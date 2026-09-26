@@ -12,6 +12,7 @@ import type {
   ApplyMarker,
   ApplyRequest,
   ApplyResult,
+  Configuration,
   ConfigurationVersion,
 } from "./types";
 import { demoConfiguration } from "./fixtures";
@@ -45,6 +46,10 @@ interface RouterState {
   applyState: ApplyObservation | null;
   setApplyState: (value: ApplyObservation | null) => void;
   uncertain: boolean;
+  draftDirty: boolean;
+  saveDraft: (configuration: Configuration) => Promise<ConfigurationVersion>;
+  discardDraft: () => Promise<void>;
+  saveConfirmed: () => void;
   setUncertain: (value: boolean) => void;
   busy: boolean;
   setBusy: (value: boolean) => void;
@@ -57,6 +62,27 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const [applyState, setApplyState] = useState<ApplyObservation | null>(null);
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const saveDraft = useCallback(async (configuration: Configuration) => {
+    const existing = versions.find((v) => v.status === "draft");
+    const saved = existing
+      ? await api.updateDraft(configuration)
+      : await api.createDraft(configuration);
+    setVersions((old) => old.map((v) => (v.id === saved.id ? saved : v)));
+    setDraftDirty(true);
+    return saved;
+  }, [versions]);
+  const discardDraft = useCallback(async () => {
+    await api.deleteDraft();
+    setVersions((old) => old.filter((v) => v.status !== "draft"));
+    setDraftDirty(false);
+  }, []);
+  const saveConfirmed = useCallback(() => {
+    setVersions((old) =>
+      old.map((v) => (v.status === "draft" ? { ...v, status: "confirmed" } : v)),
+    );
+    setDraftDirty(false);
+  }, []);
   const controller = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
     controller.current?.abort();
@@ -95,6 +121,10 @@ export function RouterProvider({ children }: { children: ReactNode }) {
         setUncertain,
         busy,
         setBusy,
+        draftDirty,
+        saveDraft,
+        discardDraft,
+        saveConfirmed,
       }}
     >
       {children}
