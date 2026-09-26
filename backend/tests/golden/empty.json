@@ -1,0 +1,13 @@
+{
+  "Dhcp4": {
+    "interfaces-config": {
+      "interfaces": []
+    },
+    "lease-database": {
+      "type": "memfile",
+      "persist": true
+    },
+    "valid-lifetime": 3600,
+    "subnet4": []
+  }
+}
