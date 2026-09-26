@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Tab, Tabs, TextField, Typography } from "@mui/material";
 import { useConfiguration } from "../state";
 import { Badge, Card, DataTable, Todo } from "../ui";
+import { DHCPEditor, DNSEditor } from "./ServiceEditors";
 import { demoLeases } from "../fixtures";
 function PageTabs({
   values,
@@ -25,6 +26,13 @@ function PageTabs({
   );
 }
 export function DHCP() {
+  return (
+    <DHCPEditor>
+      <DHCPReadOnly />
+    </DHCPEditor>
+  );
+}
+function DHCPReadOnly() {
   const { configuration: c } = useConfiguration();
   const [tab, setTab] = useState(0);
   const [query, setQuery] = useState("");
@@ -108,6 +116,13 @@ export function DHCP() {
   );
 }
 export function DNS() {
+  return (
+    <DNSEditor>
+      <DNSReadOnly />
+    </DNSEditor>
+  );
+}
+function DNSReadOnly() {
   const {
     configuration: { dns },
   } = useConfiguration();

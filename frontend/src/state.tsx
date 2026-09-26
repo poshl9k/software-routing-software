@@ -68,7 +68,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     const saved = existing
       ? await api.updateDraft(configuration)
       : await api.createDraft(configuration);
-    setVersions((old) => old.map((v) => (v.id === saved.id ? saved : v)));
+    setVersions((old) => [...old.filter((v) => v.id !== saved.id), saved]);
     setDraftDirty(true);
     return saved;
   }, [versions]);
