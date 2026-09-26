@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — Туннели</title>
+<link rel="stylesheet" href="css/vs-router.css">
+<style>
+.role-tag { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; }
+.role-server { background:#e8f1fe; color:#2f81f7; }
+.role-client { background:#f0eafc; color:#7048c8; }
+.proto-tag { font-size:11.5px; color:var(--text-secondary); }
+.qr-hint { font-size:12.5px; color:var(--text-secondary); margin-top:8px; }
+.tabs { display:flex; gap:4px; margin-bottom:14px; border-bottom:1px solid var(--card-border); }
+.tabs a { padding:8px 16px; font-size:13.5px; text-decoration:none; color:var(--text-secondary); border-bottom:2px solid transparent; }
+.tabs a.active { color:var(--accent-blue); border-bottom-color: var(--accent-blue); font-weight:600; }
+</style>
+</head>
+<body>
+<!-- SIDEBAR -->
+<main class="main">
+  <div class="topbar">
+    <div class="breadcrumbs">vs-router › <b>Туннели</b></div>
+    <div class="search">🔍 Поиск по настройкам, узлам, доменам…</div>
+    <div class="bell">🔔<span class="dot">3</span></div>
+    <div class="user"><span class="avatar">A</span> admin</div>
+  </div>
+
+  <h1 class="page-title">Туннели</h1>
+
+  <div class="grid-2">
+    <div>
+      <div class="card">
+        <div class="card-head">
+          <h2>wg-office <span class="role-tag role-server">сервер</span> <span class="proto-tag">WireGuard</span></h2>
+          <button class="btn sm" style="margin-left:auto;">✎</button>
+          <span class="chip green">подключён</span>
+        </div>
+        <dl class="kv">
+          <dt>Порт</dt><dd class="num">51820/udp (wan)</dd>
+          <dt>Ключ</dt><dd class="num">PJj3…9fQ= <span class="sub">(приватный — скрыт)</span></dd>
+          <dt>Пиры</dt><dd>5 подключено / 5 настроено</dd>
+          <dt>Маршруты</dt><dd class="num">10.8.0.0/24 → wg-office</dd>
+        </dl>
+        <table style="margin-top:12px;">
+          <tr><th>Пир</th><th>Ключ</th><th>Handshake</th><th>Трафик (↓/↑)</th><th></th></tr>
+          <tr><td>alina-laptop</td><td class="num">xT4f…</td><td><span class="chip green">28 с назад</span></td><td class="num">1.2 / 0.3 ГБ</td><td class="actions">✎ 📱 🗑</td></tr>
+          <tr><td>phone-max</td><td class="num">kL9w…</td><td><span class="chip green">2 мин назад</span></td><td class="num">0.4 / 0.1 ГБ</td><td class="actions">✎ 📱 🗑</td></tr>
+          <tr><td>printer-vpn</td><td class="num">Qw8n…</td><td><span class="chip amber">3 дня назад</span></td><td class="num">—</td><td class="actions">✎ 📱 🗑</td></tr>
+        </table>
+        <div style="margin-top:12px; display:flex; gap:8px;">
+          <button class="btn sm primary">+ Добавить пира</button>
+          <button class="btn sm">⬇ Экспорт клиентских конфигов (zip)</button>
+        </div>
+        <p class="qr-hint">Экспорт: .conf на каждого пира + QR-код для мобильных клиентов.</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>awg-home <span class="role-tag role-server">сервер</span> <span class="proto-tag">AmneziaWG</span></h2>
+          <button class="btn sm" style="margin-left:auto;">✎</button>
+          <span class="chip green">подключён</span>
+        </div>
+        <dl class="kv">
+          <dt>Порт</dt><dd class="num">443/udp (wan, адрес .20)</dd>
+          <dt>Обфускация</dt><dd class="num">Jc=4 · S1=88 · S2=1152 · H1=…H4 (скрыты)</dd>
+          <dt>Пиры</dt><dd>3 / 3</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="card-head">
+          <h2>wg-to-vps <span class="role-tag role-client">клиент</span> <span class="proto-tag">WireGuard</span></h2>
+          <button class="btn sm" style="margin-left:auto;">✎</button>
+          <span class="chip green">подключён</span>
+        </div>
+        <dl class="kv">
+          <dt>Endpoint</dt><dd class="num">vpn.example.net:51820</dd>
+          <dt>Keepalive</dt><dd class="num">25 с</dd>
+          <dt>AllowedIPs</dt><dd class="num">10.8.0.0/24, 192.168.88.0/24</dd>
+          <dt>Handshake</dt><dd><span class="chip green">41 с назад</span></dd>
+        </dl>
+        <p class="qr-hint">Маршруты выведены из AllowedIPs; можно переопределить в разделе «Маршруты» (AllowedIPs ≠ маршрут).</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>awg-rvs <span class="role-tag role-client">клиент</span> <span class="proto-tag">AmneziaWG</span></h2>
+          <button class="btn sm" style="margin-left:auto;">✎</button>
+          <span class="chip amber">нет handshake 2 ч</span>
+        </div>
+        <dl class="kv">
+          <dt>Endpoint</dt><dd class="num">rvs.example.ru:443</dd>
+          <dt>Обфускация</dt><dd class="num">Jc=6 · S1=… (из профиля)</dd>
+          <dt>AllowedIPs</dt><dd class="num">0.0.0.0/0 → default-маршрут с метрикой 100</dd>
+        </dl>
+        <div class="callout amber" style="margin:12px 0 0;">
+          <span class="ico">⚠</span>
+          <div>Импортированный профиль стороннего провайдера. Параметры обфускации взяты из .conf; совместимость подтверждена лабораторной проверкой amneziawg-go.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Добавить туннель</h2></div>
+        <p style="font-size:13px; margin-bottom:12px;">
+          При создании выбираются: <b>протокол</b> (WireGuard / AmneziaWG) и <b>роль</b>.
+          <br><span style="color:var(--text-secondary); font-size:12.5px;">Роль после создания не меняется: нужен другой сценарий — создайте отдельный туннель. Сервер и клиент одновременно — это два туннеля.</span>
+        </p>
+        <button class="btn primary">+ Сервер (ждать клиентов)</button>
+        <button class="btn" style="margin-left:8px;">+ Клиент (подключиться)</button>
+        <button class="btn ghost" style="margin-left:8px;">⬆ Импорт .conf</button>
+      </div>
+    </div>
+  </div>
+</main>
+<div class="mock-note">статичный макет · vs-router · этап 0</div>
+<script src="inject-nav.js"></script>
+</body>
+</html>

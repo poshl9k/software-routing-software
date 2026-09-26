@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — Обзор</title>
+<link rel="stylesheet" href="css/vs-router.css">
+<style>
+.dash-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.wan-row td { padding-top: 11px; padding-bottom: 11px; }
+.mini-stats { display: flex; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+.mini-stats b { color: var(--text-primary); }
+.event-type { font-size: 12px; }
+</style>
+</head>
+<body>
+<!-- SIDEBAR -->
+<main class="main">
+  <div class="topbar">
+    <div class="breadcrumbs">vs-router › <b>Обзор</b></div>
+    <div class="search">🔍 Поиск по настройкам, узлам, доменам…</div>
+    <div class="bell">🔔<span class="dot">3</span></div>
+    <div class="user"><span class="avatar">A</span> admin</div>
+  </div>
+
+  <h1 class="page-title">Обзор сети</h1>
+
+  <!-- Статусная полоса: неприменённые изменения = ключевой элемент из плана -->
+  <div class="status-strip">
+    <div class="status-pill"><span class="ico">🌐</span><div><div class="big">Интернет: <span class="chip green">подключён</span></div></div></div>
+    <div class="status-pill"><span class="ico">⇅</span><div><div class="big">WAN: 1 Гбит/с</div><div class="sub">↓ 312 Мбит/с · ↑ 187 Мбит/с</div></div></div>
+    <div class="status-pill"><span class="ico">✔</span><div><div class="big">Система: <span class="chip green">работает</span></div><div class="sub">Аптайм 12 дней</div></div></div>
+    <div class="status-pill"><span class="ico">⚠</span><div><div class="big">Изменение не применено</div><div class="sub">Есть неподтверждённые изменения · 3</div></div></div>
+    <a class="btn primary" href="apply.html">Настроить</a>
+  </div>
+
+  <div class="dash-grid">
+    <div>
+      <!-- WAN / Интернет -->
+      <div class="card">
+        <div class="card-head"><h2>WAN / Интернет</h2><a class="btn sm" href="interfaces.html">Настроить</a></div>
+        <table>
+          <tr class="wan-row">
+            <td><span class="dot-ok"></span><b>WAN1</b><div class="sub">Провайдер 1 (Основной)</div></td>
+            <td><div class="sub">IP-адрес</div><b>185.23.10.14</b><div class="sub">185.23.10.1</div></td>
+            <td><div class="sub">DNS</div><b>1.1.1.1</b><div class="sub">8.8.8.8, 8.8.4.4</div></td>
+            <td><svg class="spark" width="120" height="34"><polyline points="0,25 15,20 30,28 45,12 60,18 75,8 90,15 105,5 120,12" fill="none" stroke="#2f81f7" stroke-width="2"/><polyline points="0,30 15,26 30,29 45,22 60,25 75,20 90,24 105,18 120,22" fill="none" stroke="#1a9e55" stroke-width="2"/></svg><div class="mini-stats"><span>↓ <b>264 Мбит/с</b></span><span>↑ <b>142 Мбит/с</b></span></div></td>
+            <td class="actions">⋯</td>
+          </tr>
+          <tr class="wan-row">
+            <td><span class="dot-fail"></span><b>WAN2</b><div class="sub">Провайдер 2 (Резервный)</div></td>
+            <td><div class="sub">IP-адрес</div><b>203.0.113.10</b><div class="sub">203.0.113.1</div></td>
+            <td><div class="sub">DNS</div><b>9.9.9.9</b><div class="sub">149.112.112.112</div></td>
+            <td><svg class="spark" width="120" height="34"><polyline points="0,32 15,31 30,32 45,30 60,31 75,29 90,31 105,28 120,30" fill="none" stroke="#d43c3c" stroke-width="2"/></svg><div class="mini-stats"><span>↓ <b>48 Мбит/с</b></span><span>↑ <b>35 Мбит/с</b></span></div></td>
+            <td class="actions">⋯</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- DHCP -->
+      <div class="card">
+        <div class="card-head"><h2>DHCP</h2><button class="btn sm">Настроить</button></div>
+        <div style="display:flex; gap:26px; margin-bottom:14px;">
+          <div><div style="font-size:22px;font-weight:700;">3</div><div class="sub" style="color:var(--text-secondary);font-size:12px;">Подсети</div></div>
+          <div><div style="font-size:22px;font-weight:700;">126</div><div style="color:var(--text-secondary);font-size:12px;">Активных аренд</div></div>
+          <div><div style="font-size:22px;font-weight:700;">8</div><div style="color:var(--text-secondary);font-size:12px;">Резерваций</div></div>
+        </div>
+        <table>
+          <tr><th>Подсеть</th><th>Диапазон</th><th>Аренд</th><th>Использование</th></tr>
+          <tr><td><b>LAN</b> <span class="sub">(vlan10)</span></td><td class="num">192.168.10.0/24</td><td class="num">62</td><td style="width:42%"><div class="progress"><div style="width:66%"></div></div><span class="sub">66%</span></td></tr>
+          <tr><td><b>IoT</b> <span class="sub">(vlan20)</span></td><td class="num">192.168.20.0/24</td><td class="num">38</td><td><div class="progress green"><div style="width:41%"></div></div><span class="sub">41%</span></td></tr>
+          <tr><td><b>Guests</b> <span class="sub">(vlan30)</span></td><td class="num">192.168.30.0/24</td><td class="num">26</td><td><div class="progress"><div style="width:28%"></div></div><span class="sub">28%</span></td></tr>
+        </table>
+      </div>
+
+      <!-- Интерфейсы и VLAN -->
+      <div class="card">
+        <div class="card-head"><h2>Интерфейсы и VLAN</h2><button class="btn sm">Настроить</button></div>
+        <table>
+          <tr><th>Интерфейс</th><th>Тип</th><th>Порт / VLAN</th><th>IP-адрес</th><th>Состояние</th><th>Трафик</th><th></th></tr>
+          <tr><td><span class="chip green">eth0</span></td><td>Физический</td><td>WAN1 (Основной)</td><td class="num">—</td><td><span class="dot-ok"></span>в сети</td><td class="num">264 / 142 Мбит/с</td><td class="actions">⋯</td></tr>
+          <tr><td><span class="chip green">eth1</span></td><td>Физический</td><td>WAN2 (Резерв)</td><td class="num">—</td><td><span class="dot-ok"></span>в сети</td><td class="num">48 / 35 Мбит/с</td><td class="actions">⋯</td></tr>
+          <tr><td><span class="chip blue">br0</span></td><td>Мост (LAN)</td><td>LAN (vlan10)</td><td class="num">192.168.10.1/24</td><td><span class="dot-ok"></span>в сети</td><td class="num">96 / 54 Мбит/с</td><td class="actions">⋯</td></tr>
+          <tr><td><span class="chip blue">br20</span></td><td>Мост (VLAN)</td><td>IoT (vlan20)</td><td class="num">192.168.20.1/24</td><td><span class="dot-ok"></span>в сети</td><td class="num">28 / 16 Мбит/с</td><td class="actions">⋯</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div>
+      <!-- Туннели -->
+      <div class="card">
+        <div class="card-head"><h2>Туннели</h2><button class="btn sm">Настроить</button></div>
+        <table>
+          <tr><th>Название</th><th>Тип</th><th>Статус</th><th>Пиры</th><th>Задержка</th><th>Трафик (↓ / ↑)</th><th></th></tr>
+          <tr><td><span class="dot-ok"></span><b>wg-office</b></td><td>WireGuard</td><td><span class="chip green">подключён</span></td><td class="num">5 / 5</td><td class="num">28 мс</td><td class="num">12.4 / 3.1 Мбит/с</td><td class="actions">⋯</td></tr>
+          <tr><td><span class="dot-ok"></span><b>wg-mobile</b></td><td>WireGuard</td><td><span class="chip green">подключён</span></td><td class="num">12 / 12</td><td class="num">32 мс</td><td class="num">8.7 / 2.9 Мбит/с</td><td class="actions">⋯</td></tr>
+          <tr><td><span class="dot-ok"></span><b>amnezia-home</b></td><td>AmneziaWG</td><td><span class="chip green">подключён</span></td><td class="num">3 / 3</td><td class="num">41 мс</td><td class="num">4.2 / 1.8 Мбит/с</td><td class="actions">⋯</td></tr>
+          <tr><td><span class="dot-ok"></span><b>amnezia-rvs</b></td><td>AmneziaWG</td><td><span class="chip green">подключён</span></td><td class="num">2 / 2</td><td class="num">36 мс</td><td class="num">1.1 / 0.4 Мбит/с</td><td class="actions">⋯</td></tr>
+        </table>
+      </div>
+
+      <!-- Прокси (Caddy) -->
+      <div class="card">
+        <div class="card-head"><h2>Прокси (Caddy)</h2><button class="btn sm">Настроить</button></div>
+        <table>
+          <tr><th>Домен</th><th>Upstream</th><th>TLS</th><th>Статус</th><th></th></tr>
+          <tr><td>home.example.ru</td><td class="num">http://192.168.10.10:8123</td><td>Auto (Let's Encrypt)</td><td><span class="chip green">работает</span></td><td class="actions">⋯</td></tr>
+          <tr><td>git.example.ru</td><td class="num">http://192.168.10.30:3000</td><td>Auto (Let's Encrypt)</td><td><span class="chip green">работает</span></td><td class="actions">⋯</td></tr>
+          <tr><td>nas.example.ru</td><td class="num">https://192.168.10.50:5001</td><td>Ручной (свой CA)</td><td><span class="chip green">работает</span></td><td class="actions">⋯</td></tr>
+          <tr><td>monitor.example.ru</td><td class="num">https://192.168.10.60:9090</td><td>Ручной (свой CA)</td><td><span class="chip green">работает</span></td><td class="actions">⋯</td></tr>
+          <tr><td>wiki.example.ru</td><td class="num">https://192.168.20.10:8080</td><td>Auto (Let's Encrypt)</td><td><span class="chip green">работает</span></td><td class="actions">⋯</td></tr>
+        </table>
+      </div>
+
+      <!-- Последние события -->
+      <div class="card">
+        <div class="card-head"><h2>Последние события</h2><button class="btn sm">Все события</button></div>
+        <table>
+          <tr><th>Время</th><th>Событие</th><th>Сообщение</th></tr>
+          <tr><td class="num">14:22:31</td><td class="event-type"><span class="chip purple">Профиль</span></td><td>Клиент <b>192.168.10.45</b> получил адрес по DHCP (vlan10)</td></tr>
+          <tr><td class="num">14:21:58</td><td class="event-type"><span class="chip green">Успех</span></td><td>Резервация для принтера (MAC AA:BB:CC:…) применена</td></tr>
+          <tr><td class="num">14:16:41</td><td class="event-type"><span class="chip blue">Перезапуск</span></td><td>Конфигурация Kea перезагружена без простоя</td></tr>
+          <tr><td class="num">13:57:03</td><td class="event-type"><span class="chip red">Ошибка</span></td><td>Не удалось получить IP от WAN2 (dhcp)</td></tr>
+          <tr><td class="num">13:57:05</td><td class="event-type"><span class="chip green">Успех</span></td><td>Сертификат обновлён: home.example.ru (Let's Encrypt)</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+<div class="mock-note">статичный макет · vs-router · этап 0</div>
+<script src="inject-nav.js"></script>
+</body>
+</html>

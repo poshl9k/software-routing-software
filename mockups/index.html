@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — Макеты этапа 0</title>
+<link rel="stylesheet" href="css/vs-router.css">
+<style>
+body { display:block; }
+.wrap { max-width: 760px; margin: 40px auto; padding: 0 20px; }
+h1 { font-size: 24px; margin-bottom: 6px; }
+.lead { color: var(--text-secondary); font-size: 14px; margin-bottom: 24px; }
+a.tile {
+  display:flex; align-items:center; gap:14px;
+  background: var(--card-bg); border:1px solid var(--card-border); border-radius:10px;
+  padding: 14px 18px; margin-bottom: 10px; text-decoration:none; color: var(--text-primary);
+  transition: border-color .15s;
+}
+a.tile:hover { border-color: var(--accent-blue); }
+.tile .n { font-size: 20px; }
+.tile b { font-size: 14px; display:block; }
+.tile span.sub { color: var(--text-secondary); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>vs-router · кликабельные макеты</h1>
+  <p class="lead">Этап 0 · статичные HTML-макеты по визуальному референсу (тёмное меню, светлая рабочая область).
+  Ссылки между экранами работают; боковое меню подсвечивает текущий раздел.</p>
+
+  <a class="tile" href="dashboard.html"><span class="n">◱</span><span><b>Обзор (дашборд)</b><span class="sub">статусная полоса с бейджем «изменение не применено», WAN, DHCP, туннели, Caddy, события</span></span></a>
+  <a class="tile" href="interfaces.html"><span class="n">⑃</span><span><b>Сеть: интерфейсы и WAN-адреса</b><span class="sub">зоны (fail-closed), список WAN-адресов с основным/дополнительными, диагностика</span></span></a>
+  <a class="tile" href="firewall.html"><span class="n">✉</span><span><b>Firewall (модель pfSense)</b><span class="sub">вкладки зон, счётчики, port forward с авто-правилами, outbound NAT (гибрид)</span></span></a>
+  <a class="tile" href="dhcp.html"><span class="n">⇄</span><span><b>DHCP (Kea)</b><span class="sub">подсети, резервации внутри/вне пула с конфликтом аренды, поиск аренд</span></span></a>
+  <a class="tile" href="dns.html"><span class="n">⌾</span><span><b>DNS (Unbound)</b><span class="sub">host overrides, per-domain forwards, привязка к интерфейсам, диагностика</span></span></a>
+  <a class="tile" href="tunnels.html"><span class="n">⚿</span><span><b>Туннели</b><span class="sub">сервер/клиент, wg/awg, обфускация, экспорт клиентов (zip/QR), AllowedIPs ≠ маршрут</span></span></a>
+  <a class="tile" href="caddy.html"><span class="n">◎</span><span><b>Прокси (Caddy)</b><span class="sub">4 режима сертификата, конфликт ACME-портов, проверка backend</span></span></a>
+  <a class="tile" href="apply.html"><span class="n">⚠</span><span><b>Экран применения изменений</b><span class="sub">обратный отсчёт, валидаторы, diff версий, подтвердить/откатить</span></span></a>
+  <a class="tile" href="onboarding.html"><span class="n">✦</span><span><b>Первый запуск (onboarding)</b><span class="sub">шаг «безопасная настройка» с выбором таймера, учётка админа</span></span></a>
+</div>
+</body>
+</html>

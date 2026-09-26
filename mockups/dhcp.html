@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — DHCP</title>
+<link rel="stylesheet" href="css/vs-router.css">
+<style>
+.tabs { display:flex; gap:4px; margin-bottom:14px; border-bottom:1px solid var(--card-border); }
+.tabs a { padding:8px 16px; font-size:13.5px; text-decoration:none; color:var(--text-secondary); border-bottom:2px solid transparent; }
+.tabs a.active { color:var(--accent-blue); border-bottom-color: var(--accent-blue); font-weight:600; }
+</style>
+</head>
+<body>
+<!-- SIDEBAR -->
+<main class="main">
+  <div class="topbar">
+    <div class="breadcrumbs">vs-router › <b>DHCP</b></div>
+    <div class="search">🔍 Поиск по настройкам, узлам, доменам…</div>
+    <div class="bell">🔔<span class="dot">3</span></div>
+    <div class="user"><span class="avatar">A</span> admin</div>
+  </div>
+
+  <h1 class="page-title">DHCP (Kea)</h1>
+
+  <div class="tabs">
+    <a href="#" class="active">Подсети</a>
+    <a href="#">Резервации</a>
+    <a href="#">Аренды</a>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Подсети и пулы</h2>
+      <button class="btn sm primary">+ Добавить подсеть</button>
+    </div>
+    <table>
+      <tr><th>Подсеть</th><th>Интерфейс</th><th>Пул</th><th>Шлюз / DNS</th><th>Аренд</th><th>Резерваций</th><th></th></tr>
+      <tr>
+        <td><b>LAN</b><div class="sub">192.168.10.0/24</div></td><td>br0</td>
+        <td class="num">192.168.10.100–.200</td><td class="num">.1 · 192.168.10.1</td>
+        <td class="num">62</td><td class="num">5</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>IoT</b><div class="sub">192.168.20.0/24</div></td><td>vlan20</td>
+        <td class="num">192.168.20.50–.250</td><td class="num">.1 · 192.168.20.1</td>
+        <td class="num">38</td><td class="num">2</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>Guests</b><div class="sub">192.168.30.0/24</div></td><td>vlan30</td>
+        <td class="num">192.168.30.20–.250</td><td class="num">.1 · 192.168.30.1</td>
+        <td class="num">26</td><td class="num">1</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Резервации</h2><button class="btn sm primary">+ Добавить резервацию</button></div>
+    <table>
+      <tr><th>Имя</th><th>Идентификатор</th><th>IP-адрес</th><th>Тип</th><th>Конфликт</th><th></th></tr>
+      <tr>
+        <td><b>printer</b></td><td class="num">AA:BB:CC:10:20:30</td><td class="num">192.168.10.120</td>
+        <td><span class="chip blue">внутри пула</span></td><td>—</td><td class="actions">✎ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>nas</b></td><td class="num">AA:BB:CC:10:20:31</td><td class="num">192.168.10.10</td>
+        <td><span class="chip purple">вне пула</span></td><td>—</td><td class="actions">✎ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>cam-gate</b></td><td class="num">AA:BB:CC:20:44:07</td><td class="num">192.168.20.60</td>
+        <td><span class="chip blue">внутри пула</span></td><td><span class="chip amber">аренда у другого клиента — освободить перед применением</span></td><td class="actions">✎ 🗑</td>
+      </tr>
+    </table>
+    <p style="margin-top:10px; font-size:12.5px; color:var(--text-secondary);">
+      Резервация допустима внутри динамического пула и вне его (адрес должен принадлежать обслуживаемой подсети).
+      Kea-оптимизация out-of-pool не включается. Конфликт с действующей арендой показывается до применения.
+    </p>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Текущие аренды</h2>
+      <div class="search" style="margin-left:auto;width:260px;">🔍 Поиск: MAC, IP, hostname</div>
+    </div>
+    <table>
+      <tr><th>IP-адрес</th><th>MAC</th><th>Hostname</th><th>Подсеть</th><th>Истекает</th><th></th></tr>
+      <tr><td class="num">192.168.10.45</td><td class="num">AA:BB:CC:09:11:45</td><td>laptop-alina</td><td>LAN</td><td class="num">через 3 ч 12 мин</td><td class="actions">⋯</td></tr>
+      <tr><td class="num">192.168.10.120</td><td class="num">AA:BB:CC:10:20:30</td><td>printer</td><td>LAN</td><td class="num">резервация</td><td class="actions">⋯</td></tr>
+      <tr><td class="num">192.168.20.51</td><td class="num">AA:BB:CC:20:01:51</td><td>esp-thermo-2</td><td>IoT</td><td class="num">через 11 ч</td><td class="actions">⋯</td></tr>
+      <tr><td class="num">192.168.30.22</td><td class="num">AA:BB:CC:30:07:22</td><td>phone-guest</td><td>Guests</td><td class="num">через 42 мин</td><td class="actions">⋯</td></tr>
+    </table>
+  </div>
+</main>
+<div class="mock-note">статичный макет · vs-router · этап 0</div>
+<script src="inject-nav.js"></script>
+</body>
+</html>

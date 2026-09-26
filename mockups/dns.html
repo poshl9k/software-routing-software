@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — DNS</title>
+<link rel="stylesheet" href="css/vs-router.css">
+<style>
+.tabs { display:flex; gap:4px; margin-bottom:14px; border-bottom:1px solid var(--card-border); }
+.tabs a { padding:8px 16px; font-size:13.5px; text-decoration:none; color:var(--text-secondary); border-bottom:2px solid transparent; }
+.tabs a.active { color:var(--accent-blue); border-bottom-color: var(--accent-blue); font-weight:600; }
+</style>
+</head>
+<body>
+<!-- SIDEBAR -->
+<main class="main">
+  <div class="topbar">
+    <div class="breadcrumbs">vs-router › <b>DNS</b></div>
+    <div class="search">🔍 Поиск по настройкам, узлам, доменам…</div>
+    <div class="bell">🔔<span class="dot">3</span></div>
+    <div class="user"><span class="avatar">A</span> admin</div>
+  </div>
+
+  <h1 class="page-title">DNS (Unbound)</h1>
+
+  <div class="tabs">
+    <a href="#" class="active">Записи и переадресация</a>
+    <a href="#">Upstream и режим</a>
+    <a href="#">Журнал запросов</a>
+  </div>
+
+  <div class="grid-2">
+    <div>
+      <div class="card">
+        <div class="card-head"><h2>Локальные записи (host overrides)</h2><button class="btn sm primary">+ Добавить</button></div>
+        <table>
+          <tr><th>Имя</th><th>Тип</th><th>Значение</th><th>Комментарий</th><th></th></tr>
+          <tr><td>router.home.lan</td><td>A</td><td class="num">192.168.10.1</td><td class="sub">сам роутер</td><td class="actions">✎ 🗑</td></tr>
+          <tr><td>nas.home.lan</td><td>A</td><td class="num">192.168.10.10</td><td class="sub"></td><td class="actions">✎ 🗑</td></tr>
+          <tr><td>git.home.lan</td><td>A</td><td class="num">192.168.10.30</td><td class="sub">Gitea</td><td class="actions">✎ 🗑</td></tr>
+          <tr><td>nastya.home.lan</td><td>CNAME</td><td>nas.home.lan</td><td class="sub">псевдоним</td><td class="actions">✎ 🗑</td></tr>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>DNS-переадресация по доменам</h2><button class="btn sm primary">+ Добавить</button></div>
+        <table>
+          <tr><th>Домен</th><th>Upstream</th><th>Комментарий</th><th></th></tr>
+          <tr><td>alfapi.ru</td><td class="num">192.168.6.253</td><td class="sub">внутренний сервис</td><td class="actions">✎ 🗑</td></tr>
+          <tr><td>company.local</td><td class="num">192.168.107.201</td><td class="sub">контур офиса</td><td class="actions">✎ 🗑</td></tr>
+          <tr><td>ads.example.net</td><td class="num">0.0.0.0</td><td class="sub">заглушка (block)</td><td class="actions">✎ 🗑</td></tr>
+        </table>
+        <p class="moved-hint" style="margin-top:8px;">Аналог «DNS Forwards»: домен целиком уходит на указанный сервер (forward-zone).</p>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="card-head"><h2>Режим и привязка</h2></div>
+        <dl class="kv">
+          <dt>Режим</dt><dd><span class="chip blue">forwarding</span> <span class="sub">полная рекурсия — опция</span></dd>
+          <dt>Upstream</dt><dd class="num">1.1.1.1, 8.8.8.8 (DoT: вкл)</dd>
+          <dt>Слушает</dt><dd>br0 (lan), vlan20 (iot), vlan30 (guest) <span class="sub">— выбранные интерфейсы, не «все»</span></dd>
+          <dt>Доступ</dt><dd>lan, iot, guest <span class="sub">(access-control)</span></dd>
+          <dt>Журнал запросов</dt><dd><span class="chip green">вкл</span> · ротация 7 дней / 200 МБ</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Диагностика резолвинга</h2></div>
+        <div class="search" style="width:100%; margin-bottom:12px;">nslookup или dig — проверка имени через локальный resolver…</div>
+        <table>
+          <tr><th>Время</th><th>Запрос</th><th>Результат</th></tr>
+          <tr><td class="num">14:21:02</td><td>nas.home.lan</td><td><span class="chip green">192.168.10.10 (local)</span></td></tr>
+          <tr><td class="num">14:20:44</td><td>alfapi.ru</td><td><span class="chip green">→ 192.168.6.253 (forward)</span></td></tr>
+          <tr><td class="num">14:19:31</td><td>example.org</td><td><span class="chip green">93.184.216.34 (upstream)</span></td></tr>
+          <tr><td class="num">14:18:12</td><td>broken.invalid</td><td><span class="chip red">NXDOMAIN</span></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+<div class="mock-note">статичный макет · vs-router · этап 0</div>
+<script src="inject-nav.js"></script>
+</body>
+</html>

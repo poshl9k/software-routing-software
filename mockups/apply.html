@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — Применение изменений</title>
+<link rel="stylesheet" href="css/vs-router.css">
+<style>
+.apply-wrap { max-width: 880px; }
+.countdown { display:flex; align-items:center; gap:14px; margin: 6px 0 18px; }
+.countdown .timer {
+  font-size: 34px; font-weight: 700; color: var(--status-amber);
+  font-variant-numeric: tabular-nums; background: var(--status-amber-soft);
+  border: 1px solid #f2ddb0; padding: 6px 18px; border-radius: 10px;
+}
+.step-list { list-style: none; margin: 12px 0 4px; }
+.step-list li { padding: 7px 0; border-bottom: 1px solid #eef1f6; display:flex; gap:10px; align-items: baseline; font-size: 13.5px;}
+.step-list li:last-child { border-bottom: none; }
+.step-list .n { color: var(--text-secondary); width: 22px; }
+.diff { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; background:#fbfcfe; border:1px solid var(--card-border); border-radius:8px; padding: 12px 14px; overflow:auto; }
+.diff .add { color: var(--status-green); background: var(--status-green-soft); display:block; border-radius:3px; }
+.diff .del { color: var(--status-red); background: var(--status-red-soft); display:block; border-radius:3px; }
+.diff .ctx { color: var(--text-secondary); display:block; }
+.footer-actions { display:flex; gap: 10px; margin-top: 18px; align-items:center;}
+.footer-actions .spacer { flex:1; }
+</style>
+</head>
+<body>
+<!-- SIDEBAR -->
+<main class="main">
+  <div class="topbar">
+    <div class="breadcrumbs">vs-router › Обзор › <b>Применение изменений</b></div>
+    <div class="search">🔍 Поиск по настройкам, узлам, доменам…</div>
+    <div class="bell">🔔<span class="dot">3</span></div>
+    <div class="user"><span class="avatar">A</span> admin</div>
+  </div>
+
+  <div class="apply-wrap">
+    <h1 class="page-title">Применение изменений</h1>
+
+    <div class="callout amber">
+      <span class="ico">⚠</span>
+      <div>
+        <b>Безопасная настройка включена.</b> Конфигурация применена, но не подтверждена.
+        Если доступ к панели будет потерян или истечёт таймер, система автоматически откатится
+        к последней подтверждённой версии (v24 от 26.09, 12:40).
+      </div>
+    </div>
+
+    <div class="countdown">
+      <span>Подтвердите изменения в течение</span>
+      <span class="timer">02:31</span>
+      <span style="color:var(--text-secondary);font-size:12.5px;">окно подтверждения: 180 с (настраивается)</span>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Проверка перед применением</h2><span class="chip green">все проверки пройдены</span></div>
+      <ul class="step-list">
+        <li><span class="n">1</span> <span class="chip green">nft -c</span> Синтаксис firewall-правил корректен (62 правила, 4 зоны)</li>
+        <li><span class="n">2</span> <span class="chip green">unbound-checkconf</span> Конфигурация DNS валидна (2 forwards, 5 локальных записей)</li>
+        <li><span class="n">3</span> <span class="chip green">kea-dhcp4 -t</span> Конфигурация Kea валидна (3 подсети, 8 резерваций)</li>
+        <li><span class="n">4</span> <span class="chip green">Панель доступна</span> Проба доступности API пройдена (LAN 192.168.10.1)</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Изменения (v24 → v25)</h2><button class="btn sm">Полный diff</button></div>
+      <div class="diff">
+<span class="ctx">firewall / zones / lan</span>
+<span class="del">-  address: 192.168.10.1/24</span>
+<span class="add">+  address: 192.168.11.1/24</span>
+<span class="ctx">dhcp / subnets / lan / pool</span>
+<span class="del">-  range: 192.168.10.100 - 192.168.10.200</span>
+<span class="add">+  range: 192.168.11.100 - 192.168.11.200</span>
+<span class="ctx">dns / local-records (без изменений)</span>
+      </div>
+      <p style="margin-top:10px; font-size:12.5px; color:var(--text-secondary);">
+        Откат восстановит конфигурацию всех сервисов из v24 тем же механизмом, что и обычное применение.
+      </p>
+    </div>
+
+    <div class="footer-actions">
+      <button class="btn primary">✔ Подтвердить изменения</button>
+      <button class="btn danger">↩ Откатить сейчас</button>
+      <span class="spacer"></span>
+      <a class="btn ghost" href="dashboard.html">Вернуться к обзору</a>
+    </div>
+  </div>
+</main>
+<div class="mock-note">статичный макет · vs-router · этап 0</div>
+<script src="inject-nav.js"></script>
+</body>
+</html>

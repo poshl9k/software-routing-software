@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — Сеть / Интерфейсы</title>
+<link rel="stylesheet" href="css/vs-router.css">
+<style>
+.tabs { display:flex; gap:4px; margin-bottom:14px; border-bottom:1px solid var(--card-border); }
+.tabs a { padding:8px 16px; font-size:13.5px; text-decoration:none; color:var(--text-secondary); border-bottom:2px solid transparent; }
+.tabs a.active { color:var(--accent-blue); border-bottom-color: var(--accent-blue); font-weight:600; }
+.zone-badge { display:inline-block; padding:2px 10px; border-radius:6px; font-size:11.5px; font-weight:600; }
+.zone-wan { background:#fdeaea; color:#d43c3c; }
+.zone-lan { background:#e8f1fe; color:#2f81f7; }
+.zone-guest { background:#fdf3e0; color:#c77c0a; }
+.zone-iot { background:#f0eafc; color:#7048c8; }
+.zone-none { background:#edf0f5; color:#6b7686; }
+</style>
+</head>
+<body>
+<!-- SIDEBAR -->
+<main class="main">
+  <div class="topbar">
+    <div class="breadcrumbs">vs-router › <b>Сеть</b></div>
+    <div class="search">🔍 Поиск по настройкам, узлам, доменам…</div>
+    <div class="bell">🔔<span class="dot">3</span></div>
+    <div class="user"><span class="avatar">A</span> admin</div>
+  </div>
+
+  <h1 class="page-title">Сеть</h1>
+
+  <div class="tabs">
+    <a href="#" class="active">Интерфейсы</a>
+    <a href="#">WAN-адреса</a>
+    <a href="#">Статические маршруты</a>
+    <a href="#">Диагностика</a>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Интерфейсы и зоны</h2>
+      <button class="btn sm primary">+ Добавить интерфейс</button>
+    </div>
+    <table>
+      <tr>
+        <th>Интерфейс</th><th>Тип</th><th>Зона</th><th>Адресация</th><th>IP-адрес</th><th>Состояние</th><th>Назначение</th><th></th>
+      </tr>
+      <tr>
+        <td><b>eth0</b></td><td>Физический</td><td><span class="zone-badge zone-wan">wan</span></td><td>DHCP-клиент</td><td class="num">185.23.10.14/24</td><td><span class="dot-ok"></span>в сети</td><td>Провайдер 1 (основной)</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>eth1</b></td><td>Физический</td><td><span class="zone-badge zone-wan">wan</span></td><td>Статический</td><td class="num">203.0.113.10/24</td><td><span class="dot-ok"></span>в сети</td><td>Провайдер 2 (резерв)</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>br0</b></td><td>Мост</td><td><span class="zone-badge zone-lan">lan</span></td><td>Статический</td><td class="num">192.168.10.1/24</td><td><span class="dot-ok"></span>в сети</td><td>LAN (eth2, eth3, vlan10)</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>vlan20</b></td><td>VLAN (br0.20)</td><td><span class="zone-badge zone-iot">iot</span></td><td>Статический</td><td class="num">192.168.20.1/24</td><td><span class="dot-ok"></span>в сети</td><td>IoT-устройства</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>vlan30</b></td><td>VLAN (br0.30)</td><td><span class="zone-badge zone-guest">guest</span></td><td>Статический</td><td class="num">192.168.30.1/24</td><td><span class="dot-ok"></span>в сети</td><td>Гостевая сеть</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>eth4</b></td><td>Физический</td><td><span class="zone-badge zone-none">без зоны (fail-closed)</span></td><td>—</td><td class="num">—</td><td><span class="dot-ok"></span>линк up</td><td>Не назначен: транзит запрещён</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>WAN-адреса: eth0</h2><button class="btn sm">+ Добавить адрес</button></div>
+    <table>
+      <tr><th>Порядок</th><th>Адрес</th><th>Роль</th><th>Использование</th><th></th></tr>
+      <tr>
+        <td class="num">1</td><td class="num">185.23.10.14/24</td><td><span class="chip blue">основной</span></td>
+        <td>default исходящий трафик, masquerade, ACME (home.example.ru)</td><td class="actions">✎ ↑ ↓</td>
+      </tr>
+      <tr>
+        <td class="num">2</td><td class="num">185.23.10.20/32</td><td><span class="chip purple">дополнительный</span></td>
+        <td>port forward → mail.home.lan:25, outbound NAT (translation)</td><td class="actions">✎ ↑ ↓</td>
+      </tr>
+      <tr>
+        <td class="num">3</td><td class="num">185.23.10.21/32</td><td><span class="chip purple">дополнительный</span></td>
+        <td>резерв под будущий сайт</td><td class="actions">✎ ↑ ↓</td>
+      </tr>
+    </table>
+    <p style="margin-top:10px; font-size:12.5px; color:var(--text-secondary);">
+      Дополнительные адреса — /32 на интерфейсе, шлюз общий. Все адреса равноценны в правилах firewall, port forward и outbound NAT; «основной» — только адрес по умолчанию.
+    </p>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Диагностика (последние запуски)</h2></div>
+    <table>
+      <tr><th>Время</th><th>Тип</th><th>Интерфейс</th><th>Цель</th><th>Результат</th></tr>
+      <tr><td class="num">14:18:02</td><td>ping</td><td>br0</td><td class="num">192.168.10.45</td><td><span class="chip green">ok · 1.2 мс</span></td></tr>
+      <tr><td class="num">14:17:40</td><td>traceroute</td><td>eth0</td><td class="num">1.1.1.1</td><td><span class="chip green">9 хопов</span></td></tr>
+      <tr><td class="num">14:10:11</td><td>ping</td><td>eth1</td><td class="num">203.0.113.1</td><td><span class="chip red">timeout</span></td></tr>
+    </table>
+  </div>
+</main>
+<div class="mock-note">статичный макет · vs-router · этап 0</div>
+<script src="inject-nav.js"></script>
+</body>
+</html>

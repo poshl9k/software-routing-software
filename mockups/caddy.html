@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — Прокси (Caddy)</title>
+<link rel="stylesheet" href="css/vs-router.css">
+<style>
+.tabs { display:flex; gap:4px; margin-bottom:14px; border-bottom:1px solid var(--card-border); }
+.tabs a { padding:8px 16px; font-size:13.5px; text-decoration:none; color:var(--text-secondary); border-bottom:2px solid transparent; }
+.tabs a.active { color:var(--accent-blue); border-bottom-color: var(--accent-blue); font-weight:600; }
+</style>
+</head>
+<body>
+<!-- SIDEBAR -->
+<main class="main">
+  <div class="topbar">
+    <div class="breadcrumbs">vs-router › <b>Прокси</b></div>
+    <div class="search">🔍 Поиск по настройкам, узлам, доменам…</div>
+    <div class="bell">🔔<span class="dot">3</span></div>
+    <div class="user"><span class="avatar">A</span> admin</div>
+  </div>
+
+  <h1 class="page-title">Прокси (Caddy)</h1>
+
+  <div class="tabs">
+    <a href="#" class="active">Сайты</a>
+    <a href="#">Журнал</a>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Входящие сайты</h2>
+      <button class="btn sm primary">+ Добавить сайт</button>
+    </div>
+    <table>
+      <tr><th>Домен</th><th>WAN-адрес</th><th>Upstream</th><th>Режим сертификата</th><th>Статус</th><th>Backend</th><th></th></tr>
+      <tr>
+        <td><b>home.example.ru</b></td><td class="num">185.23.10.14</td>
+        <td class="num">http://192.168.10.10:8123</td>
+        <td><span class="chip blue">Auto · HTTP-01</span></td>
+        <td><span class="chip green">работает</span></td>
+        <td><span class="dot-ok"></span>200 · 34 мс</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>git.example.ru</b></td><td class="num">185.23.10.14</td>
+        <td class="num">http://192.168.10.30:3000</td>
+        <td><span class="chip blue">Auto · HTTP-01</span></td>
+        <td><span class="chip green">работает</span></td>
+        <td><span class="dot-ok"></span>200 · 51 мс</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>nas.example.ru</b></td><td class="num">185.23.10.14</td>
+        <td class="num">https://192.168.10.50:5001</td>
+        <td><span class="chip purple">Ручной (свой CA)</span></td>
+        <td><span class="chip green">работает</span></td>
+        <td><span class="dot-ok"></span>200 · 22 мс</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>mail.example.ru</b></td><td class="num">185.23.10.20</td>
+        <td class="num">tcp → 192.168.10.9:443</td>
+        <td><span class="chip amber">TLS passthrough (SNI)</span></td>
+        <td><span class="chip green">работает</span></td>
+        <td class="sub">TLS не завершается — сертификат на внутреннем сервере</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+      <tr>
+        <td><b>wiki.example.ru</b></td><td class="num">185.23.10.14</td>
+        <td class="num">http://192.168.20.10:8080</td>
+        <td><span class="chip blue">Auto · DNS-01</span></td>
+        <td><span class="chip amber">порт 80 занят port forward</span></td>
+        <td><span class="dot-fail"></span>ACME challenge недоступен</td><td class="actions">✎ ⧉ 🗑</td>
+      </tr>
+    </table>
+    <p style="margin-top:10px; font-size:12.5px; color:var(--text-secondary);">
+      HTTP-01 требует: домен → выбранный WAN-адрес, порт 80 свободен на этом адресе (конфликт с port forward — предупреждение, как в строке wiki).
+      DNS-01 — через API провайдера (Cloudflare / RFC 2136), wildcard возможен. Применение: caddy validate + graceful reload.
+    </p>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Последние запросы к сайтам</h2><button class="btn sm">Журнал целиком</button></div>
+    <table>
+      <tr><th>Время</th><th>Сайт</th><th>Метод</th><th>Путь</th><th>Код</th><th>Задержка</th></tr>
+      <tr><td class="num">14:22:41</td><td>home.example.ru</td><td>GET</td><td>/api/events</td><td><span class="chip green">200</span></td><td class="num">34 мс</td></tr>
+      <tr><td class="num">14:22:40</td><td>git.example.ru</td><td>GET</td><td>/explore</td><td><span class="chip green">200</span></td><td class="num">48 мс</td></tr>
+      <tr><td class="num">14:22:12</td><td>nastya.example.ru</td><td>GET</td><td>/</td><td><span class="chip red">502</span></td><td class="num">— backend недоступен</td></tr>
+    </table>
+  </div>
+</main>
+<div class="mock-note">статичный макет · vs-router · этап 0</div>
+<script src="inject-nav.js"></script>
+</body>
+</html>

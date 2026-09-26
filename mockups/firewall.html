@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — Firewall</title>
+<link rel="stylesheet" href="css/vs-router.css">
+<style>
+.tabs { display:flex; gap:4px; margin-bottom:14px; border-bottom:1px solid var(--card-border); flex-wrap:wrap; }
+.tabs a { padding:8px 16px; font-size:13.5px; text-decoration:none; color:var(--text-secondary); border-bottom:2px solid transparent; }
+.tabs a.active { color:var(--accent-blue); border-bottom-color: var(--accent-blue); font-weight:600; }
+.rule-icons { font-size: 12px; }
+.act-pass { color: var(--status-green); font-weight:700; }
+.act-block { color: var(--status-red); font-weight:700; }
+.auto-tag { font-size: 11px; }
+.moved-hint { font-size: 12.5px; color: var(--text-secondary); margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<!-- SIDEBAR -->
+<main class="main">
+  <div class="topbar">
+    <div class="breadcrumbs">vs-router › <b>Правила</b></div>
+    <div class="search">🔍 Поиск по настройкам, узлам, доменам…</div>
+    <div class="bell">🔔<span class="dot">3</span></div>
+    <div class="user"><span class="avatar">A</span> admin</div>
+  </div>
+
+  <h1 class="page-title">Firewall</h1>
+
+  <div class="tabs">
+    <a href="#" class="active">wan</a>
+    <a href="#">lan</a>
+    <a href="#">guest</a>
+    <a href="#">iot</a>
+    <a href="#">Port Forward</a>
+    <a href="#">Outbound NAT</a>
+    <a href="#">Псевдонимы</a>
+  </div>
+
+  <!-- Вкладка зоны: правила входящего трафика зоны (модель pfSense) -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Правила зоны <span class="chip green">wan</span></h2>
+      <button class="btn sm">↓ Добавить в конец</button>
+      <button class="btn sm primary">↑ Добавить в начало</button>
+    </div>
+    <table>
+      <tr><th></th><th>Действие</th><th>Протокол</th><th>Источник</th><th>Назначение</th><th>Порт</th><th>Счётчики (states / packets)</th><th>Лог</th><th></th></tr>
+      <tr>
+        <td class="rule-icons">⚓</td>
+        <td class="act-block">✖ block</td><td>TCP</td><td>Алиас: <b>rfc1918</b></td><td>Этот роутер</td><td>любой</td><td class="num">0 / 41 208</td><td>●</td>
+        <td class="actions">✎ ⧉ 🗑 ⃠</td>
+      </tr>
+      <tr>
+        <td class="rule-icons">⚓</td>
+        <td class="act-block">✖ block</td><td>любой</td><td>Алиас: <b>bogons</b></td><td>любой</td><td>любой</td><td class="num">0 / 6 130</td><td>—</td>
+        <td class="actions">✎ ⧉ 🗑 ⃠</td>
+      </tr>
+      <tr>
+        <td></td>
+        <td><span class="chip green">pass</span></td><td>TCP</td><td>любой</td><td>WAN-адрес <b>.20</b></td><td class="num">25 (auto)</td><td class="num">3 / 1 907</td><td>—</td>
+        <td class="actions">✎ ⧉ 🗑 ⃠</td>
+      </tr>
+      <tr>
+        <td style="background:#f8fafc; font-size:11px; color:var(--text-secondary); text-align:center;" colspan="9">↕ Port forward → mail.home.lan:25 (автосгенерировано)</td>
+      </tr>
+      <tr>
+        <td class="rule-icons">⚓</td>
+        <td class="act-pass">✔ pass</td><td>TCP</td><td>любой</td><td>Этот роутер</td><td class="num">51820/udp</td><td class="num">12 / 88 451</td><td>—</td>
+        <td class="actions">✎ ⧉ 🗑 ⃠</td>
+      </tr>
+      <tr style="opacity:.45">
+        <td></td>
+        <td class="act-pass">✔ pass</td><td>ICMP</td><td>любой</td><td>Этот роутер</td><td>—</td><td class="num">0 / 0</td><td>—</td>
+        <td class="actions">✎ ⧉ 🗑 ✓</td>
+      </tr>
+      <tr>
+        <td style="background:#e8f1fe; font-size:11px; color:var(--accent-blue); text-align:center;" colspan="9">🔵 Anti-lockout: доступ к панели с lan — управляется переключателем</td>
+      </tr>
+    </table>
+    <p class="moved-hint">First match wins. Порядок меняется перетаскиванием; в конце набора — неявный default deny. Отключённые правила отображаются приглушённо.</p>
+  </div>
+
+  <div class="grid-2">
+    <!-- Port forward -->
+    <div class="card">
+      <div class="card-head"><h2>Port Forward</h2><button class="btn sm primary">+ Добавить</button></div>
+      <table>
+        <tr><th>Интерфейс</th><th>Протокол</th><th>Внешний адрес</th><th>Внешний порт</th><th>Цель</th><th>FW-правило</th><th></th></tr>
+        <tr><td>wan</td><td>TCP</td><td class="num">185.23.10.20</td><td class="num">25</td><td class="num">192.168.10.9:25</td><td><span class="chip blue auto-tag">авто</span></td><td class="actions">✎ 🗑</td></tr>
+        <tr><td>wan</td><td>TCP+UDP</td><td class="num">185.23.10.14</td><td class="num">51820</td><td class="num">сам роутер</td><td><span class="chip green auto-tag">ручное</span></td><td class="actions">✎ 🗑</td></tr>
+        <tr><td>wan</td><td>TCP</td><td class="num">185.23.10.14</td><td class="num">443</td><td class="num">192.168.10.50:443</td><td><span class="chip blue auto-tag">авто</span></td><td class="actions">✎ 🗑</td></tr>
+      </table>
+      <p class="moved-hint">Порт forward приоритетнее локальных сервисов роутера на том же порту. Занятые 80/443 на адресе с ACME — предупреждение.</p>
+    </div>
+
+    <!-- Outbound NAT -->
+    <div class="card">
+      <div class="card-head"><h2>Outbound NAT</h2>
+        <span class="chip amber">режим: гибрид</span>
+        <button class="btn sm" style="margin-left:auto;">Изменить режим</button>
+      </div>
+      <table>
+        <tr><th>Зона</th><th>Источник</th><th>Назначение</th><th>Трансляция в</th><th></th></tr>
+        <tr><td>wan</td><td><b>mail-out</b> (алиас)</td><td>любой</td><td class="num">185.23.10.20 <span class="sub">(WAN-адрес)</span></td><td class="actions">✎ ↑↓</td></tr>
+        <tr><td>wan</td><td>lan (сеть)</td><td class="num">10.8.0.0/24</td><td><span class="chip red">Do not NAT</span></td><td class="actions">✎ ↑↓</td></tr>
+        <tr style="opacity:.6"><td>wan</td><td>iot (сеть)</td><td>любой</td><td class="num">185.23.10.14 <span class="sub">(авто · основной)</span></td><td class="sub">авто-правило</td></tr>
+        <tr style="opacity:.6"><td>wan</td><td>lan (сеть)</td><td>любой</td><td class="num">185.23.10.14 <span class="sub">(авто · основной)</span></td><td class="sub">авто-правило</td></tr>
+      </table>
+      <p class="moved-hint">Гибридный режим: ручные правила + автоправила для несовпавшего трафика. First match wins.</p>
+    </div>
+  </div>
+</main>
+<div class="mock-note">статичный макет · vs-router · этап 0</div>
+<script src="inject-nav.js"></script>
+</body>
+</html>
