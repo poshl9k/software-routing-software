@@ -32,4 +32,23 @@ if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.k
     fi
     apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4 2>/dev/null || true
 fi
+# Unbound rereads the include as its unprivileged service user on HUP.
+# Allow traversal only; other generated files retain their private modes.
+chmod o+x /etc/vs-router /etc/vs-router/applied
+if [ -d /etc/unbound ]; then
+    install -d -m 0755 /etc/unbound/unbound.conf.d
+    printf '%s\n' 'include: "/etc/vs-router/applied/unbound.conf"' > /etc/unbound/unbound.conf.d/vs-router.conf
+    chmod 0644 /etc/unbound/unbound.conf.d/vs-router.conf
+    if [ -f /etc/vs-router/applied/unbound.conf ]; then
+        chmod 0644 /etc/vs-router/applied/unbound.conf
+    fi
+fi
+# Allow the included configuration through Unbound's optional AppArmor profile.
+if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.unbound ]; then
+    install -d /etc/apparmor.d/local
+    local_profile=/etc/apparmor.d/local/usr.sbin.unbound
+    grep -qsF '/etc/vs-router/applied/unbound.conf r,' "$local_profile" 2>/dev/null || \
+        echo '/etc/vs-router/applied/unbound.conf r,' >> "$local_profile"
+    apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound
+fi
 systemctl daemon-reload

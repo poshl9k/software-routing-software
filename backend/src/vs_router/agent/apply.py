@@ -119,7 +119,9 @@ class ApplyEngine:
 
     def reload_service(self, name):
         command = self.reload_commands.get(name)
-        if command and self.executor.run(command, 15).returncode:
+        if callable(command):
+            command(APPLIED_DIR / FILES[name])
+        elif command and self.executor.run(command, 15).returncode:
             raise ApplyError('agent.reload_failed')
 
     def _install(self, contents, marker, validators):

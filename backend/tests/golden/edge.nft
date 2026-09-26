@@ -1,3 +1,4 @@
+destroy table inet vs_router
 table inet vs_router {
     set a_hosts_4 {
         type ipv4_addr

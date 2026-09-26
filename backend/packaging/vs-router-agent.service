@@ -10,13 +10,13 @@ WorkingDirectory=/var/lib/vs-router
 Environment=VS_ROUTER_DATABASE_URL=sqlite:////var/lib/vs-router/vs-router.db
 ExecStart=/usr/bin/python3 -m vs_router.agent.daemon
 Restart=on-failure
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadOnlyPaths=/usr /bin
-ReadWritePaths=/etc/vs-router /run/vs-router /var/lib/vs-router
+ReadWritePaths=/etc/vs-router /run/vs-router /var/lib/vs-router /etc/unbound/unbound.conf.d /etc/kea
 UMask=0007
 
 [Install]

@@ -20,6 +20,7 @@ def generate_kea(version: ConfigurationVersion) -> str:
             "option-data": options,
         })
     return json.dumps({"Dhcp4": {
+        "control-socket": {"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"},
         "interfaces-config": {"interfaces": sorted({s.interface for s in c.dhcp_subnets})},
         "lease-database": {"type": "memfile", "persist": True},
         "valid-lifetime": 3600, "subnet4": subnets,

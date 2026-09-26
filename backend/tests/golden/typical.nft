@@ -1,3 +1,4 @@
+destroy table inet vs_router
 table inet vs_router {
     chain input {
         type filter hook input priority filter; policy drop;
