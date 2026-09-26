@@ -1,0 +1,28 @@
+table inet vs_router {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        iifname != { "eth0", "eth1" } drop
+        ct state invalid drop
+        ct state established,related accept
+        iifname { "eth1" } tcp dport 443 counter accept comment "anti_lockout"
+        iifname { "eth1" } meta nfproto ipv4 counter accept comment "lan_allow"
+        iifname { "eth1" } meta nfproto ipv6 counter accept comment "lan_allow"
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        iifname != { "eth0", "eth1" } drop
+        oifname != { "eth0", "eth1" } drop
+        ct state invalid drop
+        ct state established,related accept
+        iifname { "eth1" } meta nfproto ipv4 counter accept comment "lan_allow"
+        iifname { "eth1" } meta nfproto ipv6 counter accept comment "lan_allow"
+    }
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname { "eth0" } ip saddr { 192.168.10.0/24 } counter masquerade
+    }
+}

@@ -1,0 +1,50 @@
+{
+  "Dhcp4": {
+    "interfaces-config": {
+      "interfaces": [
+        "eth1"
+      ]
+    },
+    "lease-database": {
+      "type": "memfile",
+      "persist": true
+    },
+    "valid-lifetime": 3600,
+    "subnet4": [
+      {
+        "id": 1,
+        "subnet": "192.168.10.0/24",
+        "interface": "eth1",
+        "valid-lifetime": 3600,
+        "pools": [
+          {
+            "pool": "192.168.10.100 - 192.168.10.200"
+          }
+        ],
+        "reservations-in-subnet": true,
+        "reservations-out-of-pool": false,
+        "reservations": [
+          {
+            "hw-address": "aa:bb:cc:dd:ee:01",
+            "ip-address": "192.168.10.110"
+          },
+          {
+            "hw-address": "aa:bb:cc:dd:ee:02",
+            "ip-address": "192.168.10.10",
+            "hostname": "server"
+          }
+        ],
+        "option-data": [
+          {
+            "name": "routers",
+            "data": "192.168.10.1"
+          },
+          {
+            "name": "domain-name-servers",
+            "data": "192.168.10.1"
+          }
+        ]
+      }
+    ]
+  }
+}

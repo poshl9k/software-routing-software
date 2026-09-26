@@ -1,0 +1,21 @@
+table inet vs_router {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        drop
+        ct state invalid drop
+        ct state established,related accept
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        drop
+        ct state invalid drop
+        ct state established,related accept
+    }
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+    }
+}

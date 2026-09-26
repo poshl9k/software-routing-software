@@ -1,0 +1,25 @@
+[project]
+name = "vs-router-backend"
+version = "0.1.0"
+description = "Desired configuration model and pure service configuration generators"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115,<1", "sqlalchemy>=2.0,<3", "alembic>=1.13,<2", "pydantic>=2.9,<3", "cryptography>=43", "uvicorn>=0.30,<1"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9", "httpx>=0.27,<1"]
+
+[dependency-groups]
+dev = ["pytest>=8,<9", "httpx>=0.27,<1"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+cache-dir = ".uv-cache"
