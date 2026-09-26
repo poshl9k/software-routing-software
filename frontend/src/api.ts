@@ -69,6 +69,13 @@ export const api = {
   logout: () => post<void>("/api/auth/logout", {}),
   createDraft: (body: Configuration) =>
     post<ConfigurationVersion>("/api/draft", body),
+  updateDraft: (body: Configuration) =>
+    request<ConfigurationVersion>("/api/draft", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteDraft: () => request<void>("/api/draft", { method: "DELETE" }),
   apply: (body: ApplyRequest) => post<ApplyResult>("/api/apply", body),
   confirm: (version_id: number) =>
     post<ApplyResult>("/api/confirm", { version_id }),
