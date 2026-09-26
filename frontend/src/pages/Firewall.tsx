@@ -1,146 +1,684 @@
 import { useState } from "react";
-import { Tab, Tabs, Typography } from "@mui/material";
+import { Button, Tab, Tabs, Typography } from "@mui/material";
 import { useConfiguration } from "../state";
-import { Badge, Card, DataTable } from "../ui";
+import type { Configuration, FirewallRule, Alias } from "../types";
+import { Badge, Card, DataTable, ErrorNotice } from "../ui";
+import {
+  Field,
+  SelectField,
+  Toggle,
+  EditorFooter,
+  nameValid,
+  endpointValid,
+  ipValid,
+  portValid,
+  addressElementValid,
+  portElementValid,
+} from "../editor";
+
+type Editable = Pick<
+  Configuration,
+  | "firewall_rules"
+  | "port_forwards"
+  | "outbound_nat"
+  | "outbound_nat_mode"
+  | "aliases"
+>;
+const protocols: FirewallRule["protocol"][] = [
+  "any",
+  "tcp",
+  "udp",
+  "icmp",
+  "ipv6-icmp",
+];
+const uniqueName = (name: string, rows: { name: string }[]) =>
+  nameValid(name) && rows.filter((r) => r.name === name).length === 1;
+const aliasValid = (a: Alias, aliases: Alias[]) =>
+  uniqueName(a.name, aliases) &&
+  a.elements
+    .filter(Boolean)
+    .every(a.type === "address" ? addressElementValid : portElementValid) &&
+  a.includes.filter(Boolean).every(nameValid);
+
 export default function Firewall() {
-  const { configuration: c } = useConfiguration();
+  const {
+    configuration: c,
+    version,
+    saveDraft,
+    error: apiError,
+    draftDirty,
+  } = useConfiguration();
+  const [editing, setEditing] = useState<Editable | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [tab, setTab] = useState("wan");
+  const rows = editing ?? c;
+  const isEditMode = editing !== null;
+  const patch = (value: Partial<Editable>) => setEditing({ ...rows, ...value });
   const zones = [
     ...new Set([
       "wan",
       "lan",
       "router",
       ...c.interfaces.flatMap((i) => (i.zone ? [i.zone] : [])),
-      ...c.firewall_rules.map((r) => r.ingress_zone),
+      ...rows.firewall_rules.map((r) => r.ingress_zone),
     ]),
   ];
-  const [tab, setTab] = useState("wan");
   const zone = zones.includes(tab);
+  const wan = c.interfaces.filter((i) => i.zone === "wan").map((i) => i.name);
+  const rules = rows.firewall_rules
+    .map((r, index) => ({ ...r, index }))
+    .filter((r) => r.ingress_zone === tab)
+    .sort((a, b) => a.order - b.order);
+  const updateRule = (index: number, value: Partial<FirewallRule>) =>
+    patch({
+      firewall_rules: rows.firewall_rules.map((r, i) =>
+        i === index ? { ...r, ...value } : r,
+      ),
+    });
+  const setZoneRules = (ordered: FirewallRule[]) =>
+    patch({
+      firewall_rules: [
+        ...rows.firewall_rules.filter((r) => r.ingress_zone !== tab),
+        ...ordered.map((r, order) => ({ ...r, order })),
+      ],
+    });
+  const reorder = (index: number, delta: number) => {
+    const ordered = rules.map(({ index: _index, ...r }) => r);
+    [ordered[index], ordered[index + delta]] = [
+      ordered[index + delta],
+      ordered[index],
+    ];
+    setZoneRules(ordered);
+  };
+  const allValid =
+    rows.firewall_rules.every(
+      (r) =>
+        uniqueName(r.name, rows.firewall_rules) &&
+        endpointValid(r.src) &&
+        endpointValid(r.dst),
+    ) &&
+    rows.port_forwards.every(
+      (p) =>
+        uniqueName(p.name, rows.port_forwards) &&
+        wan.includes(p.interface) &&
+        portValid(p.external_port) &&
+        portValid(p.target_port) &&
+        ipValid(p.target) &&
+        (!p.wan_address || ipValid(p.wan_address)),
+    ) &&
+    rows.outbound_nat.every(
+      (n) =>
+        uniqueName(n.name, rows.outbound_nat) &&
+        nameValid(n.egress_zone) &&
+        endpointValid(n.src) &&
+        endpointValid(n.dst) &&
+        (n.translation === "primary" || ipValid(n.translation)),
+    ) &&
+    rows.aliases.every((a) => aliasValid(a, rows.aliases));
+  const save = async () => {
+    if (!version || !allValid) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await saveDraft({
+        ...c,
+        ...rows,
+        aliases: rows.aliases.map((a) => ({
+          ...a,
+          elements: a.elements.filter(Boolean),
+          includes: a.includes.filter(Boolean),
+        })),
+      });
+      setEditing(null);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const remove = (fn: () => void) => (
+    <Button color="error" onClick={fn}>
+      Удалить
+    </Button>
+  );
   return (
     <>
       <Typography component="h1" variant="h1" className="page-title">
         Firewall
       </Typography>
+      <ErrorNotice error={error ?? apiError} />
+      {!isEditMode && (
+        <Button
+          disabled={!version}
+          onClick={() => {
+            setEditing({
+              firewall_rules: c.firewall_rules,
+              port_forwards: c.port_forwards,
+              outbound_nat: [...c.outbound_nat].sort(
+                (a, b) => a.order - b.order,
+              ),
+              outbound_nat_mode: c.outbound_nat_mode,
+              aliases: c.aliases,
+            });
+            setError(null);
+          }}
+        >
+          Редактировать
+        </Button>
+      )}
       <Tabs
         value={tab}
-        onChange={(_, value: string) => setTab(value)}
+        onChange={(_, v: string) => setTab(v)}
         variant="scrollable"
       >
         {[...zones, "Port Forward", "Outbound NAT", "Псевдонимы"].map((z) => (
           <Tab key={z} value={z} label={z} />
         ))}
       </Tabs>
-      {zone && (
-        <Card title={`Правила зоны ${tab}`}>
-          <DataTable
-            heads={[
-              "Порядок",
-              "Действие",
-              "Протокол",
-              "Источник",
-              "Назначение",
-              "Порт",
-              "Счётчики (states / packets / bytes)",
-              "Лог",
-            ]}
-            rows={c.firewall_rules
-              .filter((r) => r.ingress_zone === tab)
-              .sort((a, b) => a.order - b.order)
-              .map((r) => [
-                r.order,
-                <span style={{ opacity: r.enabled ? 1 : 0.45 }}>
-                  <Badge tone={r.action === "pass" ? "green" : "red"}>
-                    {r.action}
-                    {!r.enabled && " · выкл"}
-                  </Badge>
-                </span>,
-                r.protocol,
-                r.src,
-                r.dst,
-                r.destination_ports ?? "любой",
-                "TODO-API · runtime",
-                r.log ? "●" : "—",
-              ])}
-          />
-          <p className="sub">
-            First match wins. В конце набора — неявный default deny. Изменение
-            порядка и редактирование: TODO-API.
-          </p>
-          <Badge>
-            Anti-lockout: доступ к панели с lan —{" "}
-            {c.anti_lockout ? "вкл" : "выкл"}
-          </Badge>
-        </Card>
-      )}
-      <div className={zone ? "grid-2" : undefined}>
+      <fieldset
+        disabled={saving}
+        style={{ border: 0, padding: 0, minWidth: 0 }}
+      >
+        {zone && (
+          <Card title={`Правила зоны ${tab}`}>
+            <DataTable
+              heads={[
+                "Порядок",
+                "Имя",
+                "Протокол",
+                "Источник",
+                "Назначение",
+                "Действие",
+                "Включено",
+                "Лог",
+                "Порт",
+                "",
+              ]}
+              rows={rules.map((r, position) =>
+                isEditMode
+                  ? [
+                      <>
+                        <span>{r.order}</span>
+                        <Button
+                          aria-label={`Вверх ${r.name}`}
+                          disabled={position === 0}
+                          onClick={() => reorder(position, -1)}
+                        >
+                          ↑
+                        </Button>
+                        <Button
+                          aria-label={`Вниз ${r.name}`}
+                          disabled={position === rules.length - 1}
+                          onClick={() => reorder(position, 1)}
+                        >
+                          ↓
+                        </Button>
+                      </>,
+                      <Field
+                        label="Имя правила"
+                        value={r.name}
+                        valid={uniqueName(r.name, rows.firewall_rules)}
+                        hint="Латиница, цифры, _; до 31 символа; уникальное имя"
+                        onChange={(name) => updateRule(r.index, { name })}
+                      />,
+                      <SelectField
+                        label="Протокол"
+                        value={r.protocol}
+                        options={protocols}
+                        onChange={(protocol) =>
+                          updateRule(r.index, { protocol })
+                        }
+                      />,
+                      <Field
+                        label="Источник"
+                        value={r.src}
+                        valid={endpointValid(r.src)}
+                        hint="any, IP/CIDR, @алиас, zone:lan"
+                        onChange={(src) => updateRule(r.index, { src })}
+                      />,
+                      <Field
+                        label="Назначение"
+                        value={r.dst}
+                        valid={endpointValid(r.dst)}
+                        hint="any, IP/CIDR, @алиас, zone:lan"
+                        onChange={(dst) => updateRule(r.index, { dst })}
+                      />,
+                      <SelectField
+                        label="Действие"
+                        value={r.action}
+                        options={["pass", "block", "reject"]}
+                        onChange={(action) => updateRule(r.index, { action })}
+                      />,
+                      <Toggle
+                        label="Включено"
+                        value={r.enabled}
+                        onChange={(enabled) => updateRule(r.index, { enabled })}
+                      />,
+                      <Toggle
+                        label="Лог"
+                        value={r.log}
+                        onChange={(log) => updateRule(r.index, { log })}
+                      />,
+                      <Field
+                        label="Порт / @алиас"
+                        value={r.destination_ports ?? ""}
+                        onChange={(destination_ports) =>
+                          updateRule(r.index, {
+                            destination_ports: destination_ports || null,
+                          })
+                        }
+                      />,
+                      remove(() =>
+                        setZoneRules(
+                          rules
+                            .filter((rule) => rule.index !== r.index)
+                            .map(({ index: _index, ...rule }) => rule),
+                        ),
+                      ),
+                    ]
+                  : [
+                      r.order,
+                      r.name,
+                      r.protocol,
+                      r.src,
+                      r.dst,
+                      <Badge tone={r.action === "pass" ? "green" : "red"}>
+                        {r.action}
+                      </Badge>,
+                      r.enabled ? "да" : "нет",
+                      r.log ? "●" : "—",
+                      r.destination_ports,
+                      "TODO-API · runtime",
+                    ],
+              )}
+            />
+            {isEditMode && (
+              <Button
+                onClick={() =>
+                  patch({
+                    firewall_rules: [
+                      ...rows.firewall_rules,
+                      {
+                        name: "",
+                        ingress_zone: tab,
+                        protocol: "any",
+                        src: "any",
+                        dst: "any",
+                        destination_ports: null,
+                        action: "block",
+                        order: Math.max(-1, ...rules.map((r) => r.order)) + 1,
+                        enabled: true,
+                        log: false,
+                        counters: { states: 0, packets: 0, bytes: 0 },
+                      },
+                    ],
+                  })
+                }
+              >
+                + Добавить правило
+              </Button>
+            )}
+            <p className="sub">
+              First match wins. В конце набора — неявный default deny. Pass
+              разрешает, block блокирует, reject отклоняет с ответом.
+            </p>
+            <Badge>
+              Anti-lockout: доступ к панели с lan —{" "}
+              {c.anti_lockout ? "вкл" : "выкл"}
+            </Badge>
+          </Card>
+        )}
         {(zone || tab === "Port Forward") && (
           <Card title="Port Forward">
             <DataTable
               heads={[
+                "Имя",
                 "Интерфейс",
                 "Протокол",
-                "Внешний адрес",
                 "Внешний порт",
                 "Цель",
-                "FW-правило",
+                "Порт цели",
+                "WAN-адрес",
+                "",
               ]}
-              rows={c.port_forwards.map((p) => [
-                p.interface,
-                p.protocol,
-                p.wan_address ?? "основной",
-                p.external_port,
-                `${p.target}:${p.target_port}`,
-                <Badge>авто{!p.enabled && " · выкл"}</Badge>,
-              ])}
+              rows={rows.port_forwards.map((p, index) => {
+                const update = (v: Partial<typeof p>) =>
+                  patch({
+                    port_forwards: rows.port_forwards.map((row, i) =>
+                      i === index ? { ...row, ...v } : row,
+                    ),
+                  });
+                return isEditMode
+                  ? [
+                      <Field
+                        label="Имя Port Forward"
+                        value={p.name}
+                        valid={uniqueName(p.name, rows.port_forwards)}
+                        onChange={(name) => update({ name })}
+                      />,
+                      <SelectField
+                        label="WAN-интерфейс"
+                        value={p.interface}
+                        options={wan}
+                        onChange={(value) => update({ interface: value })}
+                      />,
+                      <SelectField
+                        label="Протокол"
+                        value={p.protocol}
+                        options={["tcp", "udp"]}
+                        onChange={(protocol) => update({ protocol })}
+                      />,
+                      <Field
+                        label="Внешний порт"
+                        type="number"
+                        value={p.external_port}
+                        valid={portValid(p.external_port)}
+                        onChange={(v) => update({ external_port: Number(v) })}
+                      />,
+                      <Field
+                        label="Цель"
+                        value={p.target}
+                        valid={ipValid(p.target)}
+                        onChange={(target) => update({ target })}
+                      />,
+                      <Field
+                        label="Порт цели"
+                        type="number"
+                        value={p.target_port}
+                        valid={portValid(p.target_port)}
+                        onChange={(v) => update({ target_port: Number(v) })}
+                      />,
+                      <Field
+                        label="WAN-адрес (опционально)"
+                        value={p.wan_address ?? ""}
+                        valid={!p.wan_address || ipValid(p.wan_address)}
+                        onChange={(v) => update({ wan_address: v || null })}
+                      />,
+                      <>
+                        <Toggle
+                          label="Включено"
+                          value={p.enabled}
+                          onChange={(enabled) => update({ enabled })}
+                        />
+                        {remove(() =>
+                          patch({
+                            port_forwards: rows.port_forwards.filter(
+                              (_, i) => i !== index,
+                            ),
+                          }),
+                        )}
+                      </>,
+                    ]
+                  : [
+                      p.name,
+                      p.interface,
+                      p.protocol,
+                      p.external_port,
+                      p.target,
+                      p.target_port,
+                      p.wan_address ?? "основной",
+                      <Badge>авто{!p.enabled && " · выкл"}</Badge>,
+                    ];
+              })}
             />
+            {isEditMode && (
+              <Button
+                onClick={() =>
+                  patch({
+                    port_forwards: [
+                      ...rows.port_forwards,
+                      {
+                        name: "",
+                        interface: wan[0] ?? "",
+                        protocol: "tcp",
+                        external_port: 80,
+                        target: "",
+                        target_port: 80,
+                        wan_address: null,
+                        enabled: true,
+                      },
+                    ],
+                  })
+                }
+              >
+                + Добавить Port Forward
+              </Button>
+            )}
             <p className="sub">
               Port forward приоритетнее локальных сервисов роутера на том же
-              порту.
+              порту. FW-правило создаётся автоматически.
             </p>
           </Card>
         )}
         {(zone || tab === "Outbound NAT") && (
-          <Card
-            title="Outbound NAT"
-            action={<Badge tone="amber">режим: {c.outbound_nat_mode}</Badge>}
-          >
+          <Card title="Outbound NAT">
+            {isEditMode ? (
+              <SelectField
+                label="Режим NAT"
+                value={rows.outbound_nat_mode}
+                options={["automatic", "hybrid", "manual", "disabled"]}
+                onChange={(outbound_nat_mode) => patch({ outbound_nat_mode })}
+              />
+            ) : (
+              <Badge>{rows.outbound_nat_mode}</Badge>
+            )}
             <DataTable
               heads={[
+                "Имя",
                 "Зона выхода",
                 "Источник",
                 "Назначение",
                 "Протокол",
                 "Translation",
                 "Do not NAT",
+                "",
               ]}
-              rows={[...c.outbound_nat]
-                .sort((a, b) => a.order - b.order)
-                .map((n) => [
-                  n.egress_zone,
-                  n.src,
-                  n.dst,
-                  n.protocol,
-                  n.translation,
-                  n.do_not_nat ? "да" : "нет",
-                ])}
+              rows={rows.outbound_nat.map((n, index) => {
+                const update = (v: Partial<typeof n>) =>
+                  patch({
+                    outbound_nat: rows.outbound_nat.map((row, i) =>
+                      i === index ? { ...row, ...v } : row,
+                    ),
+                  });
+                return isEditMode
+                  ? [
+                      <Field
+                        label="Имя NAT"
+                        value={n.name}
+                        valid={uniqueName(n.name, rows.outbound_nat)}
+                        onChange={(name) => update({ name })}
+                      />,
+                      <Field
+                        label="Зона выхода"
+                        value={n.egress_zone}
+                        valid={nameValid(n.egress_zone)}
+                        onChange={(egress_zone) => update({ egress_zone })}
+                      />,
+                      <Field
+                        label="Источник NAT"
+                        value={n.src}
+                        valid={endpointValid(n.src)}
+                        hint="any, IP/CIDR, @алиас, zone:lan"
+                        onChange={(src) => update({ src })}
+                      />,
+                      <Field
+                        label="Назначение NAT"
+                        value={n.dst}
+                        valid={endpointValid(n.dst)}
+                        hint="any, IP/CIDR, @алиас, zone:lan"
+                        onChange={(dst) => update({ dst })}
+                      />,
+                      <SelectField
+                        label="Протокол NAT"
+                        value={n.protocol}
+                        options={["any", "tcp", "udp", "icmp"]}
+                        onChange={(protocol) => update({ protocol })}
+                      />,
+                      <Field
+                        label="Translation"
+                        value={n.translation}
+                        valid={
+                          n.translation === "primary" || ipValid(n.translation)
+                        }
+                        hint="primary или IP-адрес"
+                        onChange={(translation) => update({ translation })}
+                      />,
+                      <Toggle
+                        label="Do not NAT"
+                        value={n.do_not_nat}
+                        onChange={(do_not_nat) => update({ do_not_nat })}
+                      />,
+                      remove(() =>
+                        patch({
+                          outbound_nat: rows.outbound_nat.filter(
+                            (_, i) => i !== index,
+                          ),
+                        }),
+                      ),
+                    ]
+                  : [
+                      n.name,
+                      n.egress_zone,
+                      n.src,
+                      n.dst,
+                      n.protocol,
+                      n.translation,
+                      n.do_not_nat ? "да" : "нет",
+                      "",
+                    ];
+              })}
             />
+            {isEditMode && (
+              <Button
+                onClick={() =>
+                  patch({
+                    outbound_nat: [
+                      ...rows.outbound_nat,
+                      {
+                        name: "",
+                        egress_zone: "wan",
+                        src: "any",
+                        dst: "any",
+                        protocol: "any",
+                        translation: "primary",
+                        do_not_nat: false,
+                        order:
+                          Math.max(
+                            -1,
+                            ...rows.outbound_nat.map((n) => n.order),
+                          ) + 1,
+                      },
+                    ],
+                  })
+                }
+              >
+                + Добавить NAT
+              </Button>
+            )}
             <p className="sub">
               First match wins. Путь выбирает таблица маршрутизации.
             </p>
           </Card>
         )}
-      </div>
-      {(zone || tab === "Псевдонимы") && (
-        <Card title="Псевдонимы (алиасы)">
-          <DataTable
-            heads={["Имя", "Тип", "Содержимое", "Вложение"]}
-            rows={c.aliases.map((a) => [
-              a.name,
-              a.type === "address" ? "Адреса" : "Порты",
-              a.elements.join(", "),
-              a.includes.join(", "),
-            ])}
-          />
-        </Card>
+        {(zone || tab === "Псевдонимы") && (
+          <Card title="Псевдонимы (алиасы)">
+            <DataTable
+              heads={["Имя", "Тип", "Содержимое", "Вложение", ""]}
+              rows={rows.aliases.map((a, index) => {
+                const update = (v: Partial<Alias>) =>
+                  patch({
+                    aliases: rows.aliases.map((row, i) =>
+                      i === index ? { ...row, ...v } : row,
+                    ),
+                  });
+                return isEditMode
+                  ? [
+                      <Field
+                        label="Имя алиаса"
+                        value={a.name}
+                        valid={uniqueName(a.name, rows.aliases)}
+                        hint="Латиница, цифры, _; до 31 символа; уникальное имя"
+                        onChange={(name) => update({ name })}
+                      />,
+                      <SelectField
+                        label="Тип алиаса"
+                        value={a.type}
+                        options={["address", "port"]}
+                        onChange={(type) => update({ type })}
+                      />,
+                      <Field
+                        label="Элементы (построчно)"
+                        multiline
+                        value={a.elements.join("\n")}
+                        valid={a.elements
+                          .filter(Boolean)
+                          .every(
+                            a.type === "address"
+                              ? addressElementValid
+                              : portElementValid,
+                          )}
+                        hint={
+                          a.type === "address"
+                            ? "IP, CIDR или IP-IP"
+                            : "tcp/80, udp/53, tcp/1000-2000"
+                        }
+                        onChange={(v) => update({ elements: v.split("\n") })}
+                      />,
+                      <Field
+                        label="Includes (построчно)"
+                        multiline
+                        value={a.includes.join("\n")}
+                        valid={a.includes.filter(Boolean).every(nameValid)}
+                        onChange={(v) => update({ includes: v.split("\n") })}
+                      />,
+                      remove(() =>
+                        patch({
+                          aliases: rows.aliases.filter((_, i) => i !== index),
+                        }),
+                      ),
+                    ]
+                  : [
+                      a.name,
+                      a.type,
+                      a.elements.join(", "),
+                      a.includes.join(", "),
+                      "",
+                    ];
+              })}
+            />
+            {isEditMode && (
+              <Button
+                onClick={() =>
+                  patch({
+                    aliases: [
+                      ...rows.aliases,
+                      { name: "", type: "address", elements: [], includes: [] },
+                    ],
+                  })
+                }
+              >
+                + Добавить алиас
+              </Button>
+            )}
+          </Card>
+        )}
+      </fieldset>
+      {isEditMode && (
+        <EditorFooter
+          saving={saving}
+          valid={allValid && !!version}
+          cancel={() => {
+            setEditing(null);
+            setError(null);
+          }}
+          save={() => void save()}
+        />
+      )}
+      {draftDirty && version?.status === "draft" && (
+        <p className="sub">
+          Черновик изменён и ожидает применения (экран «Применение»).
+        </p>
       )}
     </>
   );
