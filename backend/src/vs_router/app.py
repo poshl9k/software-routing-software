@@ -37,6 +37,18 @@ def create_app(engine=None, *, database_url=None, clock=None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    static_dir = os.environ.get("VS_ROUTER_STATIC_DIR")
+    if static_dir:
+        from fastapi.staticfiles import StaticFiles
+        from fastapi.responses import FileResponse
+
+        app.mount("/assets", StaticFiles(directory=f"{static_dir}/assets"), name="assets")
+
+        @app.get("/{spa_path:path}", include_in_schema=False)
+        async def spa(spa_path: str) -> FileResponse:
+            # Single-page app: any non-API path serves the shell, the router takes over.
+            return FileResponse(f"{static_dir}/index.html")
+
     return app
 
 
