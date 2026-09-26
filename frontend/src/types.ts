@@ -1,6 +1,7 @@
 /** Hand-maintained mirror of backend/src/vs_router/schema.py. Secrets stay opaque. */
 export type Secret =
-  { redacted: true } | { encrypted: true; ciphertext: string };
+  { redacted: true } | { encrypted: true; ciphertext: string }
+  | { plaintext: string }; // Write-only API input; encrypted by the server.
 export interface Interface {
   name: string;
   type: "physical" | "bridge" | "vlan";
@@ -108,6 +109,16 @@ export interface CaddySite {
   private_key: Secret | null;
   dns_api_token: Secret | null;
 }
+export interface DDNSUpdate {
+  name: string;
+  provider: "cloudflare" | "rfc2136";
+  hostname: string;
+  zone: string | null;
+  server: string | null;
+  key_name: string | null;
+  api_token: Secret;
+  wan_interface: string;
+}
 export interface Configuration {
   schema_version: 1;
   interfaces: Interface[];
@@ -120,6 +131,7 @@ export interface Configuration {
   dns: DNS;
   tunnels: Tunnel[];
   sites: CaddySite[];
+  ddns: DDNSUpdate[];
   anti_lockout: boolean;
   panel_port: number;
 }

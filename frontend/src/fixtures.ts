@@ -19,6 +19,7 @@ export const emptyConfiguration: Configuration = {
   },
   tunnels: [],
   sites: [],
+  ddns: [],
   anti_lockout: true,
   panel_port: 443,
 };

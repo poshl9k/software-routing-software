@@ -7,7 +7,7 @@
 # (wireguard-go may be symlinked as wg-go), and wg/awg tools on PATH.
 # Caddy must include caddy-l4 and caddy-dns/cloudflare; its service must run
 # `caddy run --config /etc/caddy/caddy.json` (JSON, never Caddyfile).
-# Set VS_ROUTER_SECRET_KEY in the agent service environment using a protected
+# Set VS_ROUTER_SECRET_KEY in the web API and agent service environments using a protected
 # EnvironmentFile; never put the encryption key into generated bundles.
 set -eu
 install -d -m 0750 /etc/caddy/vs-router

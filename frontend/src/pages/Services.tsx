@@ -3,6 +3,7 @@ import { Tab, Tabs, TextField, Typography } from "@mui/material";
 import { useConfiguration } from "../state";
 import { Badge, Card, DataTable, Todo } from "../ui";
 import { DHCPEditor, DNSEditor } from "./ServiceEditors";
+import { Sites, DDNS } from "./ConnectionEditors";
 import { demoLeases } from "../fixtures";
 function PageTabs({
   values,
@@ -224,183 +225,41 @@ const dnsDiagnostics: DNSDiagnostic[] = [
   },
   { time: "14:18:12", query: "broken.invalid", result: "NXDOMAIN", ok: false },
 ];
-export function Tunnels() {
-  const { configuration: c } = useConfiguration();
-  return (
-    <>
-      <Typography component="h1" variant="h1" className="page-title">
-        Туннели
-      </Typography>
-      <div className="grid-2">
-        {(["server", "client"] as const).map((role) => (
-          <div key={role}>
-            {c.tunnels
-              .filter((t) => t.role === role)
-              .map((t) => (
-                <Card
-                  key={t.name}
-                  title={t.name}
-                  action={
-                    <>
-                      <Badge tone={role === "server" ? "blue" : "purple"}>
-                        {role === "server" ? "сервер" : "клиент"}
-                      </Badge>
-                      <Badge>
-                        {t.protocol === "wg" ? "WireGuard" : "AmneziaWG"}
-                      </Badge>
-                    </>
-                  }
-                >
-                  <dl className="kv">
-                    <dt>Интерфейс</dt>
-                    <dd>{t.interface}</dd>
-                    {role === "server" ? (
-                      <>
-                        <dt>Порт</dt>
-                        <dd>{t.listen_port}/udp</dd>
-                        <dt>Пиры</dt>
-                        <dd>{t.peers.length} настроено</dd>
-                      </>
-                    ) : (
-                      <>
-                        <dt>Endpoint</dt>
-                        <dd>{t.endpoint}</dd>
-                        <dt>Keepalive</dt>
-                        <dd>{t.keepalive} с</dd>
-                        <dt>AllowedIPs</dt>
-                        <dd>{t.allowed_ips.join(", ")}</dd>
-                      </>
-                    )}
-                    <dt>Приватный ключ</dt>
-                    <dd>скрыт</dd>
-                    {t.protocol === "awg" && (
-                      <>
-                        <dt>Обфускация</dt>
-                        <dd>
-                          {Object.entries(t.obfuscation)
-                            .map(([k, v]) => `${k}=${v}`)
-                            .join(" · ")}
-                        </dd>
-                      </>
-                    )}
-                  </dl>
-                  <p className="sub">
-                    TODO-API · handshake и трафик недоступны
-                  </p>
-                  {role === "server" && (
-                    <DataTable
-                      heads={["Пир", "Ключ", "Handshake", "Трафик (↓/↑)"]}
-                      rows={t.peers.map((p) => [
-                        p.name,
-                        `${p.public_key.slice(0, 8)}…`,
-                        "TODO-API",
-                        "—",
-                      ])}
-                    />
-                  )}
-                  <p className="sub">
-                    AllowedIPs ≠ маршрут. Роль после создания не меняется.
-                  </p>
-                </Card>
-              ))}
-            {role === "client" && (
-              <Card title="Добавить туннель">
-                <Todo>
-                  Создание, импорт .conf и экспорт клиентских конфигов/QR пока
-                  не реализованы в UI.
-                </Todo>
-                <p>
-                  Сервер ждёт клиентов; клиент подключается к endpoint. Сервер и
-                  клиент одновременно — отдельные туннели.
-                </p>
-              </Card>
-            )}
-          </div>
-        ))}
-      </div>
-    </>
-  );
-}
+export { Tunnels } from "./ConnectionEditors";
 export function Proxy() {
-  const { configuration: c } = useConfiguration();
   const [tab, setTab] = useState(0);
-  const labels = {
-    http01: "Auto · HTTP-01",
-    dns01: "Auto · DNS-01",
-    manual: "Ручной (свой CA)",
-    passthrough: "TLS passthrough (SNI)",
-  };
   return (
     <>
       <Typography component="h1" variant="h1" className="page-title">
         Прокси (Caddy)
       </Typography>
-      <PageTabs values={["Сайты", "Журнал"]} value={tab} change={setTab} />
-      {tab === 0 && (
-        <Card title="Входящие сайты">
+      <PageTabs
+        values={["Сайты", "DDNS", "Журнал"]}
+        value={tab}
+        change={setTab}
+      />
+      <div hidden={tab !== 0}>
+        <Sites />
+      </div>
+      <div hidden={tab !== 1}>
+        <DDNS />
+      </div>
+      {tab === 2 && (
+        <Card title="Последние запросы к сайтам">
+          <Todo />
           <DataTable
-            heads={[
-              "Домен",
-              "WAN-адрес",
-              "Upstream",
-              "Режим сертификата",
-              "Статус",
-              "Backend",
-            ]}
-            rows={c.sites.map((s) => [
-              <b>{s.hostname}</b>,
-              s.wan_address,
-              s.upstream,
-              <Badge
-                tone={
-                  s.certificate_mode === "manual"
-                    ? "purple"
-                    : s.certificate_mode === "passthrough"
-                      ? "amber"
-                      : "blue"
-                }
-              >
-                {labels[s.certificate_mode]}
-              </Badge>,
-              s.certificate_mode === "http01" &&
-              c.port_forwards.some(
-                (p) =>
-                  p.enabled &&
-                  [80, 443].includes(p.external_port) &&
-                  (p.wan_address ??
-                    c.interfaces
-                      .find((i) => i.name === p.interface)
-                      ?.addresses[0]?.split("/")[0]) === s.wan_address,
-              ) ? (
-                <Badge tone="amber">Конфликт с port forward</Badge>
-              ) : (
-                "TODO-API"
-              ),
-              s.certificate_mode === "passthrough"
-                ? "TLS не завершается"
-                : "TODO-API",
+            heads={["Время", "Сайт", "Метод", "Путь", "Код", "Задержка"]}
+            rows={proxyLogs.map((l) => [
+              l.time,
+              l.site,
+              l.method,
+              l.path,
+              l.code,
+              l.latency,
             ])}
           />
-          <p className="sub">
-            HTTP-01 требует свободного порта 80 на выбранном WAN-адресе. DNS-01
-            использует API DNS-провайдера. Применение Caddy: TODO-API.
-          </p>
         </Card>
       )}
-      <Card title="Последние запросы к сайтам">
-        <Todo />
-        <DataTable
-          heads={["Время", "Сайт", "Метод", "Путь", "Код", "Задержка"]}
-          rows={proxyLogs.map((l) => [
-            l.time,
-            l.site,
-            l.method,
-            l.path,
-            <Badge tone={l.code < 400 ? "green" : "red"}>{l.code}</Badge>,
-            l.latency,
-          ])}
-        />
-      </Card>
     </>
   );
 }

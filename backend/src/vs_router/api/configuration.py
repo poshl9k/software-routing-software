@@ -1,5 +1,8 @@
 """Secret-safe views, JSON Pointer differences and offline validation."""
 import warnings
+import os
+
+from ..secrets import encrypt_secret
 from ipaddress import ip_address, ip_network
 from threading import RLock
 from pydantic import ValidationError
@@ -40,9 +43,37 @@ def restore_secrets(value, previous):
     return value
 
 
+def encrypt_inputs(value):
+    """Accept plaintext only at schema secret fields; never persist plaintext."""
+    if not isinstance(value, dict):
+        return value
+    value = {**value}
+    def convert(row, fields):
+        if not isinstance(row, dict):
+            return row
+        row = {**row}
+        for field in fields:
+            secret = row.get(field)
+            if isinstance(secret, dict) and set(secret) == {"plaintext"}:
+                if not isinstance(secret["plaintext"], str) or not secret["plaintext"]:
+                    raise APIError(422, "secret.empty")
+                try:
+                    row[field] = encrypt_secret(secret["plaintext"], os.environ.get(
+                        "VS_ROUTER_SECRET_KEY", "").encode()).model_dump(mode="json")
+                except (ValueError, TypeError):
+                    raise APIError(503, "secret.encryption_unavailable") from None
+        return row
+    for collection, fields in (("tunnels", ("private_key",)),
+                               ("sites", ("certificate", "private_key", "dns_api_token")),
+                               ("ddns", ("api_token",))):
+        if isinstance(value.get(collection), list):
+            value[collection] = [convert(row, fields) for row in value[collection]]
+    return value
+
+
 def parse_configuration(value, previous=None):
     try:
-        return Configuration.model_validate(restore_secrets(value, previous))
+        return Configuration.model_validate(restore_secrets(encrypt_inputs(value), previous))
     except ValidationError as exc:
         raise APIError(422, "configuration.invalid", validation_details(exc)) from None
 
