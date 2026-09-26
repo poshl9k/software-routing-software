@@ -1,0 +1,224 @@
+{
+  "admin": {
+    "listen": "127.0.0.1:2019"
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "http0": {
+          "listen": [
+            "203.0.113.1:80"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "headers": {
+                    "Location": [
+                      "https://{http.request.host}{http.request.uri}"
+                    ]
+                  },
+                  "status_code": 308
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "http01.example.com"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "https0": {
+          "automatic_https": {
+            "disable": true
+          },
+          "listen": [
+            "127.0.0.1:18000"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8080"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "dns01.example.com"
+                  ]
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8080"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "http01.example.com"
+                  ]
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8080"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "manual.example.com"
+                  ]
+                }
+              ]
+            }
+          ],
+          "tls_connection_policies": [
+            {}
+          ]
+        }
+      }
+    },
+    "layer4": {
+      "servers": {
+        "wan0": {
+          "listen": [
+            "203.0.113.1:443"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    {
+                      "dial": [
+                        "127.0.0.1:8080"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "tls": {
+                    "sni": [
+                      "passthrough.example.com"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "proxy",
+                  "upstreams": [
+                    {
+                      "dial": [
+                        "127.0.0.1:18000"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "tls": {
+                    "sni": [
+                      "dns01.example.com",
+                      "http01.example.com",
+                      "manual.example.com"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "issuers": [
+              {
+                "challenges": {
+                  "dns": {
+                    "provider": {
+                      "api_token": "dns-token",
+                      "name": "cloudflare"
+                    }
+                  },
+                  "http": {
+                    "disabled": true
+                  },
+                  "tls-alpn": {
+                    "disabled": true
+                  }
+                },
+                "module": "acme"
+              }
+            ],
+            "subjects": [
+              "dns01.example.com"
+            ]
+          },
+          {
+            "issuers": [
+              {
+                "challenges": {
+                  "tls-alpn": {
+                    "disabled": true
+                  }
+                },
+                "module": "acme"
+              }
+            ],
+            "subjects": [
+              "http01.example.com"
+            ]
+          }
+        ]
+      },
+      "certificates": {
+        "automate": [
+          "dns01.example.com",
+          "http01.example.com"
+        ],
+        "load_files": [
+          {
+            "certificate": "/etc/caddy/vs-router/manual.crt",
+            "key": "/etc/caddy/vs-router/manual.key"
+          }
+        ]
+      }
+    }
+  }
+}

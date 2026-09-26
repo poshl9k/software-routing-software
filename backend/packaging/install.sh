@@ -2,7 +2,25 @@
 # Install after installing the Python package and its system dependencies.
 # Requires: kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor
 # (validators: nft -c, unbound-checkconf, kea-dhcp4 -t must be on PATH).
+# Tunnel templates start wg-go/awg-go with the interface name; ExecStartPost
+# feeds setconf only after UAPI is ready. Install both binaries in /usr/local/bin
+# (wireguard-go may be symlinked as wg-go), and wg/awg tools on PATH.
+# Caddy must include caddy-l4 and caddy-dns/cloudflare; its service must run
+# `caddy run --config /etc/caddy/caddy.json` (JSON, never Caddyfile).
+# Set VS_ROUTER_SECRET_KEY in the agent service environment using a protected
+# EnvironmentFile; never put the encryption key into generated bundles.
 set -eu
+install -d -m 0750 /etc/caddy/vs-router
+chown root:caddy /etc/caddy/vs-router
+install -d -m 0700 /etc/vs-router/wireguard
+install -d -m 0755 /etc/systemd/system/caddy.service.d
+cat > /etc/systemd/system/caddy.service.d/vs-router.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/caddy run --config /etc/caddy/caddy.json
+ExecReload=
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/caddy.json
+EOF
 id vs-router-web >/dev/null 2>&1 || useradd --system --home-dir /var/lib/vs-router --shell /usr/sbin/nologin vs-router-web
 install -d -m 0770 /etc/vs-router /etc/vs-router/applied /etc/vs-router/confirmed
 chgrp vs-router-web /etc/vs-router /etc/vs-router/applied /etc/vs-router/confirmed

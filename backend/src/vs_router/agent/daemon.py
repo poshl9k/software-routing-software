@@ -198,10 +198,11 @@ def main():
     logging.basicConfig(level=logging.INFO)
     web_user = pwd.getpwnam('vs-router-web')
     database = create_engine(os.environ.get('VS_ROUTER_DATABASE_URL', 'sqlite:///vs-router.db'))
-    from .services import NftApply, UnboundReloader, KeaReloader, NetworkdReloader
+    from .services import NftApply, UnboundReloader, KeaReloader, NetworkdReloader, WireGuardReloader, CaddyReloader
     engine = ApplyEngine(panel_probe=panel_probe, reload_commands={
         'nftables': NftApply(), 'unbound': UnboundReloader(), 'kea': KeaReloader(),
         'networkd': NetworkdReloader(),
+        'wireguard': WireGuardReloader(), 'caddy': CaddyReloader(),
     })
     serve(os.environ.get('VS_ROUTER_AGENT_SOCKET', SOCKET_PATH), make_handlers(engine, database),
           {0, web_user.pw_uid}, socket_gid=None)

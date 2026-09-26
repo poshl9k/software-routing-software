@@ -57,8 +57,37 @@ def parse_bundle(path: str) -> dict[str, str]:
     return files
 
 
+def restore_tunnel_proxy_files() -> int:
+    """Only unpack files. systemd owns daemon startup and post-start setconf."""
+    from pathlib import Path
+    from .apply import LocalFileSystem
+    from .services import WireGuardReloader, CaddyReloader
+    fs = LocalFileSystem()
+    wireguard = Path(APPLIED) / 'wireguard.conf'
+    if wireguard.exists():
+        adapter = WireGuardReloader(filesystem=fs)
+        files, _, _ = adapter.install(wireguard)
+        fs.write(adapter.config_dir / 'manifest.json', files['manifest.json'])
+    caddy = Path(APPLIED) / 'caddy.conf'
+    if caddy.exists():
+        import grp
+        adapter = CaddyReloader(filesystem=fs)
+        files = adapter.install(caddy)
+        gid = grp.getgrnam('caddy').gr_gid
+        for target in [adapter.config_path] + [adapter.cert_dir / n for n in files if n != 'caddy.json']:
+            os.chown(target, 0, gid)
+            os.chmod(target, 0o640)
+    return 0
+
+
 def main() -> int:
     failures = 0
+
+    try:
+        failures += restore_tunnel_proxy_files()
+    except (OSError, ValueError, KeyError):
+        print("tunnel/proxy restore failed", file=sys.stderr)
+        failures += 1
 
     # 1. networkd files
     try:

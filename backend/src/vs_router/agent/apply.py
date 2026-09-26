@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass
 from typing import Callable, Protocol
 
 from ..generators import generate_kea, generate_nftables, generate_unbound, generate_networkd, serialize_networkd
+from ..generators.wireguard import generate_wg_bundle, serialize_wireguard
+from ..generators.caddy import generate_caddy_bundle, serialize_caddy
 from ..schema import ConfigurationVersion
 
 PENDING_DIR = Path('/run/vs-router/pending')
@@ -18,9 +20,9 @@ MARKER_PATH = Path('/run/vs-router/marker.json')
 # /run is volatile: retain the same journal across host reboots.
 JOURNAL_PATH = Path('/etc/vs-router/marker.json')
 FILES = {'nftables': 'nftables.conf', 'unbound': 'unbound.conf', 'kea': 'kea.json',
-         'networkd': 'networkd.conf'}
+         'networkd': 'networkd.conf', 'wireguard': 'wireguard.conf', 'caddy': 'caddy.conf'}
 VALIDATORS = {'nftables': ['nft', '-c', '-f'], 'unbound': ['unbound-checkconf'],
-              'kea': ['kea-dhcp4', '-t'], 'networkd': ['true']}
+              'kea': ['kea-dhcp4', '-t'], 'networkd': ['true'], 'wireguard': ['true'], 'caddy': ['true']}
 
 
 class Completed(Protocol):
@@ -176,6 +178,8 @@ class ApplyEngine:
             contents = {name: gen(version) for name, gen in (
                 ('nftables', generate_nftables), ('unbound', generate_unbound), ('kea', generate_kea))}
             contents["networkd"] = serialize_networkd(generate_networkd(version))
+            contents["wireguard"] = serialize_wireguard(generate_wg_bundle(version, {}))
+            contents["caddy"] = serialize_caddy(generate_caddy_bundle(version))
             self._install(contents, marker, self.validators if validators is None else validators)
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
