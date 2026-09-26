@@ -170,6 +170,25 @@ class CaddySite(Model):
         return self
 
 
+class DDNSUpdate(Model):
+    name: Name
+    provider: Literal["cloudflare", "rfc2136"]
+    hostname: str = Field(pattern=r"^[a-zA-Z0-9.-]+$")
+    zone: str | None = None
+    server: str | None = None   # RFC2136 DNS-сервер
+    key_name: str | None = None  # RFC2136 TSIG key name
+    api_token: EncryptedSecret   # Cloudflare token / TSIG key
+    wan_interface: InterfaceName = "enp1s0"
+
+    @model_validator(mode="after")
+    def check_provider(self):
+        if self.provider == "cloudflare" and (not self.zone):
+            raise ValueError("ddns.zone_required")
+        if self.provider == "rfc2136" and not (self.server and self.key_name):
+            raise ValueError("ddns.server_and_key_required")
+        return self
+
+
 class Configuration(Model):
     schema_version: Literal[1] = 1
     interfaces: tuple[Interface, ...] = ()
@@ -182,6 +201,7 @@ class Configuration(Model):
     dns: DNS = Field(default_factory=DNS)
     tunnels: tuple[Tunnel, ...] = ()
     sites: tuple[CaddySite, ...] = ()
+    ddns: tuple[DDNSUpdate, ...] = ()
     anti_lockout: bool = True
     panel_port: Port = 443
 

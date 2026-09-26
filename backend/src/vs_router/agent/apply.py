@@ -9,8 +9,10 @@ from dataclasses import asdict, dataclass
 from typing import Callable, Protocol
 
 from ..generators import generate_kea, generate_nftables, generate_unbound, generate_networkd, serialize_networkd
+import json as _json
 from ..generators.wireguard import generate_wg_bundle, serialize_wireguard
 from ..generators.caddy import generate_caddy_bundle, serialize_caddy
+from ..secrets import decrypt_secret as _decrypt
 from ..schema import ConfigurationVersion
 
 PENDING_DIR = Path('/run/vs-router/pending')
@@ -20,9 +22,10 @@ MARKER_PATH = Path('/run/vs-router/marker.json')
 # /run is volatile: retain the same journal across host reboots.
 JOURNAL_PATH = Path('/etc/vs-router/marker.json')
 FILES = {'nftables': 'nftables.conf', 'unbound': 'unbound.conf', 'kea': 'kea.json',
-         'networkd': 'networkd.conf', 'wireguard': 'wireguard.conf', 'caddy': 'caddy.conf'}
+         'networkd': 'networkd.conf', 'wireguard': 'wireguard.conf', 'caddy': 'caddy.conf',
+         'ddns': 'ddns.conf'}
 VALIDATORS = {'nftables': ['nft', '-c', '-f'], 'unbound': ['unbound-checkconf'],
-              'kea': ['kea-dhcp4', '-t'], 'networkd': ['true'], 'wireguard': ['true'], 'caddy': ['true']}
+              'kea': ['kea-dhcp4', '-t'], 'networkd': ['true'], 'wireguard': ['true'], 'caddy': ['true'], 'ddns': ['true']}
 
 
 class Completed(Protocol):
@@ -157,6 +160,10 @@ class ApplyEngine:
         for name, content in contents.items():
             self.fs.write(CONFIRMED_DIR / FILES[name], content)
 
+    def reveal_secret(self, secret):
+        import os
+        return _decrypt(secret, os.environ.get('VS_ROUTER_SECRET_KEY', '').encode())
+
     def apply_version(self, version_snapshot: dict, safe_mode: bool = False,
                       confirmation_timeout: int = 180, validators=None) -> ApplyResult:
         previous = self.status()
@@ -177,6 +184,19 @@ class ApplyEngine:
         try:
             contents = {name: gen(version) for name, gen in (
                 ('nftables', generate_nftables), ('unbound', generate_unbound), ('kea', generate_kea))}
+            # DDNS jobs (plaintext tokens live only in this 0600 file).
+            # No jobs or missing key -> empty config, worker does nothing.
+            try:
+                ddns_jobs = [
+                    {'name': j.name, 'provider': j.provider, 'hostname': j.hostname,
+                     'zone': j.zone, 'server': j.server, 'key_name': j.key_name,
+                     'api_token': self.reveal_secret(j.api_token),
+                     'wan_interface': j.wan_interface}
+                    for j in version.configuration.ddns
+                ]
+            except ValueError:
+                ddns_jobs = []
+            contents['ddns'] = _json.dumps({'ddns': ddns_jobs})
             contents["networkd"] = serialize_networkd(generate_networkd(version))
             contents["wireguard"] = serialize_wireguard(generate_wg_bundle(version, {}))
             contents["caddy"] = serialize_caddy(generate_caddy_bundle(version))

@@ -1,0 +1,17 @@
+[Unit]
+Description=vs-router DDNS update (Cloudflare / RFC 2136)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/var/lib/vs-router
+Environment=VS_ROUTER_SECRET_KEY_FILE=/etc/vs-router/secrets.key
+ExecStart=/usr/bin/python3 -m vs_router.agent.ddns_update
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/vs-router
+
+[Install]
+WantedBy=multi-user.target
