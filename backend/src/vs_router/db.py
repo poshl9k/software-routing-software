@@ -47,3 +47,15 @@ def save_version(session: Session, version: ConfigurationVersion) -> Configurati
     session.add(row)
     session.flush()
     return row
+
+
+class UserRow(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("role IN ('admin', 'operator')", name="ck_user_role"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(8), nullable=False, default="admin")
+    totp_secret: Mapped[str | None] = mapped_column(String(), nullable=True)
