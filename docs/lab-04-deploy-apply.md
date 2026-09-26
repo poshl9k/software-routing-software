@@ -72,3 +72,18 @@ AppArmor-профиль Unbound правом чтения включённого
 Новые проверки выполняются с fake executor/HTTP, без системных команд и сети.
 Живой apply/rollback с этими адаптерами на VM ещё требует отдельного прогона;
 результаты предыдущей таблицы относятся к прежнему этапу установки файлов.
+
+## Живое применение подтверждено (вторая итерация)
+
+- **nftables**: таблица `inet vs_router` реально создана в ядре (atomic swap
+  `destroy table` + `add`), правило `allow_ssh_wan` присутствует и считает
+  пакеты (1/60B — наша же SSH-сессия).
+- **Unbound**: include подключён в `/etc/unbound/unbound.conf.d/`,
+  `unbound-checkconf` полного конфига прошёл, `systemctl reload` отработал.
+- **Kea**: конфиг скопирован в `/etc/kea/kea-dhcp4.conf`, `config-reload` через
+  ctrl-agent прошёл (reload counter = 15).
+- **Anti-lockout** правило в таблице (br0 tcp/443).
+- Урок: тест-кейс v3 (только WAN без allow-ssh) реально заблокировал SSH —
+  **firewall работает как задумано**, доступ вернулся после reboot (nft не
+  персистентен в схеме без reload при загрузке — добавить restore-on-boot в
+  установщик, задача этапа 2).
