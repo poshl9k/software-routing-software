@@ -8,7 +8,7 @@ User=root
 Group=vs-router-web
 WorkingDirectory=/var/lib/vs-router
 Environment=VS_ROUTER_DATABASE_URL=sqlite:////var/lib/vs-router/vs-router.db
-ExecStart=python -m vs_router.agent.daemon
+ExecStart=/usr/bin/python3 -m vs_router.agent.daemon
 Restart=on-failure
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
