@@ -1,10 +1,12 @@
+import os
 from typing import Annotated
 from fastapi import APIRouter, Body, Depends, Path, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..agent.rpc import ApplyParams, ConfirmParams, EmptyParams, build_request
+from ..agent.rpc import ApplyParams, ConfirmParams, EmptyParams, build_request, AgentClient, AgentRPCError
+from ..agent.daemon import UnixSocketTransport
 from ..db import ConfigurationRow
 from ..schema import Configuration
 from .auth import admin, current_user, get_db
@@ -13,6 +15,18 @@ from .errors import APIError
 
 router = APIRouter(dependencies=[Depends(current_user)])
 PositiveID = Annotated[int, Path(ge=1)]
+
+
+def agent_call(method, body):
+    transport = UnixSocketTransport(os.environ.get('VS_ROUTER_AGENT_SOCKET', '/run/vs-router/agent.sock'))
+    try:
+        return AgentClient(transport).call(method, body)
+    except (OSError, EOFError):
+        raise APIError(503, 'agent.unavailable') from None
+    except AgentRPCError as exc:
+        raise APIError(409, exc.error.message) from None
+    finally:
+        transport.close()
 
 
 def version(db, version_id):
@@ -103,17 +117,17 @@ def apply(body: ApplyParams, db: Session = Depends(get_db)):
     result = validate(row.configuration.model_dump(mode="json"))
     if not result["valid"]:
         raise APIError(422, "configuration.invalid", result["errors"])
-    raise APIError(501, "agent.not_implemented")
+    return agent_call("apply_version", body)
 
 
 @router.post("/confirm", dependencies=[Depends(admin)])
 def confirm(body: ConfirmParams, db: Session = Depends(get_db)):
     build_request("confirm_version", body)
     version(db, body.version_id)
-    raise APIError(501, "agent.not_implemented")
+    return agent_call("confirm_version", body)
 
 
 @router.post("/rollback", dependencies=[Depends(admin)])
 def rollback(body: EmptyParams = Body(default=EmptyParams())):
     build_request("rollback", body)
-    raise APIError(501, "agent.not_implemented")
+    return agent_call("rollback", body)

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check vs-router rollback every 15 seconds
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=vs-router-rollback.service
+
+[Install]
+WantedBy=timers.target
