@@ -46,7 +46,7 @@ def generate_nftables(version: ConfigurationVersion) -> str:
             return f"ip daddr {p.wan_address}"
         return "fib daddr type local"
 
-    lines = ["table inet vs_router {"]
+    lines = ["destroy table inet vs_router", "table inet vs_router {"]
     for a in c.aliases:
         if a.type != "address":
             continue
