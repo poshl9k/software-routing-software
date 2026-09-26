@@ -110,7 +110,14 @@ class NetworkdReloader:
             checked(self.executor, ['chmod', '0644', str(destination)])
         for name in sorted(previous.keys() - files.keys()):
             self.fs.remove(self.network_dir / name)
-        checked(self.executor, ['networkctl', 'reload'])
+        # networkd may be absent on non-networkd hosts (lab/other init):
+        # files are still installed; reload failure must not roll back apply.
+        active = self.executor.run(
+            ['systemctl', 'is-active', '--quiet', 'systemd-networkd'], 15)
+        if active.returncode == 0:
+            checked(self.executor, ['networkctl', 'reload'])
+        else:
+            self.executor.run(['systemctl', 'restart', 'systemd-networkd'], 15)
         self.fs.write(self.manifest_path, serialize_networkd(files))
 
 
