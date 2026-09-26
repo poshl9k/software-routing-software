@@ -1,0 +1,32 @@
+### FILE: manifest.json
+{
+  "wg0": {
+    "addresses": [
+      "10.66.66.1/24"
+    ],
+    "file": "vpn.conf",
+    "protocol": "awg",
+    "routes": [
+      "0.0.0.0/0"
+    ]
+  }
+}
+### FILE: vpn.conf
+[Interface]
+PrivateKey = AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+ListenPort = 51820
+Jc = 4
+Jmin = 40
+Jmax = 70
+S1 = 15
+S2 = 95
+H1 = 1234567
+H2 = 2345678
+H3 = 3456789
+H4 = 4567890
+
+[Peer]
+PublicKey = SERVER
+Endpoint = 203.0.113.1:51820
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25

@@ -112,3 +112,123 @@ class NetworkdReloader:
             self.fs.remove(self.network_dir / name)
         checked(self.executor, ['networkctl', 'reload'])
         self.fs.write(self.manifest_path, serialize_networkd(files))
+
+
+class WireGuardReloader:
+    """Install private bundles, then configure userspace devices after readiness."""
+    def __init__(self, executor=None, filesystem=None,
+                 config_dir=Path('/etc/vs-router/wireguard'), sleep=None):
+        import time
+        self.executor = executor or SubprocessExecutor()
+        self.fs = filesystem or LocalFileSystem()
+        self.config_dir = config_dir
+        self.sleep = sleep or time.sleep
+
+    def install(self, path):
+        from ..generators.wireguard import deserialize_wireguard
+        import re
+        files = deserialize_wireguard(self.fs.read(path))
+        manifest = json.loads(files['manifest.json'])
+        for iface, entry in manifest.items():
+            if (not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_.-]{0,14}', iface)
+                    or entry['protocol'] not in ('wg', 'awg') or entry['file'] not in files):
+                raise ValueError('wireguard.invalid_manifest')
+        try:
+            previous = json.loads(self.fs.read(self.config_dir / 'manifest.json'))
+        except FileNotFoundError:
+            previous = {}
+        try:
+            owned = json.loads(self.fs.read(self.config_dir / 'owned.json'))
+        except FileNotFoundError:
+            owned = []
+        # Record ownership before writes so a failed apply cannot strand exports.
+        self.fs.write(self.config_dir / 'owned.json', json.dumps(sorted(set(owned) | set(files))))
+        for name in set(owned) - set(files):
+            self.fs.remove(self.config_dir / name)
+        for name, content in files.items():
+            if name != 'manifest.json':
+                self.fs.write(self.config_dir / name, content)
+        self.fs.write(self.config_dir / 'owned.json', json.dumps(sorted(files)))
+        return files, manifest, previous
+
+    def __call__(self, path):
+        files, manifest, previous = self.install(path)
+        # Keep union ownership across partial failures, including first application.
+        self.fs.write(self.config_dir / 'manifest.json', json.dumps(previous | manifest))
+        for iface, old in previous.items():
+            new = manifest.get(iface)
+            if new is None or old['protocol'] != new['protocol']:
+                checked(self.executor, ['systemctl', 'disable', '--now', f'vs-router-{old["protocol"]}@{iface}.service'])
+            elif new:
+                for route in sorted(set(old['routes']) - set(new['routes'])):
+                    checked(self.executor, self.route('del', route, iface))
+                for address in sorted(set(old['addresses']) - set(new['addresses'])):
+                    checked(self.executor, ['ip', 'addr', 'del', address, 'dev', iface])
+        for iface, entry in manifest.items():
+            unit = f'vs-router-{entry["protocol"]}@{iface}.service'
+            checked(self.executor, ['systemctl', 'enable', unit])
+            present = self.executor.run(['ip', 'link', 'show', 'dev', iface], 15).returncode == 0
+            alive = self.executor.run(['systemctl', 'is-active', '--quiet', unit], 15).returncode == 0
+            if not (present and alive):
+                checked(self.executor, ['systemctl', 'restart', unit])
+                for attempt in range(50):
+                    if self.executor.run([entry['protocol'], 'show', iface], 15).returncode == 0:
+                        break
+                    self.sleep(0.1)
+                else:
+                    raise ApplyError('agent.reload_failed')
+            checked(self.executor, [entry['protocol'], 'setconf', iface, str(self.config_dir / entry['file'])])
+            for address in entry['addresses']:
+                checked(self.executor, ['ip', 'addr', 'replace', address, 'dev', iface])
+            checked(self.executor, ['ip', 'link', 'set', 'dev', iface, 'up'])
+            for route in entry['routes']:
+                checked(self.executor, self.route('replace', route, iface))
+        for entry in previous.values():
+            if entry['file'] not in files:
+                self.fs.remove(self.config_dir / entry['file'])
+        self.fs.write(self.config_dir / 'manifest.json', files['manifest.json'])
+
+    @staticmethod
+    def route(action, value, iface):
+        from ipaddress import ip_network
+        network = ip_network(value)
+        return (['ip', '-6' if network.version == 6 else '-4', 'route', action,
+                 'default' if network.prefixlen == 0 else str(network), 'dev', iface]
+                + (['metric', '100'] if network.prefixlen == 0 else []))
+
+
+class CaddyReloader:
+    def __init__(self, executor=None, filesystem=None, http_client=None,
+                 config_path=Path('/etc/caddy/caddy.json'), cert_dir=Path('/etc/caddy/vs-router')):
+        self.executor = executor or SubprocessExecutor()
+        self.fs = filesystem or LocalFileSystem()
+        self.http_client = http_client or build_opener(ProxyHandler({})).open
+        self.config_path, self.cert_dir = config_path, cert_dir
+
+    def install(self, path):
+        from ..generators.caddy import deserialize_caddy
+        files = deserialize_caddy(self.fs.read(path))
+        json.loads(files['caddy.json'])
+        for name, content in files.items():
+            if name != 'caddy.json':
+                if not name.endswith(('.crt', '.key')):
+                    raise ValueError('caddy.invalid_bundle')
+                self.fs.write(self.cert_dir / name, content)
+        self.fs.write(self.config_path, files['caddy.json'])
+        return files
+
+    def __call__(self, path):
+        files = self.install(path)
+        # Caddy's unprivileged service must be able to reopen JSON and TLS keys.
+        for target in [self.config_path] + [self.cert_dir / n for n in files if n != 'caddy.json']:
+            checked(self.executor, ['chown', 'root:caddy', str(target)])
+            checked(self.executor, ['chmod', '0640', str(target)])
+        checked(self.executor, ['caddy', 'validate', '--config', str(self.config_path)])
+        request = Request('http://127.0.0.1:2019/load', data=files['caddy.json'].encode(),
+                          headers={'Content-Type': 'application/json'}, method='POST')
+        try:
+            with self.http_client(request, timeout=15) as response:
+                if response.status != 200:
+                    raise ApplyError('agent.reload_failed')
+        except (OSError, URLError, ValueError):
+            raise ApplyError('agent.reload_failed') from None

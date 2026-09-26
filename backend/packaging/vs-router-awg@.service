@@ -1,0 +1,19 @@
+[Unit]
+Description=vs-router AmneziaWG userspace tunnel %i
+After=vs-router-bootrestore.service network.target
+Requires=vs-router-bootrestore.service
+
+[Service]
+Type=simple
+Environment=WG_PROCESS_FOREGROUND=1
+ExecStart=/usr/local/bin/awg-go %i
+ExecStartPost=/usr/bin/python3 -m vs_router.agent.tunnel_start %i
+Restart=on-failure
+TimeoutStartSec=30
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
