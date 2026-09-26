@@ -1,0 +1,14 @@
+[Unit]
+Description=Check vs-router confirmation deadline
+Requires=vs-router-agent.service
+After=vs-router-agent.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/var/lib/vs-router
+ExecStart=python -m vs_router.agent.rollback_check
+NoNewPrivileges=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/vs-router /etc/vs-router

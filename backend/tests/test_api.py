@@ -201,15 +201,16 @@ async def test_origin_protection(api):
     assert (await client.post('/api/draft', json={}, headers={'Origin': 'https://router.test'})).status_code == 201
     assert (await client.delete('/api/draft', headers={'Sec-Fetch-Site': 'cross-site'})).status_code == 403
 
-async def test_agent_stubs_leave_state_unchanged(api):
+async def test_agent_unavailable_leaves_state_unchanged(api, monkeypatch):
     client, _, _ = api
     await sign_in(client)
     await client.post('/api/draft', json={})
+    monkeypatch.setenv('VS_ROUTER_AGENT_SOCKET', '/nonexistent-vs-router/agent.sock')
     before = (await client.get('/api/versions')).json()
     for path, body in [('apply', {'version_id': 1}), ('confirm', {'version_id': 1}), ('rollback', {})]:
         response = await client.post(f'/api/{path}', json=body)
-        assert response.status_code == 501
-        assert response.json()['code'] == 'agent.not_implemented'
+        assert response.status_code == 503
+        assert response.json()['code'] == 'agent.unavailable'
     assert (await client.post('/api/apply', json={'version_id': 999})).status_code == 404
     assert (await client.post('/api/apply', json={'version_id': 1, 'confirmation_timeout': 601})).status_code == 422
     assert (await client.post('/api/rollback', json={'command': 'reboot'})).status_code == 422
@@ -282,3 +283,40 @@ async def test_users_constraints_and_no_password_exposure(api):
         db.add(UserRow(username="admin", password_hash="hash", role="admin"))
         with pytest.raises(IntegrityError):
             db.commit()
+
+
+async def test_agent_rpc_success(api, monkeypatch):
+    from vs_router.api import versions
+    calls = []
+    class FakeClient:
+        def __init__(self, transport):
+            pass
+        def call(self, method, params):
+            calls.append((method, params.model_dump()))
+            return {'status': 'ok'}
+    monkeypatch.setattr(versions, 'AgentClient', FakeClient)
+    client = api[0]
+    await sign_in(client)
+    await client.post('/api/draft', json={})
+    for path, body in [('apply', {'version_id': 1}), ('confirm', {'version_id': 1}), ('rollback', {})]:
+        response = await client.post('/api/' + path, json=body)
+        assert response.status_code == 200
+        assert response.json() == {'status': 'ok'}
+    assert [c[0] for c in calls] == ['apply_version', 'confirm_version', 'rollback']
+
+
+async def test_agent_fake_unavailable(api, monkeypatch):
+    from vs_router.api import versions
+    class UnavailableClient:
+        def __init__(self, transport):
+            pass
+        def call(self, method, params):
+            raise FileNotFoundError('private socket path')
+    monkeypatch.setattr(versions, 'AgentClient', UnavailableClient)
+    client = api[0]
+    await sign_in(client)
+    await client.post('/api/draft', json={})
+    for path, body in [('apply', {'version_id': 1}), ('confirm', {'version_id': 1}), ('rollback', {})]:
+        response = await client.post('/api/' + path, json=body)
+        assert response.status_code == 503
+        assert response.json() == {'code': 'agent.unavailable', 'message': 'agent.unavailable', 'details': []}
