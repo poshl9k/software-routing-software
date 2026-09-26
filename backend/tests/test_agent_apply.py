@@ -45,7 +45,7 @@ def snapshot(i=1):
 def test_success_and_confirm(pipeline):
     engine, fs, executor, now = pipeline
     assert engine.apply_version(snapshot()).status == 'confirmed'
-    assert len(executor.calls) == 3
+    assert len(executor.calls) == len(FILES)
     assert all(timeout == 15 for _, timeout in executor.calls)
     assert engine.apply_version(snapshot(2), True, 60).status == 'pending'
     assert json.loads(fs.read(MARKER_PATH))['deadline'] == 160

@@ -1,0 +1,90 @@
+### FILE: 10-vs-router-br0.20.netdev
+[NetDev]
+Name=br0.20
+Kind=vlan
+
+[VLAN]
+Id=20
+### FILE: 10-vs-router-br0.20.network
+[Match]
+Name=br0.20
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+Address=192.168.20.1/24
+### FILE: 10-vs-router-br0.netdev
+[NetDev]
+Name=br0
+Kind=bridge
+### FILE: 10-vs-router-br0.network
+[Match]
+Name=br0
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+Address=192.168.10.1/24
+BindCarrier=eth1 eth2
+VLAN=br0.20
+### FILE: 10-vs-router-eth0.network
+[Match]
+Name=eth0
+
+[Network]
+DHCP=ipv4
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+
+[DHCPv4]
+UseDNS=no
+UseNTP=no
+UseHostname=no
+UseRoutes=no
+UseGateway=no
+### FILE: 10-vs-router-eth1.network
+[Match]
+Name=eth1
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+Bridge=br0
+### FILE: 10-vs-router-eth2.network
+[Match]
+Name=eth2
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+Bridge=br0
+### FILE: 10-vs-router-eth3.40.netdev
+[NetDev]
+Name=eth3.40
+Kind=vlan
+
+[VLAN]
+Id=40
+### FILE: 10-vs-router-eth3.40.network
+[Match]
+Name=eth3.40
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+Address=192.168.40.1/24
+### FILE: 10-vs-router-eth3.network
+[Match]
+Name=eth3
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+Address=192.168.30.1/24
+VLAN=eth3.40

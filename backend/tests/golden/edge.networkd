@@ -1,0 +1,46 @@
+### FILE: 10-vs-router-br0.netdev
+[NetDev]
+Name=br0
+Kind=bridge
+### FILE: 10-vs-router-br0.network
+[Match]
+Name=br0
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+### FILE: 10-vs-router-eth0.10.network
+[Match]
+Name=eth0.10
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+# Unassigned: fail-closed, no addresses or L2 attachments.
+### FILE: 10-vs-router-eth0.network
+[Match]
+Name=eth0
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+# WAN primary
+Address=203.0.113.2/24
+# WAN additional
+Address=203.0.113.3/32
+# WAN additional
+Address=203.0.113.4/32
+# WAN additional
+Address=2001:db8::2/128
+### FILE: 10-vs-router-eth1.network
+[Match]
+Name=eth1
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+# Unassigned: fail-closed, no addresses or L2 attachments.
