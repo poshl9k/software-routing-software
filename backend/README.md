@@ -141,3 +141,14 @@ RPC-клиент и HTTP-заглушки существуют; демон аг�
 `build_request`, `parse_response`, `AgentClient.call`. Внедряемый синхронный
 транспорт передаёт полное JSON-сообщение через send(bytes)/recv(); фрейминг,
 таймауты, unix socket и peer-credentials будут реализованы на стороне транспорта.
+
+### New secrets in draft requests
+
+`POST /api/draft` and `PUT /api/draft` accept `{ "plaintext": "..." }`
+for tunnel `private_key`, site `certificate`/`private_key`/`dns_api_token`,
+and DDNS `api_token`. The API encrypts these with `VS_ROUTER_SECRET_KEY`
+before schema validation and persistence. The web API and agent must use the
+same Fernet key from `/etc/vs-router/secrets.env`; a missing/invalid key returns
+`503 secret.encryption_unavailable`. Plaintext must not be placed in a
+`ciphertext` field. Responses continue to return `{ "redacted": true }`.
+Return that marker unchanged to retain a secret at the same named identity.
