@@ -1,0 +1,19 @@
+[Unit]
+Description=vs-router restore applied configuration on boot
+# Before networkd so .network files land before it starts; nft restores before
+# anything external talks to this machine.
+Before=systemd-networkd.service
+DefaultDependencies=no
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 -m vs_router.agent.boot_restore
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/systemd/network /etc/vs-router /etc/unbound/unbound.conf.d /etc/kea /run
+
+[Install]
+WantedBy=multi-user.target

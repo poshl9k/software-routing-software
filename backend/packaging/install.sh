@@ -51,4 +51,5 @@ if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.u
         echo '/etc/vs-router/applied/unbound.conf r,' >> "$local_profile"
     apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound
 fi
+systemctl enable vs-router-bootrestore.service 2>/dev/null || true
 systemctl daemon-reload
