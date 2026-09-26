@@ -74,3 +74,41 @@ class KeaReloader:
                 raise ApplyError('agent.reload_failed')
         except (OSError, URLError, ValueError) as exc:
             raise ApplyError('agent.reload_failed') from exc
+
+
+class NetworkdReloader:
+    """Install owned files and reload networkd; retain ownership across failures.
+
+    Only files recorded in our manifest are removed. networkctl reload applies
+    changed .network files but does not delete existing virtual kernel devices
+    when their .netdev disappears; device teardown is outside this adapter.
+    """
+    def __init__(self, executor=None, filesystem=None,
+                 network_dir=Path('/etc/systemd/network'),
+                 manifest_path=Path('/etc/vs-router/networkd-manifest.conf')):
+        self.executor = executor or SubprocessExecutor()
+        self.fs = filesystem or LocalFileSystem()
+        self.network_dir = network_dir
+        self.manifest_path = manifest_path
+
+    def __call__(self, path):
+        from ..generators.networkd import deserialize_networkd, serialize_networkd
+
+        try:
+            files = deserialize_networkd(self.fs.read(path))
+            try:
+                previous = deserialize_networkd(self.fs.read(self.manifest_path))
+            except FileNotFoundError:
+                previous = {}
+        except ValueError as exc:
+            raise ApplyError('agent.reload_failed') from exc
+        # Journal the union first: interrupted writes remain discoverable on rollback.
+        self.fs.write(self.manifest_path, serialize_networkd(previous | files))
+        for name, content in files.items():
+            destination = self.network_dir / name
+            self.fs.write(destination, content)
+            checked(self.executor, ['chmod', '0644', str(destination)])
+        for name in sorted(previous.keys() - files.keys()):
+            self.fs.remove(self.network_dir / name)
+        checked(self.executor, ['networkctl', 'reload'])
+        self.fs.write(self.manifest_path, serialize_networkd(files))

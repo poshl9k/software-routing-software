@@ -4,7 +4,7 @@ from ipaddress import ip_address, ip_network
 from threading import RLock
 from pydantic import ValidationError
 
-from ..generators import generate_kea, generate_nftables, generate_unbound
+from ..generators import generate_kea, generate_nftables, generate_unbound, generate_networkd
 from ..schema import Configuration, ConfigurationVersion
 from ..validators import expand_aliases, port_range
 from .errors import APIError, issue, validation_details
@@ -68,7 +68,8 @@ def validate(value, previous=None):
                 warnings.warn("alias.overlap", UserWarning)
             version = ConfigurationVersion(configuration=configuration)
             for name, generator in (("nftables", generate_nftables),
-                                    ("unbound", generate_unbound), ("kea", generate_kea)):
+                                    ("unbound", generate_unbound), ("kea", generate_kea),
+                                    ("networkd", generate_networkd)):
                 try:
                     generator(version)
                 except (ValueError, TypeError, KeyError, NotImplementedError):

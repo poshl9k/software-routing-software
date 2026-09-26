@@ -8,7 +8,7 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Protocol
 
-from ..generators import generate_kea, generate_nftables, generate_unbound
+from ..generators import generate_kea, generate_nftables, generate_unbound, generate_networkd, serialize_networkd
 from ..schema import ConfigurationVersion
 
 PENDING_DIR = Path('/run/vs-router/pending')
@@ -17,9 +17,10 @@ CONFIRMED_DIR = Path('/etc/vs-router/confirmed')
 MARKER_PATH = Path('/run/vs-router/marker.json')
 # /run is volatile: retain the same journal across host reboots.
 JOURNAL_PATH = Path('/etc/vs-router/marker.json')
-FILES = {'nftables': 'nftables.conf', 'unbound': 'unbound.conf', 'kea': 'kea.json'}
+FILES = {'nftables': 'nftables.conf', 'unbound': 'unbound.conf', 'kea': 'kea.json',
+         'networkd': 'networkd.conf'}
 VALIDATORS = {'nftables': ['nft', '-c', '-f'], 'unbound': ['unbound-checkconf'],
-              'kea': ['kea-dhcp4', '-t']}
+              'kea': ['kea-dhcp4', '-t'], 'networkd': ['true']}
 
 
 class Completed(Protocol):
@@ -174,6 +175,7 @@ class ApplyEngine:
         try:
             contents = {name: gen(version) for name, gen in (
                 ('nftables', generate_nftables), ('unbound', generate_unbound), ('kea', generate_kea))}
+            contents["networkd"] = serialize_networkd(generate_networkd(version))
             self._install(contents, marker, self.validators if validators is None else validators)
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
