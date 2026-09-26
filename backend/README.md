@@ -36,8 +36,10 @@ AWG требует Jc, S1, S2, H1–H4. Caddy хранит четыре режи
 Секреты принимаются только как объект `EncryptedSecret` с `encrypted: true` и
 Fernet ciphertext. `encrypt_secret`/`decrypt_secret` используют переданный извне
 ключ; ключ не хранится в БД. Поля plaintext для ключей/токенов отсутствуют,
-неизвестные JSON-поля отвергаются. API конфигурации и выдачи секретов нет.
-Единственный HTTP endpoint — `GET /health`.
+неизвестные JSON-поля отвергаются. HTTP API скрывает даже ciphertext: вместо
+секретного объекта возвращается `{"redacted": true}`. PUT сохраняет секрет по
+этому маркеру только у прежнего именованного объекта; новые секреты передаются
+как EncryptedSecret. `GET /health` доступен без входа.
 
 ## Генераторы
 
@@ -91,9 +93,51 @@ edge (вложенные aliases, диапазон портов, дополни�
 открыть Netlink, Unbound/Kea отсутствуют; unit/golden-тесты не заменяют их проверку.
 Генератор nft выдаёт содержимое принадлежащей роутеру таблицы; замена существующей
 таблицы и управление состоянием — обязанность будущего механизма применения.
-Агента, применения конфигов, управления ОС и публичного CRUD API здесь нет.
+RPC-клиент и HTTP-заглушки существуют; демон агента, применение конфигов и
+управление ОС пока не реализованы.
 
 Синтаксис сверялся с первичными источниками:
 [nftables](https://netfilter.org/projects/nftables/manpage.html),
 [Unbound](https://unbound.docs.nlnetlabs.nl/en/latest/manpages/unbound.conf.html),
 [Kea](https://kea.readthedocs.io/en/kea-2.6.2/arm/dhcp4-srv.html).
+
+
+## HTTP API
+
+Перед запуском выполнить `uv run alembic upgrade head`. По умолчанию приложение
+использует `sqlite:///vs-router.db`; URL можно задать через `VS_ROUTER_DATABASE_URL`
+(для Alembic тот же URL задаётся в `alembic.ini`). `create_app(engine=...)` принимает
+движок для тестов. Миграция 0002 добавляет users, роль и резервное поле TOTP.
+
+* `POST /api/setup`: `{ "username": "admin", "password": "..." }`, пароль от
+  8 символов; создаёт admin только при пустой users, повторный запрос — 409.
+* `POST /api/auth/login`: те же поля; argon2id, Secure/HttpOnly/SameSite=Strict
+  cookie на 8 часов. Нужен HTTPS. `POST /api/auth/logout` удаляет сессию,
+  `GET /api/auth/me` возвращает id/username/role. После пяти неудач с одного IP
+  вход заблокирован до конца 15-минутного окна. Заголовок X-Forwarded-For не
+  используется. Сессии и счётчики локальны одному процессу и очищаются при рестарте.
+* `GET /api/versions`, `GET /api/versions/{id}` возвращают снимки, включая
+  конфигурацию с маркерами секретов. Operator имеет только доступ на чтение.
+* `POST /api/draft`: тело Configuration или без тела — копия последней версии
+  (при пустой БД — defaults). Существующий draft даёт 409. `PUT /api/draft`
+  заменяет Configuration целиком; `DELETE /api/draft` удаляет черновик.
+* `POST /api/draft/validate`: без тела проверяет сохранённый draft; с телом
+  Configuration проверяет предложенную замену без записи. Ответ:
+  `{ "valid": true, "errors": [], "warnings": [] }`. Вызываются доменные
+  валидаторы и три чистых генератора; системные команды не запускаются.
+* `GET /api/diff/{id1}/{id2}`: список add/remove/replace с JSON Pointer `path`
+  и значениями `before`/`after`. Изменение секрета видно, его содержимое скрыто.
+* `POST /api/apply`: `{ "version_id": 1, "safe_mode": false,
+  "confirmation_timeout": 180 }` (таймер 60–600 секунд).
+  `POST /api/confirm`: `{ "version_id": 1 }`; `POST /api/rollback`: `{}`.
+  Валидные запросы возвращают 501, состояние БД не меняется.
+
+Ошибки: `{ "code": "...", "message": "...", "details": [] }`; message пока
+содержит машинный код для будущей локализации. В ошибках валидации нет исходных
+значений. Изменения требуют admin; чужой Origin и Sec-Fetch-Site: cross-site
+отвергаются. Запросы без Origin допускаются для небраузерных клиентов.
+
+`agent/rpc.py` задаёт JSON-RPC 2.0 whitelist, типы параметров и ответов,
+`build_request`, `parse_response`, `AgentClient.call`. Внедряемый синхронный
+транспорт передаёт полное JSON-сообщение через send(bytes)/recv(); фрейминг,
+таймауты, unix socket и peer-credentials будут реализованы на стороне транспорта.
