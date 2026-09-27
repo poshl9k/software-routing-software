@@ -75,7 +75,7 @@ function Collection<T extends Row>({
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
 }) {
-  const { configuration: c, version, saveDraft } = useConfiguration();
+  const { configuration: c, version, saveDraft, demo } = useConfiguration();
   const [editing, setEditing] = useState<
     { id: number; created: boolean; row: T }[] | null
   >(null);
@@ -139,7 +139,7 @@ function Collection<T extends Row>({
             }
             rows={rows.map((row) => {
               const cells = summary(row);
-              if (rowActions) {
+              if (rowActions && !demo) {
                 const actions = rowActions(row);
                 if (actions) cells.push(actions);
               }
