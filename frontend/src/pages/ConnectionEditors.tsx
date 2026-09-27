@@ -217,6 +217,7 @@ export function Tunnels() {
   const showQr=async(tunnel:string,peer:string)=>{setQrError(null);try{const blob=await api.peerQr(tunnel,peer);setQr({peer,url:URL.createObjectURL(blob)});}catch(e){setQrError(e);}};
   return (
     <>
+      {qrError && !qr && <ErrorNotice error={qrError} />}
       <Typography component="h1" variant="h1" className="page-title">
         Туннели
       </Typography>
@@ -342,10 +343,15 @@ export function Tunnels() {
               value={t.private_key}
               change={(v) => patch({ private_key: v ?? { plaintext: "" } })}
             />
-            <Button disabled={demo} onClick={() => void api.keygenTunnel(t.protocol).then((keys) => patch({
-              private_key: { plaintext: keys.private_key },
-              ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}),
-            }))}>Сгенерировать ключи</Button>
+            <Button disabled={demo} onClick={() => void api.keygenTunnel(t.protocol)
+              .then((keys) => patch({
+                private_key: { plaintext: keys.private_key },
+                ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}),
+              }))
+              .catch((e) => { setQrError(e); })}>Сгенерировать ключи</Button>
+            {t.private_key && !("plaintext" in t.private_key) && (
+              <p className="sub">Публичный ключ этого туннеля для удалённых клиентов не отображается: он выводится из приватного на хосте при применении.</p>
+            )}
             {t.role === "server" ? (
               <>
                 <Field
@@ -389,6 +395,7 @@ export function Tunnels() {
                         label="AllowedIPs пира"
                         value={p.allowed_ips.join(",")}
                         valid={ipsValid(p.allowed_ips)}
+                        placeholder="10.66.66.2/32"
                         onChange={(v) => update({ allowed_ips: split(v) })}
                       />
                       <SecretField label="Preshared key" value={p.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />

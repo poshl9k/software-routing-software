@@ -5,6 +5,8 @@
 # Tunnel templates start wg-go/awg-go with the interface name; ExecStartPost
 # feeds setconf only after UAPI is ready. Install both binaries in /usr/local/bin
 # (wireguard-go may be symlinked as wg-go), and wg/awg tools on PATH.
+# AmneziaWG must be 3.1+ (obfuscation parameters Jc/Jmin/Jmax/S1/S2/H1-H4 and
+# client profile compatibility are validated against 3.1).
 # Caddy must include caddy-l4 and caddy-dns/cloudflare; its service must run
 # `caddy run --config /etc/caddy/caddy.json` (JSON, never Caddyfile).
 # Set VS_ROUTER_SECRET_KEY in the web API and agent service environments using a protected
@@ -22,6 +24,11 @@ ExecReload=
 ExecReload=/usr/bin/caddy reload --config /etc/caddy/caddy.json
 EOF
 id vs-router-web >/dev/null 2>&1 || useradd --system --home-dir /var/lib/vs-router --shell /usr/sbin/nologin vs-router-web
+# Warn when the installed AmneziaWG is older than the validated 3.1 line.
+if command -v awg >/dev/null 2>&1 && ! awg --version 2>/dev/null | grep -q "v3\.[1-9]"; then
+    echo "WARNING: amneziawg-tools 3.1+ expected (obfuscation params validated on 3.1); found:" \
+        "$(awg --version 2>/dev/null | head -1)" >&2
+fi
 install -d -m 0770 /etc/vs-router /etc/vs-router/applied /etc/vs-router/confirmed
 chgrp vs-router-web /etc/vs-router /etc/vs-router/applied /etc/vs-router/confirmed
 install -d -m 0770 /run/vs-router

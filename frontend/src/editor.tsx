@@ -57,6 +57,7 @@ export function Field({
   onChange,
   valid = true,
   hint,
+  placeholder,
   multiline = false,
   type = "text",
 }: {
@@ -65,6 +66,7 @@ export function Field({
   onChange: (v: string) => void;
   valid?: boolean;
   hint?: string;
+  placeholder?: string;
   multiline?: boolean;
   type?: string;
 }) {
@@ -74,6 +76,7 @@ export function Field({
       label={label}
       value={value}
       type={type}
+      placeholder={placeholder}
       multiline={multiline}
       minRows={multiline ? 2 : undefined}
       error={!valid}
