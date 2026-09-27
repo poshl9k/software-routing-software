@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react";
-import { Button, TextField, Typography } from "@mui/material";
+import { Button, TextField, Typography, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
 import type { Tunnel, CaddySite, DDNSUpdate, Secret } from "../types";
 import { Badge, Card, DataTable, ErrorNotice } from "../ui";
+import { api } from "../api";
 import {
   Field,
   SelectField,
@@ -200,6 +201,8 @@ function Collection<T extends Row>({
   );
 }
 export function Tunnels() {
+  const [qr,setQr]=useState<{peer:string;url:string}|null>(null); const [qrError,setQrError]=useState<unknown>(null);
+  const showQr=async(tunnel:string,peer:string)=>{setQrError(null);try{const blob=await api.peerQr(tunnel,peer);setQr({peer,url:URL.createObjectURL(blob)});}catch(e){setQrError(e);}};
   return (
     <>
       <Typography component="h1" variant="h1" className="page-title">
@@ -361,6 +364,7 @@ export function Tunnels() {
                         onChange={(v) => update({ allowed_ips: split(v) })}
                       />
                       <p className="sub">Preshared key: скрыт · TODO</p>
+                      <Button onClick={()=>void showQr(t.name,p.name)}>QR-код</Button>
                       <Button disabled>Экспорт пира · TODO-API-EXPORT</Button>
                       <Button
                         onClick={() =>
@@ -451,6 +455,10 @@ export function Tunnels() {
           </>
         )}
       />
+      <Dialog open={!!qr} onClose={()=>{if(qr)URL.revokeObjectURL(qr.url);setQr(null);}}>
+        <DialogTitle>QR-код пира {qr?.peer}</DialogTitle><DialogContent>{qrError?<ErrorNotice error={qrError}/>:qr&&<img src={qr.url} alt={`QR-код пира ${qr.peer}`} style={{maxWidth:"100%"}}/>}</DialogContent>
+        <DialogActions>{qr&&<Button component="a" href={qr.url} download={`${qr.peer}.png`}>Скачать PNG</Button>}<Button onClick={()=>{if(qr)URL.revokeObjectURL(qr.url);setQr(null);}}>Закрыть</Button></DialogActions>
+      </Dialog>
       <p className="sub">
         AllowedIPs ≠ маршрут. Роль после создания не меняется.
       </p>

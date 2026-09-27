@@ -1,10 +1,13 @@
 import { useState } from "react";
-import { Tab, Tabs, TextField, Typography } from "@mui/material";
+import { Button, Tab, Tabs, TextField, Typography } from "@mui/material";
 import { useConfiguration } from "../state";
 import { Badge, Card, DataTable, Todo } from "../ui";
 import { DHCPEditor, DNSEditor } from "./ServiceEditors";
 import { Sites, DDNS } from "./ConnectionEditors";
-import { demoLeases } from "../fixtures";
+import { api, ApiError } from "../api";
+import type { DHCPLease } from "../types";
+import { ErrorNotice } from "../ui";
+import { Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 function PageTabs({
   values,
   value,
@@ -37,6 +40,8 @@ function DHCPReadOnly() {
   const { configuration: c } = useConfiguration();
   const [tab, setTab] = useState(0);
   const [query, setQuery] = useState("");
+  const [leases, setLeases] = useState<DHCPLease[]>([]); const [leaseError,setLeaseError]=useState<unknown>(null); const [loadingLeases,setLoadingLeases]=useState(false);
+  const loadLeases = async (q=query) => { setLoadingLeases(true); setLeaseError(null); try { setLeases(q.trim()?await api.searchLeases(q.trim()):await api.dhcpLeases()); } catch(e) { setLeaseError(e); setLeases([]); } finally { setLoadingLeases(false); } };
   return (
     <>
       <Typography component="h1" variant="h1" className="page-title">
@@ -45,7 +50,7 @@ function DHCPReadOnly() {
       <PageTabs
         values={["Подсети", "Резервации", "Аренды"]}
         value={tab}
-        change={setTab}
+        change={(n) => { setTab(n); if (n === 2) void loadLeases(""); }}
       />
       {tab === 0 && (
         <Card title="Подсети и пулы">
@@ -89,30 +94,11 @@ function DHCPReadOnly() {
           </p>
         </Card>
       )}
-      {(tab === 0 || tab === 2) && (
-        <Card
-          title="Текущие аренды"
-          action={
-            <TextField
-              label="Поиск: MAC, IP, hostname"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          }
-        >
-          <Todo />
-          <DataTable
-            heads={["IP-адрес", "MAC", "Hostname", "Подсеть", "Истекает"]}
-            rows={demoLeases
-              .filter((l) =>
-                `${l.ip} ${l.mac} ${l.hostname}`
-                  .toLowerCase()
-                  .includes(query.toLowerCase()),
-              )
-              .map((l) => [l.ip, l.mac, l.hostname, l.subnet, l.expires])}
-          />
-        </Card>
-      )}
+      {tab===2&&<Card title="Текущие аренды" action={<Button onClick={()=>void loadLeases()} disabled={loadingLeases}>Обновить</Button>}>
+        <div className="footer-actions"><TextField label="Поиск: MAC, IP, hostname" size="small" value={query} onChange={e=>setQuery(e.target.value)}/><Button onClick={()=>void loadLeases()} disabled={loadingLeases}>Найти</Button></div>
+        {leaseError instanceof ApiError && (leaseError.status===502||leaseError.status===503) ? <Badge tone="amber">Kea ctrl-agent недоступен</Badge> : <ErrorNotice error={leaseError}/>}
+        <DataTable heads={["IP-адрес","MAC","Hostname","Подсеть","Истекает"]} rows={leases.map(l=>[l.ip,l.mac,l.hostname??"—",l.subnet,l.expires_in])}/>
+      </Card>}
     </>
   );
 }

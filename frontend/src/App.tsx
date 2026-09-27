@@ -20,6 +20,7 @@ import Network from "./pages/Network";
 import Firewall from "./pages/Firewall";
 import { DHCP, DNS, Proxy, Tunnels } from "./pages/Services";
 import ApplyScreen from "./pages/ApplyScreen";
+import Maintenance from "./pages/Maintenance";
 import Onboarding, { Login } from "./pages/Onboarding";
 import { theme } from "./theme";
 import { RouterProvider, useConfiguration } from "./state";
@@ -35,6 +36,7 @@ export const navigation = [
   { to: "/firewall", label: "Правила", icon: "✉" },
   { to: "/events", label: "Журнал", icon: "▤" },
   { to: "/apply", label: "Применение", icon: "⚙" },
+  { to: "/maintenance", label: "Обслуживание", icon: "⌁" },
 ];
 function Layout() {
   const { pathname, search } = useLocation();
@@ -132,6 +134,7 @@ export default function App() {
             <Route path="proxy" element={<Proxy />} />
             <Route path="firewall" element={<Firewall />} />
             <Route path="apply" element={<ApplyScreen />} />
+            <Route path="maintenance" element={<Maintenance />} />
             <Route path="events" element={<Events />} />
             <Route
               path="*"
