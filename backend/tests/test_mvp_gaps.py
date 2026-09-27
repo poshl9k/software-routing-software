@@ -104,7 +104,7 @@ async def test_diag_ping_parse_and_input_validation(api):
 
 async def test_leases_unreachable_ctrl_agent(api, monkeypatch):
     client = await _confirm_sample(api)
-    monkeypatch.setenv('VS_ROUTER_KEA_CTRL_SOCKET', '/nonexistent/kea.sock')
+    monkeypatch.setenv('VS_ROUTER_KEA_CTRL_URL', 'http://127.0.0.1:1/')
     response = await client.get('/api/dhcp/leases')
     assert response.status_code == 503
     assert response.json()['code'] == 'kea.unavailable'

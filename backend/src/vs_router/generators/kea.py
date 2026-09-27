@@ -22,6 +22,10 @@ def generate_kea(version: ConfigurationVersion) -> str:
     return json.dumps({"Dhcp4": {
         "control-socket": {"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"},
         "interfaces-config": {"interfaces": sorted({s.interface for s in c.dhcp_subnets})},
+        "hooks-libraries": [
+            {"library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so"},
+            {"library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_stat_cmds.so"},
+        ],
         "lease-database": {"type": "memfile", "persist": True},
         "valid-lifetime": 3600, "subnet4": subnets,
     }}, indent=2) + "\n"

@@ -9,6 +9,14 @@
         "eth1"
       ]
     },
+    "hooks-libraries": [
+      {
+        "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so"
+      },
+      {
+        "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_stat_cmds.so"
+      }
+    ],
     "lease-database": {
       "type": "memfile",
       "persist": true

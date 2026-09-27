@@ -1,8 +1,10 @@
-"""Live DHCP leases read from the Kea ctrl-agent over its Unix HTTP socket."""
+"""Live DHCP leases read from the Kea ctrl-agent over HTTP (TCP localhost)."""
+import base64
 import http.client
 import json
 import os
-import socket
+from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Query
 
@@ -12,43 +14,50 @@ from .errors import APIError
 router = APIRouter(dependencies=[Depends(current_user)])
 
 
-def kea_request():
-    path = os.environ.get('VS_ROUTER_KEA_CTRL_SOCKET', '/run/kea/kea-ctrl-agent.sock')
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(4)
+def _auth_header():
+    user = os.environ.get('VS_ROUTER_KEA_API_USER')
+    password = os.environ.get('VS_ROUTER_KEA_API_PASSWORD')
+    if password is None:
+        path = os.environ.get('VS_ROUTER_KEA_API_PASSWORD_FILE', '/etc/kea/kea-api-password')
+        try:
+            password = Path(path).read_text().strip()
+        except OSError:
+            return None
+    if not user or not password:
+        return None
+    token = base64.b64encode(f'{user}:{password}'.encode()).decode()
+    return f'Basic {token}'
+
+
+def kea_request(command='lease4-get-all'):
+    url = urlparse(os.environ.get('VS_ROUTER_KEA_CTRL_URL', 'http://127.0.0.1:8000/'))
+    headers = {'Content-Type': 'application/json'}
+    auth = _auth_header()
+    if auth:
+        headers['Authorization'] = auth
+    body = json.dumps({'command': command, 'service': ['dhcp4']}).encode()
+    connection = http.client.HTTPConnection(url.hostname or '127.0.0.1',
+                                            url.port or 8000, timeout=4)
     try:
-        body = json.dumps({'command': 'lease4-get-all', 'service': ['dhcp4']}).encode()
-        sock.connect(path)
-        sock.sendall(b'POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n'
-                     b'Connection: close\r\nContent-Length: '
-                     + str(len(body)).encode() + b'\r\n\r\n' + body)
-        raw = bytearray()
-        while True:
-            chunk = sock.recv(65536)
-            if not chunk:
-                break
-            raw.extend(chunk)
+        connection.request('POST', url.path or '/', body=body, headers=headers)
+        response = connection.getresponse()
+        if response.status == 401:
+            raise APIError(502, 'kea.auth_failed')
+        raw = response.read()
+    except OSError:
+        raise APIError(503, 'kea.unavailable') from None
+    except http.client.HTTPException as exc:
+        raise APIError(502, 'kea.error') from exc
     finally:
-        sock.close()
-    head, body = bytes(raw).split(b'\r\n\r\n', 1)
-    if b' 200 ' not in head.split(b'\r\n', 1)[0]:
-        raise ValueError('kea.http_status')
-    if b'transfer-encoding: chunked' in head.lower():
-        decoded = bytearray()
-        while body:
-            size, body = body.split(b'\r\n', 1)
-            n = int(size.split(b';')[0], 16)
-            if n == 0:
-                break
-            decoded.extend(body[:n])
-            body = body[n + 2:]
-        body = bytes(decoded)
-    return json.loads(body)
+        connection.close()
+    return json.loads(raw)
 
 
 def lease_rows(subnet=None):
     try:
         result = kea_request()
+    except APIError:
+        raise
     except OSError:
         raise APIError(503, 'kea.unavailable') from None
     except Exception:
