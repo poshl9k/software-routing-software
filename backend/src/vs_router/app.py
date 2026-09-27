@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine
@@ -42,12 +44,16 @@ def create_app(engine=None, *, database_url=None, clock=None) -> FastAPI:
         from fastapi.staticfiles import StaticFiles
         from fastapi.responses import FileResponse
 
-        app.mount("/assets", StaticFiles(directory=f"{static_dir}/assets"), name="assets")
+        assets = Path(static_dir) / "assets"
+        # The panel must start even without a deployed frontend (API-only mode):
+        # install.sh deploys the built UI into VS_ROUTER_STATIC_DIR when present.
+        if assets.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
-        @app.get("/{spa_path:path}", include_in_schema=False)
-        async def spa(spa_path: str) -> FileResponse:
-            # Single-page app: any non-API path serves the shell, the router takes over.
-            return FileResponse(f"{static_dir}/index.html")
+            @app.get("/{spa_path:path}", include_in_schema=False)
+            async def spa(spa_path: str) -> FileResponse:
+                # Single-page app: any non-API path serves the shell, the router takes over.
+                return FileResponse(Path(static_dir) / "index.html")
 
     return app
 

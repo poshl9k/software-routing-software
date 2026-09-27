@@ -69,5 +69,19 @@ if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.u
         echo '/etc/vs-router/applied/unbound.conf r,' >> "$local_profile"
     apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound
 fi
+# Web UI static bundle: deploy ../frontend/dist (sibling of backend/) when present.
+# Panel runs API-only if the UI is not built yet (no crash on missing assets).
+UI_SRC=$(dirname -- "$packaging_dir")/../frontend/dist
+if [ -d "$UI_SRC" ] && [ -f "$UI_SRC/index.html" ]; then
+    install -d -m 0755 /var/lib/vs-router/ui
+    rm -rf /var/lib/vs-router/ui.new
+    cp -a "$UI_SRC" /var/lib/vs-router/ui.new
+    rm -rf /var/lib/vs-router/ui
+    mv /var/lib/vs-router/ui.new /var/lib/vs-router/ui
+    chmod -R a+rX /var/lib/vs-router/ui
+fi
+# Lab-only TCP bridge to the unix socket. Not for production: in production the
+# panel is reached over HTTPS through Caddy. Enable manually when needed:
+#   systemctl enable --now vs-router-web-tcp.service
 systemctl enable vs-router-bootrestore.service 2>/dev/null || true
 systemctl daemon-reload
