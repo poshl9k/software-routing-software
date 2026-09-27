@@ -4,8 +4,10 @@ import logging
 import os
 from pathlib import Path
 import pwd
+import re
 import socket
 import struct
+import subprocess
 
 from pydantic import ValidationError
 from sqlalchemy import create_engine
@@ -157,6 +159,63 @@ def panel_probe():
 
 
 def make_handlers(engine, database):
+    def safe_host(host):
+        try:
+            import ipaddress
+            ipaddress.ip_address(host)
+            return True
+        except ValueError:
+            return bool(re.fullmatch(r'(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?', host))
+
+    def diag_ping(host, count, source_interface=None):
+        if not safe_host(host):
+            raise ApplyError('diag.invalid_input')
+        command = ['ping', '-c', str(count), '-W', '2']
+        if source_interface:
+            command += ['-I', source_interface]
+        command += [host]
+        try:
+            out = subprocess.run(command, capture_output=True, text=True, timeout=10,
+                                 check=False).stdout
+        except subprocess.TimeoutExpired:
+            raise ApplyError('diag.timeout') from None
+        from ..api.diag import parse_ping
+        try:
+            return parse_ping(out)
+        except Exception:
+            raise ApplyError('diag.parse_failed') from None
+
+    def diag_traceroute(host):
+        if not safe_host(host):
+            raise ApplyError('diag.invalid_input')
+        try:
+            out = subprocess.run(['traceroute', '-n', host], capture_output=True, text=True,
+                                 timeout=20, check=False).stdout
+        except subprocess.TimeoutExpired:
+            raise ApplyError('diag.timeout') from None
+        return out.splitlines()
+
+    def nft_counters():
+        try:
+            out = subprocess.run(['nft', '-j', 'list', 'table', 'inet', 'vs_router'],
+                                 capture_output=True, text=True, timeout=5, check=True).stdout
+        except Exception:
+            raise ApplyError('nft.unavailable') from None
+        try:
+            data = json.loads(out)
+            result = {}
+            for entry in data.get('nftables', []):
+                rule = entry.get('rule', {})
+                comment = rule.get('comment')
+                for expr in rule.get('expr', []):
+                    counter = expr.get('counter')
+                    if comment and counter:
+                        result[comment] = {'packets': counter.get('packets', 0),
+                                           'bytes': counter.get('bytes', 0)}
+            return result
+        except Exception:
+            raise ApplyError('nft.unavailable') from None
+
     def apply_version(version_id, safe_mode=False, confirmation_timeout=180):
         with Session(database) as db:
             row = db.get(ConfigurationRow, version_id)
@@ -191,7 +250,9 @@ def make_handlers(engine, database):
         return engine.status()
 
     return {'apply_version': apply_version, 'confirm_version': confirm_version,
-            'rollback': lambda: engine.rollback('requested'), 'status': status}
+            'rollback': lambda: engine.rollback('requested'), 'status': status,
+            'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
+            'nft_counters': nft_counters}
 
 
 def main():
