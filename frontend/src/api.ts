@@ -62,6 +62,8 @@ export async function request<T>(
 const post = <T>(path: `/api/${string}`, body: unknown) =>
   request<T>(path, { method: "POST", body: JSON.stringify(body) });
 export const api = {
+  keygenTunnel: (protocol: "wg" | "awg") => post<{ private_key: string; public_key: string; obfuscation?: Record<string, number> }>("/api/keygen/tunnel", { protocol }),
+  keygenPeer: () => post<{ preshared_key: string }>("/api/keygen/peer", {}),
   versions: (signal?: AbortSignal) =>
     request<ConfigurationVersion[]>("/api/versions", { signal }),
   setup: (body: Credentials) => post<User>("/api/setup", body),

@@ -8,9 +8,11 @@ from vs_router.secrets import decrypt_secret
 def payload():
     return {'interfaces': [{'name': 'enp1s0', 'type': 'physical', 'zone': 'wan'},
                            {'name': 'wg0', 'type': 'physical', 'zone': 'vpn'}],
-            'tunnels': [{'name': 'client', 'interface': 'wg0', 'role': 'client',
-                         'protocol': 'wg', 'endpoint': 'example.org:51820',
-                         'server_public_key': 'public', 'private_key': {'plaintext': 'new-key'}}],
+            'tunnels': [{'name': 'client', 'interface': 'wg0', 'role': 'server',
+                         'protocol': 'wg', 'listen_port': 51820,
+                         'private_key': {'plaintext': 'new-key'},
+                         'peers': [{'name': 'peer', 'public_key': 'public', 'allowed_ips': [],
+                                    'preshared_key': {'plaintext': 'peer-psk'}}]}],
             'sites': [{'name': 'web', 'hostname': 'example.org', 'upstream': 'localhost:443',
                        'certificate_mode': 'manual', 'certificate': {'plaintext': 'cert'},
                        'private_key': {'plaintext': 'cert-key'}}],
@@ -23,6 +25,7 @@ def test_encrypt_and_restore(monkeypatch):
     monkeypatch.setenv('VS_ROUTER_SECRET_KEY', key.decode())
     config = parse_configuration(payload())
     assert decrypt_secret(config.tunnels[0].private_key, key) == 'new-key'
+    assert decrypt_secret(config.tunnels[0].peers[0].preshared_key, key) == 'peer-psk'
     assert decrypt_secret(config.sites[0].certificate, key) == 'cert'
     assert decrypt_secret(config.ddns[0].api_token, key) == 'token'
     saved = config.model_dump(mode='json')
