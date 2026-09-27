@@ -63,9 +63,12 @@ def lease_rows(subnet=None):
     except Exception:
         raise APIError(502, 'kea.error') from None
     try:
-        if not result or result[0].get('result') != 0:
+        if not result:
             raise ValueError()
-        leases = result[0]['arguments']['leases']
+        # result 0 = success with arguments, 3 = success with zero entries
+        if result[0].get('result') not in (0, 3):
+            raise ValueError()
+        leases = result[0].get('arguments', {}).get('leases', []) if result[0].get('result') == 0 else []
     except Exception:
         raise APIError(502, 'kea.error') from None
     return [{'ip': x['ip-address'], 'mac': x.get('hw-address', ''),
