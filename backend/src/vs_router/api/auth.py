@@ -1,5 +1,6 @@
 """Single-process sessions and login throttling; restart invalidates sessions."""
 import logging
+import os
 import secrets
 import time
 from threading import RLock
@@ -116,7 +117,10 @@ def login(body: Credentials, request: Request, response: Response,
         state.sessions.pop(request.cookies.get(COOKIE), None)
         token = secrets.token_urlsafe(32)
         state.sessions[token] = (user.id, state.clock() + TTL)
-    response.set_cookie(COOKIE, token, max_age=TTL, httponly=True, secure=True,
+    # Secure cookies require HTTPS; lab deployments behind a plain-HTTP TCP
+    # bridge would silently drop the session on every navigation otherwise.
+    secure = os.environ.get("VS_ROUTER_COOKIE_SECURE", "1") != "0"
+    response.set_cookie(COOKIE, token, max_age=TTL, httponly=True, secure=secure,
                         samesite="strict", path="/")
     return public_user(user)
 
