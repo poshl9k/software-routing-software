@@ -83,6 +83,7 @@ export interface Peer {
   name: string;
   public_key: string;
   preshared_key: Secret | null;
+  private_key?: Secret | null;
   allowed_ips: string[];
 }
 export interface Tunnel {

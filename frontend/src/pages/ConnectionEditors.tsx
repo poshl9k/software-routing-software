@@ -389,7 +389,8 @@ export function Tunnels() {
                         label="Публичный ключ пира"
                         value={p.public_key}
                         valid={!!p.public_key.trim()}
-                        onChange={(public_key) => update({ public_key })}
+                        hint={p.private_key ? "Сгенерирован панелью вместе с приватным" : "Введён вручную (клиентский)"}
+                        onChange={(public_key) => update({ public_key, private_key: null })}
                       />
                       <Field
                         label="AllowedIPs пира"
@@ -399,7 +400,9 @@ export function Tunnels() {
                         onChange={(v) => update({ allowed_ips: split(v) })}
                       />
                       <SecretField label="Preshared key" value={p.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />
-                      <Button disabled={demo} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } }))}>Сгенерировать PSK</Button>
+                      <SecretField label="Приватный ключ пира (входит в клиентский конфиг)" value={p.private_key ?? null} showOriginalHint={false} change={(private_key) => update({ private_key })} />
+                      <Button disabled={demo} onClick={() => void api.keygenPeerKeypair().then((pair) => update({ public_key: pair.public_key, private_key: { plaintext: pair.private_key } })).catch((e) => setQrError(e))}>Сгенерировать ключи пира</Button>
+                      <Button disabled={demo} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } })).catch((e) => setQrError(e))}>Сгенерировать PSK</Button>
                       <Button onClick={()=>void showQr(t.name,p.name)}>QR-код</Button>
                       <Button disabled>Экспорт пира · TODO-API-EXPORT</Button>
                       <Button
@@ -416,17 +419,21 @@ export function Tunnels() {
                 })}
                 <Button
                   onClick={() =>
-                    patch({
-                      peers: [
-                        ...t.peers,
-                        {
-                          name: "",
-                          public_key: "",
-                          preshared_key: null,
-                          allowed_ips: [],
-                        },
-                      ],
-                    })
+                    void api.keygenPeerKeypair()
+                      .then((pair) =>
+                        patch({
+                          peers: [
+                            ...t.peers,
+                            {
+                              name: "",
+                              public_key: pair.public_key,
+                              private_key: { plaintext: pair.private_key },
+                              preshared_key: null,
+                              allowed_ips: [],
+                            },
+                          ],
+                        }))
+                      .catch((e) => setQrError(e))
                   }
                 >
                   + Добавить пира

@@ -44,3 +44,13 @@ def generate_tunnel_keys(body: TunnelKeyRequest):
 @router.post("/keygen/peer")
 def generate_peer_key():
     return {"preshared_key": _b64(secrets.token_bytes(32))}
+
+
+@router.post("/keygen/peer-keypair")
+def generate_peer_keypair():
+    """Full peer pair for panel-generated client configs: the private key is
+    returned once and stored encrypted with the draft; the public key lands
+    in the tunnel's peer list."""
+    private = X25519PrivateKey.generate()
+    return {"private_key": _b64(private.private_bytes_raw()),
+            "public_key": _b64(private.public_key().public_bytes_raw())}

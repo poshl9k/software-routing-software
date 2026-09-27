@@ -118,3 +118,46 @@ async def test_qr_export_png_magic(api, monkeypatch):
     assert response.status_code == 200
     assert response.headers['content-type'] == 'image/png'
     assert response.content[:4] == b'\x89PNG' and len(response.content) > 500
+
+
+async def test_peer_keypair_endpoint_and_export(api, monkeypatch):
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', key)
+    client = await _confirm_sample(api, key=key)
+    client, engine, now = api
+    pair = await client.post('/api/keygen/peer-keypair')
+    assert pair.status_code == 200
+    body = pair.json()
+    assert len(base64.b64decode(body['private_key'])) == 32
+    assert len(base64.b64decode(body['public_key'])) == 32
+
+    # a peer with a panel-generated private key exports a complete client config
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+    from sqlalchemy import select as _select
+    from vs_router.db import ConfigurationRow
+    from vs_router.secrets import decrypt_secret
+    raw_private = base64.b64decode(body['private_key'])
+    public = base64.b64encode(X25519PrivateKey.from_private_bytes(raw_private)
+                              .public_key().public_bytes_raw()).decode()
+    with __import__('vs_router.db', fromlist=['Session']).Session(engine) as session:
+        config = session.scalar(_select(ConfigurationRow)
+                                .order_by(ConfigurationRow.id.desc())).snapshot().configuration
+    tunnel = config.model_copy(update={
+        'tunnels': tuple(
+            t.model_copy(update={'peers': tuple(
+                p.model_copy(update={'public_key': public,
+                                     'private_key': encrypt_secret(body['private_key'], key.encode())})
+                if i == 0 else p for i, p in enumerate(t.peers))})
+            for t in config.tunnels)})
+    await client.put('/api/draft', json=config.model_dump(mode='json'))
+    exported = await client.get('/api/tunnels/wg_test/peer/phone/qr')
+    assert exported.status_code == 200
+    from vs_router.generators.wireguard import generate_wg_bundle
+    version = __import__('vs_router.schema', fromlist=['ConfigurationVersion']).ConfigurationVersion(
+        id=1, status='draft', configuration=tunnel)
+    bundle = generate_wg_bundle(version, {})
+    conf = bundle['wg_test.peer-phone.conf']
+    assert 'TEMPLATE' not in conf
+    assert f"PrivateKey = {body['private_key']}" in conf
+    # [Peer] PublicKey in a client config is the SERVER's derived public key
+    assert 'PublicKey = ' in conf

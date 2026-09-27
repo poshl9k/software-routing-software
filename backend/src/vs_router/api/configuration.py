@@ -71,7 +71,8 @@ def encrypt_inputs(value):
     if isinstance(value.get("tunnels"), list):
         for tunnel in value["tunnels"]:
             if isinstance(tunnel, dict) and isinstance(tunnel.get("peers"), list):
-                tunnel["peers"] = [convert(peer, ("preshared_key",)) for peer in tunnel["peers"]]
+                tunnel["peers"] = [convert(peer, ("preshared_key", "private_key"))
+                                   for peer in tunnel["peers"]]
     return value
 
 

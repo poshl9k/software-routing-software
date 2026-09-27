@@ -123,6 +123,9 @@ class Peer(Model):
     name: Name
     public_key: str
     preshared_key: EncryptedSecret | None = None
+    # Filled when the panel generated the peer keypair (client config export);
+    # empty when the client brings its own key pair and shares only the public one.
+    private_key: EncryptedSecret | None = None
     allowed_ips: tuple[str, ...] = ()
 
 
