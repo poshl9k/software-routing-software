@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { Button, Tab, Tabs, Typography } from "@mui/material";
+import { Button, Tab, Tabs, Typography, TextField, Alert } from "@mui/material";
 import { useConfiguration } from "../state";
+import { api } from "../api";
+import type { ImportPreview } from "../types";
 import type { Configuration, FirewallRule, Alias } from "../types";
 import { Badge, Card, DataTable, ErrorNotice } from "../ui";
 import {
@@ -51,6 +53,10 @@ export default function Firewall() {
   const [editing, setEditing] = useState<Editable | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [exportFormat,setExportFormat]=useState<"json"|"txt"|"csv">("json"); const [importText,setImportText]=useState(""); const [preview,setPreview]=useState<ImportPreview|null>(null); const [importMode,setImportMode]=useState<"replace"|"skip">("skip");
+  const downloadAliases=async()=>{setError(null);try{const blob=await api.exportAliases(exportFormat,null);const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`aliases.${exportFormat}`;a.click();URL.revokeObjectURL(url);}catch(e){setError(e);}};
+  const previewAliases=async(data:string)=>{setError(null);try{let body:{aliases:Alias[]}|{data:string}={data};try{const parsed=JSON.parse(data);const imported=Array.isArray(parsed)?parsed:parsed?.aliases;if(Array.isArray(imported))body={aliases:imported as Alias[]};}catch{/* TXT/CSV input */}setPreview(await api.previewAliases(body));}catch(e){setError(e);}};
+  const importAliases=async()=>{if(!preview)return;setError(null);try{await api.importAliases(preview.aliases,importMode);const aliases=importMode==="replace"?preview.aliases:[...c.aliases,...preview.aliases.filter(a=>!c.aliases.some(x=>x.name===a.name))];await saveDraft({...c,aliases});setEditing(editing?{...editing,aliases}:null);setPreview(null);}catch(e){setError(e);}};
   const [tab, setTab] = useState("wan");
   const rows = editing ?? c;
   const isEditMode = editing !== null;
@@ -583,6 +589,9 @@ export default function Firewall() {
         )}
         {(zone || tab === "Псевдонимы") && (
           <Card title="Псевдонимы (алиасы)">
+            <div className="footer-actions"><TextField select size="small" label="Формат экспорта" value={exportFormat} onChange={e=>setExportFormat(e.target.value as "json"|"txt"|"csv")}><option value="json">JSON</option><option value="txt">TXT</option><option value="csv">CSV</option></TextField><Button onClick={()=>void downloadAliases()}>Экспорт</Button></div>
+            <div className="footer-actions"><Button component="label">Выбрать файл<input hidden type="file" accept=".json,.txt,.csv,text/plain,application/json" onChange={e=>{const file=e.target.files?.[0];if(file)void file.text().then(text=>{setImportText(text);void previewAliases(text);});}}/></Button><TextField label="Данные для импорта (TXT/CSV)" multiline minRows={2} value={importText} onChange={e=>setImportText(e.target.value)}/><Button onClick={()=>void previewAliases(importText)}>Предпросмотр</Button></div>
+            {preview&&<><DataTable heads={["Строка","Ошибка"]} rows={preview.errors.map(x=>[x.line,x.message])}/><DataTable heads={["Имя","Тип","Элементы","Includes"]} rows={preview.aliases.map(a=>[a.name,a.type,a.elements.join(", "),a.includes.join(", ")])}/><div className="footer-actions"><TextField select size="small" label="Режим импорта" value={importMode} onChange={e=>setImportMode(e.target.value as "replace"|"skip")}><option value="replace">Заменить</option><option value="skip">Пропустить совпадения</option></TextField><Button disabled={!preview.ok||preview.errors.length>0} onClick={()=>void importAliases()}>Импортировать и сохранить черновик</Button></div>{!preview.ok&&<Alert severity="warning">Исправьте ошибки импорта перед продолжением.</Alert>}</>}
             <DataTable
               heads={["Имя", "Тип", "Содержимое", "Вложение", ""]}
               rows={rows.aliases.map((a, index) => {

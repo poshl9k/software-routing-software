@@ -145,6 +145,12 @@ export interface ErrorBody {
   message: string;
   details: unknown[];
 }
+export interface DHCPLease {
+  ip: string; mac: string; hostname: string | null; subnet: string;
+  cltt: number; valid_lft: number; expires_in: number;
+}
+export interface ImportPreview { ok: boolean; errors: { line: number; message: string }[]; aliases: Alias[] }
+export interface PingResult { sent: number; received: number; loss_pct: number; min_avg_max_ms: number[] }
 export interface ApplyResult {
   version_id: number;
   status:
