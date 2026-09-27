@@ -63,6 +63,7 @@ function Collection<T extends Row>({
   form,
   summary,
   clean = (v) => v,
+  rowActions,
 }: {
   kind: "tunnels" | "sites" | "ddns";
   title: string;
@@ -72,6 +73,7 @@ function Collection<T extends Row>({
   clean?: (v: T) => T;
   form: (v: T, patch: (p: Partial<T>) => void, created: boolean) => ReactNode;
   summary: (v: T) => ReactNode[];
+  rowActions?: (row: T) => ReactNode;
 }) {
   const { configuration: c, version, saveDraft } = useConfiguration();
   const [editing, setEditing] = useState<
@@ -130,12 +132,19 @@ function Collection<T extends Row>({
           <DataTable
             heads={
               kind === "tunnels"
-                ? ["Имя", "Роль", "Протокол", "Статус"]
+                ? ["Имя", "Роль", "Протокол", "Статус", "QR"]
                 : kind === "sites"
                   ? ["Имя", "Hostname", "Upstream", "Сертификат", "Статус"]
                   : ["Имя", "Провайдер", "Hostname", "Статус"]
             }
-            rows={rows.map(summary)}
+            rows={rows.map((row) => {
+              const cells = summary(row);
+              if (rowActions) {
+                const actions = rowActions(row);
+                if (actions) cells.push(actions);
+              }
+              return cells;
+            })}
           />
         ) : (
           <>
@@ -212,6 +221,18 @@ export function Tunnels() {
         kind="tunnels"
         title="Туннели"
         addLabel="+ Добавить туннель"
+        rowActions={(row) =>
+          row.role === "server" && row.peers.length ? (
+            <div key="qr" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {row.peers.map((p) => (
+                <Button key={p.name} size="small" variant="text"
+                  onClick={() => void showQr(row.name, p.name)}>
+                  {p.name}
+                </Button>
+              ))}
+            </div>
+          ) : null
+        }
         empty={() => ({
           name: "",
           interface: "",
