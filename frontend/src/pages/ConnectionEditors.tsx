@@ -28,10 +28,12 @@ function SecretField({
   label,
   value,
   change,
+  showOriginalHint = true,
 }: {
   label: string;
   value: Secret | null;
   change: (s: Secret | null) => void;
+  showOriginalHint?: boolean;
 }) {
   // An empty replacement restores the original opaque value, without displaying it.
   const [original] = useState(value && !("plaintext" in value) ? value : null);
@@ -43,7 +45,7 @@ function SecretField({
       autoComplete="new-password"
       value={value && "plaintext" in value ? value.plaintext : ""}
       helperText={
-        original
+        original && showOriginalHint
           ? "(сохранён); пустое поле сохраняет прежний секрет"
           : "Новый секрет"
       }
@@ -71,7 +73,7 @@ function Collection<T extends Row>({
   empty: () => T;
   valid: (v: T) => boolean;
   clean?: (v: T) => T;
-  form: (v: T, patch: (p: Partial<T>) => void, created: boolean) => ReactNode;
+  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, demo: boolean) => ReactNode;
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
 }) {
@@ -165,6 +167,7 @@ function Collection<T extends Row>({
                         ),
                       ),
                     created,
+                    demo,
                   )}
                   <Button
                     color="error"
@@ -283,7 +286,7 @@ export function Tunnels() {
           t.protocol,
           "TODO-API · handshake и трафик",
         ]}
-        form={(t, patch, created) => (
+        form={(t, patch, created, demo) => (
           <>
             {created ? (
               <Field
@@ -339,6 +342,10 @@ export function Tunnels() {
               value={t.private_key}
               change={(v) => patch({ private_key: v ?? { plaintext: "" } })}
             />
+            <Button disabled={demo} onClick={() => void api.keygenTunnel(t.protocol).then((keys) => patch({
+              private_key: { plaintext: keys.private_key },
+              ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}),
+            }))}>Сгенерировать ключи</Button>
             {t.role === "server" ? (
               <>
                 <Field
@@ -384,7 +391,8 @@ export function Tunnels() {
                         valid={ipsValid(p.allowed_ips)}
                         onChange={(v) => update({ allowed_ips: split(v) })}
                       />
-                      <p className="sub">Preshared key: скрыт · TODO</p>
+                      <SecretField label="Preshared key" value={p.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />
+                      <Button disabled={demo} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } }))}>Сгенерировать PSK</Button>
                       <Button onClick={()=>void showQr(t.name,p.name)}>QR-код</Button>
                       <Button disabled>Экспорт пира · TODO-API-EXPORT</Button>
                       <Button

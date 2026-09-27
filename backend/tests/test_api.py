@@ -78,6 +78,27 @@ async def test_rate_limit(api):
     assert (await client.post('/api/auth/login', json=CREDS)).status_code == 429
     now[0] += LOGIN_WINDOW
     assert (await client.post('/api/auth/login', json=CREDS)).status_code == 200
+
+
+async def test_keygen_endpoints(api):
+    import base64
+    client = api[0]
+    assert (await client.post('/api/keygen/tunnel', json={'protocol': 'wg'})).status_code == 401
+    await sign_in(client)
+    wg = (await client.post('/api/keygen/tunnel', json={'protocol': 'wg'})).json()
+    assert set(wg) == {'private_key', 'public_key'}
+    for value in wg.values():
+        assert len(value) == 44 and len(base64.b64decode(value, validate=True)) == 32
+    awg = (await client.post('/api/keygen/tunnel', json={'protocol': 'awg'})).json()
+    obf = awg['obfuscation']
+    assert set(obf) == {'Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'H1', 'H2', 'H3', 'H4'}
+    assert all(type(v) is int for v in obf.values())
+    assert 3 <= obf['Jc'] <= 10 and 30 <= obf['Jmin'] < obf['Jmax'] <= 120
+    assert 10 <= obf['S1'] <= 30 and 80 <= obf['S2'] <= 120
+    assert len({obf[f'H{i}'] for i in range(1, 5)}) == 4
+    assert all(5 <= obf[f'H{i}'] <= 2_147_483_647 for i in range(1, 5))
+    psk = (await client.post('/api/keygen/peer', json={})).json()['preshared_key']
+    assert len(psk) == 44 and len(base64.b64decode(psk, validate=True)) == 32
 ROUTES = [('get', '/api/versions', None), ('get', '/api/versions/1', None), ('get', '/api/diff/1/2', None), ('post', '/api/draft', {}), ('put', '/api/draft', {}), ('delete', '/api/draft', None), ('post', '/api/draft/validate', None), ('post', '/api/apply', {'version_id': 1}), ('post', '/api/confirm', {'version_id': 1}), ('post', '/api/rollback', {})]
 
 @pytest.mark.parametrize('method,path,body', ROUTES)

@@ -68,6 +68,10 @@ def encrypt_inputs(value):
                                ("ddns", ("api_token",))):
         if isinstance(value.get(collection), list):
             value[collection] = [convert(row, fields) for row in value[collection]]
+    if isinstance(value.get("tunnels"), list):
+        for tunnel in value["tunnels"]:
+            if isinstance(tunnel, dict) and isinstance(tunnel.get("peers"), list):
+                tunnel["peers"] = [convert(peer, ("preshared_key",)) for peer in tunnel["peers"]]
     return value
 
 
