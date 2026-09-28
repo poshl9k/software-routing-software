@@ -20,6 +20,8 @@
 
 ## Установка
 
+Полная пошаговая инструкция: **[docs/install.md](docs/install.md)**. Кратко:
+
 Требования: Debian 13, `python3` (3.11+), `uv` (или pip), системные пакеты `kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor caddy wireguard-tools amneziawg-tools amneziawg-go`.
 
 Сборка фронта (один раз):
