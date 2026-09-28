@@ -53,7 +53,15 @@ parse_args() {
 }
 
 stage_check_root() {
-    [[ ${EUID} -eq 0 ]] || fail 'run this script as root'
+    if [[ ${EUID} -ne 0 ]]; then
+        if command -v sudo >/dev/null 2>&1; then
+            fail 'run this script as root (sudo ./bootstrap.sh ...)'
+        fi
+        # Fresh Debian installs ship without sudo: give the exact escape hatch.
+        fail "sudo is missing and you are not root. Run:
+  su -c 'apt update && apt install -y sudo && usermod -aG sudo $USER'
+then log out and back in, and rerun with sudo."
+    fi
     [[ -f /etc/debian_version ]] || fail 'Debian is required'
     local version
     version=$(< /etc/debian_version)
