@@ -43,12 +43,12 @@ xorriso -osirrox on -indev "$ISO" -extract / "$workdir/iso"
 chmod -R u+w "$workdir" 2>/dev/null || true
 install -m 0644 "$SCRIPT_DIR/preseed.cfg" "$workdir/iso/preseed.cfg"
 
-# Fully unattended GRUB: the netinst menu has a timeout — force 0 so the
-# default entry boots without waiting (user interaction is never required).
+# Fully unattended GRUB: the netinst grub.cfg has NO 'set timeout=' line, and
+# GRUB then waits for user input forever. Force the default entry with zero
+# timeout (append works: menu entries above are already defined).
 while IFS= read -r cfg; do
-    if grep -q 'set timeout=' "$cfg"; then
-        sed -i 's/^set timeout=.*/set timeout=0/' "$cfg"
-    fi
+    sed -i 's/^set timeout=.*/set timeout=0/' "$cfg"
+    printf 'set default=0\nset timeout=0\n' >> "$cfg"
 done < <(find "$workdir/iso/boot/grub" "$workdir/iso/EFI" -name grub.cfg -type f 2>/dev/null)
 
 preseed_args='auto=true priority=critical preseed/file=/cdrom/preseed.cfg file=/cdrom/preseed.cfg'
