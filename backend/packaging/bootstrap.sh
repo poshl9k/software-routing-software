@@ -156,7 +156,8 @@ stage_install() {
         KEA_PASSWORD=$(< /etc/kea/kea-api-password)
     fi
 
-    "$SCRIPT_DIR/install.sh"
+    # Run via bash: a fresh clone may carry the file without the exec bit.
+    bash "$SCRIPT_DIR/install.sh"
     # Kea may be inactive on a fresh machine (no interfaces configured yet) —
     # its restart must not fail the bootstrap; the panel configures it later.
     systemctl restart kea-ctrl-agent kea-dhcp4-server 2>/dev/null || \
