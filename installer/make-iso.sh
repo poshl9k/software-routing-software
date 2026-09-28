@@ -43,6 +43,14 @@ xorriso -osirrox on -indev "$ISO" -extract / "$workdir/iso"
 chmod -R u+w "$workdir" 2>/dev/null || true
 install -m 0644 "$SCRIPT_DIR/preseed.cfg" "$workdir/iso/preseed.cfg"
 
+# Fully unattended GRUB: the netinst menu has a timeout — force 0 so the
+# default entry boots without waiting (user interaction is never required).
+while IFS= read -r cfg; do
+    if grep -q 'set timeout=' "$cfg"; then
+        sed -i 's/^set timeout=.*/set timeout=0/' "$cfg"
+    fi
+done < <(find "$workdir/iso/boot/grub" "$workdir/iso/EFI" -name grub.cfg -type f 2>/dev/null)
+
 preseed_args='auto=true priority=critical preseed/file=/cdrom/preseed.cfg file=/cdrom/preseed.cfg'
 # IMPORTANT: installer boot args must be placed BEFORE the '---' separator —
 # everything after it goes to the installed system's cmdline, which d-i ignores.
