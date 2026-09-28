@@ -4,6 +4,21 @@
 
 Панель управляет сетью, firewall'ом, DHCP, DNS, туннелями, прокси и DDNS без правки конфигов руками. Все изменения проходят цикл: черновик → проверка → применение → подтверждение.
 
+## Quick start (одна команда на чистой машине)
+
+Debian поставляется **без sudo** — сначала один раз через root:
+
+```sh
+su -c 'apt update && apt install -y sudo git && usermod -aG sudo $USER'
+# выйдите и войдите заново, чтобы применилась группа sudo, затем:
+git clone https://github.com/poshl9k/software-routing-software.git
+cd software-routing-software/backend/packaging
+sudo ./bootstrap.sh --lab      # лаба: tcp-bridge 8080, cookie без Secure
+# или без --lab — прод: всё, кроме tcp-bridge
+```
+
+Скрипт идемпотентен (повторный запуск продолжает с места остановки), сам ставит apt-зависимости, собирает Caddy с L4 и AmneziaWG 3.1, собирает фронт и wheel, устанавливает сервисы и печатает в конце креды Kea ctrl-agent. Требуется: root, интернет (apt/PyPI/npm/Go). Ручной путь — ниже.
+
 ## 1. Системные пакеты
 
 ```sh
