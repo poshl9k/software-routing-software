@@ -82,12 +82,11 @@ stage_caddy() {
         log 'Caddy with layer4 already exists; skipping build'
         return
     fi
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' |
-        gpg --dearmor -o /usr/share/keyrings/xcaddy-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian/config.txt' |
-        tee /etc/apt/sources.list.d/xcaddy.list >/dev/null
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y xcaddy
+    # The Cloudsmith xcaddy apt repo proved unreliable (config.txt may return
+    # an empty body); go install is the dependable path since Go is required
+    # for AmneziaWG anyway.
+    export PATH="${PATH}:$(go env GOPATH 2>/dev/null || echo /root/go)/bin"
+    command -v xcaddy >/dev/null 2>&1 || go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
     xcaddy build --with github.com/mholt/caddy-l4 --with github.com/caddy-dns/cloudflare \
         --output /usr/local/bin/caddy
 }
