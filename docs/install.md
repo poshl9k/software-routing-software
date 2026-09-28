@@ -53,18 +53,16 @@ cd src && make && sudo cp awg awg-quick /usr/local/bin/
 
 ## 3. Caddy с L4 (TLS passthrough) и DNS-провайдерами
 
-Пакетный Caddy не содержит L4-модуль — собирается через xcaddy (см. `docs/lab-03-caddy.md`):
+Пакетный Caddy не содержит L4-модуль — собирается через xcaddy (см. `docs/lab-03-caddy.md`). Репозиторий Cloudsmith для apt ненадёжен, поэтому xcaddy ставится через Go (уже установлен на шаге 2):
 
 ```sh
-sudo apt install -y debian-keyring debian-archive-keyring curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/xcaddy-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian/config.txt' | sudo tee /etc/apt/sources.list.d/xcaddy.list
-sudo apt update && sudo apt install -y xcaddy
+export PATH="$PATH:$(go env GOPATH)/bin"
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 xcaddy build --with github.com/mholt/caddy-l4 --with github.com/caddy-dns/cloudflare \
   --output /usr/local/bin/caddy
 ```
 
-Если TLS passthrough и Cloudflare DNS-01 не нужны — достаточно пакетного Caddy.
+Если TLS passthrough и Cloudflare DNS-01 не нужны — достаточно пакетного Caddy (`sudo apt install -y caddy`).
 
 ## 4. Сборка и установка vs-router
 
