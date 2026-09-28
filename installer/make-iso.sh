@@ -44,12 +44,16 @@ chmod -R u+w "$workdir" 2>/dev/null || true
 install -m 0644 "$SCRIPT_DIR/preseed.cfg" "$workdir/iso/preseed.cfg"
 
 preseed_args='auto=true priority=critical preseed/file=/cdrom/preseed.cfg file=/cdrom/preseed.cfg'
+# IMPORTANT: installer boot args must be placed BEFORE the '---' separator —
+# everything after it goes to the installed system's cmdline, which d-i ignores.
 append_to_linux_lines() {
     local cfg=$1 tmp
     tmp=$(mktemp "$workdir/edit.XXXXXX")
     awk -v extra="$preseed_args" '
         /^[[:space:]]*linux([[:space:]]|$)/ {
-            if (index($0, "preseed/file=/cdrom/preseed.cfg") == 0) $0 = $0 " " extra
+            if (index($0, "preseed/file=/cdrom/preseed.cfg") == 0) {
+                sub(/---/, extra " ---")
+            }
         }
         { print }
     ' "$cfg" > "$tmp"
@@ -62,7 +66,9 @@ append_to_isolinux_append() {
     tmp=$(mktemp "$workdir/edit.XXXXXX")
     awk -v extra="$preseed_args" '
         /^[[:space:]]*append([[:space:]]|$)/ {
-            if (index($0, "preseed/file=/cdrom/preseed.cfg") == 0) $0 = $0 " " extra
+            if (index($0, "preseed/file=/cdrom/preseed.cfg") == 0) {
+                sub(/---/, extra " ---")
+            }
         }
         { print }
     ' "$cfg" > "$tmp"
