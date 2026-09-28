@@ -34,6 +34,14 @@ EOF
 if ! systemctl list-unit-files caddy.service --no-legend 2>/dev/null | grep -q .; then
     install -m 0644 "$packaging_dir/caddy.service" /etc/systemd/system/caddy.service
 fi
+# A running Caddy is required before the first apply (reload targets it).
+if [ ! -f /etc/caddy/caddy.json ]; then
+    printf '{"apps":{}}\n' > /etc/caddy/caddy.json
+    chown root:caddy /etc/caddy/caddy.json
+    chmod 0644 /etc/caddy/caddy.json
+fi
+systemctl enable caddy >/dev/null 2>&1 || true
+systemctl start caddy 2>/dev/null || echo 'WARNING: caddy did not start; the panel will reload it after first apply'
 id vs-router-web >/dev/null 2>&1 || useradd --system --home-dir /var/lib/vs-router --shell /usr/sbin/nologin vs-router-web
 # Warn when the installed AmneziaWG is older than the validated 3.1 line.
 if command -v awg >/dev/null 2>&1 && ! awg --version 2>/dev/null | grep -q "v3\.[1-9]"; then
