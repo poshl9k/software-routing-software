@@ -107,15 +107,16 @@ stage_awg() {
         if [[ ! -d "$workdir/amneziawg-tools/.git" ]]; then
             git clone https://github.com/amnezia-vpn/amneziawg-tools "$workdir/amneziawg-tools"
         fi
-        make -C "$workdir/amneziawg-tools/src"
-        install -m 0755 "$workdir/amneziawg-tools/src/awg" /usr/local/bin/awg
-        install -m 0755 "$workdir/amneziawg-tools/src/awg-quick" /usr/local/bin/awg-quick
+        # The binary is built as 'wg' and 'make install' renames it to awg
+        # (plus the awg-quick bash script) — no manual file copying.
+        make -C "$workdir/amneziawg-tools/src" PREFIX=/usr BINDIR=/usr/local/bin install
     else
         log 'awg and awg-quick already exist; skipping build'
     fi
     if [[ ! -x /usr/local/bin/wg-go ]]; then
+        # git.zx2c4.com is unreachable from some networks; GitHub mirror is the same code.
         if [[ ! -d "$workdir/wireguard-go/.git" ]]; then
-            git clone https://git.zx2c4.com/wireguard-go "$workdir/wireguard-go"
+            git clone https://github.com/WireGuard/wireguard-go "$workdir/wireguard-go"
         fi
         make -C "$workdir/wireguard-go"
         install -m 0755 "$workdir/wireguard-go/wireguard-go" /usr/local/bin/wg-go
