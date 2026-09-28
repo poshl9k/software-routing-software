@@ -12,17 +12,27 @@
 # Set VS_ROUTER_SECRET_KEY in the web API and agent service environments using a protected
 # EnvironmentFile; never put the encryption key into generated bundles.
 set -eu
+# Caddy built from source (xcaddy) ships no user/group and no distro unit —
+# create them; the binary lives wherever PATH resolves it (usually /usr/local/bin).
+getent group caddy >/dev/null 2>&1 || groupadd --system caddy
+id caddy >/dev/null 2>&1 || useradd --system --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy
+CADDY_BIN=$(command -v caddy || echo /usr/local/bin/caddy)
 install -d -m 0750 /etc/caddy/vs-router
 chown root:caddy /etc/caddy/vs-router
 install -d -m 0700 /etc/vs-router/wireguard
 install -d -m 0755 /etc/systemd/system/caddy.service.d
-cat > /etc/systemd/system/caddy.service.d/vs-router.conf <<'EOF'
+cat > /etc/systemd/system/caddy.service.d/vs-router.conf <<EOF
 [Service]
 ExecStart=
-ExecStart=/usr/bin/caddy run --config /etc/caddy/caddy.json
+ExecStart=${CADDY_BIN} run --config /etc/caddy/caddy.json
 ExecReload=
-ExecReload=/usr/bin/caddy reload --config /etc/caddy/caddy.json
+ExecReload=${CADDY_BIN} reload --config /etc/caddy/caddy.json
 EOF
+# Self-built caddy has no distro service file; the override above only patches
+# an existing unit and cannot create one.
+if ! systemctl list-unit-files caddy.service --no-legend 2>/dev/null | grep -q .; then
+    install -m 0644 "$packaging_dir/caddy.service" /etc/systemd/system/caddy.service
+fi
 id vs-router-web >/dev/null 2>&1 || useradd --system --home-dir /var/lib/vs-router --shell /usr/sbin/nologin vs-router-web
 # Warn when the installed AmneziaWG is older than the validated 3.1 line.
 if command -v awg >/dev/null 2>&1 && ! awg --version 2>/dev/null | grep -q "v3\.[1-9]"; then

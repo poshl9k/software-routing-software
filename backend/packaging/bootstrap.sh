@@ -137,7 +137,8 @@ stage_build() {
 stage_install() {
     local wheel_dir="$REPO_ROOT/backend/dist"
     compgen -G "$wheel_dir/*.whl" >/dev/null || fail "no backend wheel found in ${wheel_dir}"
-    python3 -m pip install --break-system-packages "$wheel_dir"/*.whl
+    python3 -m pip install --break-system-packages --force-reinstall --no-deps "$wheel_dir"/*.whl
+    python3 -m pip install --break-system-packages "$wheel_dir"/*.whl  # deps only, no-op if satisfied
 
     install -d -m 0700 /etc/vs-router
     if [[ ! -f /etc/vs-router/secrets.env ]]; then
