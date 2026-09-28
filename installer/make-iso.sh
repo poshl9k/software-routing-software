@@ -69,6 +69,39 @@ append_to_linux_lines() {
     rm -f "$tmp"
 }
 
+# Clone the first GRUB menuentry after adding the unattended arguments. This
+# keeps the kernel/initrd configuration identical while exposing d-i's expert
+# questions through priority=medium. Appending a complete menuentry is valid
+# GRUB syntax even when the final existing entry is followed by other commands.
+append_grub_semiauto_entry() {
+    local cfg=$1 tmp
+    tmp=$(mktemp "$workdir/edit.XXXXXX")
+    awk '
+        !found && /^[[:space:]]*menuentry[[:space:]]/ {
+            found=1
+            block=1
+        }
+        found && block {
+            line=$0
+            if (line ~ /menuentry[[:space:]]/) {
+                sub(/menuentry[[:space:]]+[^ ]+/, "menuentry '\''Semi-automatic install (expert)'\''", line)
+            }
+            gsub(/priority=critical/, "priority=medium", line)
+            print line
+            opens=gsub(/{/, "{", $0)
+            closes=gsub(/}/, "}", $0)
+            depth += opens - closes
+            if (depth <= 0 && opens + closes > 0) block=0
+        }
+    ' "$cfg" > "$tmp"
+    if [[ -s $tmp ]]; then
+        cat "$tmp" >> "$cfg"
+    else
+        printf 'Could not find a GRUB menuentry to clone in %s; skipping expert entry.\n' "$cfg" >&2
+    fi
+    rm -f "$tmp"
+}
+
 append_to_isolinux_append() {
     local cfg=$1 tmp
     tmp=$(mktemp "$workdir/edit.XXXXXX")
@@ -98,10 +131,46 @@ if (( ! found_grub )); then
     exit 1
 fi
 
+# Add the expert option only after every existing Linux line has received the
+# normal preseed arguments, then change only the cloned entry's priority.
+while IFS= read -r -d '' cfg; do
+    append_grub_semiauto_entry "$cfg"
+done < <(find "$workdir/iso/boot/grub" -type f -name grub.cfg -print0 2>/dev/null || true)
+if [[ -f $workdir/iso/EFI/boot/grub.cfg ]]; then
+    append_grub_semiauto_entry "$workdir/iso/EFI/boot/grub.cfg"
+fi
+
+append_isolinux_semiauto_entry() {
+    local cfg=$1 tmp
+    tmp=$(mktemp "$workdir/edit.XXXXXX")
+    awk '
+        /^label[[:space:]]/ {
+            if (block) exit
+            if ($0 ~ /^label[[:space:]]+install([[:space:]]|$)/) { found=1; block=1 }
+        }
+        found && block {
+            line=$0
+            if (line ~ /^label[[:space:]]/) sub(/^label[[:space:]]+install/, "label semiauto", line)
+            if (line ~ /^[[:space:]]*menu[[:space:]]+label[[:space:]]/) sub(/Install/, "Semi-automatic install (expert)", line)
+            if (line ~ /^[[:space:]]*append[[:space:]]/) sub(/priority=critical/, "priority=medium", line)
+            print line
+        }
+    ' "$cfg" > "$tmp"
+    if [[ -s $tmp ]]; then
+        cat "$tmp" >> "$cfg"
+    else
+        printf 'Could not find an install label in %s; skipping expert entry.\n' "$cfg" >&2
+    fi
+    rm -f "$tmp"
+}
+
 for cfgdir in "$workdir/iso/boot/isolinux" "$workdir/iso/isolinux"; do
     [[ -d $cfgdir ]] || continue
     while IFS= read -r -d '' cfg; do
         append_to_isolinux_append "$cfg"
+        if [[ $(basename "$cfg") == txt.cfg ]]; then
+            append_isolinux_semiauto_entry "$cfg"
+        fi
     done < <(find "$cfgdir" -type f -name '*.cfg' -print0)
 done
 
