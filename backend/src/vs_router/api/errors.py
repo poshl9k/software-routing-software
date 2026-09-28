@@ -1,4 +1,6 @@
 """Public errors never contain submitted values or exception messages."""
+import re
+
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -18,7 +20,16 @@ def issue(code: str, details=None):
 
 def validation_details(exc):
     # Even error messages/context can contain private input (e.g. ipaddress).
-    return [{"path": list(e["loc"]), "type": e["type"]} for e in exc.errors()]
+    def humanize(e):
+        msg = e.get("msg", "")
+        # Only expose our own short validator codes (e.g. interface.vlan_parent).
+        # Third-party messages (ipaddress etc.) embed user input — never echo those.
+        if msg.startswith("Value error, "):
+            msg = msg[len("Value error, "):]
+        if not re.fullmatch(r"[a-z0-9]+(?:\.[a-z0-9_]+)+", msg):
+            msg = ""
+        return {"path": list(e["loc"]), "type": e["type"], "message": msg}
+    return [humanize(e) for e in exc.errors()]
 
 
 def install_errors(app):

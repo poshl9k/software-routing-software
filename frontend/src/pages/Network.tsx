@@ -181,6 +181,28 @@ export default function Network() {
                       ) : (
                         "—"
                       ),
+                      i.type === "vlan" ? (
+                        <TextField
+                          size="small"
+                          select
+                          SelectProps={{ native: true }}
+                          value={i.parent ?? ""}
+                          onChange={(e) => setField(i.key, { parent: e.target.value || null })}
+                        >
+                          <option value="">— выберите —</option>
+                          {rows
+                            .filter(
+                              (p) => p.key !== i.key && p.type === "physical"
+                            )
+                            .map((p) => (
+                              <option key={p.key} value={p.name}>
+                                {p.name}
+                              </option>
+                            ))}
+                        </TextField>
+                      ) : (
+                        "—"
+                      ),
                       i.type === "bridge" ? (
                         <TextField
                           size="small"
