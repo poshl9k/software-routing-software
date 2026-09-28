@@ -34,9 +34,13 @@ for file in /usr/lib/ISOLINUX/isohdpfx.bin; do
 done
 
 workdir=$(mktemp -d)
-trap 'rm -rf "$workdir"' EXIT
-mkdir -p "$workdir/iso"
+trap 'chmod -R u+w "$workdir" 2>/dev/null; rm -rf "$workdir"' EXIT
+# Extracted files keep their ISO permissions (read-only) — make them writable
+# for later edits and cleanup.
+chmod -R u+w "$workdir" 2>/dev/null || true
+
 xorriso -osirrox on -indev "$ISO" -extract / "$workdir/iso"
+chmod -R u+w "$workdir" 2>/dev/null || true
 install -m 0644 "$SCRIPT_DIR/preseed.cfg" "$workdir/iso/preseed.cfg"
 
 preseed_args='auto=true priority=critical preseed/file=/cdrom/preseed.cfg file=/cdrom/preseed.cfg'
