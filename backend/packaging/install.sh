@@ -15,7 +15,7 @@ set -eu
 # Caddy built from source (xcaddy) ships no user/group and no distro unit —
 # create them; the binary lives wherever PATH resolves it (usually /usr/local/bin).
 getent group caddy >/dev/null 2>&1 || groupadd --system caddy
-id caddy >/dev/null 2>&1 || useradd --system --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy
+id caddy >/dev/null 2>&1 || useradd --system --gid caddy --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy
 CADDY_BIN=$(command -v caddy || echo /usr/local/bin/caddy)
 install -d -m 0750 /etc/caddy/vs-router
 chown root:caddy /etc/caddy/vs-router
