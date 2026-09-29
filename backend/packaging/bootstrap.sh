@@ -71,6 +71,16 @@ then log out and back in, and rerun with sudo."
 
 stage_apt_deps() {
     export DEBIAN_FRONTEND=noninteractive
+    # VM/lab networks (slirp, NAT) reproducibly stall pipelined apt downloads:
+    # connections ESTABLISH, ~240MB flows, then every stream freezes and the
+    # method processes spin forever (timeouts never fire). Serial queue mode
+    # plus short timeouts and retries turns that freeze into a visible retry.
+    printf '%s\n' \
+        'Acquire::Queue-Mode "access";' \
+        'Acquire::http::Timeout "30";' \
+        'Acquire::https::Timeout "30";' \
+        'Acquire::Retries "5";' \
+        > /etc/apt/apt.conf.d/95vsr-bootstrap
     apt-get update
     apt-get install -y python3 python3-pip python3-venv git build-essential golang-go \
         kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor wireguard-tools \

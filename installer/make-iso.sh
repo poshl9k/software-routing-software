@@ -42,16 +42,45 @@ chmod -R u+w "$workdir" 2>/dev/null || true
 xorriso -osirrox on -indev "$ISO" -extract / "$workdir/iso"
 chmod -R u+w "$workdir" 2>/dev/null || true
 install -m 0644 "$SCRIPT_DIR/preseed.cfg" "$workdir/iso/preseed.cfg"
+install -m 0644 "$SCRIPT_DIR/preseed-semiauto.cfg" "$workdir/iso/preseed-semiauto.cfg"
 
 # Fully unattended GRUB: the netinst grub.cfg has NO 'set timeout=' line, and
 # GRUB then waits for user input forever. Force the default entry with zero
 # timeout (append works: menu entries above are already defined).
+# Test hook: VS_ROUTER_TEST_SEMIAUTO=1 boots the semi-auto entry (by title —
+# GRUB resolves it lazily when the menu is shown, so the entry defined later
+# in the file still matches). Product builds keep default=0 (auto mode).
+grub_default=0
+if [[ -n ${VS_ROUTER_TEST_SEMIAUTO:-} ]]; then
+    grub_default="'Semi-automatic install (expert)'"
+fi
 while IFS= read -r cfg; do
     sed -i 's/^set timeout=.*/set timeout=0/' "$cfg"
-    printf 'set default=0\nset timeout=0\n' >> "$cfg"
+    printf 'set default=%s\nset timeout=0\n' "$grub_default" >> "$cfg"
 done < <(find "$workdir/iso/boot/grub" "$workdir/iso/EFI" -name grub.cfg -type f 2>/dev/null)
 
 preseed_args='auto=true priority=critical preseed/file=/cdrom/preseed.cfg file=/cdrom/preseed.cfg'
+# Test-only static network: qemu user-net with the passt backend does not
+# always answer d-i's DHCP in time; passt passes traffic through with the
+# HOST's address, so for VM tests set VS_ROUTER_STATIC_NET="ip mask gw dns"
+# and the installer will skip DHCP entirely. Product ISO builds are unaffected.
+if [[ -n ${VS_ROUTER_STATIC_NET:-} ]]; then
+    read -r _static_ip _static_mask _static_gw _static_dns <<<"$VS_ROUTER_STATIC_NET"
+    preseed_args+=" netcfg/use_dhcp=false netcfg/disable_autoconfig=true"
+    preseed_args+=" netcfg/get_ipaddress=${_static_ip} netcfg/get_netmask=${_static_mask}"
+    preseed_args+=" netcfg/get_gateway=${_static_gw} netcfg/get_nameservers=${_static_dns}"
+    preseed_args+=" netcfg/confirm_static=true"
+    echo "Test static network: ip=${_static_ip} mask=${_static_mask} gw=${_static_gw} dns=${_static_dns}"
+fi
+# Test-only phone-home override: slirp's 10.0.2.2 does not exist on other
+# network backends (virbr0 NAT, passt). Set VS_ROUTER_PHONEHOME_IP to the
+# host address the guest can reach; only the STAGED preseed copies inside
+# the ISO are patched — repo files and product builds are unaffected.
+if [[ -n ${VS_ROUTER_PHONEHOME_IP:-} ]]; then
+    sed -i "s|http://10.0.2.2:8099|http://${VS_ROUTER_PHONEHOME_IP}:8099|" \
+        "$workdir/iso/preseed.cfg" "$workdir/iso/preseed-semiauto.cfg"
+    echo "Test phone-home: http://${VS_ROUTER_PHONEHOME_IP}:8099"
+fi
 # IMPORTANT: installer boot args must be placed BEFORE the '---' separator —
 # everything after it goes to the installed system's cmdline, which d-i ignores.
 append_to_linux_lines() {
@@ -70,8 +99,10 @@ append_to_linux_lines() {
 }
 
 # Clone the first GRUB menuentry after adding the unattended arguments. This
-# keeps the kernel/initrd configuration identical while exposing d-i's expert
-# questions through priority=medium. Appending a complete menuentry is valid
+# keeps the kernel/initrd configuration identical. priority=high keeps d-i's
+# normal LINEAR flow (no main menu between steps — that is what medium does)
+# while letting preseed "seen false" flags surface the core questions with
+# their preseeded values as defaults. Appending a complete menuentry is valid
 # GRUB syntax even when the final existing entry is followed by other commands.
 append_grub_semiauto_entry() {
     local cfg=$1 tmp
@@ -84,9 +115,16 @@ append_grub_semiauto_entry() {
         found && block {
             line=$0
             if (line ~ /menuentry[[:space:]]/) {
-                sub(/menuentry[[:space:]]+[^ ]+/, "menuentry '\''Semi-automatic install (expert)'\''", line)
+                sub(/menuentry.*[{]/, "menuentry '\''Semi-automatic install (expert)'\'' {", line)
             }
-            gsub(/priority=critical/, "priority=medium", line)
+            gsub(/priority=critical/, "priority=high", line)
+            # auto=true makes d-i skip preseeded questions — the opposite of
+            # semi-auto (which asks them with preseed values as defaults).
+            gsub(/auto=true[[:space:]]*/, "", line)
+            # The semi-auto flow asks the operator the core set (language,
+            # location, keyboard, hostname, network, disk, SSH account) with
+            # preseed defaults — a different preseed file drives that.
+            gsub("/cdrom/preseed.cfg", "/cdrom/preseed-semiauto.cfg", line)
             print line
             opens=gsub(/{/, "{", $0)
             closes=gsub(/}/, "}", $0)
@@ -152,7 +190,9 @@ append_isolinux_semiauto_entry() {
             line=$0
             if (line ~ /^label[[:space:]]/) sub(/^label[[:space:]]+install/, "label semiauto", line)
             if (line ~ /^[[:space:]]*menu[[:space:]]+label[[:space:]]/) sub(/Install/, "Semi-automatic install (expert)", line)
-            if (line ~ /^[[:space:]]*append[[:space:]]/) sub(/priority=critical/, "priority=medium", line)
+            if (line ~ /^[[:space:]]*append[[:space:]]/) sub(/priority=critical/, "priority=high", line)
+            if (line ~ /^[[:space:]]*append[[:space:]]/) gsub(/auto=true[[:space:]]*/, "", line)
+            if (line ~ /^[[:space:]]*append[[:space:]]/) gsub("/cdrom/preseed.cfg", "/cdrom/preseed-semiauto.cfg", line)
             print line
         }
     ' "$cfg" > "$tmp"
