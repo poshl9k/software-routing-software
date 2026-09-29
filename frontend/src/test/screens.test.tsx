@@ -154,7 +154,7 @@ describe("screens", () => {
     await screen.findByRole("heading", { name: "Базовая сеть" });
     await user.click(screen.getByRole("button", { name: "Продолжить →" }));
     await user.click(
-      screen.getByRole("button", { name: "Сохранить черновик" }),
+      screen.getByRole("button", { name: "Сохранить" }),
     );
     expect(
       await screen.findByRole("heading", {

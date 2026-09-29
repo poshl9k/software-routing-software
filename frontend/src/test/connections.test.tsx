@@ -73,7 +73,7 @@ async function open(
 }
 const fill = (label: string, value: string) =>
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
-const save = () => screen.getByRole("button", { name: "Сохранить черновик" });
+const save = () => screen.getByRole("button", { name: "Сохранить" });
 it("renders AWG server, locks role, preserves secrets and hides obfuscation for WG", async () => {
   const fetch = await open(<Tunnels />, {
     ...emptyConfiguration,

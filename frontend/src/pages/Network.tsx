@@ -29,7 +29,7 @@ export default function Network() {
     ? tab
     : "interfaces";
 
-  // Локальная редактируемая копия; сохраняется только по кнопке «Сохранить черновик».
+  // Локальная редактируемая копия; сохраняется только по кнопке «Сохранить».
   const [editing, setEditing] = useState<Editable[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -335,7 +335,7 @@ export default function Network() {
                   disabled={saving || !allValid}
                   onClick={() => void save()}
                 >
-                  {saving ? "Сохранение…" : "Сохранить черновик"}
+                  {saving ? "Сохранение…" : "Сохранить"}
                 </Button>
               </div>
             )}

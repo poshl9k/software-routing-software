@@ -152,7 +152,7 @@ export function EditorFooter({
         Отмена
       </Button>
       <Button variant="contained" disabled={saving || !valid} onClick={save}>
-        {saving ? "Сохранение…" : "Сохранить черновик"}
+        {saving ? "Сохранение…" : "Сохранить"}
       </Button>
     </div>
   );

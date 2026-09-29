@@ -234,7 +234,7 @@ export default function Onboarding() {
               {busy
                 ? "Сохранение…"
                 : step === 2
-                  ? "Сохранить черновик"
+                  ? "Сохранить"
                   : "Продолжить →"}
             </Button>
           </div>

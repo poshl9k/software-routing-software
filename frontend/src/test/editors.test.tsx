@@ -59,7 +59,7 @@ async function open(page: React.ReactNode) {
   await userEvent.click(edit);
 }
 const saveButton = () =>
-  screen.getByRole("button", { name: "Сохранить черновик" });
+  screen.getByRole("button", { name: "Сохранить" });
 
 it("renders Firewall editor, validates names and addresses, reorders and cancels locally", async () => {
   const fetch = mockApi();
@@ -166,7 +166,7 @@ it("saves DHCP reservations inside/outside the pool and DNS records/forwards thr
   await user.click(saveButton());
   await waitFor(() =>
     expect(
-      screen.queryByRole("button", { name: "Сохранить черновик" }),
+      screen.queryByRole("button", { name: "Сохранить" }),
     ).not.toBeInTheDocument(),
   );
   const dhcp = JSON.parse(
