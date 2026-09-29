@@ -33,7 +33,10 @@ def test_migration_roundtrip_and_single_draft(database):
         session.commit()
     with Session(engine) as session:
         row = session.get(ConfigurationRow, 1)
-        assert row.snapshot() == scenario("edge")
+        # created_at is stamped by the DB layer and now part of the snapshot.
+        assert row.snapshot() == scenario("edge").model_copy(
+            update={"created_at": row.created_at}
+        )
         session.add(ConfigurationRow(id=2, status="draft", configuration=row.configuration))
         with pytest.raises(IntegrityError):
             session.commit()

@@ -30,8 +30,7 @@ import {
   useConfiguration,
   useRouterState,
 } from "./state";
-import { ErrorNotice, Todo } from "./ui";
-
+import { ErrorNotice, Todo, fmtDateTime } from "./ui";
 function ApplyTopButton() {
   const { demo } = useConfiguration();
   const { uncertain } = useRouterState();
@@ -84,6 +83,7 @@ function ApplyTopButton() {
   if (!draft) return null;
   const applyDisabled =
     !timeoutValid || (preferences.safe && !confirmed);
+  const when = fmtDateTime(draft.created_at);
   return (
     <Tooltip
       title={
@@ -91,7 +91,7 @@ function ApplyTopButton() {
           ? preferences.safe && !confirmed
             ? "Безопасный режим требует ранее подтверждённой версии; параметры — на странице «Применение»"
             : "Окно подтверждения должно быть 60–600 секунд; параметры — на странице «Применение»"
-          : `Применить черновик v${draft.id} с сохранёнными параметрами; diff и параметры — на странице «Применение»`
+          : `Применить черновик v${draft.id}${when ? ` от ${when}` : ""} с сохранёнными параметрами; diff и параметры — на странице «Применение»`
       }
     >
       <span>
@@ -101,7 +101,7 @@ function ApplyTopButton() {
           disabled={applyDisabled}
           onClick={() => void command("apply")}
         >
-          Применить v{draft.id}
+          Применить
         </Button>
       </span>
     </Tooltip>
@@ -192,7 +192,13 @@ function Layout() {
           </Todo>
         ) : (
           <Alert severity="info">
-            Конфигурация v{version?.id} ·{" "}
+            Конфигурация v{version?.id}
+            {version?.created_at && (
+              <>
+                {" "}· {fmtDateTime(version.created_at)}
+              </>
+            )}{" "}
+            ·{" "}
             {version?.status === "draft" ? "черновик" : "подтверждена в БД"}.
             Это желаемая конфигурация; runtime-статусы отмечены отдельно.
           </Alert>

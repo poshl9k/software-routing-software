@@ -232,7 +232,7 @@ describe("screens", () => {
     const user = userEvent.setup();
     open("/");
     const button = await screen.findByRole("button", {
-      name: "Применить v2",
+      name: "Применить",
     });
     expect(button).toBeEnabled();
     await user.click(button);

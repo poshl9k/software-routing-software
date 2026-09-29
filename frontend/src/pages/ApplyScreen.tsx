@@ -11,7 +11,7 @@ import {
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useApplyCommands, statusLabels, useCountdown, useRouterState } from "../state";
-import { Badge, Card, DataTable, ErrorNotice, Todo } from "../ui";
+import { Badge, Card, DataTable, ErrorNotice, Todo, fmtDateTime } from "../ui";
 import type { ApplyResult } from "../types";
 export default function ApplyScreen() {
   const { uncertain, busy, applyState } = useRouterState();
@@ -122,6 +122,7 @@ export default function ApplyScreen() {
               .map((v) => (
                 <MenuItem value={v.id} key={v.id}>
                   v{v.id}
+                  {fmtDateTime(v.created_at) ? ` · ${fmtDateTime(v.created_at)}` : ""}
                 </MenuItem>
               ))}
           </TextField>
@@ -183,7 +184,7 @@ export default function ApplyScreen() {
         </p>
       </Card>
       <Card
-        title={`Изменения (${confirmed ? `v${confirmed.id}` : "нет стабильной версии"} → ${draft ? `v${draft.id}` : "нет черновика"})`}
+        title={`Изменения (${confirmed ? `v${confirmed.id}${fmtDateTime(confirmed.created_at) ? ` от ${fmtDateTime(confirmed.created_at)}` : ""}` : "нет стабильной версии"} → ${draft ? `v${draft.id}${fmtDateTime(draft.created_at) ? ` от ${fmtDateTime(draft.created_at)}` : ""}` : "нет черновика"})`}
       >
         <ErrorNotice error={diffError} />
         {diff ? (

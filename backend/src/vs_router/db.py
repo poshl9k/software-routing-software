@@ -33,7 +33,12 @@ class ConfigurationRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     def snapshot(self) -> ConfigurationVersion:
-        return ConfigurationVersion(id=self.id, status=self.status, configuration=self.configuration)
+        return ConfigurationVersion(
+            id=self.id,
+            status=self.status,
+            configuration=self.configuration,
+            created_at=self.created_at,
+        )
 
 
 def save_version(session: Session, version: ConfigurationVersion) -> ConfigurationRow:

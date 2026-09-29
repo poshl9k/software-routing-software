@@ -140,6 +140,7 @@ export interface ConfigurationVersion {
   id: number;
   status: "draft" | "confirmed";
   configuration: Configuration;
+  created_at?: string | null;
 }
 export interface ErrorBody {
   code: string;

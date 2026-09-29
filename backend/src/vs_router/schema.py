@@ -1,4 +1,5 @@
 """Versioned JSON contract. References use names, aliases use an explicit @ prefix."""
+from datetime import datetime
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -219,3 +220,4 @@ class ConfigurationVersion(Model):
     id: int = Field(default=1, ge=1)
     status: Literal["draft", "confirmed"] = "draft"
     configuration: Configuration = Field(default_factory=Configuration)
+    created_at: datetime | None = None
