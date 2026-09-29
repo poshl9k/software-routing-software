@@ -69,6 +69,34 @@ then log out and back in, and rerun with sudo."
     log "Detected Debian ${version}"
 }
 
+stage_networkd() {
+    # ISO installs (and d-i generally) leave /etc/network/interfaces with a
+    # DHCP stanza and the ifupdown networking.service active, while the panel
+    # manages /etc/systemd/network/*.network via systemd-networkd. Without
+    # migration the panel's generated configs never apply (networkd inactive,
+    # links unmanaged) and the first apply kills the DHCP address instead of
+    # replacing it. Mirror the current behavior under networkd: a DHCP
+    # fallback .network for every present wired link, ifupdown disabled for
+    # future boots, networkd enabled. The fallback files are named exactly
+    # like the generator's output (10-vs-router-<iface>.network) so the first
+    # panel apply overwrites them in place.
+    systemctl disable networking.service >/dev/null 2>&1 || true
+    local iface file
+    for iface in $(ls /sys/class/net 2>/dev/null); do
+        [ "$iface" = lo ] && continue
+        # Skip wireless NICs: unassociated wlan has no carrier and would only
+        # race the wired link for the DHCP lease.
+        [ -e "/sys/class/net/${iface}/wireless" ] && continue
+        file="/etc/systemd/network/10-vs-router-${iface}.network"
+        [ -e "$file" ] && continue
+        install -d -m 0755 /etc/systemd/network
+        printf '[Match]\nName=%s\n\n[Network]\nDHCP=ipv4\n' "$iface" > "$file"
+        log "networkd fallback: ${file} (DHCP)"
+    done
+    systemctl enable systemd-networkd.service >/dev/null 2>&1 || true
+    systemctl restart systemd-networkd.service >/dev/null 2>&1 || true
+}
+
 stage_apt_deps() {
     export DEBIAN_FRONTEND=noninteractive
     # VM/lab networks (slirp, NAT) reproducibly stall pipelined apt downloads:
@@ -222,6 +250,7 @@ stage_summary() {
 main() {
     parse_args "$@"
     run_stage 'check:_root' stage_check_root
+    run_stage 'networkd' stage_networkd
     run_stage 'apt:deps' stage_apt_deps
     run_stage 'caddy' stage_caddy
     run_stage 'awg' stage_awg
