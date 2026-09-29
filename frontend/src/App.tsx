@@ -6,6 +6,7 @@ import {
   LinearProgress,
   TextField,
   ThemeProvider,
+  Tooltip,
 } from "@mui/material";
 import {
   Link,
@@ -23,8 +24,89 @@ import ApplyScreen from "./pages/ApplyScreen";
 import Maintenance from "./pages/Maintenance";
 import Onboarding, { Login } from "./pages/Onboarding";
 import { theme } from "./theme";
-import { RouterProvider, useConfiguration } from "./state";
+import {
+  RouterProvider,
+  useApplyCommands,
+  useConfiguration,
+  useRouterState,
+} from "./state";
 import { ErrorNotice, Todo } from "./ui";
+
+function ApplyTopButton() {
+  const { demo } = useConfiguration();
+  const { uncertain } = useRouterState();
+  const {
+    draft,
+    confirmed,
+    preferences,
+    pending,
+    active,
+    seconds,
+    timeoutValid,
+    command,
+  } = useApplyCommands();
+  if (demo) return null;
+  const mmss =
+    seconds === null
+      ? null
+      : `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  if (pending)
+    return (
+      <Tooltip title="Агент ждёт подтверждения; по истечении окна — автоматический откат">
+        <span>
+          <Button
+            variant="contained"
+            color="success"
+            disabled={seconds === 0 || seconds === null}
+            onClick={() => void command("confirm")}
+          >
+            Подтвердить{mmss ? ` · ${mmss}` : ""}
+          </Button>
+        </span>
+      </Tooltip>
+    );
+  if (active || uncertain)
+    return (
+      <Tooltip
+        title={
+          uncertain
+            ? "Результат последней команды неизвестен; проверьте состояние на странице «Применение»"
+            : "Команда выполняется; подробности на странице «Применение»"
+        }
+      >
+        <span>
+          <Button variant="contained" component={Link} to="/apply">
+            Выполняется…
+          </Button>
+        </span>
+      </Tooltip>
+    );
+  if (!draft) return null;
+  const applyDisabled =
+    !timeoutValid || (preferences.safe && !confirmed);
+  return (
+    <Tooltip
+      title={
+        applyDisabled
+          ? preferences.safe && !confirmed
+            ? "Безопасный режим требует ранее подтверждённой версии; параметры — на странице «Применение»"
+            : "Окно подтверждения должно быть 60–600 секунд; параметры — на странице «Применение»"
+          : `Применить черновик v${draft.id} с сохранёнными параметрами; diff и параметры — на странице «Применение»`
+      }
+    >
+      <span>
+        <Button
+          variant="contained"
+          color="primary"
+          disabled={applyDisabled}
+          onClick={() => void command("apply")}
+        >
+          Применить v{draft.id}
+        </Button>
+      </span>
+    </Tooltip>
+  );
+}
 export const navigation = [
   { to: "/", label: "Обзор", icon: "◱" },
   { to: "/network", label: "Сеть", icon: "⑃" },
@@ -42,6 +124,7 @@ function Layout() {
   const { pathname, search } = useLocation();
   const [query, setQuery] = useState("");
   const { loading, error, demo, version, refresh } = useConfiguration();
+  const { applyError } = useRouterState();
   const title =
     navigation.find((n) => n.to === pathname + search)?.label ??
     navigation.find((n) => n.to === pathname)?.label;
@@ -91,6 +174,7 @@ function Layout() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          <ApplyTopButton />
           <Button component={Link} to="/login">
             Вход
           </Button>
@@ -98,6 +182,7 @@ function Layout() {
             Обновить
           </Button>
         </header>
+        <ErrorNotice error={applyError} />
         {loading && <LinearProgress aria-label="Загрузка конфигурации" />}
         <ErrorNotice error={error} />
         {demo ? (

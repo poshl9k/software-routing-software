@@ -208,4 +208,43 @@ describe("screens", () => {
       ),
     ).toMatchObject({ deadline: 100000, approximate: false });
   });
+  it("applies the draft from the topbar button without leaving the page", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            path === "/api/versions"
+              ? versions
+              : path.startsWith("/api/diff")
+                ? []
+                : path === "/api/apply"
+                  ? {
+                      version_id: 2,
+                      status: "pending",
+                      phases: { nftables: "applied" },
+                    }
+                  : { version_id: 2, status: "confirmed" },
+          ),
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    open("/");
+    const button = await screen.findByRole("button", {
+      name: "Применить v2",
+    });
+    expect(button).toBeEnabled();
+    await user.click(button);
+    expect(
+      await screen.findByRole("button", { name: /Подтвердить/ }),
+    ).toBeVisible();
+    expect(
+      screen.getAllByRole("button", { name: /Подтвердить/ }).length,
+    ).toBeGreaterThan(0);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/apply",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
 });

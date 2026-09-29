@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
@@ -10,105 +10,47 @@ import {
 } from "@mui/material";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import {
-  observation,
-  statusLabels,
-  useCountdown,
-  useRouterState,
-} from "../state";
+import { useApplyCommands, statusLabels, useCountdown, useRouterState } from "../state";
 import { Badge, Card, DataTable, ErrorNotice, Todo } from "../ui";
-import { readPreferences, savePreferences } from "../preferences";
 import type { ApplyResult } from "../types";
 export default function ApplyScreen() {
+  const { uncertain, busy, applyState } = useRouterState();
   const {
-    versions,
-    refresh,
-    applyState,
-    setApplyState,
-    uncertain,
-    setUncertain,
-    busy,
-    setBusy,
-  } = useRouterState();
-  const [preferences, setPreferences] = useState(readPreferences);
+    drafts,
+    draft,
+    confirmed,
+    preferences,
+    setPreferences,
+    seconds,
+    state,
+    pending,
+    active,
+    timeoutValid,
+    error,
+    command,
+  } = useApplyCommands();
   const [selected, setSelected] = useState<number | "">("");
-  const [error, setError] = useState<unknown>(null);
   const [diff, setDiff] = useState<unknown[] | null>(null);
   const [diffError, setDiffError] = useState<unknown>(null);
-  const requestLock = useRef(false);
-  const draft = versions.find(
-    (v) => v.status === "draft" && (selected === "" || selected === v.id),
-  );
-  const confirmed = versions
-    .filter((v) => v.status === "confirmed")
-    .sort((a, b) => b.id - a.id)[0];
-  const seconds = useCountdown(applyState?.deadline ?? null);
-  const state = applyState?.result;
-  const pending = state?.status === "pending";
-  const active =
-    state &&
-    ["pending", "applying", "rolling_back", "rollback_failed"].includes(
-      state.status,
-    );
+  const shownDraft =
+    drafts.find((v) => v.id === selected) ?? draft;
   useEffect(() => {
     let cancelled = false;
     setDiff(null);
     setDiffError(null);
-    if (confirmed && draft)
+    if (confirmed && shownDraft)
       api
-        .diff(confirmed.id, draft.id)
-        .then((data) => {
+        .diff(confirmed.id, shownDraft.id)
+        .then((data: unknown[]) => {
           if (!cancelled) setDiff(data);
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           if (!cancelled) setDiffError(err);
         });
     return () => {
       cancelled = true;
     };
-  }, [confirmed?.id, draft?.id]);
-  async function command(kind: "apply" | "confirm" | "rollback") {
-    if (requestLock.current || busy) return;
-    requestLock.current = true;
-    setBusy(true);
-    setError(null);
-    const started = Date.now();
-    try {
-      let result: ApplyResult;
-      if (kind === "apply") {
-        if (!draft) return;
-        const params = {
-          version_id: draft.id,
-          safe_mode: preferences.safe,
-          confirmation_timeout: preferences.timeout,
-        };
-        savePreferences(preferences);
-        result = await api.apply(params);
-        setApplyState(observation(result, params, started));
-      } else {
-        if (kind === "confirm" && !state) return;
-        result =
-          kind === "confirm"
-            ? await api.confirm(state!.version_id)
-            : await api.rollback();
-        setApplyState(observation(result));
-      }
-      setUncertain(false);
-      if (result.error)
-        setError(new Error(`${result.error.message} · ${result.error.code}`));
-      await refresh();
-    } catch (err) {
-      setError(err);
-      setUncertain(true);
-    } finally {
-      requestLock.current = false;
-      setBusy(false);
-    }
-  }
-  const timeoutValid =
-    Number.isInteger(preferences.timeout) &&
-    preferences.timeout >= 60 &&
-    preferences.timeout <= 600;
+  }, [confirmed?.id, shownDraft?.id]);
   return (
     <div className="apply-wrap">
       <Typography component="h1" variant="h1" className="page-title">
@@ -176,8 +118,7 @@ export default function ApplyScreen() {
             onChange={(e) => setSelected(Number(e.target.value))}
             disabled={busy || !!active}
           >
-            {versions
-              .filter((v) => v.status === "draft")
+            {drafts
               .map((v) => (
                 <MenuItem value={v.id} key={v.id}>
                   v{v.id}

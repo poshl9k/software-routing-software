@@ -16,6 +16,7 @@ import type {
   ConfigurationVersion,
 } from "./types";
 import { demoConfiguration } from "./fixtures";
+import { readPreferences, savePreferences, type Preferences } from "./preferences";
 export interface ApplyObservation {
   result: ApplyResult;
   deadline: number | null;
@@ -45,6 +46,8 @@ interface RouterState {
   refresh: () => Promise<void>;
   applyState: ApplyObservation | null;
   setApplyState: (value: ApplyObservation | null) => void;
+  applyError: unknown;
+  setApplyError: (value: unknown) => void;
   uncertain: boolean;
   draftDirty: boolean;
   saveDraft: (configuration: Configuration) => Promise<ConfigurationVersion>;
@@ -60,6 +63,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
   const [applyState, setApplyState] = useState<ApplyObservation | null>(null);
+  const [applyError, setApplyError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [draftDirty, setDraftDirty] = useState(false);
@@ -117,6 +121,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
         refresh,
         applyState,
         setApplyState,
+        applyError,
+        setApplyError,
         uncertain,
         setUncertain,
         busy,
@@ -166,3 +172,128 @@ export const statusLabels: Record<ApplyResult["status"], string> = {
   failed: "Ошибка применения",
   rollback_failed: "Ошибка отката",
 };
+
+export interface ApplyCommands {
+  drafts: ConfigurationVersion[];
+  draft: ConfigurationVersion | undefined;
+  confirmed: ConfigurationVersion | undefined;
+  preferences: Preferences;
+  setPreferences: (update: (old: Preferences) => Preferences) => void;
+  seconds: number | null;
+  state: ApplyResult | undefined;
+  pending: boolean;
+  active: boolean;
+  timeoutValid: boolean;
+  error: unknown;
+  command: (kind: "apply" | "confirm" | "rollback", draftId?: number | "") => Promise<void>;
+}
+
+/**
+ * Apply/confirm/rollback commands shared by the Apply screen and the topbar
+ * button. The state is per-instance, except busy/uncertain/applyState which
+ * live in the router context: two instances cannot double-fire (busy gates),
+ * and the pending observation is visible from both.
+ */
+export function useApplyCommands(
+  draftIdOverride?: number | "",
+): ApplyCommands {
+  const {
+    versions,
+    refresh,
+    applyState,
+    setApplyState,
+    applyError,
+    setApplyError,
+    uncertain,
+    setUncertain,
+    busy,
+    setBusy,
+  } = useRouterState();
+  const [preferences, setPreferencesState] =
+    useState<Preferences>(readPreferences);
+  const requestLock = useRef(false);
+  const drafts = versions.filter((v) => v.status === "draft");
+  const draft =
+    drafts.find((v) => v.id === draftIdOverride) ?? drafts[0];
+  const confirmed = versions
+    .filter((v) => v.status === "confirmed")
+    .sort((a, b) => b.id - a.id)[0];
+  const seconds = useCountdown(applyState?.deadline ?? null);
+  const state = applyState?.result;
+  const pending = state?.status === "pending";
+  const active =
+    !!state &&
+    ["pending", "applying", "rolling_back", "rollback_failed"].includes(
+      state.status,
+    );
+  const timeoutValid =
+    Number.isInteger(preferences.timeout) &&
+    preferences.timeout >= 60 &&
+    preferences.timeout <= 600;
+  function setPreferences(
+    update: (old: Preferences) => Preferences,
+  ) {
+    setPreferencesState(update);
+  }
+  async function command(
+    kind: "apply" | "confirm" | "rollback",
+    draftId?: number | "",
+  ) {
+    if (requestLock.current || busy) return;
+    requestLock.current = true;
+    setBusy(true);
+    setApplyError(null);
+    const started = Date.now();
+    const target =
+      draftId === undefined || draftId === ""
+        ? draft
+        : drafts.find((v) => v.id === draftId) ?? draft;
+    try {
+      let result: ApplyResult;
+      if (kind === "apply") {
+        if (!target) return;
+        const params = {
+          version_id: target.id,
+          safe_mode: preferences.safe,
+          confirmation_timeout: preferences.timeout,
+        };
+        savePreferences(preferences);
+        result = await api.apply(params);
+        setApplyState(observation(result, params, started));
+      } else {
+        if (kind === "confirm" && !state) return;
+        result =
+          kind === "confirm"
+            ? await api.confirm(state!.version_id)
+            : await api.rollback();
+        setApplyState(observation(result));
+      }
+      setUncertain(false);
+      if (result.error)
+        setApplyError(
+          new Error(`${result.error.message} · ${result.error.code}`),
+        );
+      await refresh();
+    } catch (err) {
+      setApplyError(err);
+      setUncertain(true);
+    } finally {
+      requestLock.current = false;
+      setBusy(false);
+    }
+  }
+  return {
+    drafts,
+    draft,
+    confirmed,
+    preferences,
+    setPreferences,
+    seconds,
+    state,
+    pending,
+    active,
+    timeoutValid,
+    error: applyError,
+    command,
+  };
+}
