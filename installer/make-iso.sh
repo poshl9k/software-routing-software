@@ -84,22 +84,34 @@ fi
 # Wi-Fi preseed: netcfg/choose_interface=auto takes the first interface with
 # a link — on machines with Wi-Fi that is often the wlan NIC (cable up but
 # negotiation slower), so full-auto stops at the WPA passphrase prompt and
-# fails on the empty input ("Invalid passphrase"). Set
-# VS_ROUTER_WIFI="essid passphrase" to preseed WPA credentials; the values
-# are quoted on the kernel cmdline. If netcfg picks Ethernet instead, the
-# wireless keys are simply unused.
+# fails on the empty input ("Invalid passphrase"). Auto mode therefore
+# BLACKLISTS the wireless stack entirely (see wifi_block_args below).
+# Set VS_ROUTER_WIFI="essid passphrase" ONLY if installing over Wi-Fi is
+# really wanted: it preseeds WPA credentials (unquoted secrets live in the
+# ISO file — avoid; prefer Ethernet or the semi-auto mode).
 if [[ -n ${VS_ROUTER_WIFI:-} ]]; then
     read -r _wifi_essid _wifi_pass <<<"$VS_ROUTER_WIFI"
     preseed_args+=" netcfg/wireless_essid=\"${_wifi_essid}\""
     preseed_args+=" netcfg/wireless_security_type=wpa netcfg/wireless_wpa=\"${_wifi_pass}\""
     echo "Test Wi-Fi: essid=${_wifi_essid} (passphrase set)"
 fi
+# Full-auto must never use Wi-Fi: choose_interface=auto races the wlan NIC
+# against Ethernet and the wlan often links first -> dead end at the WPA
+# prompt. Blacklisting mac80211+cfg80211 kills every modern wireless driver
+# (all depend on them), so netcfg only ever sees wired NICs. Args before
+# '---' affect the INSTALLER only — the installed system boots with its own
+# cmdline and keeps its Wi-Fi. Semi-auto strips this (it asks the network
+# step explicitly). Escape hatch: VS_ROUTER_KEEP_WIFI=1 to disable.
+wifi_block_args=''
+if [[ -z ${VS_ROUTER_KEEP_WIFI:-} ]]; then
+    wifi_block_args='modprobe.blacklist=mac80211,cfg80211'
+fi
 # IMPORTANT: installer boot args must be placed BEFORE the '---' separator —
 # everything after it goes to the installed system's cmdline, which d-i ignores.
 append_to_linux_lines() {
     local cfg=$1 tmp
     tmp=$(mktemp "$workdir/edit.XXXXXX")
-    awk -v extra="$preseed_args" '
+    awk -v extra="$preseed_args${wifi_block_args:+ $wifi_block_args}" '
         /^[[:space:]]*linux([[:space:]]|$)/ {
             if (index($0, "preseed/file=/cdrom/preseed.cfg") == 0) {
                 sub(/---/, extra " ---")
@@ -138,6 +150,9 @@ append_grub_semiauto_entry() {
             # location, keyboard, hostname, network, disk, SSH account) with
             # preseed defaults — a different preseed file drives that.
             gsub("/cdrom/preseed.cfg", "/cdrom/preseed-semiauto.cfg", line)
+            # Wi-Fi stays available in semi-auto: the network step is asked
+            # explicitly, so the operator can pick wlan or wired.
+            gsub(/modprobe\.blacklist=mac80211,cfg80211[[:space:]]*/, "", line)
             print line
             opens=gsub(/{/, "{", $0)
             closes=gsub(/}/, "}", $0)
@@ -156,7 +171,7 @@ append_grub_semiauto_entry() {
 append_to_isolinux_append() {
     local cfg=$1 tmp
     tmp=$(mktemp "$workdir/edit.XXXXXX")
-    awk -v extra="$preseed_args" '
+    awk -v extra="$preseed_args${wifi_block_args:+ $wifi_block_args}" '
         /^[[:space:]]*append([[:space:]]|$)/ {
             if (index($0, "preseed/file=/cdrom/preseed.cfg") == 0) {
                 sub(/---/, extra " ---")
@@ -206,6 +221,8 @@ append_isolinux_semiauto_entry() {
             if (line ~ /^[[:space:]]*append[[:space:]]/) sub(/priority=critical/, "priority=high", line)
             if (line ~ /^[[:space:]]*append[[:space:]]/) gsub(/auto=true[[:space:]]*/, "", line)
             if (line ~ /^[[:space:]]*append[[:space:]]/) gsub("/cdrom/preseed.cfg", "/cdrom/preseed-semiauto.cfg", line)
+            # Wi-Fi stays available in semi-auto (network step asked explicitly).
+            if (line ~ /^[[:space:]]*append[[:space:]]/) gsub(/modprobe\.blacklist=mac80211,cfg80211[[:space:]]*/, "", line)
             print line
         }
     ' "$cfg" > "$tmp"
