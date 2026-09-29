@@ -81,6 +81,19 @@ if [[ -n ${VS_ROUTER_PHONEHOME_IP:-} ]]; then
         "$workdir/iso/preseed.cfg" "$workdir/iso/preseed-semiauto.cfg"
     echo "Test phone-home: http://${VS_ROUTER_PHONEHOME_IP}:8099"
 fi
+# Wi-Fi preseed: netcfg/choose_interface=auto takes the first interface with
+# a link — on machines with Wi-Fi that is often the wlan NIC (cable up but
+# negotiation slower), so full-auto stops at the WPA passphrase prompt and
+# fails on the empty input ("Invalid passphrase"). Set
+# VS_ROUTER_WIFI="essid passphrase" to preseed WPA credentials; the values
+# are quoted on the kernel cmdline. If netcfg picks Ethernet instead, the
+# wireless keys are simply unused.
+if [[ -n ${VS_ROUTER_WIFI:-} ]]; then
+    read -r _wifi_essid _wifi_pass <<<"$VS_ROUTER_WIFI"
+    preseed_args+=" netcfg/wireless_essid=\"${_wifi_essid}\""
+    preseed_args+=" netcfg/wireless_security_type=wpa netcfg/wireless_wpa=\"${_wifi_pass}\""
+    echo "Test Wi-Fi: essid=${_wifi_essid} (passphrase set)"
+fi
 # IMPORTANT: installer boot args must be placed BEFORE the '---' separator —
 # everything after it goes to the installed system's cmdline, which d-i ignores.
 append_to_linux_lines() {
