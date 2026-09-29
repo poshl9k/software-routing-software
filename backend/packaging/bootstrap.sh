@@ -95,20 +95,11 @@ stage_networkd() {
     done
     systemctl enable systemd-networkd.service >/dev/null 2>&1 || true
     systemctl restart systemd-networkd.service >/dev/null 2>&1 || true
-    # networkd's DHCP client-id differs from dhclient's, so its lease can be a
-    # different address. Stabilize THIS boot: once a link actually became
-    # routable under networkd, stop ifupdown (its dhclient would otherwise
-    # renew the stale lease in parallel); future boots only run networkd.
-    local routable=0
-    for iface in $(ls /sys/class/net 2>/dev/null); do
-        [ "$iface" = lo ] && continue
-        state=$(networkctl show "$iface" 2>/dev/null | awk '/Administrative State|Operational State/ {print $3}')
-        if [[ $state == *routable* || $state == *configured* ]]; then routable=1; break; fi
-    done
-    if [[ $routable == 1 ]]; then
-        systemctl stop networking.service >/dev/null 2>&1 || true
-        log 'networkd took over connectivity; networking.service stopped'
-    fi
+    # Do NOT stop networking.service here: 'stop' runs ifdown, which
+    # deconfigures the interface (dhclient exit hooks flush the address) and
+    # would kill connectivity mid-bootstrap. The parallel dhclient is
+    # harmless for this one boot; the installer's finish-install reboot
+    # leaves networkd as the only network manager.
 }
 
 stage_apt_deps() {
