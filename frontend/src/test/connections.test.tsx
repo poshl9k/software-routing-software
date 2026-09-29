@@ -96,7 +96,19 @@ it("renders AWG server, locks role, preserves secrets and hides obfuscation for 
   expect(body.tunnels[0].peers).toEqual(server.peers);
 });
 it("creates a complete draft with a client and write-only new secret", async () => {
-  const fetch = await open(<Tunnels />);
+  const wg0 = {
+    name: "wg0",
+    type: "physical" as const,
+    zone: "lan",
+    addresses: [],
+    parent: null,
+    vlan_id: null,
+    members: [],
+  };
+  const fetch = await open(<Tunnels />, {
+    ...emptyConfiguration,
+    interfaces: [wg0],
+  });
   await userEvent.click(
     screen.getByRole("button", { name: "+ Добавить туннель" }),
   );
@@ -114,6 +126,7 @@ it("creates a complete draft with a client and write-only new secret", async () 
   expect(call[1]!.method).toBe("POST");
   expect(JSON.parse(call[1]!.body as string)).toEqual({
     ...emptyConfiguration,
+    interfaces: [wg0],
     tunnels: [
       expect.objectContaining({
         name: "client",

@@ -213,6 +213,7 @@ function Collection<T extends Row>({
   );
 }
 export function Tunnels() {
+  const { configuration: c } = useConfiguration();
   const [qr,setQr]=useState<{peer:string;url:string}|null>(null); const [qrError,setQrError]=useState<unknown>(null);
   const showQr=async(tunnel:string,peer:string)=>{setQrError(null);try{const blob=await api.peerQr(tunnel,peer);setQr({peer,url:URL.createObjectURL(blob)});}catch(e){setQrError(e);}};
   return (
@@ -304,12 +305,18 @@ export function Tunnels() {
                 helperText="Имя сохраняет привязку секретов"
               />
             )}
-            <Field
-              label="Интерфейс"
-              value={t.interface}
-              valid={interfaceValid(t.interface)}
-              onChange={(v) => patch({ interface: v })}
-            />
+            <div>
+              <SelectField
+                label="Интерфейс"
+                value={t.interface}
+                options={c.interfaces.map((i) => i.name)}
+                onChange={(v) => patch({ interface: v })}
+              />
+              <p className="sub">
+                Туннель привязывается к интерфейсу из конфигурации — сначала
+                добавьте его на странице «Сеть» (например, wg0/amnezia0).
+              </p>
+            </div>
             {created ? (
               <SelectField
                 label="Роль"
