@@ -11,6 +11,13 @@
 # the first boot in the normal environment.
 set -u
 export DEBIAN_FRONTEND=noninteractive
+# systemd oneshot services run with HOME unset — go refuses to work without
+# it ("neither GOMODCACHE nor GOPATH is set"); bootstrap.sh's xcaddy stage
+# depends on go env GOPATH.
+export HOME="${HOME:-/root}"
+export GOPATH="${GOPATH:-$HOME/go}"
+export GOMODCACHE="${GOMODCACHE:-$GOPATH/pkg/mod}"
+export PATH="$PATH:$GOPATH/bin"
 export PS4="+$(date +%H:%M:%S) "
 
 # Bounded wait for connectivity (DHCP may lag the service start at boot).
