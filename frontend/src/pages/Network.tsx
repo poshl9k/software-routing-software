@@ -204,17 +204,84 @@ export default function Network() {
                         "—"
                       ),
                       i.type === "bridge" ? (
-                        <TextField
-                          size="small"
-                          fullWidth
-                          value={i.members.join(", ")}
-                          placeholder="eth2, eth3"
-                          onChange={(e) =>
-                            setField(i.key, {
-                              members: e.target.value.split(",").map((m) => m.trim()),
-                            })
-                          }
-                        />
+                        <div className="members-edit">
+                          {i.members.map((m, index) => {
+                            const member = rows.find(
+                              (p) => p.key !== i.key && p.name === m,
+                            );
+                            return (
+                              <div key={m + index} className="members-row">
+                                <TextField
+                                  select
+                                  size="small"
+                                  SelectProps={{ native: true }}
+                                  value={m}
+                                  error={!m || !member || !member.zone}
+                                  onChange={(e) =>
+                                    setField(i.key, {
+                                      members: i.members.map((row, r) =>
+                                        r === index ? e.target.value : row,
+                                      ),
+                                    })
+                                  }
+                                >
+                                  <option value="">— выберите —</option>
+                                  {rows
+                                    .filter(
+                                      (p) =>
+                                        p.key !== i.key &&
+                                        p.type === "physical" &&
+                                        (p.name === m ||
+                                          !i.members.includes(p.name)),
+                                    )
+                                    .map((p) => (
+                                      <option key={p.key} value={p.name}>
+                                        {p.name}
+                                        {p.zone ? "" : " (без зоны!)"}
+                                      </option>
+                                    ))}
+                                </TextField>
+                                <Button
+                                  size="small"
+                                  color="error"
+                                  onClick={() =>
+                                    setField(i.key, {
+                                      members: i.members.filter(
+                                        (_, r) => r !== index,
+                                      ),
+                                    })
+                                  }
+                                >
+                                  ✕
+                                </Button>
+                              </div>
+                            );
+                          })}
+                          {rows.some(
+                            (p) =>
+                              p.key !== i.key &&
+                              p.type === "physical" &&
+                              !i.members.includes(p.name),
+                          ) && (
+                            <Button
+                              size="small"
+                              onClick={() => {
+                                const free = rows.find(
+                                  (p) =>
+                                    p.key !== i.key &&
+                                    p.type === "physical" &&
+                                    !i.members.includes(p.name),
+                                );
+                                if (free)
+                                  setField(i.key, {
+                                    members: [...i.members, free.name],
+                                  });
+                              }}
+                            >
+                              + участник
+                            </Button>
+                          )}
+                        </div>
                       ) : (
                         "—"
                       ),

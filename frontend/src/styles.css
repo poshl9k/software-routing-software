@@ -336,3 +336,14 @@ pre {
     flex-wrap: wrap;
   }
 }
+
+.members-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.members-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
