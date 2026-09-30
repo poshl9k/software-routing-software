@@ -35,13 +35,91 @@ export default function Maintenance() {
         <Button disabled={busy} onClick={()=>void perform(async()=>{const result=await api.backupRestore({...backup,...(restorePassword?{password:restorePassword}:{})});setNotice(`Восстановлено: ${result.restored}`);})}>Восстановить</Button></>}
     </Card>
     <Card title="Диагностика ping">
-      <div className="footer-actions"><TextField size="small" label="Узел" value={host} error={!host.trim()} helperText={!host.trim()?"Укажите узел":""} onChange={e=>setHost(e.target.value)}/>
-      <TextField size="small" label="Количество (1–5)" type="number" inputProps={{min:1,max:5}} value={count} onChange={e=>setCount(Number(e.target.value))}/>
-      <TextField select SelectProps={{native:true}} size="small" label="Исходный интерфейс" value={iface} onChange={e=>setIface(e.target.value)}><option value="">Автоматически</option>{configuration.interfaces.map(i=><option key={i.name} value={i.name}>{i.name}</option>)}</TextField>
-      <Button disabled={busy||!host.trim()||count<1||count>5} onClick={()=>void perform(async()=>setPing(await api.ping({host:host.trim(),count,...(iface?{source_interface:iface}:{})})))}>Ping</Button></div>
-      {ping&&<p>Отправлено: {ping.sent} · Получено: {ping.received} · Потери: {ping.loss_pct}% · min/avg/max: {ping.min_avg_max_ms.join(" / ")} мс</p>}
+      <div className="diag-controls">
+        <TextField
+          className="grow"
+          size="small"
+          label="Узел"
+          value={host}
+          error={!host.trim()}
+          helperText={!host.trim() ? "Укажите узел" : ""}
+          onChange={(e) => setHost(e.target.value)}
+        />
+        <TextField
+          size="small"
+          label="Количество"
+          helperText="1–5"
+          type="number"
+          inputProps={{ min: 1, max: 5 }}
+          sx={{ width: 130 }}
+          value={count}
+          onChange={(e) => setCount(Number(e.target.value))}
+        />
+        <TextField
+          select
+          SelectProps={{ native: true }}
+          size="small"
+          label="Интерфейс"
+          InputLabelProps={{ shrink: true }}
+          sx={{ width: 200 }}
+          value={iface}
+          onChange={(e) => setIface(e.target.value)}
+        >
+          <option value="">Автоматически</option>
+          {configuration.interfaces.map((i) => (
+            <option key={i.name} value={i.name}>
+              {i.name}
+            </option>
+          ))}
+        </TextField>
+        <Button
+          disabled={busy || !host.trim() || count < 1 || count > 5}
+          onClick={() =>
+            void perform(async () =>
+              setPing(
+                await api.ping({
+                  host: host.trim(),
+                  count,
+                  ...(iface ? { source_interface: iface } : {}),
+                }),
+              )
+            )
+          }
+        >
+          Ping
+        </Button>
+      </div>
+      {ping && (
+        <p>
+          Отправлено: {ping.sent} · Получено: {ping.received} · Потери:{" "}
+          {ping.loss_pct}% · min/avg/max: {ping.min_avg_max_ms.join(" / ")} мс
+        </p>
+      )}
     </Card>
-    <Card title="Traceroute"><div className="footer-actions"><TextField size="small" label="Узел" value={host} onChange={e=>setHost(e.target.value)}/><Button disabled={busy||!host.trim()} onClick={()=>void perform(async()=>setTrace(await api.traceroute(host.trim())))}>Запустить</Button></div>{trace.map((line,i)=><div key={i}>{line}</div>)}</Card>
+    <Card title="Traceroute">
+      <div className="diag-controls">
+        <TextField
+          className="grow"
+          size="small"
+          label="Узел"
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+        />
+        <Button
+          disabled={busy || !host.trim()}
+          onClick={() =>
+            void perform(async () =>
+              setTrace(await api.traceroute(host.trim())),
+            )
+          }
+        >
+          Запустить
+        </Button>
+      </div>
+      {trace.map((line, i) => (
+        <div key={i}>{line}</div>
+      ))}
+    </Card>
     <Card title="Счётчики правил" action={<Button onClick={()=>void refreshCounters()} disabled={busy}>Обновить</Button>}><DataTable heads={["Правило","Пакеты","Байты"]} rows={Object.entries(counters).map(([name,value])=>[name,value.packets,value.bytes])}/></Card>
   </>;
 }

@@ -14,7 +14,8 @@ import { useApplyCommands, statusLabels, useCountdown, useRouterState } from "..
 import { Badge, Card, DataTable, ErrorNotice, Todo, fmtDateTime } from "../ui";
 import type { ApplyResult } from "../types";
 export default function ApplyScreen() {
-  const { uncertain, busy, applyState } = useRouterState();
+  const { uncertain, busy, applyState, discardDraft, setNotice } =
+    useRouterState();
   const {
     drafts,
     draft,
@@ -208,7 +209,7 @@ export default function ApplyScreen() {
           }
           onClick={() => void command("apply")}
         >
-          {busy ? "Выполняется…" : "Применить черновик"}
+          {busy ? "Выполняется…" : "Применить"}
         </Button>
         <Button
           variant="contained"
@@ -224,6 +225,16 @@ export default function ApplyScreen() {
           onClick={() => void command("rollback")}
         >
           Откатить сейчас
+        </Button>
+        <Button
+          color="error"
+          disabled={busy || !draft || !!active}
+          onClick={() => {
+            if (window.confirm("Сбросить черновик? Изменения будут потеряны."))
+              void discardDraft().then(() => setNotice("Черновик сброшен"));
+          }}
+        >
+          Сбросить черновик
         </Button>
         <Button component={Link} to="/">
           Вернуться к обзору

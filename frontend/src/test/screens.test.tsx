@@ -107,19 +107,18 @@ describe("screens", () => {
     );
     const user = userEvent.setup();
     open("/apply");
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Применить черновик" }),
-      ).toBeEnabled(),
-    );
+    const applyButtons = () =>
+      screen
+        .getAllByRole("button", { name: "Применить" })
+        // The Apply screen's own button comes after the topbar one in the DOM.
+        .slice(-1);
+    await waitFor(() => expect(applyButtons()[0]).toBeEnabled());
     const safe = await screen.findByRole("switch", {
       name: "Безопасная настройка",
     });
     await waitFor(() => expect(safe).toBeEnabled());
     await user.click(safe);
-    await user.click(
-      screen.getByRole("button", { name: "Применить черновик" }),
-    );
+    await user.click(applyButtons()[0]);
     expect(await screen.findByRole("timer")).toHaveTextContent(
       /0[23]:[0-5][0-9]/,
     );
@@ -128,9 +127,7 @@ describe("screens", () => {
         screen.getByRole("button", { name: "Подтвердить изменения" }),
       ).toBeEnabled(),
     );
-    expect(
-      screen.getByRole("button", { name: "Применить черновик" }),
-    ).toBeDisabled();
+    expect(applyButtons()[0]).toBeDisabled();
     await user.click(
       screen.getByRole("button", { name: "Подтвердить изменения" }),
     );

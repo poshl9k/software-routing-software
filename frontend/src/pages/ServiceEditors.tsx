@@ -27,7 +27,7 @@ const poolValid = (p: { start: string; end: string }) =>
 const normalize = (v: string[]) => lines(v.join("\n"));
 
 export function DHCPEditor({ children }: { children: ReactNode }) {
-  const { configuration: c, version, saveDraft } = useConfiguration();
+  const { configuration: c, version, saveDraft, setNotice } = useConfiguration();
   const [editing, setEditing] = useState<DHCPSubnet[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -59,7 +59,7 @@ export function DHCPEditor({ children }: { children: ReactNode }) {
     setSaving(true);
     setError(null);
     try {
-      await saveDraft({
+      const saved = await saveDraft({
         ...c,
         dhcp_subnets: rows.map((s) => ({
           ...s,
@@ -67,6 +67,7 @@ export function DHCPEditor({ children }: { children: ReactNode }) {
           dns_servers: normalize(s.dns_servers),
         })),
       });
+      setNotice(`Черновик v${saved.id} сохранён`);
       setEditing(null);
     } catch (err) {
       setError(err);
@@ -302,7 +303,7 @@ export function DHCPEditor({ children }: { children: ReactNode }) {
 }
 
 export function DNSEditor({ children }: { children: ReactNode }) {
-  const { configuration: c, version, saveDraft } = useConfiguration();
+  const { configuration: c, version, saveDraft, setNotice } = useConfiguration();
   const [editing, setEditing] = useState<DNSConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -340,7 +341,7 @@ export function DNSEditor({ children }: { children: ReactNode }) {
     setSaving(true);
     setError(null);
     try {
-      await saveDraft({
+      const saved = await saveDraft({
         ...c,
         dns: {
           ...dns,
@@ -351,6 +352,7 @@ export function DNSEditor({ children }: { children: ReactNode }) {
           })),
         },
       });
+      setNotice(`Черновик v${saved.id} сохранён`);
       setEditing(null);
     } catch (err) {
       setError(err);

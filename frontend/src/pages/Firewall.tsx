@@ -49,6 +49,7 @@ export default function Firewall() {
     saveDraft,
     error: apiError,
     draftDirty,
+    setNotice,
   } = useConfiguration();
   const [editing, setEditing] = useState<Editable | null>(null);
   const [saving, setSaving] = useState(false);
@@ -127,7 +128,7 @@ export default function Firewall() {
     setSaving(true);
     setError(null);
     try {
-      await saveDraft({
+      const saved = await saveDraft({
         ...c,
         ...rows,
         aliases: rows.aliases.map((a) => ({
@@ -136,6 +137,7 @@ export default function Firewall() {
           includes: a.includes.filter(Boolean),
         })),
       });
+      setNotice(`Черновик v${saved.id} сохранён`);
       setEditing(null);
     } catch (err) {
       setError(err);

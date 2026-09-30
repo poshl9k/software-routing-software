@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Button,
   CssBaseline,
   LinearProgress,
+  Snackbar,
   TextField,
   ThemeProvider,
   Tooltip,
@@ -15,6 +16,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
 } from "react-router-dom";
 import Dashboard, { Events } from "./pages/Dashboard";
 import Network from "./pages/Network";
@@ -30,7 +32,7 @@ import {
   useConfiguration,
   useRouterState,
 } from "./state";
-import { ErrorNotice, Todo, fmtDateTime } from "./ui";
+import { Badge, ErrorNotice, Todo, fmtDateTime } from "./ui";
 function ApplyTopButton() {
   const { demo } = useConfiguration();
   const { uncertain } = useRouterState();
@@ -122,9 +124,24 @@ export const navigation = [
 ];
 function Layout() {
   const { pathname, search } = useLocation();
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
-  const { loading, error, demo, version, refresh } = useConfiguration();
-  const { applyError } = useRouterState();
+  const {
+    loading,
+    error,
+    demo,
+    version,
+    refresh,
+    user,
+    loadUser,
+    signOut,
+    notice,
+    setNotice,
+    applyError,
+  } = useConfiguration();
+  useEffect(() => {
+    void loadUser();
+  }, [loadUser]);
   const title =
     navigation.find((n) => n.to === pathname + search)?.label ??
     navigation.find((n) => n.to === pathname)?.label;
@@ -168,6 +185,15 @@ function Layout() {
           <div className="breadcrumbs">
             vs-router › <b>{title}</b>
           </div>
+          {!demo && version && (
+            <Badge tone={version.status === "draft" ? "amber" : "green"}>
+              v{version.id} ·{" "}
+              {version.status === "draft" ? "черновик" : "подтверждена"}
+              {fmtDateTime(version.created_at)
+                ? ` · ${fmtDateTime(version.created_at)}`
+                : ""}
+            </Badge>
+          )}
           <TextField
             className="search"
             label="Поиск раздела"
@@ -175,9 +201,22 @@ function Layout() {
             onChange={(e) => setQuery(e.target.value)}
           />
           <ApplyTopButton />
-          <Button component={Link} to="/login">
-            Вход
-          </Button>
+          {user ? (
+            <>
+              <span className="user-name">{user.username}</span>
+              <Button
+                onClick={() =>
+                  void signOut().then(() => navigate("/login"))
+                }
+              >
+                Выйти
+              </Button>
+            </>
+          ) : (
+            <Button component={Link} to="/login">
+              Вход
+            </Button>
+          )}
           <Button onClick={() => void refresh()} disabled={loading}>
             Обновить
           </Button>
@@ -185,23 +224,17 @@ function Layout() {
         <ErrorNotice error={applyError} />
         {loading && <LinearProgress aria-label="Загрузка конфигурации" />}
         <ErrorNotice error={error} />
-        {demo ? (
+        <Snackbar
+          open={notice !== null}
+          autoHideDuration={4000}
+          onClose={() => setNotice(null)}
+          message={notice ?? ""}
+        />
+        {demo && (
           <Todo>
             Показаны демонстрационные данные из макетов. Доступная версия
             конфигурации не получена.
           </Todo>
-        ) : (
-          <Alert severity="info">
-            Конфигурация v{version?.id}
-            {version?.created_at && (
-              <>
-                {" "}· {fmtDateTime(version.created_at)}
-              </>
-            )}{" "}
-            ·{" "}
-            {version?.status === "draft" ? "черновик" : "подтверждена в БД"}.
-            Это желаемая конфигурация; runtime-статусы отмечены отдельно.
-          </Alert>
         )}
         <Outlet />
       </main>

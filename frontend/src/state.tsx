@@ -17,6 +17,13 @@ import type {
 } from "./types";
 import { demoConfiguration } from "./fixtures";
 import { readPreferences, savePreferences, type Preferences } from "./preferences";
+import type { User } from "./types";
+
+export function fmtUser(value: unknown): User | null {
+  return value && typeof (value as User).username === "string"
+    ? (value as User)
+    : null;
+}
 export interface ApplyObservation {
   result: ApplyResult;
   deadline: number | null;
@@ -48,6 +55,11 @@ interface RouterState {
   setApplyState: (value: ApplyObservation | null) => void;
   applyError: unknown;
   setApplyError: (value: unknown) => void;
+  notice: string | null;
+  setNotice: (value: string | null) => void;
+  user: User | null;
+  loadUser: () => Promise<void>;
+  signOut: () => Promise<void>;
   uncertain: boolean;
   draftDirty: boolean;
   saveDraft: (configuration: Configuration) => Promise<ConfigurationVersion>;
@@ -64,6 +76,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<unknown>(null);
   const [applyState, setApplyState] = useState<ApplyObservation | null>(null);
   const [applyError, setApplyError] = useState<unknown>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [draftDirty, setDraftDirty] = useState(false);
@@ -112,6 +126,20 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     void refresh();
     return () => controller.current?.abort();
   }, [refresh]);
+  const loadUser = useCallback(async () => {
+    try {
+      setUser(fmtUser(await api.me()));
+    } catch {
+      setUser(null);
+    }
+  }, []);
+  const signOut = useCallback(async () => {
+    try {
+      await api.logout();
+    } finally {
+      setUser(null);
+    }
+  }, []);
   return (
     <Context.Provider
       value={{
@@ -123,6 +151,11 @@ export function RouterProvider({ children }: { children: ReactNode }) {
         setApplyState,
         applyError,
         setApplyError,
+        notice,
+        setNotice,
+        user,
+        loadUser,
+        signOut,
         uncertain,
         setUncertain,
         busy,

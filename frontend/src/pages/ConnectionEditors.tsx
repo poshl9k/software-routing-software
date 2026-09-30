@@ -77,7 +77,8 @@ function Collection<T extends Row>({
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
 }) {
-  const { configuration: c, version, saveDraft, demo } = useConfiguration();
+  const { configuration: c, version, saveDraft, demo, setNotice } =
+    useConfiguration();
   const [editing, setEditing] = useState<
     { id: number; created: boolean; row: T }[] | null
   >(null);
@@ -94,13 +95,14 @@ function Collection<T extends Row>({
     setSaving(true);
     setError(null);
     try {
-      await saveDraft({
+      const saved = await saveDraft({
         ...c,
         tunnels: c.tunnels,
         sites: c.sites,
         ddns: c.ddns,
         [kind]: editing.map((v) => clean(v.row)),
       });
+      setNotice(`Черновик v${saved.id} сохранён`);
       setEditing(null);
     } catch (e) {
       setError(e);

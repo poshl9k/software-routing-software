@@ -22,7 +22,8 @@ const emptyInterface = (key: string): Editable => ({
 });
 
 export default function Network() {
-  const { configuration: c, version, saveDraft, draftDirty } = useConfiguration();
+  const { configuration: c, version, saveDraft, draftDirty, setNotice } =
+    useConfiguration();
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "interfaces";
   const knownTab = ["interfaces", "wan", "routes", "diagnostics"].includes(tab)
@@ -54,7 +55,8 @@ export default function Network() {
         addresses: rest.addresses.filter((a) => a.trim()),
         members: rest.members.filter((m) => m.trim()),
       }));
-      await saveDraft({ ...c, interfaces });
+      const saved = await saveDraft({ ...c, interfaces });
+      setNotice(`Черновик v${saved.id} сохранён`);
       setEditing(null);
     } catch (err) {
       setError(err);
