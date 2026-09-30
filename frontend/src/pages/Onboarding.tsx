@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Alert,
   Button,
@@ -24,7 +24,7 @@ export default function Onboarding() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const lock = useRef(false);
-  const { refresh } = useRouterState();
+  const { refresh, loadUser } = useRouterState();
   async function next(event: FormEvent) {
     event.preventDefault();
     if (lock.current) return;
@@ -39,6 +39,8 @@ export default function Onboarding() {
         }
         // Setup creates an account but does not establish a session.
         await api.login({ username, password });
+        // Populate the session user so the topbar shows "Выйти", not "Вход".
+        await loadUser();
         setPassword("");
         setStep(1);
       } else if (step === 1) {
@@ -249,8 +251,11 @@ export function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const lock = useRef(false);
-  const { refresh } = useRouterState();
+  const { refresh, loadUser, user } = useRouterState();
   const navigate = useNavigate();
+  useEffect(() => {
+    if (user) navigate("/");
+  }, [user, navigate]);
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (lock.current) return;
@@ -260,6 +265,7 @@ export function Login() {
     try {
       await api.login({ username, password });
       setPassword("");
+      await loadUser();
       await refresh();
       navigate("/");
     } catch (err) {

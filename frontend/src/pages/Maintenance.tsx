@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Checkbox, FormControlLabel, TextField, Typography } from "@mui/material";
+import { Alert, Button, Checkbox, FormControl, FormControlLabel, InputLabel, MenuItem, Select, TextField, Typography } from "@mui/material";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { Card, DataTable, ErrorNotice } from "../ui";
@@ -55,23 +55,22 @@ export default function Maintenance() {
           value={count}
           onChange={(e) => setCount(Number(e.target.value))}
         />
-        <TextField
-          select
-          SelectProps={{ native: true }}
-          size="small"
-          label="Интерфейс"
-          InputLabelProps={{ shrink: true }}
-          sx={{ width: 200 }}
-          value={iface}
-          onChange={(e) => setIface(e.target.value)}
-        >
-          <option value="">Автоматически</option>
-          {configuration.interfaces.map((i) => (
-            <option key={i.name} value={i.name}>
-              {i.name}
-            </option>
-          ))}
-        </TextField>
+        <FormControl size="small" sx={{ width: 200 }}>
+          <InputLabel id="maintenance-iface-label">Интерфейс</InputLabel>
+          <Select
+            labelId="maintenance-iface-label"
+            label="Интерфейс"
+            value={iface}
+            onChange={(e) => setIface(e.target.value)}
+          >
+            <MenuItem value="">Автоматически</MenuItem>
+            {configuration.interfaces.map((i) => (
+              <MenuItem key={i.name} value={i.name}>
+                {i.name}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
         <Button
           disabled={busy || !host.trim() || count < 1 || count > 5}
           onClick={() =>
