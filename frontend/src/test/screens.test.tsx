@@ -18,7 +18,7 @@ function mockApi() {
           JSON.stringify(
             path === "/api/versions"
               ? versions
-              : path.startsWith("/api/diff")
+              : path === "/api/host/interfaces" || path.startsWith("/api/diff")
                 ? []
                 : {},
           ),
@@ -92,7 +92,7 @@ describe("screens", () => {
           JSON.stringify(
             path === "/api/versions"
               ? versions
-              : path.startsWith("/api/diff")
+              : path === "/api/host/interfaces" || path.startsWith("/api/diff")
                 ? []
                 : path === "/api/apply"
                   ? {
@@ -213,7 +213,7 @@ describe("screens", () => {
           JSON.stringify(
             path === "/api/versions"
               ? versions
-              : path.startsWith("/api/diff")
+              : path === "/api/host/interfaces" || path.startsWith("/api/diff")
                 ? []
                 : path === "/api/apply"
                   ? {

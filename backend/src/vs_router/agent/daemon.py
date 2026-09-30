@@ -158,6 +158,27 @@ def panel_probe():
         return False
 
 
+def list_interfaces() -> list[dict[str, str | None]]:
+    """Read the host's link inventory without changing network configuration."""
+    try:
+        output = subprocess.run(['ip', '-br', 'link'], capture_output=True,
+                                text=True, timeout=5, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        raise ApplyError('host.interfaces_unavailable') from None
+    interfaces: list[dict[str, str | None]] = []
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        name, separator, parent = fields[0].partition('@')
+        kind = ('vlan' if separator else 'bridge' if name.startswith('br')
+                else 'bond' if name.startswith('bond') else 'physical')
+        interfaces.append({'name': name, 'kind': kind,
+                           'parent': parent if separator else None,
+                           'operstate': fields[1]})
+    return interfaces
+
+
 def make_handlers(engine, database):
     def safe_host(host):
         try:
@@ -252,7 +273,7 @@ def make_handlers(engine, database):
     return {'apply_version': apply_version, 'confirm_version': confirm_version,
             'rollback': lambda: engine.rollback('requested'), 'status': status,
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
-            'nft_counters': nft_counters}
+            'nft_counters': nft_counters, 'list_interfaces': list_interfaces}
 
 
 def main():

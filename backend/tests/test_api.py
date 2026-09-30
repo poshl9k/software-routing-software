@@ -341,3 +341,29 @@ async def test_agent_fake_unavailable(api, monkeypatch):
         response = await client.post('/api/' + path, json=body)
         assert response.status_code == 503
         assert response.json() == {'code': 'agent.unavailable', 'message': 'agent.unavailable', 'details': []}
+
+
+async def test_host_interfaces(api, monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+    from vs_router.api import host
+    from vs_router.api.errors import APIError
+
+    client = api[0]
+    entries = [{'name': 'eth0', 'kind': 'physical', 'parent': None, 'operstate': 'UP'}]
+    call = Mock(return_value=entries)
+    monkeypatch.setattr(host, 'agent_call', call)
+    assert (await client.get('/api/host/interfaces')).status_code == 401
+    call.assert_not_called()
+    await sign_in(client)
+    response = await client.get('/api/host/interfaces')
+    assert response.status_code == 200
+    assert response.json() == entries
+    call.assert_called_once_with('list_interfaces', {})
+    call.side_effect = APIError(503, 'agent.unavailable')
+    response = await client.get('/api/host/interfaces')
+    assert response.status_code == 503
+    assert response.json()['code'] == 'agent.unavailable'
+    call.side_effect = RuntimeError('private failure')
+    response = await client.get('/api/host/interfaces')
+    assert response.status_code == 503
+    assert response.json()['code'] == 'host.interfaces_unavailable'

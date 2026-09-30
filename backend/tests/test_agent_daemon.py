@@ -88,3 +88,47 @@ def test_db_handlers_confirm_exact_applied_snapshot(tmp_path):
         assert row.status == 'confirmed'
         assert row.configuration.panel_port != 8443
     database.dispose()
+
+
+def test_list_interfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+    from subprocess import CompletedProcess
+    from vs_router.agent.rpc import build_request
+
+    command = ['ip', '-br', 'link']
+    run = Mock(return_value=CompletedProcess(command, 0, stdout=(
+        'lo UNKNOWN 00:00:00:00:00:00\n'
+        'eth0 UP aa:bb:cc:dd:ee:ff <UP>\n'
+        'vlan10@eth0 DOWN aa:bb:cc:dd:ee:ff\n'
+        'br0 UP aa:bb:cc:dd:ee:ff\n'
+        'bond0 DOWN aa:bb:cc:dd:ee:ff\n\n'
+    )))
+    monkeypatch.setattr(daemon.subprocess, 'run', run)
+    handlers = daemon.make_handlers(None, None)
+    result = daemon.dispatch(build_request('list_interfaces', {}).model_dump_json(), handlers)
+    assert result.error is None
+    assert result.result == [
+        {'name': 'lo', 'kind': 'physical', 'parent': None, 'operstate': 'UNKNOWN'},
+        {'name': 'eth0', 'kind': 'physical', 'parent': None, 'operstate': 'UP'},
+        {'name': 'vlan10', 'kind': 'vlan', 'parent': 'eth0', 'operstate': 'DOWN'},
+        {'name': 'br0', 'kind': 'bridge', 'parent': None, 'operstate': 'UP'},
+        {'name': 'bond0', 'kind': 'bond', 'parent': None, 'operstate': 'DOWN'},
+    ]
+    run.assert_called_once_with(command, capture_output=True, text=True, timeout=5, check=True)
+    invalid = daemon.dispatch(
+        b'{"id":1,"method":"list_interfaces","params":{"command":"bad"}}', handlers)
+    assert invalid.error.message == 'rpc.invalid_request'
+    assert run.call_count == 1
+
+
+@pytest.mark.parametrize('failure', [FileNotFoundError(),
+                                     daemon.subprocess.TimeoutExpired('ip', 5),
+                                     daemon.subprocess.CalledProcessError(1, 'ip')])
+def test_list_interfaces_failure(monkeypatch: pytest.MonkeyPatch, failure: Exception) -> None:
+    from unittest.mock import Mock
+    from vs_router.agent.rpc import build_request
+
+    monkeypatch.setattr(daemon.subprocess, 'run', Mock(side_effect=failure))
+    result = daemon.dispatch(build_request('list_interfaces').model_dump_json(),
+                             daemon.make_handlers(None, None))
+    assert result.error.message == 'host.interfaces_unavailable'

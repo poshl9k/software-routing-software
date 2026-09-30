@@ -185,3 +185,10 @@ export interface Credentials {
   username: string;
   password: string;
 }
+
+export interface HostInterface {
+  name: string;
+  kind: "physical" | "vlan" | "bridge" | "bond";
+  parent: string | null;
+  operstate: string;
+}

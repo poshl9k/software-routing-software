@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from .api import auth, versions, aliases_io, leases, backup, diag, tunnels, keygen
+from .api import auth, versions, aliases_io, leases, backup, diag, tunnels, keygen, host
 from .api.errors import install_errors, issue
 
 
@@ -34,7 +34,7 @@ def create_app(engine=None, *, database_url=None, clock=None) -> FastAPI:
 
     app.include_router(auth.router, prefix="/api")
     app.include_router(versions.router, prefix="/api")
-    for module in (aliases_io, leases, backup, diag, tunnels, keygen):
+    for module in (aliases_io, leases, backup, diag, tunnels, keygen, host):
         app.include_router(module.router, prefix="/api")
 
     @app.get("/health")

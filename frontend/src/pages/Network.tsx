@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, Tab, Tabs, TextField, Typography } from "@mui/material";
 import { useSearchParams } from "react-router-dom";
 import { useConfiguration } from "../state";
 import { api } from "../api";
-import type { Interface } from "../types";
+import type { HostInterface, Interface } from "../types";
 import { Badge, Card, DataTable, Todo, ErrorNotice } from "../ui";
 
 type Editable = Interface & { key: string };
@@ -35,11 +35,49 @@ export default function Network() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
+  const [hostInterfaces, setHostInterfaces] = useState<HostInterface[]>([]);
+  const [hostError, setHostError] = useState<unknown>(null);
+  useEffect(() => {
+    let active = true;
+    api.hostInterfaces().then(
+      (interfaces) => { if (active) setHostInterfaces(interfaces); },
+      (err: unknown) => { if (active) setHostError(err); },
+    );
+    return () => { active = false; };
+  }, []);
+  const physicalNics = hostInterfaces.filter((i) => i.kind === "physical");
+  const allRealNics = hostInterfaces;
+
   const rows: Editable[] = editing ?? c.interfaces.map((i) => ({ ...i, key: i.name }));
   const isEditMode = editing !== null;
 
-  const setField = (key: string, patch: Partial<Editable>) =>
-    setEditing(rows.map((i) => (i.key === key ? { ...i, ...patch } : i)));
+  const candidates = (i: Editable, host: HostInterface[]) =>
+    [...new Set([
+      ...rows.filter((p) => p.key !== i.key && p.type === "physical").map((p) => p.name),
+      ...host.map((p) => p.name),
+    ])].filter((name) => name && name !== i.name);
+
+  const setField = (key: string, patch: Partial<Editable>) => {
+    const updated = rows.map((i) => (i.key === key ? { ...i, ...patch } : i));
+    // References must also exist in the draft; zones remain explicitly assigned.
+    for (const name of [patch.parent, ...(patch.members ?? [])]) {
+      if (name && !updated.some((i) => i.name === name))
+        updated.push({ ...emptyInterface(`host-${name}`), name });
+    }
+    setEditing(updated);
+  };
+
+  const addVirtual = (type: "vlan" | "bridge", parent: string | null = null) => {
+    const prefix = type === "vlan" ? "vlan" : "br";
+    let id = 1;
+    while ([...rows, ...allRealNics].some((i) => i.name === `${prefix}${id}`)) id++;
+    const next = [...rows];
+    if (parent && !next.some((i) => i.name === parent))
+      next.push({ ...emptyInterface(`host-${parent}`), name: parent });
+    next.push({ ...emptyInterface(`new-${Date.now()}`), name: `${prefix}${id}`,
+      type, parent, vlan_id: type === "vlan" ? 1 : null });
+    setEditing(next);
+  };
 
   const addRow = () => setEditing([...rows, emptyInterface(`new-${Date.now()}`)]);
   const removeRow = (key: string) => setEditing(rows.filter((i) => i.key !== key));
@@ -92,6 +130,7 @@ export default function Network() {
       {knownTab === "interfaces" && (
         <>
           <ErrorNotice error={error} />
+          <ErrorNotice error={hostError} />
           <Card
             title="Интерфейсы и зоны"
             action={
@@ -120,6 +159,8 @@ export default function Network() {
                   ? rows.map((i) => [
                       <TextField
                         size="small"
+                        select
+                        SelectProps={{ native: true }}
                         value={i.name}
                         error={i.name.length > 0 && !nameValid(i)}
                         helperText={
@@ -128,7 +169,17 @@ export default function Network() {
                             : undefined
                         }
                         onChange={(e) => setField(i.key, { name: e.target.value })}
-                      />,
+                      >
+                        <option value="">— выберите интерфейс —</option>
+                        {i.name && !allRealNics.some((p) => p.name === i.name) && (
+                          <option value={i.name} disabled={i.type === "physical"}>
+                            {i.name} ({i.type === "physical" ? "нет в ОС" : "в черновике"})
+                          </option>
+                        )}
+                        {allRealNics.map((p) => (
+                          <option key={p.name} value={p.name}>{p.name} ({p.operstate})</option>
+                        ))}
+                      </TextField>,
                       <TextField
                         select
                         size="small"
@@ -192,15 +243,9 @@ export default function Network() {
                           onChange={(e) => setField(i.key, { parent: e.target.value || null })}
                         >
                           <option value="">— выберите —</option>
-                          {rows
-                            .filter(
-                              (p) => p.key !== i.key && p.type === "physical"
-                            )
-                            .map((p) => (
-                              <option key={p.key} value={p.name}>
-                                {p.name}
-                              </option>
-                            ))}
+                          {candidates(i, physicalNics).map((name) => (
+                            <option key={name} value={name}>{name}</option>
+                          ))}
                         </TextField>
                       ) : (
                         "—"
@@ -228,18 +273,12 @@ export default function Network() {
                                   }
                                 >
                                   <option value="">— выберите —</option>
-                                  {rows
-                                    .filter(
-                                      (p) =>
-                                        p.key !== i.key &&
-                                        p.type === "physical" &&
-                                        (p.name === m ||
-                                          !i.members.includes(p.name)),
-                                    )
-                                    .map((p) => (
-                                      <option key={p.key} value={p.name}>
-                                        {p.name}
-                                        {p.zone ? "" : " (без зоны!)"}
+                                  {candidates(i, allRealNics)
+                                    .filter((name) => name === m || !i.members.includes(name))
+                                    .map((name) => (
+                                      <option key={name} value={name}>
+                                        {name}
+                                        {rows.find((p) => p.name === name)?.zone ? "" : " (без зоны!)"}
                                       </option>
                                     ))}
                                 </TextField>
@@ -259,24 +298,16 @@ export default function Network() {
                               </div>
                             );
                           })}
-                          {rows.some(
-                            (p) =>
-                              p.key !== i.key &&
-                              p.type === "physical" &&
-                              !i.members.includes(p.name),
-                          ) && (
+                          {candidates(i, allRealNics).some((name) => !i.members.includes(name)) && (
                             <Button
                               size="small"
                               onClick={() => {
-                                const free = rows.find(
-                                  (p) =>
-                                    p.key !== i.key &&
-                                    p.type === "physical" &&
-                                    !i.members.includes(p.name),
+                                const free = candidates(i, allRealNics).find(
+                                  (name) => !i.members.includes(name),
                                 );
                                 if (free)
                                   setField(i.key, {
-                                    members: [...i.members, free.name],
+                                    members: [...i.members, free],
                                   });
                               }}
                             >
@@ -326,6 +357,14 @@ export default function Network() {
               <div className="footer-actions">
                 <Button size="small" onClick={addRow}>
                   + Добавить интерфейс
+                </Button>
+                {physicalNics.map((p) => (
+                  <Button key={p.name} size="small" onClick={() => addVirtual("vlan", p.name)}>
+                    + VLAN на {p.name}
+                  </Button>
+                ))}
+                <Button size="small" onClick={() => addVirtual("bridge")}>
+                  + Мост
                 </Button>
                 <span className="spacer" />
                 <Button size="small" onClick={() => setEditing(null)}>

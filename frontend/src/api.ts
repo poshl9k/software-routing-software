@@ -1,4 +1,5 @@
 import type {
+  HostInterface,
   ApplyRequest,
   ApplyResult,
   Configuration,
@@ -62,6 +63,7 @@ export async function request<T>(
 const post = <T>(path: `/api/${string}`, body: unknown) =>
   request<T>(path, { method: "POST", body: JSON.stringify(body) });
 export const api = {
+  hostInterfaces: () => request<HostInterface[]>("/api/host/interfaces"),
   keygenTunnel: (protocol: "wg" | "awg") => post<{ private_key: string; public_key: string; obfuscation?: Record<string, number> }>("/api/keygen/tunnel", { protocol }),
   keygenPeer: () => post<{ preshared_key: string }>("/api/keygen/peer", {}),
   keygenPeerKeypair: () => post<{ private_key: string; public_key: string }>("/api/keygen/peer-keypair", {}),
