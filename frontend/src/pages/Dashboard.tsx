@@ -2,18 +2,13 @@ import { Button, Typography } from "@mui/material";
 import { Link } from "react-router-dom";
 import { useConfiguration, statusLabels } from "../state";
 import { Badge, Card, DataTable, Todo } from "../ui";
-import { demoEvents } from "../fixtures";
 export function Events() {
   return (
     <Card title="Последние события">
       <Todo />
       <DataTable
         heads={["Время", "Событие", "Сообщение"]}
-        rows={demoEvents.map((e) => [
-          e.time,
-          <Badge tone={e.type}>{e.label}</Badge>,
-          e.message,
-        ])}
+        rows={[]}
       />
     </Card>
   );

@@ -88,8 +88,5 @@ log 'Restarting runtime services'
 systemctl daemon-reload
 systemctl restart vs-router-agent vs-router-web 2>/dev/null \
     || warn 'one or more runtime services did not restart; check systemctl status'
-if systemctl is-enabled --quiet vs-router-web-tcp.service 2>/dev/null; then
-    systemctl restart vs-router-web-tcp.service 2>/dev/null || true
-fi
 
 log 'Update complete. Verify: systemctl status vs-router-web vs-router-agent'

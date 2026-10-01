@@ -3,14 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import { RouterProvider } from "../state";
-import { emptyConfiguration, demoConfiguration } from "../fixtures";
+import { emptyConfiguration, sampleConfiguration } from "../fixtures";
 import { DHCP } from "../pages/Services";
 import Firewall from "../pages/Firewall";
 import { Tunnels } from "../pages/ConnectionEditors";
 import Maintenance from "../pages/Maintenance";
 import App from "../App";
 
-function setup(configuration=demoConfiguration, extras: (path:string,init?:RequestInit)=>Response|Promise<Response> = ()=>new Response("{}")) {
+function setup(configuration=sampleConfiguration, extras: (path:string,init?:RequestInit)=>Response|Promise<Response> = ()=>new Response("{}")) {
   const fetch=vi.fn(async(path:string,init?:RequestInit)=>path==="/api/versions"?new Response(JSON.stringify([{id:1,status:"draft",configuration}])):extras(path,init));
   vi.stubGlobal("fetch",fetch); return fetch;
 }
@@ -21,7 +21,7 @@ it("loads runtime leases in the DHCP leases tab",async()=>{
   const user=userEvent.setup();mount(<DHCP/>);await user.click(screen.getByRole("tab",{name:"Аренды"}));expect(await screen.findByText("laptop")).toBeVisible();expect(screen.getByText("90")).toBeVisible();
 });
 it("opens the tunnel peer QR dialog from a blob response",async()=>{
-  Object.defineProperty(URL,"createObjectURL",{configurable:true,value:vi.fn(()=>"blob:qr")});const fetch=setup(demoConfiguration,(path)=>path.includes("/qr")?new Response(new Blob(["png"],{type:"image/png"})):new Response("{}"));
+  Object.defineProperty(URL,"createObjectURL",{configurable:true,value:vi.fn(()=>"blob:qr")});const fetch=setup(sampleConfiguration,(path)=>path.includes("/qr")?new Response(new Blob(["png"],{type:"image/png"})):new Response("{}"));
   const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("button",{name:"Редактировать"}));await user.click(screen.getAllByRole("button",{name:"QR-код"})[0]);expect(await screen.findByRole("dialog")).toBeVisible();expect(screen.getByRole("img",{name:/QR-код пира/})).toBeVisible();expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/tunnels/wg-office/peer/alina-laptop/qr"),expect.objectContaining({credentials:"include"}));
 });
 it("generates tunnel keys and fills private key plus AWG parameters",async()=>{
@@ -30,7 +30,7 @@ it("generates tunnel keys and fills private key plus AWG parameters",async()=>{
   const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("button",{name:"Редактировать"}));await user.click(screen.getByRole("button",{name:"+ Добавить туннель"}));await user.selectOptions(screen.getByLabelText("Протокол"),"awg");await user.click(screen.getByRole("button",{name:"Сгенерировать ключи"}));await waitFor(()=>expect(screen.getByLabelText("Приватный ключ")).toHaveValue("a".repeat(44)));expect(fetch).toHaveBeenCalledWith("/api/keygen/tunnel",expect.objectContaining({method:"POST",body:JSON.stringify({protocol:"awg"})}));expect(screen.getByLabelText("H4")).toHaveValue(14);expect(screen.getByLabelText("Jmin")).toHaveValue(35);
 });
 it("generates and fills a peer PSK",async()=>{
-  const fetch=setup(demoConfiguration,(path)=>path==="/api/keygen/peer"?new Response(JSON.stringify({preshared_key:"p".repeat(44)})):new Response("{}"));
+  const fetch=setup(sampleConfiguration,(path)=>path==="/api/keygen/peer"?new Response(JSON.stringify({preshared_key:"p".repeat(44)})):new Response("{}"));
   const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("button",{name:"Редактировать"}));await user.click(screen.getAllByRole("button",{name:"Сгенерировать PSK"})[0]);await waitFor(()=>expect(screen.getAllByLabelText("Preshared key")[0]).toHaveValue("p".repeat(44)));expect(fetch).toHaveBeenCalledWith("/api/keygen/peer",expect.objectContaining({method:"POST",body:"{}"}));
 });
 it("exports aliases in the selected format",async()=>{

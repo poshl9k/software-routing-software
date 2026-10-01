@@ -106,8 +106,5 @@ if [ -d "$UI_SRC" ] && [ -f "$UI_SRC/index.html" ]; then
     mv /var/lib/vs-router/ui.new /var/lib/vs-router/ui
     chmod -R a+rX /var/lib/vs-router/ui
 fi
-# Lab-only TCP bridge to the unix socket. Not for production: in production the
-# panel is reached over HTTPS through Caddy. Enable manually when needed:
-#   systemctl enable --now vs-router-web-tcp.service
 systemctl enable vs-router-bootrestore.service 2>/dev/null || true
 systemctl daemon-reload

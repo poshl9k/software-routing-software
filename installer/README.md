@@ -9,7 +9,7 @@ bash installer/make-iso.sh
 
 Скрипт берёт `/var/lib/libvirt/images/debian-13.7.0-amd64-netinst.iso` или скачивает образ Debian 13.7 netinst в `/tmp`. Можно передать другой ISO первым аргументом. Результат: `vs-router-installer-13.7.0-amd64.iso`.
 
-Загрузите компьютер или VM с полученного ISO и подключите сеть с доступом в интернет. Установка Debian и запуск bootstrap выполнятся автоматически; сеть нужна для загрузки bootstrap и пакетов/исходников. В конце откройте панель на порту **8080**. Учетная запись системы: **vsr-admin / vsr-install**, для неё настроен `sudo NOPASSWD`. Лог bootstrap: `/root/bootstrap.log`.
+Загрузите компьютер или VM с полученного ISO и подключите сеть с доступом в интернет. Установка Debian и запуск bootstrap выполнятся автоматически; сеть нужна для загрузки bootstrap и пакетов/исходников. В конце откройте панель по HTTPS через Caddy. Учетная запись системы: **vsr-admin / vsr-install**, для неё настроен `sudo NOPASSWD`. Лог bootstrap: `/root/bootstrap.log`.
 
 **Wi‑Fi:** в авто-режиме Wi‑Fi отключён намеренно: `netcfg/choose_interface=auto` гоняет интерфейсы, wlan часто линкуется раньше Ethernet, и установка умирала на вопросе WPA-пароля («Invalid passphrase»). Авто-запись установщика грузится с `modprobe.blacklist=mac80211,cfg80211` — беспроводные драйверы не поднимаются, netcfg видит только проводные NIC. Это касается только установщика: установленная система загружается со своим cmdline и Wi‑Fi сохраняет. Секреты в ISO не вшиваются; если установку по Wi‑Fi всё же нужно провести, есть аварийный хук `VS_ROUTER_WIFI="essid пароль" bash installer/make-iso.sh` (креды открытым текстом в файле ISO — избегайте; лучше Ethernet или полуавто, где сеть выбирается явно и Wi‑Fi остаётся). Спасение прямо на экране ошибки: Go Back → Execute a shell → `rmmod <wifi-модуль>` (имя через `lspci -k | grep -A3 Network`) → Go Back → продолжить. Учтите: в netinst может не оказаться firmware вашего адаптера — тогда интерфейса не будет в списке вовсе.
 
@@ -22,10 +22,10 @@ bash installer/make-iso.sh
 
 | Компонент | Значение |
 |---|---|
-| Панель | `http://<ip-машины>:8080` (лабовый tcp-bridge; в проде — HTTPS через Caddy) |
+| Панель | HTTPS через Caddy → unix socket |
 | Учётка ОС | `vsr-admin` / `vsr-install`, sudo NOPASSWD |
 | Учётка панели | создаётся в onboarding при первом входе (панель открыта, пока таблица пользователей пуста) |
-| Сервисы | `vs-router-agent`, `vs-router-web`, `vs-router-rollback.timer`, `vs-router-ddns.timer`, `vs-router-web-tcp` (лаба), `caddy` |
+| Сервисы | `vs-router-agent`, `vs-router-web`, `vs-router-rollback.timer`, `vs-router-ddns.timer`, `caddy` |
 | Креды Kea ctrl-agent | печатаются в конце bootstrap-лога (и в сводке), user `kea-api` |
 | Лог установки | `/root/bootstrap.log` (весь вывод bootstrap) |
 | Репозиторий | `/opt/vs-router` (клон); обновление кода и дистрибутива — `sudo ./backend/packaging/update.sh`; полная переустановка зависимостей/тулчейна — `git pull` + `sudo ./backend/packaging/bootstrap.sh` |

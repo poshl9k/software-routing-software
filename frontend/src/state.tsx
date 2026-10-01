@@ -15,7 +15,7 @@ import type {
   Configuration,
   ConfigurationVersion,
 } from "./types";
-import { demoConfiguration } from "./fixtures";
+import { emptyConfiguration } from "./fixtures";
 import { readPreferences, savePreferences, type Preferences } from "./preferences";
 import type { User } from "./types";
 
@@ -180,7 +180,7 @@ export function useConfiguration() {
   const version = [...state.versions].sort((a, b) => b.id - a.id)[0];
   return {
     ...state,
-    configuration: version?.configuration ?? demoConfiguration,
+    configuration: version?.configuration ?? emptyConfiguration,
     demo: !version,
     version,
   };

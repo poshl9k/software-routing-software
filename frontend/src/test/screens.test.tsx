@@ -64,7 +64,7 @@ describe("screens", () => {
       screen.getByText(/неподтверждённые изменения: неизвестно/),
     ).toBeVisible();
   });
-  it("shows API failures and an explicit demo fallback", async () => {
+  it("unconfigured server shows a setup prompt with no fabricated data", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -80,9 +80,11 @@ describe("screens", () => {
     );
     open("/network");
     expect(
-      await screen.findByText(/демонстрационные данные из макетов/),
+      await screen.findByText(/Нет сохранённой конфигурации — выполните первичную настройку/),
     ).toBeVisible();
-    expect(screen.getByText("без зоны (fail-closed)")).toBeVisible();
+    expect(screen.queryByText("без зоны (fail-closed)")).not.toBeInTheDocument();
+    expect(screen.queryByText("eth0")).not.toBeInTheDocument();
+    expect(screen.queryByText(/демонстрационные данные из макетов/)).not.toBeInTheDocument();
   });
   it("applies, counts down and confirms the actual returned version", async () => {
     const fetch = mockApi();

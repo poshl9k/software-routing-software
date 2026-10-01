@@ -73,11 +73,7 @@ sudo ./backend/packaging/update.sh          # git pull + сборка фронт
 
 ### Доступ к панели
 
-В проде панель доступна через HTTPS-прокси (Caddy → unix socket). Для лабораторного доступа по TCP:
-
-```sh
-sudo systemctl enable --now vs-router-web-tcp.service   # порт 8080, только для лабы
-```
+Панель доступна через HTTPS-прокси (Caddy → unix socket).
 
 ## Известные ограничения MVP
 

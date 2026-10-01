@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 CURRENT_STAGE=initialization
-LAB_MODE=0
 SKIP_BUILD=0
 KEA_PASSWORD=''
 
@@ -33,8 +32,7 @@ run_stage() {
 
 usage() {
     cat <<'EOF'
-Usage: bootstrap.sh [--lab] [--skip-build] [--help]
-  --lab         Enable the plain HTTP TCP bridge on port 8080 and insecure cookies.
+Usage: bootstrap.sh [--skip-build] [--help]
   --skip-build  Skip frontend and backend builds; use existing backend wheels.
   --help        Show this help.
 EOF
@@ -43,7 +41,6 @@ EOF
 parse_args() {
     while (($#)); do
         case $1 in
-            --lab) LAB_MODE=1 ;;
             --skip-build) SKIP_BUILD=1 ;;
             --help|-h) usage; exit 0 ;;
             *) usage >&2; fail "unknown option: $1" ;;
@@ -216,24 +213,8 @@ Environment=VS_ROUTER_KEA_API_USER=kea-api
 Environment=VS_ROUTER_KEA_API_PASSWORD=${KEA_PASSWORD}
 EOF
 
-    local enable_lab=$LAB_MODE
-    if (( ! LAB_MODE )); then
-        local answer
-        read -r -p 'Enable lab TCP bridge on port 8080? [y/N] ' answer
-        [[ $answer =~ ^[Yy]([Ee][Ss])?$ ]] && enable_lab=1 || enable_lab=0
-    fi
-    if ((enable_lab)); then
-        install -d -m 0755 /etc/systemd/system/vs-router-web.service.d
-        cat > /etc/systemd/system/vs-router-web.service.d/lab.conf <<'EOF'
-[Service]
-Environment=VS_ROUTER_COOKIE_SECURE=0
-EOF
-    fi
     systemctl daemon-reload
     systemctl enable --now vs-router-agent vs-router-web vs-router-rollback.timer vs-router-ddns.timer
-    if ((enable_lab)); then
-        systemctl enable --now vs-router-web-tcp.service
-    fi
 }
 
 stage_summary() {
@@ -242,14 +223,8 @@ stage_summary() {
         status=$(systemctl is-active "$service" 2>/dev/null || true)
         log "Service ${service}: ${status:-unknown}"
     done
-    if systemctl is-enabled --quiet vs-router-web-tcp.service 2>/dev/null; then
-        log 'Service vs-router-web-tcp.service: enabled (lab, TCP 8080)'
-    else
-        log 'Service vs-router-web-tcp.service: disabled'
-    fi
     log 'Open the panel and complete first-run onboarding to create the administrator and configure the network.'
     log "Kea ctrl-agent credentials: username kea-api, password ${KEA_PASSWORD}"
-    log 'Firewall reminder: add the 8080 rule through the panel for lab access, or put the panel behind an HTTPS proxy.'
 }
 
 main() {

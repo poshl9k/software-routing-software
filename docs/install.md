@@ -16,8 +16,7 @@ su -c 'apt update && apt install -y sudo git && usermod -aG sudo $USER'
 # выйдите и войдите заново, чтобы применилась группа sudo, затем:
 git clone https://github.com/poshl9k/software-routing-software.git
 cd software-routing-software/backend/packaging
-sudo ./bootstrap.sh --lab      # лаба: tcp-bridge 8080, cookie без Secure
-# или без --lab — прод: всё, кроме tcp-bridge
+sudo ./bootstrap.sh
 ```
 
 Скрипт идемпотентен (повторный запуск продолжает с места остановки), сам ставит apt-зависимости, собирает Caddy с L4 и AmneziaWG 3.1, собирает фронт и wheel, устанавливает сервисы и печатает в конце креды Kea ctrl-agent. Требуется: root, интернет (apt/PyPI/npm/Go). Ручной путь — ниже.
@@ -102,7 +101,6 @@ sudo chmod 0600 /etc/vs-router/secrets.env
 | Переменная | Назначение |
 |---|---|
 | `VS_ROUTER_KEA_API_USER` / `VS_ROUTER_KEA_API_PASSWORD` | basic-auth к Kea ctrl-agent (live-аренды). Имя/пароль берутся из `/etc/kea/kea-ctrl-agent.conf` и `/etc/kea/kea-api-password` |
-| `VS_ROUTER_COOKIE_SECURE=0` | только для лабы с plain-HTTP доступом к панели; в проде панель за HTTPS — не задавать |
 | `VS_ROUTER_AGENT_SOCKET`, `VS_ROUTER_PANEL_SOCKET`, `VS_ROUTER_KEA_CTRL_URL` | пути/адреса IPC, дефолты разумны |
 
 ## 6. install.sh
@@ -133,15 +131,13 @@ sudo systemctl restart kea-ctrl-agent kea-dhcp4-server
 1. Запустите сервисы: `sudo systemctl enable --now vs-router-agent vs-router-web vs-router-rollback.timer vs-router-ddns.timer`
 2. При первом входе панель предложит **onboarding**: учётка администратора (`/api/setup` работает, пока таблица пользователей пуста), базовая сеть, выбор «безопасной настройки» (окно подтверждения с автооткатом).
 3. Доступ:
-   - **Лаба**: `sudo systemctl enable --now vs-router-web-tcp.service` (порт 8080, plain HTTP). Firewall по умолчанию режет всё с WAN, кроме SSH — правило для 8080 добавьте **в самой панели** (Правила → правило `pass tcp/8080` на зоне wan → Применить).
-   - **Прод**: HTTPS-прокси (Caddy) → unix socket `/run/vs-router/web/web.sock`; cookie `Secure` остаётся включённым.
+   - HTTPS-прокси (Caddy) → unix socket `/run/vs-router/web/web.sock`; cookie `Secure` остаётся включённым.
 
 ## 9. Проверка установки
 
 ```sh
 systemctl is-active vs-router-web vs-router-agent vs-router-rollback.timer
 sudo ls /run/vs-router/agent.sock /run/vs-router/web/web.sock
-curl -s http://127.0.0.1:8080/health            # через tcp-bridge или прокси
 ```
 
 Цикл применения: правьте конфигурацию в UI → «Сохранить черновик» → «Проверить» (валидаторы `nft -c`, `unbound-checkconf`, `kea-dhcp4 -t`, `caddy validate`) → «Применить» → «Подтвердить». При включённой «безопасной настройке» неподтверждённое применение откатится само.
