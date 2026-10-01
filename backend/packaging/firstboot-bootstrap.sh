@@ -27,7 +27,7 @@ until getent hosts deb.debian.org >/dev/null 2>&1 || [ "$n" -ge 30 ]; do
     n=$((n+1))
 done
 
-bash -x /opt/vs-router/backend/packaging/bootstrap.sh --lab > /root/bootstrap.log 2>&1
+bash -x /opt/vs-router/backend/packaging/bootstrap.sh > /root/bootstrap.log 2>&1
 rc=$?
 tail -50 /root/bootstrap.log > /dev/console
 # Phone-home to the HOST, which is the default gateway on every test network
