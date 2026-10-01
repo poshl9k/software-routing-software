@@ -173,9 +173,12 @@ def list_interfaces() -> list[dict[str, str | None]]:
         name, separator, parent = fields[0].partition('@')
         kind = ('vlan' if separator else 'bridge' if name.startswith('br')
                 else 'bond' if name.startswith('bond') else 'physical')
+        # Field 2 is the MAC (e.g. aa:bb:cc:dd:ee:ff); point-to-point links
+        # have no MAC and show the flag list there instead.
+        mac = fields[2] if len(fields) > 2 and not fields[2].startswith('<') else None
         interfaces.append({'name': name, 'kind': kind,
                            'parent': parent if separator else None,
-                           'operstate': fields[1]})
+                           'operstate': fields[1], 'mac': mac})
     return interfaces
 
 

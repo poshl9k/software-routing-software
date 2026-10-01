@@ -108,11 +108,11 @@ def test_list_interfaces(monkeypatch: pytest.MonkeyPatch) -> None:
     result = daemon.dispatch(build_request('list_interfaces', {}).model_dump_json(), handlers)
     assert result.error is None
     assert result.result == [
-        {'name': 'lo', 'kind': 'physical', 'parent': None, 'operstate': 'UNKNOWN'},
-        {'name': 'eth0', 'kind': 'physical', 'parent': None, 'operstate': 'UP'},
-        {'name': 'vlan10', 'kind': 'vlan', 'parent': 'eth0', 'operstate': 'DOWN'},
-        {'name': 'br0', 'kind': 'bridge', 'parent': None, 'operstate': 'UP'},
-        {'name': 'bond0', 'kind': 'bond', 'parent': None, 'operstate': 'DOWN'},
+        {'name': 'lo', 'kind': 'physical', 'parent': None, 'operstate': 'UNKNOWN', 'mac': '00:00:00:00:00:00'},
+        {'name': 'eth0', 'kind': 'physical', 'parent': None, 'operstate': 'UP', 'mac': 'aa:bb:cc:dd:ee:ff'},
+        {'name': 'vlan10', 'kind': 'vlan', 'parent': 'eth0', 'operstate': 'DOWN', 'mac': 'aa:bb:cc:dd:ee:ff'},
+        {'name': 'br0', 'kind': 'bridge', 'parent': None, 'operstate': 'UP', 'mac': 'aa:bb:cc:dd:ee:ff'},
+        {'name': 'bond0', 'kind': 'bond', 'parent': None, 'operstate': 'DOWN', 'mac': 'aa:bb:cc:dd:ee:ff'},
     ]
     run.assert_called_once_with(command, capture_output=True, text=True, timeout=5, check=True)
     invalid = daemon.dispatch(

@@ -191,4 +191,5 @@ export interface HostInterface {
   kind: "physical" | "vlan" | "bridge" | "bond";
   parent: string | null;
   operstate: string;
+  mac: string | null;
 }

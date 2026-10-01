@@ -28,7 +28,7 @@ bash installer/make-iso.sh
 | Сервисы | `vs-router-agent`, `vs-router-web`, `vs-router-rollback.timer`, `vs-router-ddns.timer`, `vs-router-web-tcp` (лаба), `caddy` |
 | Креды Kea ctrl-agent | печатаются в конце bootstrap-лога (и в сводке), user `kea-api` |
 | Лог установки | `/root/bootstrap.log` (весь вывод bootstrap) |
-| Репозиторий | `/opt/vs-router` (клон, из которого собрано; `git pull` + `sudo ./backend/packaging/bootstrap.sh` для обновления) |
+| Репозиторий | `/opt/vs-router` (клон); обновление кода и дистрибутива — `sudo ./backend/packaging/update.sh`; полная переустановка зависимостей/тулчейна — `git pull` + `sudo ./backend/packaging/bootstrap.sh` |
 | Требования к сети | DHCP-адрес + интернет во время установки (apt, PyPI, npm, Go-модули); после — как настроите |
 
 ## Проверенный статус

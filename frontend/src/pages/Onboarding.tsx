@@ -11,6 +11,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { emptyConfiguration } from "../fixtures";
 import { ErrorNotice } from "../ui";
+import type { HostInterface } from "../types";
 import { readPreferences, savePreferences } from "../preferences";
 import { useRouterState } from "../state";
 export default function Onboarding() {
@@ -23,8 +24,36 @@ export default function Onboarding() {
   const [preferences, setPreferences] = useState(readPreferences);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [hostInterfaces, setHostInterfaces] = useState<HostInterface[]>([]);
+  const [hostError, setHostError] = useState<unknown>(null);
   const lock = useRef(false);
   const { refresh, loadUser } = useRouterState();
+  // Pick the LAN interface from the real host inventory (with MAC for clarity).
+  const physicalNics = hostInterfaces.filter(
+    (i) => i.kind === "physical" && i.name !== "lo",
+  );
+  useEffect(() => {
+    let active = true;
+    api
+      .hostInterfaces()
+      .then(
+        (interfaces) => {
+          if (active) setHostInterfaces(interfaces);
+        },
+        (err: unknown) => {
+          if (active) setHostError(err);
+        },
+      );
+    return () => {
+      active = false;
+    };
+  }, []);
+  // Default the selection to the first real NIC until the user picks one.
+  useEffect(() => {
+    if (lan === "eth1" && physicalNics.length > 0) {
+      setLan(physicalNics[0].name);
+    }
+  }, [physicalNics]);
   async function next(event: FormEvent) {
     event.preventDefault();
     if (lock.current) return;
@@ -138,20 +167,28 @@ export default function Onboarding() {
               Базовая сеть
             </Typography>
             <p>
-              Создадим черновик LAN. Применение — отдельное действие на экране
-              применения.
+              Укажем LAN-интерфейс из реальных портов системы. Применение —
+              отдельное действие на экране применения.
             </p>
             <div className="fields">
               <TextField
+                select
                 required
                 label="LAN-интерфейс"
                 value={lan}
                 disabled={busy}
-                slotProps={{
-                  htmlInput: { pattern: "[a-zA-Z][a-zA-Z0-9_.-]{0,14}" },
-                }}
+                SelectProps={{ native: true }}
                 onChange={(e) => setLan(e.target.value)}
-              />
+              >
+                {physicalNics.length === 0 && (
+                  <option value={lan}>{lan} (нет данных от агента)</option>
+                )}
+                {physicalNics.map((i) => (
+                  <option key={i.name} value={i.name}>
+                    {i.name} · {i.mac}
+                  </option>
+                ))}
+              </TextField>
               <TextField
                 required
                 label="Адрес LAN (CIDR)"
@@ -161,6 +198,12 @@ export default function Onboarding() {
                 helperText="Например, 192.168.10.1/24. Проверка выполняется API при сохранении."
               />
             </div>
+            {hostError && (
+              <Alert severity="warning">
+                Не удалось получить список интерфейсов из системы — проверьте
+                агент.
+              </Alert>
+            )}
             <Alert severity="info">
               TODO-API · обнаружение портов и DHCP-клиент WAN пока отсутствуют.
             </Alert>
@@ -217,7 +260,7 @@ export default function Onboarding() {
               Первичная настройка готова
             </Typography>
             <Alert severity="success">
-              Учётная запись создана, вход выполнен, черновик LAN сохранён.
+              Учётная запись создана, вход выполнен, базовая сеть LAN сохранена.
               Конфигурация ещё не применена.
             </Alert>
             <Button component={Link} to="/apply" variant="contained">
