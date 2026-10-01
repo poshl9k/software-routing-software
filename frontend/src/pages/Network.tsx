@@ -57,6 +57,10 @@ export default function Network() {
       ...host.map((p) => p.name),
     ])].filter((name) => name && name !== i.name);
 
+  // Имена интерфейсов, уже занятые другими строками конфигурации.
+  const usedByOtherRows = (i: Editable) =>
+    new Set(rows.filter((r) => r.key !== i.key && r.name).map((r) => r.name));
+
   const setField = (key: string, patch: Partial<Editable>) => {
     const updated = rows.map((i) => (i.key === key ? { ...i, ...patch } : i));
     // References must also exist in the draft; zones remain explicitly assigned.
@@ -151,7 +155,7 @@ export default function Network() {
             <DataTable
               heads={
                 isEditMode
-                  ? ["Интерфейс", "Тип", "Зона", "Адреса (через запятую)", "VLAN ID", "Члены бриджа", ""]
+                  ? ["Интерфейс", "Тип", "Зона", "Адреса (через запятую)", "VLAN ID", "Родитель / члены", ""]
                   : ["Интерфейс", "Тип", "Зона", "Адресация", "IP-адрес", "Состояние", "Назначение"]
               }
               rows={
@@ -176,7 +180,9 @@ export default function Network() {
                             {i.name} ({i.type === "physical" ? "нет в ОС" : "в черновике"})
                           </option>
                         )}
-                        {allRealNics.map((p) => (
+                        {allRealNics
+                          .filter((p) => !usedByOtherRows(i).has(p.name))
+                          .map((p) => (
                           <option key={p.name} value={p.name}>{p.name} ({p.operstate})</option>
                         ))}
                       </TextField>,
@@ -243,7 +249,9 @@ export default function Network() {
                           onChange={(e) => setField(i.key, { parent: e.target.value || null })}
                         >
                           <option value="">— выберите —</option>
-                          {candidates(i, physicalNics).map((name) => (
+                          {candidates(i, physicalNics)
+                            .filter((name) => name === i.parent || !usedByOtherRows(i).has(name))
+                            .map((name) => (
                             <option key={name} value={name}>{name}</option>
                           ))}
                         </TextField>
@@ -274,7 +282,7 @@ export default function Network() {
                                 >
                                   <option value="">— выберите —</option>
                                   {candidates(i, allRealNics)
-                                    .filter((name) => name === m || !i.members.includes(name))
+                                    .filter((name) => i.members.includes(name) || (!i.members.includes(name) && !usedByOtherRows(i).has(name)))
                                     .map((name) => (
                                       <option key={name} value={name}>
                                         {name}
@@ -298,12 +306,12 @@ export default function Network() {
                               </div>
                             );
                           })}
-                          {candidates(i, allRealNics).some((name) => !i.members.includes(name)) && (
+                          {candidates(i, allRealNics).some((name) => !i.members.includes(name) && !usedByOtherRows(i).has(name)) && (
                             <Button
                               size="small"
                               onClick={() => {
                                 const free = candidates(i, allRealNics).find(
-                                  (name) => !i.members.includes(name),
+                                  (name) => !i.members.includes(name) && !usedByOtherRows(i).has(name),
                                 );
                                 if (free)
                                   setField(i.key, {
@@ -349,7 +357,11 @@ export default function Network() {
                       i.addresses.length ? "Статический" : "—",
                       i.addresses.join(", "),
                       "TODO-API",
-                      i.zone ? i.members.join(", ") : "Транзит запрещён",
+                      i.type === "vlan"
+                        ? `на ${i.parent ?? "—"}`
+                        : i.zone
+                          ? i.members.join(", ")
+                          : "Транзит запрещён",
                     ])
               }
             />
