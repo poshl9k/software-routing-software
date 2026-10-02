@@ -80,8 +80,65 @@ def restore_tunnel_proxy_files() -> int:
     return 0
 
 
+def recover_interrupted_apply():
+    """Reboot never promotes a pending/partially installed snapshot."""
+    from pathlib import Path
+    from .apply import ApplyEngine, CONFIRMED_DIR, FILES
+    from ..schema import ConfigurationVersion
+    from ..generators.nftables import generate_nftables
+    engine = ApplyEngine()
+    marker = engine.status()
+    if not marker or marker['status'] in ('confirmed', 'rolled_back'):
+        return
+    try:
+        backup = json.loads(engine.fs.read(CONFIRMED_DIR / 'snapshot.json'))
+    except FileNotFoundError:
+        return  # SSH restore rejects this failed/interrupted first apply.
+    version = ConfigurationVersion.model_validate(backup['version_snapshot'])
+    files = dict(backup['files'])
+    files.setdefault('ssh', version.configuration.ssh.model_dump_json())
+    # Old snapshots predate the dedicated SSH decision; regenerate their nft.
+    from ..management import read_management
+    files['nftables'] = generate_nftables(version, read_management())
+    for name, filename in FILES.items():
+        engine.fs.write(Path(APPLIED) / filename, files[name])
+    engine.fs.write(Path(APPLIED) / 'snapshot.json', json.dumps(backup['version_snapshot']))
+    engine.marker({'version_id': backup['version_id'], 'status': 'rolled_back',
+                   'deadline': None, 'reason': 'reboot', 'phases': {'rollback': 'rolled_back'}})
+
+
+def restore_ssh() -> None:
+    """Reopen SSH only after the confirmed firewall and guard are restored.
+
+    The service waits for this oneshot. SSHController queues its start rather
+    than waiting for a unit whose After= dependency is this very process.
+    """
+    from .apply import ApplyEngine
+    from .ssh import SSHController
+    SSHController().restore(ApplyEngine())
+
+
 def main() -> int:
     failures = 0
+    # Refuse restoration before any listener or applied firewall is installed if
+    # the recorded physical LAN identity no longer exists.
+    from .management_console import check
+    from ..management import read_management, STATE_DIR
+    try:
+        check()
+        management = read_management()
+    except (OSError, ValueError):
+        print("management identity check failed; local console required", file=sys.stderr)
+        return 1
+    if management is not None and not os.path.exists(os.path.join(APPLIED, 'snapshot.json')):
+        if run(['/usr/sbin/nft', '-f', str(STATE_DIR / 'management.nft')]):
+            return 1
+
+    try:
+        recover_interrupted_apply()
+    except (OSError, ValueError, KeyError):
+        print("interrupted apply recovery failed", file=sys.stderr)
+        return 1
 
     try:
         failures += restore_tunnel_proxy_files()
@@ -115,6 +172,15 @@ def main() -> int:
             dst.write(src.read())
         os.chmod(KEA_CONF, 0o644)
 
+    # Only a fully restored policy may reopen SSH. The ssh.service unit also
+    # Requires this oneshot, so a failed restore keeps its listener down.
+    if not failures:
+        from .apply import ApplyError
+        try:
+            restore_ssh()
+        except (OSError, ValueError, subprocess.SubprocessError, ApplyError):
+            print("SSH protection restore failed", file=sys.stderr)
+            failures += 1
     print("boot-restore:", "OK" if not failures else f"{failures} failures")
     return 1 if failures else 0
 

@@ -23,9 +23,9 @@ MARKER_PATH = Path('/run/vs-router/marker.json')
 JOURNAL_PATH = Path('/etc/vs-router/marker.json')
 FILES = {'nftables': 'nftables.conf', 'unbound': 'unbound.conf', 'kea': 'kea.json',
          'networkd': 'networkd.conf', 'wireguard': 'wireguard.conf', 'caddy': 'caddy.conf',
-         'ddns': 'ddns.conf'}
+         'ddns': 'ddns.conf', 'ssh': 'ssh.json'}
 VALIDATORS = {'nftables': ['nft', '-c', '-f'], 'unbound': ['unbound-checkconf'],
-              'kea': ['kea-dhcp4', '-t'], 'networkd': ['true'], 'wireguard': ['true'], 'caddy': ['true'], 'ddns': ['true']}
+              'kea': ['kea-dhcp4', '-t'], 'networkd': ['true'], 'wireguard': ['true'], 'caddy': ['true'], 'ddns': ['true'], 'ssh': ['true']}
 
 
 class Completed(Protocol):
@@ -103,13 +103,16 @@ class ApplyResult:
 
 class ApplyEngine:
     def __init__(self, *, executor=None, filesystem=None, clock: Clock = time.time,
-                 validators=None, reload_commands=None, panel_probe: Callable | None = None):
+                 validators=None, reload_commands=None, panel_probe: Callable | None = None,
+                 management_provider=None, ssh_controller=None):
         self.executor = executor or SubprocessExecutor()
         self.fs = filesystem or LocalFileSystem()
         self.clock = clock
         self.validators = VALIDATORS if validators is None else validators
         self.reload_commands = reload_commands or {}
         self.panel_probe = panel_probe
+        self.management_provider = management_provider
+        self.ssh_controller = ssh_controller
 
     def status(self):
         for path in (JOURNAL_PATH, MARKER_PATH):
@@ -131,6 +134,9 @@ class ApplyEngine:
             raise ApplyError('agent.reload_failed')
 
     def _install(self, contents, marker, validators):
+        # Upgrade pre-SSH backups to the closed default.
+        contents = dict(contents)
+        contents.setdefault('ssh', '{"interfaces": [], "wan_confirmed_interfaces": []}')
         for name, content in contents.items():
             self.fs.write(PENDING_DIR / FILES[name], content)
             marker['phases'][name] = 'generated'
@@ -145,11 +151,15 @@ class ApplyEngine:
             marker['phases'][name] = 'validated'
         # Journal before the first live mutation, so interrupted applications roll back.
         self.marker(marker)
+        if self.ssh_controller is not None:
+            self.ssh_controller.close()
         for name, filename in FILES.items():
             self.fs.atomic_move(PENDING_DIR / filename, APPLIED_DIR / filename)
             self.reload_service(name)
             marker['phases'][name] = 'applied'
             self.marker(marker)
+        if self.ssh_controller is not None:
+            self.ssh_controller.activate(json.loads(contents['ssh']))
 
     def _backup(self, version_id):
         contents = {n: self.fs.read(APPLIED_DIR / f) for n, f in FILES.items()}
@@ -172,18 +182,38 @@ class ApplyEngine:
         if not 60 <= confirmation_timeout <= 600:
             raise ApplyError('agent.invalid_timeout')
         version = ConfigurationVersion.model_validate(version_snapshot)
-        if safe_mode:
+        try:
+            backup = json.loads(self.fs.read(CONFIRMED_DIR / 'snapshot.json'))
+        except FileNotFoundError:
+            backup = None
+        management = None
+        if self.management_provider is not None:
             try:
-                self.fs.read(CONFIRMED_DIR / 'snapshot.json')
-            except FileNotFoundError:
-                raise ApplyError('agent.no_confirmed_version') from None
+                from ..management import validate_management, validate_site_bindings
+                management = self.management_provider()
+                if management is not None:
+                    validate_management(version.configuration, management)
+                    validate_site_bindings(version, management)
+            except (OSError, ValueError) as exc:
+                raise ApplyError('management.access_invalid') from exc
+        if management is not None and backup is None:
+            # No rollback target exists. The host guard is mandatory instead.
+            safe_mode = False
+        elif management is not None and backup is not None:
+            old = ConfigurationVersion.model_validate(backup['version_snapshot']).configuration
+            old_lan = next((i for i in old.interfaces if i.name == management.interface), None)
+            new_lan = next(i for i in version.configuration.interfaces if i.name == management.interface)
+            if old_lan != new_lan or old.anti_lockout != version.configuration.anti_lockout:
+                safe_mode = True
+        elif safe_mode and backup is None:
+            raise ApplyError('agent.no_confirmed_version')
         now = self.clock()
         marker = {'version_id': version.id, 'applied_at': now,
                   'deadline': now + confirmation_timeout if safe_mode else None,
                   'status': 'applying', 'phases': {}}
         try:
             contents = {name: gen(version) for name, gen in (
-                ('nftables', generate_nftables), ('unbound', generate_unbound), ('kea', generate_kea))}
+                ('nftables', lambda v: generate_nftables(v, management)), ('unbound', generate_unbound), ('kea', generate_kea))}
             # DDNS jobs (plaintext tokens live only in this 0600 file).
             # No jobs or missing key -> empty config, worker does nothing.
             try:
@@ -197,14 +227,23 @@ class ApplyEngine:
             except ValueError:
                 ddns_jobs = []
             contents['ddns'] = _json.dumps({'ddns': ddns_jobs})
-            contents["networkd"] = serialize_networkd(generate_networkd(version))
+            network = generate_networkd(version)
+            if management is not None:
+                name = f'10-vs-router-{management.interface}.network'
+                network[name] = network[name].replace(
+                    f'Name={management.interface}\n',
+                    f'Name={management.interface}\nMACAddress={management.mac}\n', 1)
+            contents["networkd"] = serialize_networkd(network)
             contents["wireguard"] = serialize_wireguard(generate_wg_bundle(version, {}))
-            contents["caddy"] = serialize_caddy(generate_caddy_bundle(version))
+            contents["ssh"] = version.configuration.ssh.model_dump_json()
+            contents["caddy"] = serialize_caddy(generate_caddy_bundle(version, management))
             self._install(contents, marker, self.validators if validators is None else validators)
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
-            if safe_mode and self.panel_probe is not None and not self.panel_probe():
-                return self.rollback('panel.unavailable')
+            if self.panel_probe is not None and not self.panel_probe():
+                if backup is not None:
+                    return self.rollback('panel.unavailable')
+                raise ApplyError('panel.unavailable')
             if not safe_mode:
                 self._backup(version.id)
             self.marker(marker)
@@ -214,7 +253,13 @@ class ApplyEngine:
             mutated = any(v == 'applied' for v in marker['phases'].values()) or self.status() == marker
             marker.update(status='failed', error={'code': code, 'message': code, 'details': []})
             self.marker(marker)
-            if mutated:
+            if self.ssh_controller is not None:
+                try:
+                    self.ssh_controller.close()
+                except (OSError, subprocess.SubprocessError, ApplyError):
+                    marker['error']['code'] = 'ssh.close_failed'
+                    self.marker(marker)
+            if mutated and backup is not None:
                 return self.rollback(code)
             return ApplyResult(version.id, 'failed', marker['phases'], marker['error'])
 
@@ -239,7 +284,12 @@ class ApplyEngine:
                   'deadline': self.clock(), 'status': 'rolling_back', 'reason': reason, 'phases': {}}
         try:
             self._install(backup['files'], marker, self.validators)
-        except (OSError, subprocess.SubprocessError, ApplyError) as exc:
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError) as exc:
+            if self.ssh_controller is not None:
+                try:
+                    self.ssh_controller.close()
+                except (OSError, subprocess.SubprocessError, ApplyError):
+                    pass  # Preserve retryable rollback failure; never report success.
             marker.update(status='rollback_failed', deadline=self.clock())
             self.marker(marker)
             raise ApplyError('agent.rollback_failed') from exc

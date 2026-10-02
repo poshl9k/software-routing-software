@@ -287,7 +287,7 @@ export function useApplyCommands(
         if (!target) return;
         const params = {
           version_id: target.id,
-          safe_mode: preferences.safe,
+          safe_mode: confirmed ? preferences.safe : false,
           confirmation_timeout: preferences.timeout,
         };
         savePreferences(preferences);

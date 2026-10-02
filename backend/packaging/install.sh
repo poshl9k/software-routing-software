@@ -12,6 +12,28 @@
 # Set VS_ROUTER_SECRET_KEY in the web API and agent service environments using a protected
 # EnvironmentFile; never put the encryption key into generated bundles.
 set -eu
+umask 022
+# Listener remains closed until the agent has installed the interface firewall.
+systemctl mask ssh.service ssh.socket
+systemctl stop ssh.service ssh.socket
+install -d -m 0700 /etc/vs-router-ssh /var/lib/vs-router-ssh /run/vs-router-ssh
+install -d -m 0755 /etc/systemd/system/ssh.service.d
+cat > /etc/systemd/system/ssh.service.d/vs-router.conf <<'EOF'
+[Unit]
+Requires=vs-router-bootrestore.service
+After=vs-router-bootrestore.service vs-router-ssh-guard.service
+BindsTo=vs-router-ssh-guard.service
+ConditionPathExists=/run/vs-router-ssh/ready
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/sshd -D -f /etc/vs-router-ssh/sshd_config
+ExecStartPre=
+ExecStartPre=/usr/sbin/sshd -t -f /etc/vs-router-ssh/sshd_config
+ExecReload=
+ExecReload=/usr/sbin/sshd -t -f /etc/vs-router-ssh/sshd_config
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=control-group
+EOF
 # Caddy built from source (xcaddy) ships no user/group and no distro unit —
 # create them; the binary lives wherever PATH resolves it (usually /usr/local/bin).
 getent group caddy >/dev/null 2>&1 || groupadd --system caddy
@@ -28,6 +50,7 @@ ExecStart=
 ExecStart=${CADDY_BIN} run --config /etc/caddy/caddy.json
 ExecReload=
 ExecReload=${CADDY_BIN} reload --config /etc/caddy/caddy.json
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 EOF
 # Self-built caddy has no distro service file; the override above only patches
 # an existing unit and cannot create one.
@@ -40,9 +63,22 @@ if [ ! -f /etc/caddy/caddy.json ]; then
     chown root:caddy /etc/caddy/caddy.json
     chmod 0644 /etc/caddy/caddy.json
 fi
-systemctl enable caddy >/dev/null 2>&1 || true
-systemctl start caddy 2>/dev/null || echo 'WARNING: caddy did not start; the panel will reload it after first apply'
+systemctl daemon-reload
+systemctl enable caddy
+systemctl restart caddy
+systemctl is-active --quiet caddy
 id vs-router-web >/dev/null 2>&1 || useradd --system --home-dir /var/lib/vs-router --shell /usr/sbin/nologin vs-router-web
+# Caddy proxies the restricted web Unix socket, never a TCP bridge.
+usermod -a -G vs-router-web caddy
+install -d -m 0755 /etc/systemd/system/caddy.service.d
+cat > /etc/systemd/system/caddy.service.d/management.conf <<'EOF'
+[Unit]
+Requires=vs-router-bootrestore.service
+After=vs-router-bootrestore.service
+[Service]
+ExecStartPre=+/usr/bin/python3 -m vs_router.agent.management_console --check
+EOF
+
 # Warn when the installed AmneziaWG is older than the validated 3.1 line.
 if command -v awg >/dev/null 2>&1 && ! awg --version 2>/dev/null | grep -q "v3\.[1-9]"; then
     echo "WARNING: amneziawg-tools 3.1+ expected (obfuscation params validated on 3.1); found:" \
@@ -56,16 +92,17 @@ install -d -m 0770 -o vs-router-web -g vs-router-web /run/vs-router/web /var/lib
 packaging_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install -m 0644 "$packaging_dir"/*.service "$packaging_dir"/*.timer /etc/systemd/system/
 install -m 0644 "$packaging_dir/vs-router.conf" /etc/tmpfiles.d/vs-router.conf
+systemctl daemon-reload
 # Web DB must be writable by both the web user (owner) and the agent (group).
 DB=/var/lib/vs-router/vs-router.db
 if [ ! -f "$DB" ]; then
     install -m 0660 -o vs-router-web -g vs-router-web /dev/null "$DB"
-    cd "$(dirname -- "$packaging_dir")"
-    python3 -m alembic -n vsrouter upgrade head 2>/dev/null || \
-      VS_ROUTER_DATABASE_URL="sqlite:///$DB" python3 -m alembic upgrade head
-    chown vs-router-web:vs-router-web "$DB"
-    chmod 0660 "$DB"
 fi
+# Always migrate the installed DB, including reruns. Stop writers first.
+systemctl stop vs-router-web.service vs-router-agent.service
+VS_ROUTER_DATABASE_URL="sqlite:///$DB" python3 -m alembic -c "$packaging_dir/../alembic.ini" upgrade head
+chown vs-router-web:vs-router-web "$DB"
+chmod 0660 "$DB"
 # AppArmor: allow kea-dhcp4 to read our staged configs during validation.
 if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.kea-dhcp4 ]; then
     local_profile=/etc/apparmor.d/local/usr.sbin.kea-dhcp4
@@ -74,7 +111,7 @@ if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.k
     if [ "${include_line:-0}" = "0" ]; then
         sed -i "s|#include <local/usr.sbin.kea-dhcp4>|include <local/usr.sbin.kea-dhcp4>|" /etc/apparmor.d/usr.sbin.kea-dhcp4
     fi
-    apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4 2>/dev/null || true
+    apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4
 fi
 # Unbound rereads the include as its unprivileged service user on HUP.
 # Allow traversal only; other generated files retain their private modes.
@@ -106,5 +143,8 @@ if [ -d "$UI_SRC" ] && [ -f "$UI_SRC/index.html" ]; then
     mv /var/lib/vs-router/ui.new /var/lib/vs-router/ui
     chmod -R a+rX /var/lib/vs-router/ui
 fi
-systemctl enable vs-router-bootrestore.service 2>/dev/null || true
+systemctl enable vs-router-bootrestore.service
 systemctl daemon-reload
+systemctl restart vs-router-agent.service vs-router-web.service
+systemctl is-active --quiet vs-router-agent.service
+systemctl is-active --quiet vs-router-web.service

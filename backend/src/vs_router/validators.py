@@ -88,6 +88,19 @@ def validate_configuration(c):
             fail("interface.vlan_parent")
         if any(m not in interfaces or m == i.name for m in i.members):
             fail("interface.bridge_member")
+    selected = set(c.ssh.interfaces)
+    confirmed = set(c.ssh.wan_confirmed_interfaces)
+    if len(selected) != len(c.ssh.interfaces) or len(confirmed) != len(c.ssh.wan_confirmed_interfaces):
+        fail("ssh.duplicate_interface")
+    members = {m for i in c.interfaces for m in i.members}
+    for name in selected:
+        if name not in interfaces or not interfaces[name].zone or name in members:
+            fail("ssh.interface_binding_required")
+    wan = {name for name in selected if interfaces[name].zone == "wan"}
+    if confirmed != wan:
+        fail("ssh.wan_confirmation_required")
+    if c.panel_port == 22:
+        fail("ssh.port_reserved")
     def selector(value, kind="address"):
         if value.startswith("@"):
             if value[1:] not in aliases or aliases[value[1:]].type != kind:

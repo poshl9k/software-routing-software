@@ -1,40 +1,36 @@
 #!/bin/bash
-# First-boot bootstrap for the vs-router installer ISO.
-#
-# Why not in d-i late_command: inside the d-i chroot the pipelined apt
-# downloads reproducibly deadlock — the http method process spins at ~100%
-# CPU around the ~300MB mark, makes no connections and no disk writes, and
-# never hits its own timeouts (observed on slirp AND virbr0 NAT). The same
-# bootstrap.sh on a booted Debian 13 system is proven to work, so the
-# preseed late_command only clones the repo, installs
-# vs-router-bootstrap-firstboot.service and enables it; this script runs on
-# the first boot in the normal environment.
-set -u
+set +x
+set -euo pipefail
+umask 077
 export DEBIAN_FRONTEND=noninteractive
-# systemd oneshot services run with HOME unset — go refuses to work without
-# it ("neither GOMODCACHE nor GOPATH is set"); bootstrap.sh's xcaddy stage
-# depends on go env GOPATH.
-export HOME="${HOME:-/root}"
-export GOPATH="${GOPATH:-$HOME/go}"
-export GOMODCACHE="${GOMODCACHE:-$GOPATH/pkg/mod}"
+export GOPATH=/root/go
+export GOMODCACHE=/root/go/pkg/mod
 export PATH="$PATH:$GOPATH/bin"
-export PS4="+$(date +%H:%M:%S) "
-
-# Bounded wait for connectivity (DHCP may lag the service start at boot).
-n=0
-until getent hosts deb.debian.org >/dev/null 2>&1 || [ "$n" -ge 30 ]; do
-    sleep 2
-    n=$((n+1))
-done
-
-bash -x /opt/vs-router/backend/packaging/bootstrap.sh > /root/bootstrap.log 2>&1
-rc=$?
-tail -50 /root/bootstrap.log > /dev/console
-# Phone-home to the HOST, which is the default gateway on every test network
-# (slirp: 10.0.2.2, libvirt NAT: 192.168.122.1, passt: host address).
-gw=$(ip route show default 2>/dev/null | awk '{print $3}' | head -1)
-if [ -n "$gw" ]; then
-    curl -s -m 5 "http://$gw:8099/?bootstrap=$rc" >/dev/null 2>&1 || true
+state=/var/lib/vs-router-bootstrap
+install -d -m 0700 "$state"
+exec 9>"$state/lock"
+flock -n 9 || { echo 'Bootstrap is already running' >&2; exit 1; }
+case ${1:-} in
+    --retry) rm -f "$state/attempted" ;;
+    '') ;;
+    *) echo 'Usage: firstboot-bootstrap.sh [--retry]' >&2; exit 2 ;;
+esac
+if [[ -e $state/attempted ]]; then
+    echo 'Previous bootstrap attempted. Use firstboot-bootstrap.sh --retry from the console.' >&2
+    exit 1
 fi
-systemctl disable vs-router-bootstrap-firstboot.service 2>/dev/null || true
-exit $rc
+rm -f "$state/succeeded"
+touch "$state/attempted"
+# Keep the unit enabled on failure, but the persistent attempt marker prevents
+# automatic retries after reboot. An interrupted attempt also needs --retry.
+rc=0
+install -m 0600 /dev/null /root/bootstrap.log
+bash /opt/vs-router/backend/packaging/bootstrap.sh > /root/bootstrap.log 2>&1 || rc=$?
+tail -50 /root/bootstrap.log > /dev/console || true
+if ((rc == 0)); then
+    systemctl disable vs-router-bootstrap-firstboot.service
+    touch "$state/succeeded"
+else
+    printf 'Bootstrap FAILED (%s). See /root/bootstrap.log; correct the cause, then run:\nsudo bash /opt/vs-router/backend/packaging/firstboot-bootstrap.sh --retry\n' "$rc" > /dev/console || true
+fi
+exit "$rc"

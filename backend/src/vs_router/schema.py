@@ -193,6 +193,11 @@ class DDNSUpdate(Model):
         return self
 
 
+class SSH(Model):
+    interfaces: tuple[InterfaceName, ...] = ()
+    wan_confirmed_interfaces: tuple[InterfaceName, ...] = ()
+
+
 class Configuration(Model):
     schema_version: Literal[1] = 1
     interfaces: tuple[Interface, ...] = ()
@@ -206,6 +211,7 @@ class Configuration(Model):
     tunnels: tuple[Tunnel, ...] = ()
     sites: tuple[CaddySite, ...] = ()
     ddns: tuple[DDNSUpdate, ...] = ()
+    ssh: SSH = Field(default_factory=SSH)
     anti_lockout: bool = True
     panel_port: Port = 443
 

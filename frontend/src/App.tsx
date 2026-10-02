@@ -21,6 +21,7 @@ import {
 import Dashboard, { Events } from "./pages/Dashboard";
 import Network from "./pages/Network";
 import Firewall from "./pages/Firewall";
+import SSH from "./pages/SSH";
 import { DHCP, DNS, Proxy, Tunnels } from "./pages/Services";
 import ApplyScreen from "./pages/ApplyScreen";
 import Maintenance from "./pages/Maintenance";
@@ -39,7 +40,6 @@ function ApplyTopButton() {
   const {
     draft,
     confirmed,
-    preferences,
     pending,
     active,
     seconds,
@@ -83,17 +83,16 @@ function ApplyTopButton() {
       </Tooltip>
     );
   if (!draft) return null;
-  const applyDisabled =
-    !timeoutValid || (preferences.safe && !confirmed);
+  const applyDisabled = !timeoutValid;
   const when = fmtDateTime(draft.created_at);
   return (
     <Tooltip
       title={
         applyDisabled
-          ? preferences.safe && !confirmed
-            ? "Безопасный режим требует ранее подтверждённой версии; параметры — на странице «Применение»"
-            : "Окно подтверждения должно быть 60–600 секунд; параметры — на странице «Применение»"
-          : `Применить черновик v${draft.id}${when ? ` от ${when}` : ""} с сохранёнными параметрами; diff и параметры — на странице «Применение»`
+          ? "Окно подтверждения должно быть 60–600 секунд; параметры — на странице «Применение»"
+          : !confirmed
+            ? "Первое применение без автоотката. Нужен доступ к локальной консоли; сохраните выбранный LAN и HTTPS на порту 443."
+            : `Применить черновик v${draft.id}${when ? ` от ${when}` : ""} с сохранёнными параметрами; diff и параметры — на странице «Применение»`
       }
     >
       <span>
@@ -118,6 +117,7 @@ export const navigation = [
   { to: "/tunnels", label: "Туннели", icon: "⚿" },
   { to: "/proxy", label: "Прокси", icon: "◎" },
   { to: "/firewall", label: "Правила", icon: "✉" },
+  { to: "/ssh", label: "SSH", icon: "⌘" },
   { to: "/events", label: "Журнал", icon: "▤" },
   { to: "/apply", label: "Применение", icon: "⚙" },
   { to: "/maintenance", label: "Обслуживание", icon: "⌁" },
@@ -256,6 +256,7 @@ export default function App() {
             <Route path="tunnels" element={<Tunnels />} />
             <Route path="proxy" element={<Proxy />} />
             <Route path="firewall" element={<Firewall />} />
+            <Route path="ssh" element={<SSH />} />
             <Route path="apply" element={<ApplyScreen />} />
             <Route path="maintenance" element={<Maintenance />} />
             <Route path="events" element={<Events />} />

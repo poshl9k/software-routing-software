@@ -20,9 +20,21 @@ def upstream(value, layer4=False):
     return bind(parsed.hostname, port), parsed
 
 
-def generate_caddy_json(version) -> dict:
+def generate_caddy_json(version, management=None) -> dict:
     sites = sorted(version.configuration.sites, key=lambda s: s.name)
     apps, servers, l4, policies, automate, certificates = {}, {}, {}, [], [], []
+    if management is not None:
+        from ..management import TLS_DIR, validate_site_bindings
+        validate_site_bindings(version, management)
+        servers['management'] = {
+            'listen': [bind(management.ip, 443)],
+            'routes': [{'handle': [{'handler': 'reverse_proxy', 'upstreams': [
+                {'dial': 'unix//run/vs-router/web/web.sock'}]}]}],
+            'tls_connection_policies': [{'default_sni': management.ip,
+                                         'certificate_selection': {'any_tag': ['management']}}],
+            'automatic_https': {'disable': True}}
+        certificates.append({'certificate': str(TLS_DIR / 'server.crt'),
+                             'key': str(TLS_DIR / 'server.key'), 'tags': ['management']})
     groups = {}
     # Unbound sites use the primary WAN; if WAN is dynamic, use an explicit
     # site's binding before falling back to a wildcard listener.
@@ -90,8 +102,8 @@ def generate_caddy_json(version) -> dict:
     return {'admin': {'listen': '127.0.0.1:2019'}, 'apps': apps}
 
 
-def generate_caddy_bundle(version):
-    files = {'caddy.json': json.dumps(generate_caddy_json(version), indent=2, sort_keys=True) + '\n'}
+def generate_caddy_bundle(version, management=None):
+    files = {'caddy.json': json.dumps(generate_caddy_json(version, management), indent=2, sort_keys=True) + '\n'}
     for site in version.configuration.sites:
         if site.certificate_mode == 'manual':
             files[f'{site.name}.crt'] = reveal(site.certificate)

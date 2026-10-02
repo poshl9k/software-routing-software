@@ -1,0 +1,18 @@
+[Unit]
+Description=vs-router SSH brute-force protection (Fail2Ban)
+After=systemd-journald.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/fail2ban-server -xf -c /etc/vs-router-ssh start
+RuntimeDirectory=vs-router-ssh
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=vs-router-ssh
+StateDirectoryMode=0700
+Restart=no
+ProtectSystem=strict
+ReadWritePaths=/etc/vs-router-ssh /run/vs-router-ssh /var/lib/vs-router-ssh
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes

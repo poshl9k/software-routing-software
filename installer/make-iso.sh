@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
+set +x
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-DEFAULT_ISO=/var/lib/libvirt/images/debian-13.7.0-amd64-netinst.iso
-DOWNLOAD_URL=https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso
-OUT=${OUT:-vs-router-installer-13.7.0-amd64.iso}
-ISO=${1:-$DEFAULT_ISO}
+# Supply an independently verified Debian 13 ISO and its trusted SHA-256.
+ISO=${1:?Usage: VS_ROUTER_REVISION=<40 hex commit> VS_ROUTER_ISO_SHA256=<trusted hash> make-iso.sh <Debian 13 ISO>}
+OUT=${OUT:-vs-router-installer-amd64.iso}
+[[ ${VS_ROUTER_REVISION:-} =~ ^[0-9a-f]{40}$ ]] || { echo 'A full reviewed source commit is required' >&2; exit 1; }
+[[ ${VS_ROUTER_ISO_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || { echo 'Trusted Debian ISO SHA-256 required' >&2; exit 1; }
+printf '%s  %s\n' "$VS_ROUTER_ISO_SHA256" "$ISO" | sha256sum -c -
+if [[ ${VS_ROUTER_UNATTENDED_LAB:-0} != 1 ]]; then
+    for lab_option in VS_ROUTER_STATIC_NET VS_ROUTER_PHONEHOME_IP VS_ROUTER_WIFI VS_ROUTER_KEEP_WIFI; do
+        [[ -z ${!lab_option:-} ]] || { echo "$lab_option requires VS_ROUTER_UNATTENDED_LAB=1" >&2; exit 1; }
+    done
+fi
 
 need_command() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -15,16 +24,6 @@ need_command() {
 }
 
 need_command xorriso
-if [[ ! -f $ISO ]]; then
-    if [[ $ISO != "$DEFAULT_ISO" ]]; then
-        printf 'Input ISO not found: %s\n' "$ISO" >&2
-        exit 1
-    fi
-    need_command curl
-    ISO=/tmp/debian-13.7.0-amd64-netinst.iso
-    printf 'Downloading Debian netinst ISO to %s\n' "$ISO"
-    curl -fL "$DOWNLOAD_URL" -o "$ISO"
-fi
 
 for file in /usr/lib/ISOLINUX/isohdpfx.bin; do
     if [[ ! -f $file ]]; then
@@ -41,17 +40,21 @@ chmod -R u+w "$workdir" 2>/dev/null || true
 
 xorriso -osirrox on -indev "$ISO" -extract / "$workdir/iso"
 chmod -R u+w "$workdir" 2>/dev/null || true
-install -m 0644 "$SCRIPT_DIR/preseed.cfg" "$workdir/iso/preseed.cfg"
+if [[ ${VS_ROUTER_UNATTENDED_LAB:-0} == 1 ]]; then
+    install -m 0644 "$SCRIPT_DIR/preseed.cfg" "$workdir/iso/preseed.cfg"
+else
+    # The known lab password never enters a production ISO, even as an
+    # alternative menu option.
+    install -m 0644 "$SCRIPT_DIR/preseed-semiauto.cfg" "$workdir/iso/preseed.cfg"
+fi
 install -m 0644 "$SCRIPT_DIR/preseed-semiauto.cfg" "$workdir/iso/preseed-semiauto.cfg"
 
-# Fully unattended GRUB: the netinst grub.cfg has NO 'set timeout=' line, and
-# GRUB then waits for user input forever. Force the default entry with zero
-# timeout (append works: menu entries above are already defined).
-# Test hook: VS_ROUTER_TEST_SEMIAUTO=1 boots the semi-auto entry (by title —
-# GRUB resolves it lazily when the menu is shown, so the entry defined later
-# in the file still matches). Product builds keep default=0 (auto mode).
+grep -Eq 'Debian GNU/Linux 13[. /]' "$workdir/iso/.disk/info" || { echo 'Debian 13 ISO required' >&2; exit 1; }
+sed -i "s/@VS_ROUTER_REVISION@/$VS_ROUTER_REVISION/g" "$workdir/iso/"preseed*.cfg
+
+# Production selects the interactive entry. Unattended boot is lab-only.
 grub_default=0
-if [[ -n ${VS_ROUTER_TEST_SEMIAUTO:-} ]]; then
+if [[ ${VS_ROUTER_UNATTENDED_LAB:-0} != 1 ]]; then
     grub_default="'Semi-automatic install (expert)'"
 fi
 while IFS= read -r cfg; do
@@ -59,7 +62,10 @@ while IFS= read -r cfg; do
     printf 'set default=%s\nset timeout=0\n' "$grub_default" >> "$cfg"
 done < <(find "$workdir/iso/boot/grub" "$workdir/iso/EFI" -name grub.cfg -type f 2>/dev/null)
 
-preseed_args='auto=true priority=critical preseed/file=/cdrom/preseed.cfg file=/cdrom/preseed.cfg'
+preseed_args='priority=high preseed/file=/cdrom/preseed.cfg file=/cdrom/preseed.cfg'
+if [[ ${VS_ROUTER_UNATTENDED_LAB:-0} == 1 ]]; then
+    preseed_args="auto=true ${preseed_args/priority=high/priority=critical}"
+fi
 # Test-only static network: qemu user-net with the passt backend does not
 # always answer d-i's DHCP in time; passt passes traffic through with the
 # HOST's address, so for VM tests set VS_ROUTER_STATIC_NET="ip mask gw dns"

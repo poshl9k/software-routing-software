@@ -63,6 +63,18 @@ export default function ApplyScreen() {
         БД не заменяет маркер.
       </Todo>
       <ErrorNotice error={error} />
+      {!confirmed && (
+        <Alert severity="warning">
+          Первое применение выполняется без автоотката: подтверждённой версии ещё нет.
+          Нужен доступ к локальной консоли. На подготовленном хосте агент проверяет
+          сохранение выбранного физического LAN, его адреса и HTTPS на порту 443.
+          Выбранный таймер начнёт действовать после первого успешного применения.
+        </Alert>
+      )}
+      <Alert severity="info">
+        Первичный адрес и порт управления зарезервированы. Перенос этого адреса
+        на другой порт и смена адреса панели пока не поддерживаются.
+      </Alert>
       {uncertain && (
         <Alert severity="warning">
           Результат команды неизвестен. Проверьте состояние агента; повторное
@@ -204,8 +216,7 @@ export default function ApplyScreen() {
             !!active ||
             uncertain ||
             !draft ||
-            !timeoutValid ||
-            (preferences.safe && !confirmed)
+            !timeoutValid
           }
           onClick={() => void command("apply")}
         >

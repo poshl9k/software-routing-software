@@ -26,6 +26,7 @@ table inet vs_router {
     }
     chain input {
         type filter hook input priority filter; policy drop;
+        tcp dport 22 counter drop comment "ssh_unselected"
         iifname "lo" accept
         iifname != { "eth0", "eth1" } drop
         ct state invalid drop

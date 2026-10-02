@@ -40,6 +40,7 @@ describe("screens", () => {
     ["/", "Обзор сети"],
     ["/network", "Сеть"],
     ["/firewall", "Firewall"],
+    ["/ssh", "SSH"],
     ["/dhcp", "DHCP (Kea)"],
     ["/dns", "DNS (Unbound)"],
     ["/tunnels", "Туннели"],
@@ -140,6 +141,23 @@ describe("screens", () => {
       ),
     );
     expect(await screen.findByText(/Подтверждено · v2/)).toBeVisible();
+  });
+  it("first apply keeps the saved timer preference but sends safe_mode false", async () => {
+    localStorage.setItem("vs-router.preferences", JSON.stringify({ safe: true, timeout: 180 }));
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? [versions[0]] :
+      path === "/api/apply" ? { version_id: 2, status: "confirmed", phases: {} } : []
+    ))));
+    open("/apply");
+    expect(await screen.findByText(/Первое применение выполняется без автоотката/)).toBeVisible();
+    await userEvent.click(screen.getAllByRole("button", { name: "Применить" }).at(-1)!);
+    await waitFor(() => {
+      const call = fetch.mock.calls.find(([path]) => path === "/api/apply");
+      expect(call).toBeDefined();
+      expect(JSON.parse(call![1].body).safe_mode).toBe(false);
+    });
+    expect(JSON.parse(localStorage.getItem("vs-router.preferences")!).safe).toBe(true);
   });
   it("onboarding submits credentials, then login, then a network draft", async () => {
     const fetch = mockApi();

@@ -146,7 +146,19 @@ def serve(socket_path, handlers, allowed_uids=None, *, stop_event=None, ready_ev
 
 
 def panel_probe():
-    """Probe uvicorn's local Unix socket (compatible with AF_UNIX confinement)."""
+    """Probe provisioned HTTPS, or the Unix API on hosts without management state."""
+    from ..management import host_management, TLS_DIR
+    try:
+        management = host_management()
+        if management is not None:
+            import ssl
+            from urllib.request import build_opener, ProxyHandler, HTTPSHandler
+            context = ssl.create_default_context(cafile=str(TLS_DIR / 'ca.crt'))
+            opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context))
+            with opener.open(f'https://{management.ip}/health', timeout=3) as response:
+                return response.status == 200
+    except (OSError, ValueError):
+        return False
     path = os.environ.get('VS_ROUTER_PANEL_SOCKET', '/run/vs-router/web/web.sock')
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -284,7 +296,9 @@ def main():
     web_user = pwd.getpwnam('vs-router-web')
     database = create_engine(os.environ.get('VS_ROUTER_DATABASE_URL', 'sqlite:///vs-router.db'))
     from .services import NftApply, UnboundReloader, KeaReloader, NetworkdReloader, WireGuardReloader, CaddyReloader
-    engine = ApplyEngine(panel_probe=panel_probe, reload_commands={
+    from ..management import host_management
+    from .ssh import SSHController
+    engine = ApplyEngine(panel_probe=panel_probe, management_provider=host_management, ssh_controller=SSHController(), reload_commands={
         'nftables': NftApply(), 'unbound': UnboundReloader(), 'kea': KeaReloader(),
         'networkd': NetworkdReloader(),
         'wireguard': WireGuardReloader(), 'caddy': CaddyReloader(),

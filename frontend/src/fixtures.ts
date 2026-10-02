@@ -20,6 +20,7 @@ export const emptyConfiguration: Configuration = {
   tunnels: [],
   sites: [],
   ddns: [],
+  ssh: { interfaces: [], wan_confirmed_interfaces: [] },
   anti_lockout: true,
   panel_port: 443,
 };

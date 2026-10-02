@@ -7,7 +7,7 @@
 ## Quick start (одна команда на чистой машине)
 
 Альтернатива: соберите ISO командой `bash installer/make-iso.sh`.
-Загрузите машину с ISO — установка и bootstrap выполнятся автоматически; креды см. `installer/README.md`.
+Сборка требует проверенного SHA-256 ISO Debian 13 и полного commit ID. Обычный ISO запрашивает пароль ОС; SSH закрыт. Текущие ограничения и явный lab-режим — в `installer/README.md`. Для первичного LAN HTTPS после установки требуется отдельная команда с локальной консоли (см. ниже); VM-проверка этого контура ещё не выполнена.
 
 Debian поставляется **без sudo** — сначала один раз через root:
 
@@ -19,7 +19,7 @@ cd software-routing-software/backend/packaging
 sudo ./bootstrap.sh
 ```
 
-Скрипт идемпотентен (повторный запуск продолжает с места остановки), сам ставит apt-зависимости, собирает Caddy с L4 и AmneziaWG 3.1, собирает фронт и wheel, устанавливает сервисы и печатает в конце креды Kea ctrl-agent. Требуется: root, интернет (apt/PyPI/npm/Go). Ручной путь — ниже.
+Bootstrap поддерживает только Debian 13. Для ручного запуска сначала нужны nftables и явно записанный с консоли DHCP uplink (имя и MAC в `/var/lib/vs-router-bootstrap/installer-uplink`, каталог root:root 0700); ISO делает это автоматически. Запускайте с локальной консоли: начальная политика запрещает входящие подключения. Повторный запуск мигрирует БД и перезапускает сервисы. Секрет Kea не печатается. Готовность ПО не означает готовность HTTPS-панели. Полный проверенный набор зависимостей пока не зафиксирован; примеры ручной сборки ниже также не являются проверенным выпуском.
 
 ## 1. Системные пакеты
 
@@ -71,7 +71,7 @@ xcaddy build --with github.com/mholt/caddy-l4 --with github.com/caddy-dns/cloudf
 Node.js (для сборки UI) и uv (для backend):
 
 ```sh
-sudo apt install -y nodejs npm   # Debian 13: nodejs >= 18
+sudo apt install -y nodejs npm   # Для frontend нужен Node 22.12+; проверьте версию
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
@@ -80,7 +80,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```sh
 git clone https://github.com/poshl9k/software-routing-software.git
 cd software-routing-software
-(cd frontend && npm install && npm run build)   # dist → отдаётся бэкендом
+(cd frontend && npm ci && npm run build)   # dist → отдаётся бэкендом
 (cd backend && uv build)                         # wheel в backend/dist/
 sudo pip install --break-system-packages backend/dist/vs_router_backend-*.whl
 ```
@@ -119,14 +119,16 @@ sudo ./install.sh
 Генерируемые Kea-конфиги включают hooks `lease_cmds`/`stat_cmds`. Для авторизации ctrl-agent создайте пароль:
 
 ```sh
-echo "vsr-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')" | sudo tee /etc/kea/kea-api-password
+sudo python3 -c 'import os,secrets; os.umask(0o077); open("/etc/kea/kea-api-password", "x").write(secrets.token_urlsafe(32) + "\n")'
 sudo chmod 0640 /etc/kea/kea-api-password && sudo chown root:_kea /etc/kea/kea-api-password
 sudo systemctl restart kea-ctrl-agent kea-dhcp4-server
 ```
 
-Логин/пароль передайте в web-сервис (см. таблицу в п.5 — через `secrets.env` или drop-in `vs-router-web.service.d`).
+Bootstrap передаёт пароль через systemd `LoadCredential` и путь `%d/kea-api-password` в `VS_ROUTER_KEA_API_PASSWORD_FILE`. Не помещайте пароль в открытый drop-in и не выводите его в журнал.
 
 ## 8. Первый запуск и доступ к панели
+
+**Первичный доступ:** bootstrap не назначает LAN автоматически. Сначала выполните консольную команду из раздела «Первичный management LAN» ниже и проверьте доступ с LAN.
 
 1. Запустите сервисы: `sudo systemctl enable --now vs-router-agent vs-router-web vs-router-rollback.timer vs-router-ddns.timer`
 2. При первом входе панель предложит **onboarding**: учётка администратора (`/api/setup` работает, пока таблица пользователей пуста), базовая сеть, выбор «безопасной настройки» (окно подтверждения с автооткатом).
@@ -150,3 +152,43 @@ sudo ls /run/vs-router/agent.sock /run/vs-router/web/web.sock
 - Ядро обновляется только по уязвимостям; после обновления — проверка туннелей (см. план, «Обновления»).
 - Сессии панели in-memory: рестарт `vs-router-web` сбрасывает входы.
 - Бэкап: `GET /api/backup/export` (экран «Обслуживание»); без пароля секреты в экспорте — маркеры.
+
+## Первичный management LAN (реализованный ограниченный контур)
+
+После установки ПО, **из локальной root-консоли**, определите MAC отдельного
+проводного физического порта через `ip link` и выполните:
+
+```sh
+python3 -m vs_router.agent.management_console --mac <фактический-MAC-LAN> --address 192.168.10.1/24
+```
+
+Адрес можно изменить при первом запуске команды. Uplink установщика нельзя
+выбирать как LAN; требуется минимум два физических проводных порта. Имя и MAC
+сохраняются в root-only `/var/lib/vs-router-bootstrap/management.json`.
+Повтор той же команды до apply сохраняет CA и ключи. Несовпадение идентичности
+блокирует загрузку Caddy и восстановление правил; исправление требует консоли.
+
+Команда создаёт RSA-3072 CA и серверный сертификат с IP SAN, печатает SHA-256
+отпечаток CA, проверяет запуск сервисов и локальный HTTPS с проверкой доверия.
+CA private key хранится отдельно, root-only (0700 каталог / 0600 файл).
+Публичный CA находится в `/etc/caddy/management/ca.crt`; сверяйте его отпечаток
+с консолью перед добавлением доверия на компьютере администратора.
+
+На компьютере администратора вручную назначьте свободный адрес той же подсети
+(например, `192.168.10.2/24`) и откройте `https://192.168.10.1/`.
+Локальная HTTPS-проба **не подтверждает доступ из LAN**: отдельно проверьте
+доступ с LAN и отсутствие доступа с WAN. DHCP до первого apply не включается.
+
+Первый черновик должен содержать точные имя LAN, статический адрес/префикс,
+тип physical и зону lan, panel_port=443. Первое применение не имеет автоотката;
+ошибка не создаёт искусственную confirmed-версию. HTTPS-маршрут остаётся даже
+при пустом списке сайтов. Неявные wildcard listener сайтов и конфликтующие
+port forwards запрещены. После confirmed изменения параметров выбранного LAN
+принудительно включают таймер. Перенос самого endpoint (имя/адрес/порт) пока
+**запрещён**, а не реализован как безопасная миграция.
+
+Осталось: SSH UI/модель/защита WAN/служба и её откат; транзакционная миграция
+management endpoint и сертификата; автоматическое продление сертификата
+(серверный сертификат действует 397 дней); испытания чистой Debian 13 VM,
+reboot/rollback и доступ с настоящих LAN/WAN клиентов. `/api/setup` pairing
+не изменён. Проверки на временных деревьях не заменяют эти VM-испытания.

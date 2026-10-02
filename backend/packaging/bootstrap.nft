@@ -1,0 +1,16 @@
+# Replaced atomically by the agent's first applied vs_router table.
+destroy table inet vs_router
+table inet vs_router {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        ct state established,related accept
+        udp sport 67 udp dport 68 accept
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

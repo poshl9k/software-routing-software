@@ -1,46 +1,70 @@
 # vs-router installer ISO
 
-Сборка из корня репозитория (нужны `xorriso`, `isolinux` и интернет для загрузки ISO, если его ещё нет):
+Production installs are semi-automatic: the operator chooses the OS password and
+confirms partitioning. Sudo requires that password. SSH is masked, and an initial
+nftables input/forward deny policy permits loopback, established replies and DHCPv4.
+Use the local console. **Software installation does not yet provide initial LAN
+HTTPS access:** console LAN assignment, certificates and first-apply guards remain
+unimplemented. Do not treat this image as ready for production deployment.
+
+Build with `xorriso` and `isolinux` already installed:
 
 ```sh
-sudo apt install xorriso isolinux
-bash installer/make-iso.sh
+VS_ROUTER_REVISION=<reviewed-full-40-character-commit> \
+VS_ROUTER_ISO_SHA256=<independently-verified-Debian-ISO-sha256> \
+bash installer/make-iso.sh /path/to/debian-13-amd64-netinst.iso
 ```
 
-Скрипт берёт `/var/lib/libvirt/images/debian-13.7.0-amd64-netinst.iso` или скачивает образ Debian 13.7 netinst в `/tmp`. Можно передать другой ISO первым аргументом. Результат: `vs-router-installer-13.7.0-amd64.iso`.
+Obtain the ISO hash through a trusted verification process (including Debian's
+signed checksum verification). The builder checks that hash and the ISO's Debian
+13 label; it does not authenticate a hash supplied by an attacker. No ISO is
+automatically downloaded. Output: `vs-router-installer-amd64.iso`. Both BIOS and
+UEFI production paths use the semi-automatic preseed; the lab password is excluded
+from the production image. The source checkout is detached at the supplied commit.
+That commit must contain these installer changes; the builder does not publish
+local edits or commit them for you.
 
-Загрузите компьютер или VM с полученного ISO и подключите сеть с доступом в интернет. Установка Debian и запуск bootstrap выполнятся автоматически; сеть нужна для загрузки bootstrap и пакетов/исходников. В конце откройте панель по HTTPS через Caddy. Учетная запись системы: **vsr-admin / vsr-install**, для неё настроен `sudo NOPASSWD`. Лог bootstrap: `/root/bootstrap.log`.
+Unattended destructive lab installation requires `VS_ROUTER_UNATTENDED_LAB=1` at
+build time. Only that image contains the known lab account `vsr-admin / vsr-install`.
+It still requires a sudo password and keeps SSH closed. Never deploy that image
+on an untrusted network. Static-network and Wi-Fi build hooks are lab-only;
+automatic bootstrap migration currently supports **one wired DHCP uplink only**.
 
-**Wi‑Fi:** в авто-режиме Wi‑Fi отключён намеренно: `netcfg/choose_interface=auto` гоняет интерфейсы, wlan часто линкуется раньше Ethernet, и установка умирала на вопросе WPA-пароля («Invalid passphrase»). Авто-запись установщика грузится с `modprobe.blacklist=mac80211,cfg80211` — беспроводные драйверы не поднимаются, netcfg видит только проводные NIC. Это касается только установщика: установленная система загружается со своим cmdline и Wi‑Fi сохраняет. Секреты в ISO не вшиваются; если установку по Wi‑Fi всё же нужно провести, есть аварийный хук `VS_ROUTER_WIFI="essid пароль" bash installer/make-iso.sh` (креды открытым текстом в файле ISO — избегайте; лучше Ethernet или полуавто, где сеть выбирается явно и Wi‑Fi остаётся). Спасение прямо на экране ошибки: Go Back → Execute a shell → `rmmod <wifi-модуль>` (имя через `lspci -k | grep -A3 Network`) → Go Back → продолжить. Учтите: в netinst может не оказаться firmware вашего адаптера — тогда интерфейса не будет в списке вовсе.
+The installer records the uplink name and MAC in the root-only directory
+`/var/lib/vs-router-bootstrap`. Bootstrap writes DHCP configuration only for that
+port and journals it in the agent's networkd manifest for first-apply cleanup.
+Before disabling ifupdown at future boots it requires networkd wait-online, a DHCP
+lease, a default route and DNS resolution. It does not stop ifupdown mid-install.
+Static installs, an ambiguous uplink or changed MAC fail for console review.
 
-## Режимы установки
+Firstboot logs to `/root/bootstrap.log` with mode 0600. A failed or interrupted
+attempt keeps the unit enabled but records an attempt marker, preventing automatic
+retries across reboots. After fixing the cause, run from the console:
 
-- **Авто (по умолчанию):** полностью автоматическая установка без вопросов.
-- **Полуавто:** выберите в GRUB/isolinux пункт **Semi-automatic install (expert)**. Установщик идёт обычным линейным потоком (priority=high, без главного меню) и спрашивает только: язык, локацию, раскладку клавиатуры, hostname, учётную запись (SSH-креды; пароль задаёте вы) и разметку диска с подтверждением. Значения из preseed предложены как значения по умолчанию. Роли WAN/LAN и настройки роутера задаются в мастере первого запуска веб-панели.
+```sh
+sudo bash /opt/vs-router/backend/packaging/firstboot-bootstrap.sh --retry
+```
 
-## Что получается на выходе
+Success disables firstboot. Bootstrap reruns migrate the existing database and
+restart runtime services; they preserve existing encryption keys and Kea passwords.
+The web service receives its Kea password through systemd `LoadCredential`; the
+password is not embedded in a unit or printed. Kea service readiness still depends
+on the eventual applied DHCP configuration.
 
-| Компонент | Значение |
-|---|---|
-| Панель | HTTPS через Caddy → unix socket |
-| Учётка ОС | `vsr-admin` / `vsr-install`, sudo NOPASSWD |
-| Учётка панели | создаётся в onboarding при первом входе (панель открыта, пока таблица пользователей пуста) |
-| Сервисы | `vs-router-agent`, `vs-router-web`, `vs-router-rollback.timer`, `vs-router-ddns.timer`, `caddy` |
-| Креды Kea ctrl-agent | печатаются в конце bootstrap-лога (и в сводке), user `kea-api` |
-| Лог установки | `/root/bootstrap.log` (весь вывод bootstrap) |
-| Репозиторий | `/opt/vs-router` (клон); обновление кода и дистрибутива — `sudo ./backend/packaging/update.sh`; полная переустановка зависимостей/тулчейна — `git pull` + `sudo ./backend/packaging/bootstrap.sh` |
-| Требования к сети | DHCP-адрес + интернет во время установки (apt, PyPI, npm, Go-модули); после — как настроите |
+## Remaining release and validation gaps
 
-## Проверенный статус
+`npm ci` uses the committed lockfile. Caddy 2.11.4, caddy-l4 v0.1.2 and AmneziaWG
+v3.1.20260812 use versions recorded in the existing lab reports, not a newly
+verified release. Source tags are not signed-artifact verification. APT packages,
+Python runtime/build dependencies, Go/Node toolchains, xcaddy, Cloudflare plugin
+and wireguard-go still require a reviewed release manifest and verified pins;
+bootstrap still resolves those downloads from upstream. Existing helper binaries
+are reused without release attestation. ADR-0005 is therefore **not complete**.
 
-Автоустановка (preseed → late_command → первый запуск → bootstrap) проверена end-to-end
-на тестовой VM (`qemu:///system`, сеть default/virbr0, диск 20G, 3 ГБ RAM): phone-home
-`?bootstrap=0` (честный код возврата), все сервисы active, панель HTTP 200.
-
-Bootstrap выполняется сервисом `vs-router-bootstrap-firstboot.service` при первом
-запуске, а не в late_command: в chroot d-i pipelined-скачивания apt воспроизводимо
-заклинивают (http-метод крутит CPU без соединений и таймаутов — наблюдено на slirp и
-virbr0 NAT); на загруженной системе тот же bootstrap проходит целиком. Тестовые хуки
-сборки: `VS_ROUTER_TEST_SEMIAUTO` (грузить полуавто-запись), `VS_ROUTER_PHONEHOME_IP`
-(подмена адреса phone-home в staged-копиях preseed), `VS_ROUTER_STATIC_NET` (статическая
-сеть вместо DHCP — обход молчаливого DHCP passt).
+New tests exercise shell failure propagation, retry behavior and network-manager
+handoff with isolated files/fake commands. They do not prove DHCP continuity or
+firewall behavior on real hosts. Rebuild/boot the ISO on a disposable Debian 13 VM
+and test failures, reboot and rerun before deployment. Historical lab reports do
+not validate this revision. LAN-only HTTPS, identity checks at every boot, safe
+management endpoint transitions, UI-controlled SSH and WAN brute-force protection
+remain separate unfinished work. One-port panel provisioning is not provided.

@@ -4,7 +4,7 @@ from ..schema import ConfigurationVersion
 from ..validators import address, expand_aliases
 
 
-def generate_nftables(version: ConfigurationVersion) -> str:
+def generate_nftables(version: ConfigurationVersion, management=None) -> str:
     c = version.configuration
     expanded = expand_aliases(c.aliases)
     interfaces = {i.name: i for i in c.interfaces}
@@ -60,7 +60,15 @@ def generate_nftables(version: ConfigurationVersion) -> str:
     for chain in ("input", "forward"):
         lines += [f"    chain {chain} {{", f"        type filter hook {chain} priority filter; policy drop;"]
         if chain == "input":
+            # SSH is an exhaustive decision, before loopback, conntrack,
+            # management exceptions and user rules. Revocation kills old flows.
+            if c.ssh.interfaces:
+                lines.append(f'        iifname {names(sorted(c.ssh.interfaces))} tcp dport 22 ct state != invalid counter accept comment "ssh_selected"')
+            lines.append('        tcp dport 22 counter drop comment "ssh_unselected"')
             lines.append('        iifname "lo" accept')
+            if management is not None:
+                lines += [f'        iifname "{management.interface}" ip daddr {management.ip} tcp dport 443 counter accept comment "management"',
+                          f'        ip daddr {management.ip} tcp dport 443 drop']
         if assigned:
             lines.append(f"        iifname != {names(assigned)} drop")
             if chain == "forward":

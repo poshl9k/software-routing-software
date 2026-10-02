@@ -133,6 +133,7 @@ export interface Configuration {
   tunnels: Tunnel[];
   sites: CaddySite[];
   ddns: DDNSUpdate[];
+  ssh: { interfaces: string[]; wan_confirmed_interfaces: string[] };
   anti_lockout: boolean;
   panel_port: number;
 }

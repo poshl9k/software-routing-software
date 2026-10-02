@@ -1,0 +1,15 @@
+[Unit]
+Description=vs-router first-boot software installation
+After=network-online.target nftables.service
+Requires=nftables.service
+Wants=network-online.target
+ConditionPathExists=!/var/lib/vs-router-bootstrap/attempted
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/vs-router/backend/packaging/firstboot-bootstrap.sh
+TimeoutStartSec=0
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

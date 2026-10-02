@@ -4,7 +4,7 @@ Description=vs-router restore applied configuration on boot
 # anything external talks to this machine.
 Before=systemd-networkd.service caddy.service
 DefaultDependencies=no
-After=systemd-udev-settle.service
+After=systemd-udev-settle.service nftables.service
 Wants=systemd-udev-settle.service
 
 [Service]
@@ -14,7 +14,7 @@ User=root
 ExecStart=/usr/bin/python3 -m vs_router.agent.boot_restore
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/etc/caddy /etc/systemd/system /etc/systemd/network /etc/vs-router /etc/unbound/unbound.conf.d /etc/kea /run
+ReadWritePaths=/etc/caddy /etc/systemd/system /etc/systemd/network /etc/vs-router /etc/vs-router-ssh /etc/unbound/unbound.conf.d /etc/kea /run
 
 [Install]
 WantedBy=multi-user.target
