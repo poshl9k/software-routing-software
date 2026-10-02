@@ -83,6 +83,8 @@ def test_firstboot_explicit_retry_and_trace(tmp_path):
     assert (state / 'succeeded').exists()
     assert calls.read_text().strip() == 'disabled'
     assert 'bash -x' not in script
+    assert 'export HOME=/root' in script
+    assert 'export GOCACHE=/root/.cache/go-build' in script
     assert log.stat().st_mode & 0o777 == 0o600
 
 

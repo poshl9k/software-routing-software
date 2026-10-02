@@ -3,8 +3,10 @@ set +x
 set -euo pipefail
 umask 077
 export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
 export GOPATH=/root/go
 export GOMODCACHE=/root/go/pkg/mod
+export GOCACHE=/root/.cache/go-build
 export PATH="$PATH:$GOPATH/bin"
 state=/var/lib/vs-router-bootstrap
 install -d -m 0700 "$state"
