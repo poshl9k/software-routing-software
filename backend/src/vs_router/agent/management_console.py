@@ -47,6 +47,26 @@ class Console:
         if gid is not None:
             os.chown(target, -1, gid)
 
+    @staticmethod
+    def server_certificate(state: Management, ca_key: rsa.RSAPrivateKey,
+                          key: rsa.RSAPrivateKey):
+        now = datetime.now(timezone.utc)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, state.ip)])
+        subject_key_id = x509.SubjectKeyIdentifier.from_public_key(key.public_key())
+        authority_key_id = x509.AuthorityKeyIdentifier(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()).digest, None, None)
+        return (x509.CertificateBuilder().subject_name(name).issuer_name(
+                    x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,
+                                                  'vs-router local management CA')]))
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(minutes=5)).not_valid_after(now + timedelta(days=397))
+                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                .add_extension(x509.SubjectAlternativeName([x509.IPAddress(IPv4Address(state.ip))]), critical=False)
+                .add_extension(subject_key_id, critical=False)
+                .add_extension(authority_key_id, critical=False)
+                .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+                .sign(ca_key, hashes.SHA256()))
+
     def certificates(self, state):
         target = self.path(TLS_DIR)
         ca_dir = self.path(STATE_DIR / 'ca')
@@ -56,16 +76,27 @@ class Console:
             ca = x509.load_pem_x509_certificate((ca_dir / 'ca.crt').read_bytes())
             key = serialization.load_pem_private_key((target / 'server.key').read_bytes(), None)
             ca_key = serialization.load_pem_private_key((ca_dir / 'ca.key').read_bytes(), None)
+            if not isinstance(ca_key, rsa.RSAPrivateKey) or not isinstance(key, rsa.RSAPrivateKey):
+                raise ValueError('management.certificate_invalid')
             try:
                 cert.verify_directly_issued_by(ca)
             except InvalidSignature as exc:
                 raise ValueError('management.certificate_invalid') from exc
+            expected_aki = x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()).digest
+            try:
+                actual_aki = cert.extensions.get_extension_for_class(
+                    x509.AuthorityKeyIdentifier).value.key_identifier
+            except x509.ExtensionNotFound:
+                actual_aki = None
+            expired = cert.not_valid_after_utc <= datetime.now(timezone.utc)
             if (cert.public_key().public_numbers() != key.public_key().public_numbers()
                     or ca.public_key().public_numbers() != ca_key.public_key().public_numbers()
                     or cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
                     .get_values_for_type(x509.IPAddress) != [IPv4Address(state.ip)]
-                    or cert.not_valid_after_utc <= datetime.now(timezone.utc)):
-                raise ValueError('management.certificate_invalid')
+                    or expired or actual_aki != expected_aki):
+                cert = self.server_certificate(state, ca_key, key)
+                self.write(TLS_DIR / 'server.crt', cert.public_bytes(serialization.Encoding.PEM).decode(),
+                           0o640, self.caddy_gid)
             os.chmod(ca_dir, 0o700)
             os.chmod(ca_dir / 'ca.key', 0o600)
             os.chmod(target, 0o750)
@@ -84,15 +115,9 @@ class Console:
               .not_valid_before(now - timedelta(minutes=5)).not_valid_after(now + timedelta(days=3650))
               .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
               .add_extension(x509.KeyUsage(False, False, False, False, False, True, True, False, False), critical=True)
+              .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
               .sign(ca_key, hashes.SHA256()))
-        cert = (x509.CertificateBuilder()
-                .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, state.ip)]))
-                .issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number())
-                .not_valid_before(now - timedelta(minutes=5)).not_valid_after(now + timedelta(days=397))
-                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-                .add_extension(x509.SubjectAlternativeName([x509.IPAddress(IPv4Address(state.ip))]), critical=False)
-                .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
-                .sign(ca_key, hashes.SHA256()))
+        cert = self.server_certificate(state, ca_key, key)
         pem = serialization.Encoding.PEM
         private = lambda k: k.private_bytes(pem, serialization.PrivateFormat.PKCS8,
                                              serialization.NoEncryption()).decode()

@@ -1,11 +1,15 @@
 """All host effects use temporary trees or injected executors; no live services."""
 import json
 import os
+from datetime import datetime, timedelta, timezone
+from ipaddress import IPv4Address
 from types import SimpleNamespace
 
 import pytest
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from vs_router.management import Management, verify_identity, validate_management
 from vs_router.schema import Configuration, ConfigurationVersion
 from vs_router.generators.caddy import generate_caddy_json
@@ -59,6 +63,9 @@ def test_provision_and_retry_preserve_keys_and_ownership(tmp_path):
     cert = x509.load_pem_x509_certificate((tmp_path / 'etc/caddy/management/server.crt').read_bytes())
     ca = x509.load_pem_x509_certificate((ca_key.parent / 'ca.crt').read_bytes())
     cert.verify_directly_issued_by(ca)
+    assert ca.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest
+    aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
+    assert aki.key_identifier == ca.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest
     assert fingerprint == ca.fingerprint(hashes.SHA256()).hex(':')
     console.provision(STATE.mac, STATE.address)
     assert ca_key.read_bytes() == original
@@ -70,6 +77,34 @@ def test_provision_and_retry_preserve_keys_and_ownership(tmp_path):
     assert rules.index('tcp dport 443 drop') < rules.index('ct state established')
     with pytest.raises(ValueError, match='migration_not_supported'):
         console.provision(STATE.mac, '192.168.20.1/24')
+
+
+def test_legacy_leaf_is_reissued_without_rotating_ca(tmp_path):
+    host(tmp_path)
+    console = Console(tmp_path, recording_runner([]), os.getgid())
+    console.provision(STATE.mac, STATE.address)
+    ca_path = tmp_path / 'etc/caddy/management/ca.crt'
+    ca_before = ca_path.read_bytes()
+    ca = x509.load_pem_x509_certificate(ca_before)
+    ca_key = serialization.load_pem_private_key(
+        (tmp_path / 'var/lib/vs-router-bootstrap/ca/ca.key').read_bytes(), None)
+    key_path = tmp_path / 'etc/caddy/management/server.key'
+    key = serialization.load_pem_private_key(key_path.read_bytes(), None)
+    legacy = (x509.CertificateBuilder()
+              .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, STATE.ip)]))
+              .issuer_name(ca.subject).public_key(key.public_key())
+              .serial_number(x509.random_serial_number())
+              .not_valid_before(datetime.now(timezone.utc) - timedelta(minutes=1))
+              .not_valid_after(datetime.now(timezone.utc) + timedelta(days=30))
+              .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+              .add_extension(x509.SubjectAlternativeName([x509.IPAddress(IPv4Address(STATE.ip))]), False)
+              .sign(ca_key, hashes.SHA256()))
+    cert_path = tmp_path / 'etc/caddy/management/server.crt'
+    cert_path.write_bytes(legacy.public_bytes(serialization.Encoding.PEM))
+    console.provision(STATE.mac, STATE.address)
+    assert ca_path.read_bytes() == ca_before
+    renewed = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    assert renewed.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier
 
 
 @pytest.mark.parametrize('problem', ['one_port', 'mac', 'name', 'wireless', 'uplink'])
