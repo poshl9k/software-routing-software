@@ -64,14 +64,14 @@ if (( ! SKIP_BUILD )); then
     log 'Building frontend bundle'
     ( cd "$REPO_ROOT/frontend" && npm ci && npm run build )
     log 'Building backend wheel'
-    ( cd "$REPO_ROOT/backend" && rm -rf dist && python3 -m pip wheel --no-deps -w dist . )
+    ( cd "$REPO_ROOT/backend" && rm -rf dist && python3 -m pip wheel --no-build-isolation --no-deps -w dist . )
 fi
 
 log 'Installing backend package'
 wheel_dir="$REPO_ROOT/backend/dist"
 compgen -G "$wheel_dir"/*.whl >/dev/null || fail "no backend wheel found in ${wheel_dir} (run without --skip-build)"
 python3 -m pip install --break-system-packages --force-reinstall --no-deps "$wheel_dir"/*.whl
-python3 -m pip install --break-system-packages "$wheel_dir"/*.whl
+bash "$SCRIPT_DIR/install-runtime-deps.sh" "$REPO_ROOT/backend/requirements-runtime.txt"
 
 log 'Applying database migrations'
 if [ -f "$DB" ]; then

@@ -5,6 +5,7 @@ These tests never invoke host service/network/package managers.
 import os
 from pathlib import Path
 import subprocess
+import tomllib
 
 import pytest
 
@@ -88,6 +89,25 @@ def test_firstboot_explicit_retry_and_trace(tmp_path):
     assert log.stat().st_mode & 0o777 == 0o600
 
 
+def test_debian_installer_sources_are_snapshot_pinned():
+    expected = (
+        'd-i mirror/protocol string https',
+        'd-i mirror/https/hostname string snapshot.debian.org',
+        'd-i mirror/https/directory string /archive/debian/20261002T000000Z',
+        'd-i mirror/suite string trixie',
+        'd-i mirror/udeb/suite string trixie',
+        'd-i apt-setup/services-select multiselect',
+        'd-i apt-setup/local0/repository string https://snapshot.debian.org/archive/debian/20261002T000000Z trixie-updates',
+        'd-i apt-setup/local1/repository string https://snapshot.debian.org/archive/debian-security/20261002T000000Z trixie-security',
+        'check-valid-until=no',
+    )
+    for path in (ROOT / 'installer/preseed.cfg', ROOT / 'installer/preseed-semiauto.cfg'):
+        preseed = path.read_text()
+        assert all(setting in preseed for setting in expected)
+        assert 'apt-setup/security_host string security.debian.org' not in preseed
+        assert 'deb.debian.org' not in preseed
+
+
 def test_no_production_credentials_or_open_ssh():
     production = (ROOT / 'installer/preseed-semiauto.cfg').read_text()
     assert 'vsr-install' not in production
@@ -104,6 +124,95 @@ def test_no_production_credentials_or_open_ssh():
     assert '/tmp/vs-router-bootstrap' not in bootstrap
 
 
+def test_release_build_inputs_are_pinned():
+    bootstrap = (PACKAGING / 'bootstrap.sh').read_text()
+    assert '@latest' not in bootstrap
+    assert 'go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"' in bootstrap
+    assert 'github.com/caddy-dns/cloudflare@${CLOUDFLARE_MODULE_VERSION}' in bootstrap
+    assert 'git clone https://github.com/WireGuard/wireguard-go' not in bootstrap
+    assert "GO_TOOLCHAIN_VERSION='go1.25.1'" in bootstrap
+    assert "NODE_VERSION='v20.19.2'" in bootstrap
+    assert "NPM_VERSION='9.2.0'" in bootstrap
+    for revision in (
+            '1f50ad736ecca22a9bfc7b4606805ec9ca49fe48',
+            'ee0f0a9aa34ff0a0da4b3433b9512781cfe02843',
+            'ecfc5a8d54462e18e13c72173e2623d16d8e25a0'):
+        assert revision in bootstrap
+
+
+def test_bootstrap_apt_uses_signed_fixed_snapshot():
+    bootstrap = (PACKAGING / 'bootstrap.sh').read_text()
+    sources = (PACKAGING / 'apt-snapshot.sources').read_text()
+    assert 'readonly APT_RELEASE_SOURCES="$SCRIPT_DIR/apt-snapshot.sources"' in bootstrap
+    assert '@APT_SNAPSHOT_TIMESTAMP@' not in sources
+    assert 'https://snapshot.debian.org/archive/debian/20261002T000000Z/' in sources
+    assert 'https://snapshot.debian.org/archive/debian-security/20261002T000000Z/' in sources
+    assert sources.count('Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg') == 2
+    assert sources.count('Check-Valid-Until: no') == 2
+    apt_stage = bootstrap[bootstrap.index('stage_apt_deps() {'):bootstrap.index('\nstage_caddy() {')]
+    assert 'apt_with_release update' in apt_stage
+    assert 'apt_with_release install -y' in apt_stage
+    assert 'apt_with_release install -y dbus ' in apt_stage
+    assert 'Dir::Etc::sourceparts=-' in bootstrap
+
+
+def test_backend_wheels_use_snapshot_build_backend():
+    bootstrap = (PACKAGING / 'bootstrap.sh').read_text()
+    updater = (PACKAGING / 'update.sh').read_text()
+    apt_stage = bootstrap[bootstrap.index('stage_apt_deps() {'):bootstrap.index('\nstage_caddy() {')]
+    assert 'python3-setuptools python3-wheel' in apt_stage
+    assert '--no-build-isolation --no-deps' in bootstrap
+    assert '--no-build-isolation --no-deps' in updater
+
+
+def test_runtime_dependency_lock_matches_uv_lock():
+    uv_lock = tomllib.loads((ROOT / 'backend/uv.lock').read_text())
+    locked = {package['name']: package for package in uv_lock['package']}
+    requirements = (ROOT / 'backend/requirements-runtime.txt').read_text().splitlines()
+    package = None
+    version = None
+    hashes = []
+    seen = set()
+
+    def verify_current():
+        if package is None:
+            return
+        assert package['version'] == version
+        artifacts = {item['hash'] for item in package.get('wheels', [])}
+        if package.get('sdist'):
+            artifacts.add(package['sdist']['hash'])
+        assert hashes and set(hashes) <= artifacts
+        seen.add(package['name'])
+
+    for line in requirements:
+        if line.startswith('#') or not line.strip():
+            continue
+        if not line[0].isspace():
+            verify_current()
+            name, version = line.split('==', 1)
+            version = version.split()[0]
+            package = locked[name]
+            hashes = []
+        else:
+            assert line.strip().startswith('--hash=sha256:')
+            hashes.append(line.strip().removeprefix('--hash='))
+    verify_current()
+    assert len(seen) == len([line for line in requirements if line and not line[0].isspace() and not line.startswith('#')])
+
+
+def test_runtime_installer_cleans_pip_copies_and_uses_hash_lock():
+    bootstrap = (PACKAGING / 'bootstrap.sh').read_text()
+    updater = (PACKAGING / 'update.sh').read_text()
+    helper = (PACKAGING / 'install-runtime-deps.sh').read_text()
+    lock = ROOT / 'backend/requirements-runtime.txt'
+    assert 'install-runtime-deps.sh' in bootstrap
+    assert 'install-runtime-deps.sh' in updater
+    assert str(lock.name) in bootstrap and str(lock.name) in updater
+    assert "installer.strip().lower() == 'pip'" in helper
+    assert "'pip', 'uninstall', '--break-system-packages', '--yes'" in helper
+    assert '--require-hashes' in helper
+
+
 def test_iso_requires_verified_inputs(tmp_path):
     env = dict(os.environ)
     env.pop('VS_ROUTER_REVISION', None)
@@ -118,7 +227,7 @@ def test_shell_syntax():
         subprocess.run(['bash', '-n', str(script)], check=True)
 
 
-@pytest.mark.parametrize('failure', ['systemctl', 'networkctl', 'wait_online', 'lease', 'dns', None])
+@pytest.mark.parametrize('failure', ['bus', 'systemctl', 'networkctl', 'wait_online', 'lease', 'dns', None])
 def test_network_migration_requires_working_networkd(tmp_path, failure):
     from vs_router.generators.networkd import deserialize_networkd
     script = (PACKAGING / 'bootstrap.sh').read_text()
@@ -143,7 +252,7 @@ def test_network_migration_requires_working_networkd(tmp_path, failure):
         (tmp_path / 'run/systemd/netif/leases/2').write_text('ADDRESS=192.0.2.2\n')
     code = f'''source "{source}"
 logger() {{ :; }}
-systemctl() {{ echo "systemctl $*"; [[ "{failure}" != systemctl ]]; }}
+systemctl() {{ echo "systemctl $*"; if [[ $* == 'start dbus.socket' ]]; then [[ "{failure}" != bus ]]; else [[ "{failure}" != systemctl ]]; fi; }}
 networkctl() {{ [[ "{failure}" != networkctl ]]; }}
 wait_online() {{ [[ "{failure}" != wait_online ]]; }}
 ip() {{ echo 'default via 192.0.2.1 dev eth0'; }}
@@ -152,6 +261,9 @@ run_stage networkd stage_networkd
 '''
     result = bash(code)
     assert (result.returncode == 0) == (failure is None), result.stdout + result.stderr
+    assert 'systemctl start dbus.socket' in result.stdout
+    if failure != 'bus':
+        assert result.stdout.index('systemctl start dbus.socket') < result.stdout.index('systemctl enable --now systemd-networkd.service')
     assert ('systemctl disable networking.service' in result.stdout) == (failure is None)
     files = list((tmp_path / 'etc/systemd/network').glob('*'))
     assert [p.name for p in files] == ['10-vs-router-eth0.network']
@@ -222,7 +334,8 @@ if '-extract' in args:
     files={'.disk/info':'Debian GNU/Linux 13.1.0 amd64',
            'boot/grub/grub.cfg':"menuentry 'Install' {\\n linux /install.amd/vmlinuz --- quiet\\n initrd /install.amd/initrd.gz\\n}\\n",
            'boot/grub/efi.img':'',
-           'isolinux/txt.cfg':'label install\\n menu label Install\\n kernel /install.amd/vmlinuz\\n append initrd=/install.amd/initrd.gz --- quiet\\n'}
+           'isolinux/txt.cfg':'label install\\n menu label Install\\n kernel /install.amd/vmlinuz\\n append initrd=/install.amd/initrd.gz --- quiet\\n',
+           'isolinux/spkgtk.cfg':'label installspk\\n ontimeout /install.amd/vmlinuz vga=788 initrd=/install.amd/gtk/initrd.gz speakup.synth=soft --- quiet\\n'}
     for name,content in files.items():
         p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content)
 else:
@@ -233,21 +346,33 @@ else:
     iso = tmp_path / 'input.iso'
     iso.write_bytes(b'isolated ISO fixture')
     capture = tmp_path / 'capture.json'
+    test_git_url = 'git://127.0.0.1:9418/vs-router.git'
     env = dict(os.environ, PATH=f'{fakebin}:{os.environ["PATH"]}',
                CAPTURE=str(capture), OUT=str(tmp_path / 'output.iso'),
                VS_ROUTER_ISO_SHA256=hashlib.sha256(iso.read_bytes()).hexdigest(),
                VS_ROUTER_REVISION='a' * 40, VS_ROUTER_UNATTENDED_LAB='1' if lab else '0')
+    env.pop('VS_ROUTER_TEST_GIT_URL', None)
+    env.pop('VS_ROUTER_TEST_POWER_OFF', None)
+    if lab:
+        env['VS_ROUTER_TEST_GIT_URL'] = test_git_url
+        env['VS_ROUTER_TEST_POWER_OFF'] = '1'
     result = subprocess.run(['bash', str(ROOT / 'installer/make-iso.sh'), str(iso)],
                             env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     staged = json.loads(capture.read_text())
     assert ('vsr-install' in staged['preseed.cfg']) == lab
+    assert ('debian-installer/exit/poweroff boolean true' in staged['preseed.cfg']) == lab
+    assert ('git://127.0.0.1:9418/vs-router.git' in staged['preseed.cfg']) == lab
     assert 'vsr-install' not in staged['preseed-semiauto.cfg']
+    assert ('auto=true' in staged['isolinux/spkgtk.cfg']) == lab
+    assert ('locale=en_US.UTF-8' in staged['isolinux/spkgtk.cfg']) == lab
+    assert 'preseed/file=/cdrom/preseed.cfg' in staged['isolinux/spkgtk.cfg']
     assert 'NOPASSWD' not in ''.join(staged.values())
     assert '@VS_ROUTER_REVISION@' not in ''.join(staged.values())
     for menu in ('boot/grub/grub.cfg', 'isolinux/txt.cfg'):
         assert 'priority=high' in staged[menu]
         assert ('auto=true' in staged[menu]) == lab
+        assert ('locale=en_US.UTF-8' in staged[menu]) == lab
 
 
 def test_installed_db_migrates_on_rerun(tmp_path):

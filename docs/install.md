@@ -19,9 +19,11 @@ cd software-routing-software/backend/packaging
 sudo ./bootstrap.sh
 ```
 
-Bootstrap поддерживает только Debian 13. Для ручного запуска сначала нужны nftables и явно записанный с консоли DHCP uplink (имя и MAC в `/var/lib/vs-router-bootstrap/installer-uplink`, каталог root:root 0700); ISO делает это автоматически. Запускайте с локальной консоли: начальная политика запрещает входящие подключения. Повторный запуск мигрирует БД и перезапускает сервисы. Секрет Kea не печатается. Готовность ПО не означает готовность HTTPS-панели. Полный проверенный набор зависимостей пока не зафиксирован; примеры ручной сборки ниже также не являются проверенным выпуском.
+Bootstrap поддерживает только Debian 13. Python runtime-зависимости закреплены версиями и SHA-256 wheel-хешами для проверенной цели amd64 / CPython 3.13. Версии Node.js 20.19.2, npm 9.2.0 и Go toolchain 1.25.1 проверяются перед сборкой. Пакеты Debian, включая базовый набор Debian Installer, берутся из подписанного snapshot `20261002T000000Z`: production и lab preseeds закрепляют зеркало, updates и security. Проверка срока действия отключается только для неизменяемых snapshot-записей. Исходные APT-источники установленной системы bootstrap не меняет. Официальный netinst ISO проверен по detached-подписи Debian CD и SHA-256; полный ISO-install ещё нужно подтвердить на чистой VM.
 
 ## 1. Системные пакеты
+
+Команды ниже — ручной путь для разработки и диагностики; они используют текущие APT-репозитории и не воспроизводят зафиксированный выпуск. Для установки по выпуску используйте `bootstrap.sh` выше.
 
 ```sh
 sudo apt update
@@ -38,16 +40,18 @@ WireGuard: пакетный `wireguard-tools` + демон `wg-go` (userspace) �
 
 ```sh
 sudo apt install -y golang-go build-essential
-git clone https://git.zx2c4.com/wireguard-go && cd wireguard-go
+git init wireguard-go && cd wireguard-go
+git fetch --depth 1 https://github.com/WireGuard/wireguard-go ecfc5a8d54462e18e13c72173e2623d16d8e25a0
+git checkout --detach FETCH_HEAD
 make && sudo cp wireguard-go /usr/local/bin/wg-go
 ```
 
 AmneziaWG — **версия 3.1+** (параметры обфускации и профили валидированы на 3.1):
 
 ```sh
-git clone https://github.com/amnezia-vpn/amneziawg-go && cd amneziawg-go
+git clone --branch v3.1.20260812 https://github.com/amnezia-vpn/amneziawg-go && cd amneziawg-go
 make && sudo cp amneziawg-go /usr/local/bin/
-git clone https://github.com/amnezia-vpn/amneziawg-tools && cd ../amneziawg-tools
+git clone --branch v3.1.20260812 https://github.com/amnezia-vpn/amneziawg-tools && cd ../amneziawg-tools
 cd src && make && sudo cp awg awg-quick /usr/local/bin/
 ```
 
@@ -59,8 +63,10 @@ cd src && make && sudo cp awg awg-quick /usr/local/bin/
 
 ```sh
 export PATH="$PATH:$(go env GOPATH)/bin"
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-xcaddy build --with github.com/mholt/caddy-l4 --with github.com/caddy-dns/cloudflare \
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7
+xcaddy build v2.11.4 \
+  --with github.com/mholt/caddy-l4@v0.1.2 \
+  --with github.com/caddy-dns/cloudflare@v0.2.4 \
   --output /usr/local/bin/caddy
 ```
 
@@ -71,7 +77,7 @@ xcaddy build --with github.com/mholt/caddy-l4 --with github.com/caddy-dns/cloudf
 Node.js (для сборки UI) и uv (для backend):
 
 ```sh
-sudo apt install -y nodejs npm   # Для frontend нужен Node 22.12+; проверьте версию
+sudo apt install -y nodejs npm   # Проверено на Debian 13: Node 20.19.2, достаточно для Vite 7
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 

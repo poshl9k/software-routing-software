@@ -10,8 +10,8 @@ mapfile -t uplinks < <(awk '$1 == "iface" && $3 == "inet" && $4 == "dhcp" {print
 iface=${uplinks[0]}
 [[ $iface =~ ^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$ && -e /sys/class/net/$iface/device && ! -e /sys/class/net/$iface/wireless ]]
 printf '%s %s\n' "$iface" "$(< "/sys/class/net/$iface/address")" > /var/lib/vs-router-bootstrap/installer-uplink
-# SSH is not installed by the production preseed; also close socket activation
-# if another installer task selected it. Later interface-scoped SSH is pending.
+# SSH is not selected in the initial package set. Mask socket activation now;
+# bootstrap installs SSH but only an applied interface-scoped policy may open it.
 systemctl mask ssh.service ssh.socket
 install -m 0644 "$packaging_dir/bootstrap.nft" /etc/nftables.conf
 systemctl enable nftables.service

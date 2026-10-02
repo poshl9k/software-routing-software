@@ -51,6 +51,24 @@ install -m 0644 "$SCRIPT_DIR/preseed-semiauto.cfg" "$workdir/iso/preseed-semiaut
 
 grep -Eq 'Debian GNU/Linux 13[. /]' "$workdir/iso/.disk/info" || { echo 'Debian 13 ISO required' >&2; exit 1; }
 sed -i "s/@VS_ROUTER_REVISION@/$VS_ROUTER_REVISION/g" "$workdir/iso/"preseed*.cfg
+if [[ -n ${VS_ROUTER_TEST_GIT_URL:-} ]]; then
+    [[ ${VS_ROUTER_UNATTENDED_LAB:-0} == 1 ]] || { echo 'VS_ROUTER_TEST_GIT_URL requires VS_ROUTER_UNATTENDED_LAB=1' >&2; exit 1; }
+    [[ $VS_ROUTER_TEST_GIT_URL =~ ^git://[[:alnum:].:-]+/[[:alnum:]_.-]+(/[[:alnum:]_.-]+)*\.git$|^http://[[:alnum:].:-]+/[[:alnum:]_.-]+(/[[:alnum:]_.-]+)*\.git$ ]] || {
+        echo 'VS_ROUTER_TEST_GIT_URL must be a git:// or http:// test repository URL' >&2
+        exit 1
+    }
+    sed -i "s|https://github.com/poshl9k/software-routing-software.git|$VS_ROUTER_TEST_GIT_URL|g" \
+        "$workdir/iso/preseed.cfg" "$workdir/iso/preseed-semiauto.cfg"
+fi
+if [[ ${VS_ROUTER_TEST_POWER_OFF:-0} == 1 ]]; then
+    [[ ${VS_ROUTER_UNATTENDED_LAB:-0} == 1 ]] || { echo 'VS_ROUTER_TEST_POWER_OFF requires VS_ROUTER_UNATTENDED_LAB=1' >&2; exit 1; }
+    grep -Fq 'd-i debian-installer/exit/poweroff boolean false' "$workdir/iso/preseed.cfg" || {
+        echo 'lab preseed poweroff default changed; update test override' >&2
+        exit 1
+    }
+    sed -i 's|d-i debian-installer/exit/poweroff boolean false|d-i debian-installer/exit/poweroff boolean true|' \
+        "$workdir/iso/preseed.cfg"
+fi
 
 # Production selects the interactive entry. Unattended boot is lab-only.
 grub_default=0
@@ -64,7 +82,7 @@ done < <(find "$workdir/iso/boot/grub" "$workdir/iso/EFI" -name grub.cfg -type f
 
 preseed_args='priority=high preseed/file=/cdrom/preseed.cfg file=/cdrom/preseed.cfg'
 if [[ ${VS_ROUTER_UNATTENDED_LAB:-0} == 1 ]]; then
-    preseed_args="auto=true ${preseed_args/priority=high/priority=critical}"
+    preseed_args="auto=true ${preseed_args/priority=high/priority=critical} locale=en_US.UTF-8"
 fi
 # Test-only static network: qemu user-net with the passt backend does not
 # always answer d-i's DHCP in time; passt passes traffic through with the
@@ -178,7 +196,7 @@ append_to_isolinux_append() {
     local cfg=$1 tmp
     tmp=$(mktemp "$workdir/edit.XXXXXX")
     awk -v extra="$preseed_args${wifi_block_args:+ $wifi_block_args}" '
-        /^[[:space:]]*append([[:space:]]|$)/ {
+        /^[[:space:]]*(append|ontimeout)([[:space:]]|$)/ {
             if (index($0, "preseed/file=/cdrom/preseed.cfg") == 0) {
                 sub(/---/, extra " ---")
             }

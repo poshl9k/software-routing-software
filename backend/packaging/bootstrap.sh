@@ -10,12 +10,44 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 CURRENT_STAGE=initialization
 SKIP_BUILD=0
 BUILD_DIR=''
+readonly XCADDY_VERSION='v0.4.7'
+readonly CLOUDFLARE_MODULE_VERSION='v0.2.4'
+readonly CADDY_VERSION='v2.11.4'
+readonly CADDY_L4_VERSION='v0.1.2'
+readonly AMNEZIAWG_VERSION='v3.1.20260812'
+readonly AMNEZIAWG_GO_REVISION='1f50ad736ecca22a9bfc7b4606805ec9ca49fe48'
+readonly AMNEZIAWG_TOOLS_REVISION='ee0f0a9aa34ff0a0da4b3433b9512781cfe02843'
+readonly WIREGUARD_GO_REVISION='ecfc5a8d54462e18e13c72173e2623d16d8e25a0'
+readonly GO_TOOLCHAIN_VERSION='go1.25.1'
+readonly NODE_VERSION='v20.19.2'
+readonly NPM_VERSION='9.2.0'
+readonly APT_RELEASE_SOURCES="$SCRIPT_DIR/apt-snapshot.sources"
 trap 'status=$?; log "ERROR: stage ${CURRENT_STAGE} failed (status ${status})"; exit "$status"' ERR
 trap '[[ -z $BUILD_DIR ]] || rm -rf -- "$BUILD_DIR"' EXIT
 
 log() {
     logger -t vs-router-bootstrap -- "$*" 2>/dev/null || true
     printf '[vs-router-bootstrap] %s\n' "$*"
+}
+
+binary_revision() {
+    go version -m "$1" 2>/dev/null | awk '$1 == "build" && $2 ~ /^vcs\.revision=/ { sub(/^vcs\.revision=/, "", $2); print $2; exit }'
+}
+
+binary_toolchain() {
+    go version -m "$1" 2>/dev/null | awk 'NR == 1 { sub(/^.*: /, ""); print $1 }'
+}
+
+module_version() {
+    go version -m "$1" 2>/dev/null | awk -v module="$2" '$1 == "dep" && $2 == module { print $3; exit }'
+}
+
+apt_with_release() {
+    apt-get \
+        -o "Dir::Etc::sourcelist=${APT_RELEASE_SOURCES}" \
+        -o 'Dir::Etc::sourceparts=-' \
+        -o 'Acquire::Check-Valid-Until=false' \
+        "$@"
 }
 
 fail() {
@@ -96,6 +128,9 @@ stage_networkd() {
     chmod 0644 "$file"
     # Record temporary ownership using the agent's bundle format before activation.
     { printf '### FILE: %s\n' "${file##*/}"; cat "$file"; } > /etc/vs-router/networkd-manifest.conf
+    # A minimal Debian Installer system may have an installed but inactive
+    # dbus.socket. networkctl uses the system bus even if networkd itself starts.
+    systemctl start dbus.socket
     systemctl enable --now systemd-networkd.service
     networkctl reload
     /usr/lib/systemd/systemd-networkd-wait-online --interface="$iface":routable --ipv4 --timeout=60
@@ -132,58 +167,102 @@ stage_apt_deps() {
     # Mask before installing OpenSSH: package postinst must not open a listener.
     systemctl mask ssh.service ssh.socket
     systemctl stop ssh.service ssh.socket || true
-    apt-get update
-    apt-get install -y python3 python3-pip python3-venv git build-essential golang-go \
+    [[ -s "$APT_RELEASE_SOURCES" ]] || fail "release APT source list missing: $APT_RELEASE_SOURCES"
+    [[ -s /usr/share/keyrings/debian-archive-keyring.gpg ]] || fail 'Debian archive signing keyring missing'
+    # Use one signed, date-pinned Debian snapshot for this release. Ignore
+    # ambient APT sources only for these operations; preserve host sources for
+    # future operator-managed security updates after bootstrap completes.
+    apt_with_release update
+    apt_with_release install -y dbus python3 python3-pip python3-venv python3-setuptools python3-wheel git build-essential golang-go \
         kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor wireguard-tools \
         socat curl nodejs npm debian-keyring debian-archive-keyring \
         openssh-server fail2ban python3-systemd
+    local node_version npm_version go_version
+    node_version=$(node --version)
+    npm_version=$(npm --version)
+    [[ $node_version == "$NODE_VERSION" ]] || fail "Node.js ${NODE_VERSION} required (found ${node_version})"
+    [[ $npm_version == "$NPM_VERSION" ]] || fail "npm ${NPM_VERSION} required (found ${npm_version})"
+    python3 -c 'import platform, sys; assert sys.version_info[:2] == (3, 13) and platform.machine() == "x86_64"' \
+        || fail 'Python 3.13 on amd64 is required by the hashed runtime wheels'
+    export GOTOOLCHAIN="${GO_TOOLCHAIN_VERSION}+auto"
+    go_version=$(go version)
+    [[ $go_version == "go version ${GO_TOOLCHAIN_VERSION} linux/amd64" ]] || fail "Go ${GO_TOOLCHAIN_VERSION} required (found ${go_version})"
 }
 
 stage_caddy() {
-    if [[ -x /usr/local/bin/caddy ]] && /usr/local/bin/caddy list-modules 2>/dev/null | grep -q layer4; then
-        log 'Caddy with layer4 already exists; skipping build'
+    if [[ -x /usr/local/bin/caddy ]] \
+            && [[ $(/usr/local/bin/caddy version 2>/dev/null | awk '{print $1}') == "$CADDY_VERSION" ]] \
+            && [[ $(module_version /usr/local/bin/caddy github.com/mholt/caddy-l4) == "$CADDY_L4_VERSION" ]] \
+            && [[ $(module_version /usr/local/bin/caddy github.com/caddy-dns/cloudflare) == "$CLOUDFLARE_MODULE_VERSION" ]] \
+            && [[ $(binary_toolchain /usr/local/bin/caddy) == "$GO_TOOLCHAIN_VERSION" ]] \
+            && /usr/local/bin/caddy list-modules 2>/dev/null | grep -q layer4; then
+        log 'Pinned Caddy build already exists; skipping build'
         return
     fi
+    log 'Caddy build missing or unpinned; rebuilding'
     # The Cloudsmith xcaddy apt repo proved unreliable (config.txt may return
     # an empty body); go install is the dependable path since Go is required
     # for AmneziaWG anyway.
     export PATH="${PATH}:$(go env GOPATH 2>/dev/null || echo /root/go)/bin"
-    command -v xcaddy >/dev/null 2>&1 || go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-    xcaddy build v2.11.4 --with github.com/mholt/caddy-l4@v0.1.2 --with github.com/caddy-dns/cloudflare \
+    if ! command -v xcaddy >/dev/null 2>&1 \
+            || [[ $(xcaddy version 2>/dev/null | awk '{print $1}') != "$XCADDY_VERSION" ]]; then
+        go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
+    fi
+    [[ $(xcaddy version | awk '{print $1}') == "$XCADDY_VERSION" ]] || fail "xcaddy ${XCADDY_VERSION} required"
+    xcaddy build "$CADDY_VERSION" \
+        --with "github.com/mholt/caddy-l4@${CADDY_L4_VERSION}" \
+        --with "github.com/caddy-dns/cloudflare@${CLOUDFLARE_MODULE_VERSION}" \
         --output /usr/local/bin/caddy
 }
 
 stage_awg() {
     BUILD_DIR=$(mktemp -d /var/lib/vs-router-build.XXXXXXXX)
     local workdir=$BUILD_DIR
-    if [[ ! -x /usr/local/bin/awg-go ]]; then
-        if [[ ! -d "$workdir/amneziawg-go/.git" ]]; then
-            git clone --branch v3.1.20260812 --depth 1 https://github.com/amnezia-vpn/amneziawg-go "$workdir/amneziawg-go"
+    if [[ -x /usr/local/bin/awg-go ]] \
+            && [[ $(binary_revision /usr/local/bin/awg-go) == "$AMNEZIAWG_GO_REVISION" ]] \
+            && [[ $(binary_toolchain /usr/local/bin/awg-go) == "$GO_TOOLCHAIN_VERSION" ]]; then
+        log 'Pinned AmneziaWG Go binary already exists; skipping build'
+    else
+        if [[ -d "$workdir/amneziawg-go/.git" ]]; then
+            [[ $(git -C "$workdir/amneziawg-go" rev-parse HEAD) == "$AMNEZIAWG_GO_REVISION" ]] || fail 'AmneziaWG Go checkout revision mismatch'
+        else
+            git clone --branch "$AMNEZIAWG_VERSION" --depth 1 https://github.com/amnezia-vpn/amneziawg-go "$workdir/amneziawg-go"
+            [[ $(git -C "$workdir/amneziawg-go" rev-parse HEAD) == "$AMNEZIAWG_GO_REVISION" ]] || fail 'AmneziaWG Go tag revision mismatch'
         fi
         make -C "$workdir/amneziawg-go"
         install -m 0755 "$workdir/amneziawg-go/amneziawg-go" /usr/local/bin/awg-go
-    else
-        log 'awg-go already exists; skipping build'
     fi
-    if [[ ! -x /usr/local/bin/awg || ! -x /usr/local/bin/awg-quick ]]; then
-        if [[ ! -d "$workdir/amneziawg-tools/.git" ]]; then
-            git clone --branch v3.1.20260812 --depth 1 https://github.com/amnezia-vpn/amneziawg-tools "$workdir/amneziawg-tools"
+    if [[ -x /usr/local/bin/awg && -x /usr/local/bin/awg-quick ]] \
+            && [[ $(/usr/local/bin/awg --version 2>/dev/null) == "amneziawg-tools ${AMNEZIAWG_VERSION} - "* ]]; then
+        log 'Pinned AmneziaWG tools already exist; skipping build'
+    else
+        if [[ -d "$workdir/amneziawg-tools/.git" ]]; then
+            [[ $(git -C "$workdir/amneziawg-tools" rev-parse HEAD) == "$AMNEZIAWG_TOOLS_REVISION" ]] || fail 'AmneziaWG tools checkout revision mismatch'
+        else
+            git clone --branch "$AMNEZIAWG_VERSION" --depth 1 https://github.com/amnezia-vpn/amneziawg-tools "$workdir/amneziawg-tools"
+            [[ $(git -C "$workdir/amneziawg-tools" rev-parse HEAD) == "$AMNEZIAWG_TOOLS_REVISION" ]] || fail 'AmneziaWG tools tag revision mismatch'
         fi
         # The binary is built as 'wg' and 'make install' renames it to awg
         # (plus the awg-quick bash script) — no manual file copying.
         make -C "$workdir/amneziawg-tools/src" PREFIX=/usr BINDIR=/usr/local/bin install
-    else
-        log 'awg and awg-quick already exist; skipping build'
     fi
-    if [[ ! -x /usr/local/bin/wg-go ]]; then
-        # git.zx2c4.com is unreachable from some networks; GitHub mirror is the same code.
-        if [[ ! -d "$workdir/wireguard-go/.git" ]]; then
-            git clone https://github.com/WireGuard/wireguard-go "$workdir/wireguard-go"
+    if [[ -x /usr/local/bin/wg-go ]] \
+            && [[ $(binary_revision /usr/local/bin/wg-go) == "$WIREGUARD_GO_REVISION" ]] \
+            && [[ $(binary_toolchain /usr/local/bin/wg-go) == "$GO_TOOLCHAIN_VERSION" ]]; then
+        log 'Pinned WireGuard Go binary already exists; skipping build'
+    else
+        if [[ -d "$workdir/wireguard-go/.git" ]]; then
+            [[ $(git -C "$workdir/wireguard-go" rev-parse HEAD) == "$WIREGUARD_GO_REVISION" ]] || fail 'WireGuard Go checkout revision mismatch'
+        else
+            # Fetch by immutable revision; the upstream Git server is unreliable from some networks.
+            git init "$workdir/wireguard-go"
+            git -C "$workdir/wireguard-go" fetch --depth 1 \
+                https://github.com/WireGuard/wireguard-go "$WIREGUARD_GO_REVISION"
+            git -C "$workdir/wireguard-go" checkout --detach FETCH_HEAD
+            [[ $(git -C "$workdir/wireguard-go" rev-parse HEAD) == "$WIREGUARD_GO_REVISION" ]] || fail 'WireGuard Go revision mismatch'
         fi
         make -C "$workdir/wireguard-go"
         install -m 0755 "$workdir/wireguard-go/wireguard-go" /usr/local/bin/wg-go
-    else
-        log 'wg-go already exists; skipping build'
     fi
 }
 
@@ -194,7 +273,7 @@ stage_build() {
     fi
     (cd "$REPO_ROOT/frontend"; npm ci; npm run build)
     rm -f "$REPO_ROOT/backend/dist/"*.whl
-    (cd "$REPO_ROOT/backend"; python3 -m pip wheel --no-deps -w dist .)
+    (cd "$REPO_ROOT/backend"; python3 -m pip wheel --no-build-isolation --no-deps -w dist .)
     test -s "$REPO_ROOT/frontend/dist/index.html"
 }
 
@@ -202,10 +281,8 @@ stage_install() {
     local wheel_dir="$REPO_ROOT/backend/dist"
     compgen -G "$wheel_dir/*.whl" >/dev/null || fail "no backend wheel found in ${wheel_dir}"
     python3 -m pip install --break-system-packages --force-reinstall --no-deps "$wheel_dir"/*.whl
-    # Debian-owned Python packages (e.g. typing_extensions) lack pip RECORD;
-    # pip cannot uninstall them during dependency resolution. Install newer deps
-    # into /usr/local without attempting to remove files owned by dpkg.
-    python3 -m pip install --break-system-packages --ignore-installed "$wheel_dir"/*.whl
+    # Runtime wheel hashes come from the committed uv.lock export.
+    bash "$SCRIPT_DIR/install-runtime-deps.sh" "$REPO_ROOT/backend/requirements-runtime.txt"
 
     install -d -m 0700 /etc/vs-router
     if [[ ! -s /etc/vs-router/secrets.env ]]; then
