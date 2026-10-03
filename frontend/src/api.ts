@@ -7,6 +7,7 @@ import type {
   Credentials,
   ErrorBody,
   User,
+  TProxyPreview,
   Alias, DHCPLease, ImportPreview, PingResult,
 } from "./types";
 export class ApiError extends Error {
@@ -69,6 +70,7 @@ export const api = {
   keygenPeerKeypair: () => post<{ private_key: string; public_key: string }>("/api/keygen/peer-keypair", {}),
   versions: (signal?: AbortSignal) =>
     request<ConfigurationVersion[]>("/api/versions", { signal }),
+  previewTproxy: () => request<TProxyPreview>("/api/draft/tproxy/preview"),
   setup: (body: Credentials) => post<User>("/api/setup", body),
   login: (body: Credentials) => post<User>("/api/auth/login", body),
   me: () => request<User>("/api/auth/me"),

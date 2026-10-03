@@ -78,6 +78,17 @@ def validate_configuration(c):
     interfaces = {i.name: i for i in c.interfaces}
     if len(interfaces) != len(c.interfaces):
         fail("interface.duplicate")
+    ingress = c.tproxy.ingress_interfaces
+    if len({r.name for r in c.tproxy.rules}) != len(c.tproxy.rules):
+        fail("tproxy.duplicate_rule")
+    if len(set(ingress)) != len(ingress) or any(
+        name not in interfaces or interfaces[name].zone in (None, "wan")
+        for name in ingress
+    ):
+        fail("tproxy.ingress_interface")
+    # No sing-box process, packet interception or crash guard is installed yet.
+    if c.tproxy.enabled:
+        fail("tproxy.not_available")
     zones = {i.zone for i in c.interfaces if i.zone}
     for i in c.interfaces:
         if i.zone == "router":

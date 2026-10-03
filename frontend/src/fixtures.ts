@@ -21,6 +21,13 @@ export const emptyConfiguration: Configuration = {
   sites: [],
   ddns: [],
   ssh: { interfaces: [], wan_confirmed_interfaces: [] },
+  tproxy: {
+    enabled: false,
+    ingress_interfaces: [],
+    rules: [],
+    final: "direct",
+    update_schedule: { mode: "interval", interval_hours: 6, window_start: "00:00", window_end: "05:00" },
+  },
   anti_lockout: true,
   panel_port: 443,
 };

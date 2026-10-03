@@ -198,6 +198,49 @@ class SSH(Model):
     wan_confirmed_interfaces: tuple[InterfaceName, ...] = ()
 
 
+class TProxyUpdateSchedule(Model):
+    mode: Literal["interval", "window"] = "interval"
+    interval_hours: int = Field(default=6, ge=1, le=168)
+    window_start: str = Field(default="00:00", pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+    window_end: str = Field(default="05:00", pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+
+    @model_validator(mode="after")
+    def check_window(self):
+        if self.mode == "window" and self.window_start >= self.window_end:
+            raise ValueError("tproxy.invalid_window")
+        return self
+
+
+class TProxyRule(Model):
+    name: Name
+    domain_suffix: tuple[str, ...] = ()
+    ip_cidr: tuple[str, ...] = ()
+    action: Literal["direct", "block"]
+    order: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def check_matchers(self):
+        from ipaddress import ip_network
+        import re
+        if not self.domain_suffix and not self.ip_cidr:
+            raise ValueError("tproxy.rule_matcher_required")
+        if any(not re.fullmatch(r"(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+", domain)
+               for domain in self.domain_suffix):
+            raise ValueError("tproxy.domain_invalid")
+        for cidr in self.ip_cidr:
+            if ip_network(cidr).version != 4:
+                raise ValueError("tproxy.ipv4_required")
+        return self
+
+
+class TProxy(Model):
+    enabled: bool = False
+    ingress_interfaces: tuple[InterfaceName, ...] = ()
+    rules: tuple[TProxyRule, ...] = ()
+    final: Literal["direct"] = "direct"
+    update_schedule: TProxyUpdateSchedule = Field(default_factory=TProxyUpdateSchedule)
+
+
 class Configuration(Model):
     schema_version: Literal[1] = 1
     interfaces: tuple[Interface, ...] = ()
@@ -212,6 +255,7 @@ class Configuration(Model):
     sites: tuple[CaddySite, ...] = ()
     ddns: tuple[DDNSUpdate, ...] = ()
     ssh: SSH = Field(default_factory=SSH)
+    tproxy: TProxy = Field(default_factory=TProxy)
     anti_lockout: bool = True
     panel_port: Port = 443
 

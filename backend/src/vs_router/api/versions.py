@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ..agent.rpc import ApplyParams, ConfirmParams, EmptyParams, build_request, AgentClient, AgentRPCError
 from ..agent.daemon import UnixSocketTransport
 from ..db import ConfigurationRow
+from ..generators.singbox import generate_singbox
 from ..schema import Configuration
 from .auth import admin, current_user, get_db
 from .configuration import check_roles, parse_configuration, redact, structural_diff, validate
@@ -55,6 +56,14 @@ def versions(db: Session = Depends(get_db)):
 @router.get("/versions/{id}")
 def get_version(id: PositiveID, db: Session = Depends(get_db)):
     return view(version(db, id))
+
+
+@router.get("/draft/tproxy/preview", dependencies=[Depends(admin)])
+def preview_tproxy(response: Response, db: Session = Depends(get_db)):
+    """Inspect the saved draft only; this is not live configuration or readiness."""
+    row = draft(db)
+    response.headers['Cache-Control'] = 'no-store'
+    return {'version_id': row.id, 'singbox': generate_singbox(row.snapshot())}
 
 
 @router.post("/draft", status_code=201, dependencies=[Depends(admin)])

@@ -120,6 +120,30 @@ export interface DDNSUpdate {
   api_token: Secret;
   wan_interface: string;
 }
+export interface TProxyUpdateSchedule {
+  mode: "interval" | "window";
+  interval_hours: number;
+  window_start: string;
+  window_end: string;
+}
+export interface TProxyRule {
+  name: string;
+  domain_suffix: string[];
+  ip_cidr: string[];
+  action: "direct" | "block";
+  order: number;
+}
+export interface TProxy {
+  enabled: boolean;
+  ingress_interfaces: string[];
+  rules: TProxyRule[];
+  final: "direct";
+  update_schedule: TProxyUpdateSchedule;
+}
+export interface TProxyPreview {
+  version_id: number;
+  singbox: Record<string, unknown>;
+}
 export interface Configuration {
   schema_version: 1;
   interfaces: Interface[];
@@ -134,6 +158,7 @@ export interface Configuration {
   sites: CaddySite[];
   ddns: DDNSUpdate[];
   ssh: { interfaces: string[]; wan_confirmed_interfaces: string[] };
+  tproxy: TProxy;
   anti_lockout: boolean;
   panel_port: number;
 }

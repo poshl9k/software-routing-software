@@ -99,7 +99,7 @@ async def test_keygen_endpoints(api):
     assert all(5 <= obf[f'H{i}'] <= 2_147_483_647 for i in range(1, 5))
     psk = (await client.post('/api/keygen/peer', json={})).json()['preshared_key']
     assert len(psk) == 44 and len(base64.b64decode(psk, validate=True)) == 32
-ROUTES = [('get', '/api/versions', None), ('get', '/api/versions/1', None), ('get', '/api/diff/1/2', None), ('post', '/api/draft', {}), ('put', '/api/draft', {}), ('delete', '/api/draft', None), ('post', '/api/draft/validate', None), ('post', '/api/apply', {'version_id': 1}), ('post', '/api/confirm', {'version_id': 1}), ('post', '/api/rollback', {})]
+ROUTES = [('get', '/api/versions', None), ('get', '/api/versions/1', None), ('get', '/api/draft/tproxy/preview', None), ('get', '/api/diff/1/2', None), ('post', '/api/draft', {}), ('put', '/api/draft', {}), ('delete', '/api/draft', None), ('post', '/api/draft/validate', None), ('post', '/api/apply', {'version_id': 1}), ('post', '/api/confirm', {'version_id': 1}), ('post', '/api/rollback', {})]
 
 @pytest.mark.parametrize('method,path,body', ROUTES)
 async def test_auth_required(api, method, path, body):
@@ -115,9 +115,56 @@ async def test_operator_read_only(api):
         db.scalar(select(UserRow)).role = 'operator'
         db.commit()
     assert (await client.get('/api/versions')).status_code == 200
+    assert (await client.get('/api/draft/tproxy/preview')).status_code == 403
     for method, path, data in ROUTES:
         if method != 'get':
             assert (await client.request(method, path, json=data)).status_code == 403
+
+async def test_tproxy_draft_roundtrip_and_enable_rejected(api):
+    client, _, _ = api
+    await sign_in(client)
+    response = await client.post('/api/draft', json={})
+    assert response.status_code == 201
+    config = response.json()['configuration']
+    assert config['tproxy']['enabled'] is False
+    config['interfaces'] = [{'name': 'eth1', 'zone': 'lan'}]
+    config['tproxy']['ingress_interfaces'] = ['eth1']
+    config['tproxy']['rules'] = [{'name': 'site', 'domain_suffix': ['example.org'], 'action': 'block'}]
+    config['tproxy']['update_schedule']['mode'] = 'window'
+    response = await client.put('/api/draft', json=config)
+    assert response.status_code == 200
+    saved = response.json()['configuration']['tproxy']
+    assert saved['ingress_interfaces'] == ['eth1']
+    assert saved['rules'][0]['action'] == 'block'
+    assert saved['update_schedule']['mode'] == 'window'
+    config['tproxy']['enabled'] = True
+    response = await client.put('/api/draft', json=config)
+    assert response.status_code == 422
+    assert (await client.get('/api/versions')).json()[0]['configuration']['tproxy'] == saved
+
+
+async def test_tproxy_preview_uses_saved_draft_without_side_effects(api):
+    from vs_router.generators.singbox import generate_singbox
+    client, _, _ = api
+    await sign_in(client)
+    assert (await client.get('/api/draft/tproxy/preview')).status_code == 404
+    created = await client.post('/api/draft', json={'tproxy': {'rules': [
+        {'name': 'blocked', 'domain_suffix': ['example.org'], 'action': 'block'},
+    ]}})
+    assert created.status_code == 201
+    preview = await client.get('/api/draft/tproxy/preview')
+    assert preview.status_code == 200
+    assert preview.headers['cache-control'] == 'no-store'
+    assert preview.json() == {
+        'version_id': created.json()['id'],
+        'singbox': generate_singbox(ConfigurationVersion.model_validate(created.json())),
+    }
+    assert 'private_key' not in preview.text and 'ciphertext' not in preview.text
+    assert (await client.request('GET', '/api/draft/tproxy/preview', json={
+        'rules': [{'name': 'override', 'action': 'direct'}],
+    })).json() == preview.json()
+    assert (await client.get('/api/versions')).json() == [created.json()]
+
 
 async def test_versions_crud_diff_and_persistence(api):
     client, engine, _ = api
@@ -192,7 +239,7 @@ async def test_secrets_redacted_and_preserved(api):
     assert response.status_code == 201
     public = response.json()['configuration']
     assert public['tunnels'][0]['private_key'] == {'redacted': True}
-    for path in ('/api/versions', '/api/versions/2', '/api/diff/1/2'):
+    for path in ('/api/versions', '/api/versions/2', '/api/diff/1/2', '/api/draft/tproxy/preview'):
         text = (await client.get(path)).text
         assert 'ciphertext' not in text and 'gAAAA' not in text and ('private-value' not in text)
     assert (await client.get('/api/diff/1/2')).json()[0]['path'] == '/tunnels/0/private_key'
@@ -205,7 +252,7 @@ async def test_secrets_redacted_and_preserved(api):
     public['tunnels'][0]['name'] = 'new_tunnel'
     assert (await client.put('/api/draft', json=public)).json()['code'] == 'secret.missing'
 
-@pytest.mark.parametrize('path,body', [('/api/auth/login', {'username': 'x', 'password': 'secret', 'extra': 'private'}), ('/api/draft', {'interfaces': [{'name': 'eth0', 'addresses': ['private-secret']}]}), ('/api/apply', {'version_id': 'private-secret'})])
+@pytest.mark.parametrize('path,body', [('/api/auth/login', {'username': 'x', 'password': 'secret', 'extra': 'private'}), ('/api/draft', {'interfaces': [{'name': 'eth0', 'addresses': ['private-secret']}]}), ('/api/apply', {'version_id': 'private-secret'}), ('/api/draft', {'tproxy': {'rules': [{'name': 'private_rule', 'ip_cidr': ['private-secret'], 'action': 'block'}]}})])
 async def test_error_payloads_do_not_echo_input(api, path, body):
     client, _, _ = api
     await sign_in(client)

@@ -57,3 +57,66 @@ def test_router_not_assignable():
 def test_config_injection_rejected():
     with pytest.raises(ValidationError):
         Configuration(interfaces=[{"name": 'eth0" accept'}])
+
+
+def test_legacy_configuration_has_disabled_tproxy_and_roundtrips():
+    configuration = Configuration.model_validate({})
+    payload = configuration.model_dump(mode="json")
+    assert payload["tproxy"] == {
+        "enabled": False,
+        "ingress_interfaces": [],
+        "rules": [],
+        "final": "direct",
+        "update_schedule": {"mode": "interval", "interval_hours": 6, "window_start": "00:00", "window_end": "05:00"},
+    }
+    assert Configuration.model_validate(payload).model_dump(mode="json") == payload
+
+
+def test_tproxy_cannot_be_enabled_without_packet_path():
+    with pytest.raises(ValidationError, match="tproxy.not_available"):
+        Configuration.model_validate({"tproxy": {"enabled": True}})
+
+
+def test_tproxy_ingress_must_be_assigned_non_wan_interface():
+    interfaces = [{"name": "eth0", "zone": "wan"},
+                  {"name": "eth1", "zone": "lan"}, {"name": "eth2"}]
+    for ingress in ("missing", "eth0", "eth2"):
+        with pytest.raises(ValidationError, match="tproxy.ingress_interface"):
+            Configuration.model_validate({"interfaces": interfaces, "tproxy": {"ingress_interfaces": [ingress]}})
+    Configuration.model_validate({"interfaces": interfaces, "tproxy": {"ingress_interfaces": ["eth1"]}})
+
+
+@pytest.mark.parametrize("schedule", [
+    {"mode": "window", "window_start": "25:00"},
+    {"mode": "window", "window_start": "05:00", "window_end": "00:00"},
+    {"mode": "window", "window_start": "00:00", "window_end": "00:00"},
+    {"mode": "interval", "interval_hours": 0},
+])
+def test_tproxy_invalid_update_schedule_rejected(schedule):
+    with pytest.raises(ValidationError):
+        Configuration.model_validate({"tproxy": {"update_schedule": schedule}})
+
+
+def test_tproxy_daily_window_schedule_roundtrips():
+    config = Configuration.model_validate({"tproxy": {"update_schedule": {
+        "mode": "window", "window_start": "01:30", "window_end": "04:00",
+    }}})
+    assert config.tproxy.update_schedule.mode == "window"
+    assert config.tproxy.update_schedule.window_start == "01:30"
+
+
+def test_tproxy_rule_requires_matcher_and_unique_name():
+    with pytest.raises(ValidationError, match="tproxy.rule_matcher_required"):
+        Configuration.model_validate({"tproxy": {"rules": [{"name": "empty", "action": "direct"}]}})
+    with pytest.raises(ValidationError, match="tproxy.duplicate_rule"):
+        Configuration.model_validate({"tproxy": {"rules": [
+            {"name": "service", "domain_suffix": ["example.org"], "action": "direct"},
+            {"name": "service", "ip_cidr": ["203.0.113.0/24"], "action": "block"},
+        ]}})
+
+
+def test_tproxy_rule_rejects_bad_domain_and_network():
+    for rule in ({"name": "bad", "domain_suffix": ["example.org; accept"], "action": "direct"},
+                 {"name": "bad", "ip_cidr": ["not-ip"], "action": "direct"}):
+        with pytest.raises(ValidationError):
+            Configuration.model_validate({"tproxy": {"rules": [rule]}})

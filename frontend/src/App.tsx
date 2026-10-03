@@ -21,6 +21,7 @@ import {
 import Dashboard, { Events } from "./pages/Dashboard";
 import Network from "./pages/Network";
 import Firewall from "./pages/Firewall";
+import Routing from "./pages/Routing";
 import SSH from "./pages/SSH";
 import { DHCP, DNS, Proxy, Tunnels } from "./pages/Services";
 import ApplyScreen from "./pages/ApplyScreen";
@@ -114,6 +115,7 @@ export const navigation = [
   { to: "/dhcp", label: "DHCP", icon: "⇄" },
   { to: "/dns", label: "DNS", icon: "⌾" },
   { to: "/network?tab=routes", label: "Маршруты", icon: "⇋" },
+  { to: "/routing", label: "Маршрутизация", icon: "⤳" },
   { to: "/tunnels", label: "Туннели", icon: "⚿" },
   { to: "/proxy", label: "Прокси", icon: "◎" },
   { to: "/firewall", label: "Правила", icon: "✉" },
@@ -255,6 +257,7 @@ export default function App() {
             <Route path="dns" element={<DNS />} />
             <Route path="tunnels" element={<Tunnels />} />
             <Route path="proxy" element={<Proxy />} />
+            <Route path="routing" element={<Routing />} />
             <Route path="firewall" element={<Firewall />} />
             <Route path="ssh" element={<SSH />} />
             <Route path="apply" element={<ApplyScreen />} />

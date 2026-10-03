@@ -45,6 +45,7 @@ describe("screens", () => {
     ["/dns", "DNS (Unbound)"],
     ["/tunnels", "Туннели"],
     ["/proxy", "Прокси (Caddy)"],
+    ["/routing", "Маршрутизация · sing-box TProxy"],
     ["/apply", "Применение изменений"],
     ["/onboarding", "Учётная запись администратора"],
   ])("renders %s", async (path, title) => {
@@ -56,6 +57,50 @@ describe("screens", () => {
     await waitFor(() =>
       expect(screen.queryByRole("progressbar")).not.toBeInTheDocument(),
     );
+  });
+  it("keeps routing draft read-only for an operator", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 2, username: "operator", role: "operator" } : {},
+    ))));
+    open("/routing");
+    expect(await screen.findByText("operator")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Редактировать" })).toBeDisabled();
+    expect(fetch.mock.calls.filter(([, init]) => init?.method)).toHaveLength(0);
+  });
+  it("previews saved TProxy draft for admin without applying it", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      path === "/api/draft/tproxy/preview" ? {
+        version_id: 2,
+        singbox: { inbounds: [{ type: "tproxy", tag: "tproxy-udp" }], route: { final: "direct" } },
+      } : {},
+    ))));
+    open("/routing");
+    await screen.findByText("admin");
+    await userEvent.click(screen.getByRole("button", { name: "Предпросмотр сохранённого черновика" }));
+    expect(await screen.findByText(/"tproxy-udp"/)).toBeVisible();
+    expect(fetch.mock.calls.some(([path]) => path === "/api/draft/tproxy/preview")).toBe(true);
+    expect(fetch.mock.calls.some(([path]) => path === "/api/apply")).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "Редактировать" }));
+    expect(screen.queryByLabelText("Конфигурация sing-box")).not.toBeInTheDocument();
+  });
+  it("shows preview failure without claiming TProxy is active", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      { code: "agent.unavailable", message: "Предпросмотр недоступен", details: [] },
+    ), { status: path === "/api/draft/tproxy/preview" ? 503 : 200 })));
+    open("/routing");
+    await screen.findByText("admin");
+    await userEvent.click(screen.getByRole("button", { name: "Предпросмотр сохранённого черновика" }));
+    expect(await screen.findByText(/Предпросмотр недоступен/)).toBeVisible();
+    expect(screen.queryByLabelText("Конфигурация sing-box")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Включить TProxy" })).toBeDisabled();
   });
   it("does not mistake a draft for a pending agent marker", async () => {
     mockApi();
