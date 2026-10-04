@@ -6,8 +6,10 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import type {
   ApplyMarker,
   ApplyRequest,
@@ -52,7 +54,7 @@ interface RouterState {
   error: unknown;
   refresh: () => Promise<void>;
   applyState: ApplyObservation | null;
-  setApplyState: (value: ApplyObservation | null) => void;
+  setApplyState: Dispatch<SetStateAction<ApplyObservation | null>>;
   applyError: unknown;
   setApplyError: (value: unknown) => void;
   notice: string | null;
@@ -102,6 +104,18 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     setDraftDirty(false);
   }, []);
   const controller = useRef<AbortController | null>(null);
+  const clearSession = useCallback(() => {
+    controller.current?.abort();
+    setUser(null);
+    setVersions([]);
+    setLoading(false);
+    setError(null);
+    setApplyState(null);
+    setApplyError(null);
+    setUncertain(false);
+    setDraftDirty(false);
+    setNotice(null);
+  }, []);
   const refresh = useCallback(async () => {
     controller.current?.abort();
     const current = new AbortController();
@@ -115,13 +129,16 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       if (!current.signal.aborted) {
-        setError(err);
-        setVersions([]);
+        if (err instanceof ApiError && err.status === 401) clearSession();
+        else {
+          setError(err);
+          setVersions([]);
+        }
       }
     } finally {
       if (!current.signal.aborted) setLoading(false);
     }
-  }, []);
+  }, [clearSession]);
   useEffect(() => {
     void refresh();
     return () => controller.current?.abort();
@@ -130,16 +147,13 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     try {
       setUser(fmtUser(await api.me()));
     } catch {
-      setUser(null);
+      clearSession();
     }
-  }, []);
+  }, [clearSession]);
   const signOut = useCallback(async () => {
-    try {
-      await api.logout();
-    } finally {
-      setUser(null);
-    }
-  }, []);
+    await api.logout();
+    clearSession();
+  }, [clearSession]);
   return (
     <Context.Provider
       value={{

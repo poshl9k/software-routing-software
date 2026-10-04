@@ -129,6 +129,13 @@ def apply(body: ApplyParams, db: Session = Depends(get_db)):
     return agent_call("apply_version", body)
 
 
+@router.get("/apply/status", dependencies=[Depends(admin)])
+def apply_status(response: Response):
+    """Host-owned marker, not a guess reconstructed from configuration rows."""
+    response.headers['Cache-Control'] = 'no-store'
+    return agent_call('status', EmptyParams())
+
+
 @router.post("/confirm", dependencies=[Depends(admin)])
 def confirm(body: ConfirmParams, db: Session = Depends(get_db)):
     build_request("confirm_version", body)

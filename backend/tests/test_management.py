@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from ipaddress import IPv4Address
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from cryptography import x509
@@ -170,9 +171,51 @@ def test_guard_rejects_before_mutations(changes):
     assert not fs.files
 
 
+def test_apply_without_console_assigned_management_is_rejected_before_mutation():
+    fs = FakeFS()
+    engine = ApplyEngine(filesystem=fs, executor=FakeExecutor(),
+                         management_provider=lambda: None,
+                         panel_probe=lambda: pytest.fail('no network probe before LAN assignment'))
+    with pytest.raises(ApplyError, match='management.assignment_required'):
+        engine.apply_version(version().model_dump(mode='json'))
+    assert not fs.files
+
+
+def test_panel_probe_without_management_never_uses_unix_socket(monkeypatch):
+    from vs_router.agent import daemon
+    monkeypatch.setattr('vs_router.management.host_management', lambda: None)
+    monkeypatch.setattr(daemon.socket, 'socket',
+                        lambda *a, **kw: pytest.fail('Unix API is not LAN HTTPS'))
+    assert daemon.panel_probe() is False
+
+
+def test_panel_probe_requires_https_with_management_ca(monkeypatch):
+    import ssl
+    from urllib import request
+    from vs_router.agent import daemon
+    from vs_router.management import TLS_DIR
+    monkeypatch.setattr('vs_router.management.host_management', lambda: STATE)
+    calls = []
+    context = object()
+    monkeypatch.setattr(ssl, 'create_default_context',
+                        lambda cafile: calls.append(cafile) or context)
+    response = MagicMock()
+    response.__enter__.return_value.status = 200
+    opener = MagicMock()
+    opener.open.return_value = response
+    monkeypatch.setattr(request, 'build_opener',
+                        lambda *handlers: calls.append(handlers) or opener)
+    assert daemon.panel_probe() is True
+    assert calls[0] == str(TLS_DIR / 'ca.crt')
+    assert len(calls[1]) == 2
+    assert calls[1][1]._context is context
+    opener.open.assert_called_once_with('https://192.168.10.1/health', timeout=3)
+
+
 def test_guarded_first_apply_and_rollback_preserve_panel():
     fs = FakeFS()
-    engine = ApplyEngine(filesystem=fs, executor=FakeExecutor(), management_provider=lambda: STATE)
+    engine = ApplyEngine(filesystem=fs, executor=FakeExecutor(), management_provider=lambda: STATE,
+                         panel_probe=lambda: True)
     snapshot = version().model_dump(mode='json')
     assert engine.apply_version(snapshot, safe_mode=True).status == 'confirmed'
     assert engine.status()['deadline'] is None
@@ -191,12 +234,14 @@ def test_first_apply_failure_does_not_attempt_nonexistent_rollback():
     def fail(path):
         raise OSError('service failed')
     engine = ApplyEngine(filesystem=FakeFS(), executor=FakeExecutor(),
-                         management_provider=lambda: STATE, reload_commands={'nftables': fail})
+                         management_provider=lambda: STATE, panel_probe=lambda: True,
+                         reload_commands={'nftables': fail})
     assert engine.apply_version(version().model_dump(mode='json')).status == 'failed'
 
 
 def test_management_lan_edits_force_timer_even_when_default_off():
-    engine = ApplyEngine(filesystem=FakeFS(), executor=FakeExecutor(), management_provider=lambda: STATE)
+    engine = ApplyEngine(filesystem=FakeFS(), executor=FakeExecutor(), management_provider=lambda: STATE,
+                         panel_probe=lambda: True)
     snapshot = version().model_dump(mode='json')
     engine.apply_version(snapshot)
     snapshot['id'] = 2
@@ -232,11 +277,20 @@ def test_boot_restores_bootstrap_firewall_before_services(tmp_path, monkeypatch)
 
 
 def test_first_apply_https_probe_failure_does_not_confirm():
-    engine = ApplyEngine(filesystem=FakeFS(), executor=FakeExecutor(),
+    fs = FakeFS()
+    engine = ApplyEngine(filesystem=fs, executor=FakeExecutor(),
                          management_provider=lambda: STATE, panel_probe=lambda: False)
-    result = engine.apply_version(version().model_dump(mode='json'))
-    assert result.status == 'failed'
-    assert result.error['code'] == 'panel.unavailable'
+    with pytest.raises(ApplyError, match='panel.unavailable'):
+        engine.apply_version(version().model_dump(mode='json'))
+    assert not fs.files
+
+
+def test_first_apply_without_https_probe_is_rejected_before_mutation():
+    fs = FakeFS()
+    engine = ApplyEngine(filesystem=fs, executor=FakeExecutor(), management_provider=lambda: STATE)
+    with pytest.raises(ApplyError, match='panel.unavailable'):
+        engine.apply_version(version().model_dump(mode='json'))
+    assert not fs.files
 
 
 def test_provision_preserves_unowned_configuration(tmp_path):

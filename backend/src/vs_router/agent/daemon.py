@@ -146,27 +146,19 @@ def serve(socket_path, handlers, allowed_uids=None, *, stop_event=None, ready_ev
 
 
 def panel_probe():
-    """Probe provisioned HTTPS, or the Unix API on hosts without management state."""
+    """Probe provisioned HTTPS only; Unix API health is not LAN access."""
     from ..management import host_management, TLS_DIR
     try:
         management = host_management()
-        if management is not None:
-            import ssl
-            from urllib.request import build_opener, ProxyHandler, HTTPSHandler
-            context = ssl.create_default_context(cafile=str(TLS_DIR / 'ca.crt'))
-            opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context))
-            with opener.open(f'https://{management.ip}/health', timeout=3) as response:
-                return response.status == 200
+        if management is None:
+            return False
+        import ssl
+        from urllib.request import build_opener, ProxyHandler, HTTPSHandler
+        context = ssl.create_default_context(cafile=str(TLS_DIR / 'ca.crt'))
+        opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context))
+        with opener.open(f'https://{management.ip}/health', timeout=3) as response:
+            return response.status == 200
     except (OSError, ValueError):
-        return False
-    path = os.environ.get('VS_ROUTER_PANEL_SOCKET', '/run/vs-router/web/web.sock')
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(3)
-            connection.connect(path)
-            connection.sendall(b'GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n')
-            return connection.recv(1024).split(b'\r\n', 1)[0].split()[1] == b'200'
-    except (OSError, IndexError):
         return False
 
 

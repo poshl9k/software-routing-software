@@ -99,7 +99,7 @@ async def test_keygen_endpoints(api):
     assert all(5 <= obf[f'H{i}'] <= 2_147_483_647 for i in range(1, 5))
     psk = (await client.post('/api/keygen/peer', json={})).json()['preshared_key']
     assert len(psk) == 44 and len(base64.b64decode(psk, validate=True)) == 32
-ROUTES = [('get', '/api/versions', None), ('get', '/api/versions/1', None), ('get', '/api/draft/tproxy/preview', None), ('get', '/api/diff/1/2', None), ('post', '/api/draft', {}), ('put', '/api/draft', {}), ('delete', '/api/draft', None), ('post', '/api/draft/validate', None), ('post', '/api/apply', {'version_id': 1}), ('post', '/api/confirm', {'version_id': 1}), ('post', '/api/rollback', {})]
+ROUTES = [('get', '/api/versions', None), ('get', '/api/versions/1', None), ('get', '/api/draft/tproxy/preview', None), ('get', '/api/apply/status', None), ('get', '/api/backup/export', None), ('get', '/api/diff/1/2', None), ('post', '/api/draft', {}), ('put', '/api/draft', {}), ('delete', '/api/draft', None), ('post', '/api/draft/validate', None), ('post', '/api/apply', {'version_id': 1}), ('post', '/api/confirm', {'version_id': 1}), ('post', '/api/rollback', {}), ('post', '/api/backup/export', {'include_secrets': True, 'password': 'example-password'}), ('post', '/api/backup/restore', {'schema_version': 1, 'versions': []})]
 
 @pytest.mark.parametrize('method,path,body', ROUTES)
 async def test_auth_required(api, method, path, body):
@@ -116,9 +116,30 @@ async def test_operator_read_only(api):
         db.commit()
     assert (await client.get('/api/versions')).status_code == 200
     assert (await client.get('/api/draft/tproxy/preview')).status_code == 403
+    assert (await client.get('/api/apply/status')).status_code == 403
+    assert (await client.get('/api/backup/export')).status_code == 403
     for method, path, data in ROUTES:
         if method != 'get':
             assert (await client.request(method, path, json=data)).status_code == 403
+
+
+async def test_apply_status_reads_agent_marker_without_db_fallback(api, monkeypatch):
+    from vs_router.api import versions as routes
+    client, _, _ = api
+    await sign_in(client)
+    calls = []
+    marker = {'version_id': 2, 'status': 'pending', 'deadline': 1800000000,
+              'applied_at': 1799999800, 'phases': {'nftables': 'applied'}}
+    state: dict[str, dict | None] = {'result': marker}
+    monkeypatch.setattr(routes, 'agent_call', lambda method, body:
+                        calls.append((method, body.model_dump())) or state['result'])
+    response = await client.get('/api/apply/status')
+    assert response.status_code == 200
+    assert response.headers['cache-control'] == 'no-store'
+    assert response.json() == marker
+    assert calls == [('status', {})]
+    state['result'] = None
+    assert (await client.get('/api/apply/status')).json() is None
 
 async def test_tproxy_draft_roundtrip_and_enable_rejected(api):
     client, _, _ = api

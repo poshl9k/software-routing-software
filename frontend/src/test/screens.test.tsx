@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { emptyConfiguration } from "../fixtures";
-import { observation, useCountdown } from "../state";
+import { observation, RouterProvider, useCountdown, useRouterState } from "../state";
 const versions = [
   { id: 2, status: "draft", configuration: emptyConfiguration },
   { id: 1, status: "confirmed", configuration: emptyConfiguration },
@@ -69,6 +69,104 @@ describe("screens", () => {
     expect(screen.getByRole("button", { name: "Редактировать" })).toBeDisabled();
     expect(fetch.mock.calls.filter(([, init]) => init?.method)).toHaveLength(0);
   });
+  it("does not offer admin-only backup or diagnostics to an operator", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 2, username: "operator", role: "operator" } : {},
+    ))));
+    open("/maintenance");
+    expect(await screen.findByText("operator")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Экспорт" })).toBeDisabled();
+    const fileLabel = screen.getByRole("button", { name: "Выбрать файл импорта" });
+    expect(fileLabel).toHaveAttribute("aria-disabled", "true");
+    expect(fileLabel.querySelector("input")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Ping" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Обновить" }).at(-1)).toBeDisabled();
+    expect(fetch.mock.calls.some(([path]) => path === "/api/diag/rules-counters")).toBe(false);
+  });
+  it("does not offer draft deletion or apply commands to an operator", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 2, username: "operator", role: "operator" } : {},
+    ))));
+    open("/apply");
+    expect(await screen.findByText("operator")).toBeVisible();
+    for (const name of ["Применить", "Подтвердить изменения", "Откатить сейчас", "Сбросить черновик"])
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    expect(fetch.mock.calls.some(([path]) => path === "/api/apply/status")).toBe(false);
+  });
+  it("reports failed draft deletion and retains the draft", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string, init?: RequestInit) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      path === "/api/apply/status" ? null :
+      path === "/api/draft" && init?.method === "DELETE" ? {
+        code: "draft.unavailable", message: "Черновик не удалён", details: [],
+      } : [],
+    ), { status: path === "/api/draft" && init?.method === "DELETE" ? 503 : 200 })));
+    open("/apply");
+    await screen.findByText("admin");
+    await userEvent.click(screen.getByRole("button", { name: "Сбросить черновик" }));
+    expect((await screen.findAllByText(/Черновик не удалён/))[0]).toBeVisible();
+    expect(screen.getByRole("button", { name: "Сбросить черновик" })).toBeEnabled();
+  });
+  it("drops version and apply state when the admin signs out", async () => {
+    mockApi();
+    function Probe() {
+      const { versions: rows, applyState, uncertain, setApplyState, setUncertain, signOut } = useRouterState();
+      return <>
+        <span data-testid="session-state">{`${rows.length}:${applyState?.result.status ?? "none"}:${uncertain}`}</span>
+        <button onClick={() => { setApplyState(observation({version_id: 2, status: "pending", phases: {}})); setUncertain(true); }}>Seed</button>
+        <button onClick={() => void signOut()}>Sign out</button>
+      </>;
+    }
+    render(<RouterProvider><Probe /></RouterProvider>);
+    await waitFor(() => expect(screen.getByTestId("session-state")).toHaveTextContent("2:none:false"));
+    await userEvent.click(screen.getByRole("button", { name: "Seed" }));
+    expect(screen.getByTestId("session-state")).toHaveTextContent("2:pending:true");
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(screen.getByTestId("session-state")).toHaveTextContent("0:none:false"));
+  });
+  it("reports failed logout without claiming the session ended", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      path === "/api/auth/logout" ? {code: "auth.unavailable", message: "Выход не выполнен", details: []} :
+      path === "/api/apply/status" ? null : {},
+    ), {status: path === "/api/auth/logout" ? 503 : 200})));
+    open("/");
+    await screen.findByText("admin");
+    await userEvent.click(screen.getByRole("button", {name: "Выйти"}));
+    expect((await screen.findAllByText(/Выход не выполнен/))[0]).toBeVisible();
+    expect(screen.getByText("admin")).toBeVisible();
+    expect(screen.getByRole("heading", {name: "Обзор сети"})).toBeVisible();
+  });
+  it("clears cached apply state after a session-expired versions response", async () => {
+    let reads = 0;
+    vi.stubGlobal("fetch", vi.fn((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" && ++reads > 1
+        ? { code: "auth.required", message: "auth.required", details: [] }
+        : versions,
+    ), {status: path === "/api/versions" && reads > 1 ? 401 : 200}))));
+    function Probe() {
+      const { versions: rows, applyState, setApplyState, refresh } = useRouterState();
+      return <>
+        <span data-testid="session-state">{`${rows.length}:${applyState?.result.status ?? "none"}`}</span>
+        <button onClick={() => setApplyState(observation({version_id: 2, status: "pending", phases: {}}))}>Seed</button>
+        <button onClick={() => void refresh()}>Refresh</button>
+      </>;
+    }
+    render(<RouterProvider><Probe /></RouterProvider>);
+    await waitFor(() => expect(screen.getByTestId("session-state")).toHaveTextContent("2:none"));
+    await userEvent.click(screen.getByRole("button", { name: "Seed" }));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByTestId("session-state")).toHaveTextContent("0:none"));
+  });
   it("previews saved TProxy draft for admin without applying it", async () => {
     const fetch = mockApi();
     fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
@@ -110,6 +208,141 @@ describe("screens", () => {
       screen.getByText(/неподтверждённые изменения: неизвестно/),
     ).toBeVisible();
   });
+  it("restores pending apply from the agent marker after opening the page", async () => {
+    const fetch = mockApi();
+    const deadline = Math.floor(Date.now() / 1000) + 120;
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      path === "/api/apply/status" ? {
+        version_id: 2, status: "pending", applied_at: deadline - 60,
+        deadline, phases: { nftables: "applied" },
+      } : path.startsWith("/api/diff") ? [] : {},
+    ))));
+    open("/apply");
+    expect(await screen.findByText(/Неподтверждённые изменения · v2/)).toBeVisible();
+    expect(screen.getByRole("timer")).toHaveTextContent(/0[12]:[0-5][0-9]/);
+    expect(screen.getByRole("button", { name: "Подтвердить изменения" })).toBeEnabled();
+    expect(fetch.mock.calls.some(([path]) => path === "/api/apply/status")).toBe(true);
+  });
+  it("shows a persisted agent failure code after page reload", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      path === "/api/apply/status" ? {
+        version_id: 2, status: "failed", applied_at: 0, deadline: null,
+        phases: { nftables: "failed" },
+        error: { code: "agent.reload_failed", message: "agent.reload_failed", details: [] },
+      } : [],
+    ))));
+    open("/apply");
+    expect(await screen.findByText(/Ошибка применения · v2/)).toBeVisible();
+    expect(screen.getByText(/agent\.reload_failed/)).toBeVisible();
+  });
+  it("restores pending marker in the topbar on the overview", async () => {
+    const fetch = mockApi();
+    const deadline = Math.floor(Date.now() / 1000) + 120;
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      path === "/api/apply/status" ? {
+        version_id: 2, status: "pending", applied_at: deadline - 60,
+        deadline, phases: {},
+      } : {},
+    ))));
+    open("/");
+    expect(await screen.findByRole("button", { name: /Подтвердить ·/ })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Применить" })).not.toBeInTheDocument();
+    expect(fetch.mock.calls.some(([path]) => path === "/api/apply/status")).toBe(true);
+  });
+  it("keeps the topbar apply disabled when the agent status read fails", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      { code: "agent.unavailable", message: "Агент недоступен", details: [] },
+    ), { status: path === "/api/apply/status" ? 503 : 200 })));
+    open("/");
+    await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/apply/status")).toBe(true));
+    expect(await screen.findByRole("link", { name: "Выполняется…" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Применить" })).not.toBeInTheDocument();
+  });
+  it("does not infer a safe state when the agent marker is unavailable", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      path.startsWith("/api/diff") ? [] :
+      { code: "agent.unavailable", message: "Агент недоступен", details: [] },
+    ), { status: path === "/api/apply/status" ? 503 : 200 })));
+    open("/apply");
+    expect(await screen.findByText(/Результат команды неизвестен/)).toBeVisible();
+    expect(screen.getAllByText(/Агент недоступен/)[0]).toBeVisible();
+    expect(screen.getByRole("button", { name: "Подтвердить изменения" })).toBeDisabled();
+  });
+  it("rechecks the agent marker after a temporary status failure", async () => {
+    const fetch = mockApi();
+    let attempts = 0;
+    fetch.mockImplementation((path: string) => {
+      if (path === "/api/apply/status") {
+        attempts += 1;
+        return Promise.resolve(new Response(JSON.stringify(attempts === 1 ? {
+          code: "agent.unavailable", message: "Агент недоступен", details: [],
+        } : null), { status: attempts === 1 ? 503 : 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify(
+        path === "/api/versions" ? versions :
+        path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } : [],
+      )));
+    });
+    open("/apply");
+    expect(await screen.findByText(/Результат команды неизвестен/)).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "Применить" }).at(-1)).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Обновить состояние" }));
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Применить" }).at(-1)).toBeEnabled());
+    expect(screen.queryByText(/Результат команды неизвестен/)).not.toBeInTheDocument();
+    expect(attempts).toBe(2);
+  });
+  it("blocks apply until the agent confirms no pending marker", async () => {
+    const fetch = mockApi();
+    let resolveStatus!: (response: Response) => void;
+    const pendingStatus = new Promise<Response>((resolve) => { resolveStatus = resolve; });
+    fetch.mockImplementation((path: string) => path === "/api/apply/status" ? pendingStatus :
+      Promise.resolve(new Response(JSON.stringify(
+        path === "/api/versions" ? versions :
+        path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+        path.startsWith("/api/diff") ? [] : {},
+      ))));
+    open("/apply");
+    await screen.findByText("admin");
+    await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/apply/status")).toBe(true));
+    expect(screen.getAllByRole("button", { name: "Применить" }).at(-1)).toBeDisabled();
+    await act(async () => { resolveStatus(new Response("null")); });
+    expect(screen.getAllByRole("button", { name: "Применить" }).at(-1)).toBeEnabled();
+  });
+  it("disables topbar confirmation when marker verification fails", async () => {
+    const fetch = mockApi();
+    let statusReads = 0;
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      path === "/api/apply" ? { version_id: 2, status: "pending", phases: {} } :
+      path === "/api/apply/status" && ++statusReads > 1 ? {
+        code: "agent.unavailable", message: "Агент недоступен", details: [],
+      } : path === "/api/apply/status" ? null : [],
+    ), { status: path === "/api/apply/status" && statusReads > 1 ? 503 : 200 })));
+    const user = userEvent.setup();
+    open("/");
+    const button = await screen.findByRole("button", { name: "Применить" });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+    await user.click(screen.getByRole("link", { name: "Применение" }));
+    expect(await screen.findByText(/Результат команды неизвестен/)).toBeVisible();
+    expect(screen.getByRole("button", { name: /Подтвердить ·/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Подтвердить изменения" })).toBeDisabled();
+    expect(fetch.mock.calls.some(([path]) => path === "/api/confirm")).toBe(false);
+  });
   it("unconfigured server shows a setup prompt with no fabricated data", async () => {
     vi.stubGlobal(
       "fetch",
@@ -140,6 +373,14 @@ describe("screens", () => {
           JSON.stringify(
             path === "/api/versions"
               ? versions
+              : path === "/api/apply/status"
+                ? fetch.mock.calls.some(([called]) => called === "/api/apply") &&
+                  !fetch.mock.calls.some(([called]) => called === "/api/confirm") ? {
+                    version_id: 2, status: "pending", applied_at: Date.now() / 1000,
+                    deadline: Date.now() / 1000 + 180, phases: { nftables: "applied" },
+                  } : null
+              : path === "/api/auth/me"
+                ? { id: 1, username: "admin", role: "admin" }
               : path === "/api/host/interfaces" || path.startsWith("/api/diff")
                 ? []
                 : path === "/api/apply"
@@ -192,10 +433,13 @@ describe("screens", () => {
     const fetch = mockApi();
     fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions" ? [versions[0]] :
+      path === "/api/apply/status" ? null :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
       path === "/api/apply" ? { version_id: 2, status: "confirmed", phases: {} } : []
     ))));
     open("/apply");
     expect(await screen.findByText(/Первое применение выполняется без автоотката/)).toBeVisible();
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Применить" }).at(-1)).toBeEnabled());
     await userEvent.click(screen.getAllByRole("button", { name: "Применить" }).at(-1)!);
     await waitFor(() => {
       const call = fetch.mock.calls.find(([path]) => path === "/api/apply");
@@ -278,6 +522,13 @@ describe("screens", () => {
           JSON.stringify(
             path === "/api/versions"
               ? versions
+              : path === "/api/auth/me"
+                ? { id: 1, username: "admin", role: "admin" }
+              : path === "/api/apply/status"
+                ? fetch.mock.calls.some(([called]) => called === "/api/apply") ? {
+                    version_id: 2, status: "pending", applied_at: Date.now() / 1000,
+                    deadline: Date.now() / 1000 + 180, phases: {},
+                  } : null
               : path === "/api/host/interfaces" || path.startsWith("/api/diff")
                 ? []
                 : path === "/api/apply"
@@ -296,7 +547,7 @@ describe("screens", () => {
     const button = await screen.findByRole("button", {
       name: "Применить",
     });
-    expect(button).toBeEnabled();
+    await waitFor(() => expect(button).toBeEnabled());
     await user.click(button);
     expect(
       await screen.findByRole("button", { name: /Подтвердить/ }),

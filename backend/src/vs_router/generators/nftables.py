@@ -1,7 +1,8 @@
 """Deterministic ruleset for a router-owned nftables table; no host I/O."""
-from ipaddress import ip_interface
+from ipaddress import ip_address, ip_interface
 from ..schema import ConfigurationVersion
 from ..validators import address, expand_aliases
+from .unbound import tproxy_unbound_listener_addresses
 
 
 def names(values):
@@ -175,6 +176,101 @@ def generate_tproxy_containment(version: ConfigurationVersion) -> str:
             f'        iifname {selection} counter drop comment "tproxy_containment"\n'
             "    }\n"
             "}\n")
+
+
+def generate_tproxy_dns_ingress_guard(version: ConfigurationVersion) -> str:
+    """OFFLINE experiment: drop selected clients' direct IPv4 DNS before routing.
+
+    Local router DNS remains reachable. This does not classify queries entering
+    Unbound or constrain its OUTPUT, and must not enter bundle/apply/boot until
+    those paths, DNAT exceptions and crash/established-flow behavior are proven.
+    """
+    table = "inet vs_router_tproxy_dns_ingress"
+    c = version.configuration
+    if not c.tproxy.enabled:
+        return f"destroy table {table}\n"
+    sources = c.tproxy.ingress_interfaces
+    allowed = {i.name for i in c.interfaces if i.zone and i.zone != "wan"}
+    if not sources or len(set(sources)) != len(sources) or not set(sources) <= allowed:
+        raise ValueError("tproxy.dns_invalid_ingress")
+    # Offline fixtures bypass only the public enabled gate. Never render rules
+    # from an otherwise invalid model_copy snapshot.
+    data = version.model_dump()
+    data["configuration"]["tproxy"]["enabled"] = False
+    ConfigurationVersion.model_validate(data)
+    return (f"destroy table {table}\n"
+            f"table {table} {{\n"
+            "    chain prerouting {\n"
+            "        type filter hook prerouting priority -110; policy accept;\n"
+            f"        iifname != {names(sorted(sources))} return\n"
+            "        meta nfproto != ipv4 return\n"
+            "        meta l4proto != { tcp, udp } return\n"
+            "        fib daddr type local return\n"
+            '        th dport 53 counter drop comment "tproxy_dns_direct"\n'
+            "    }\n"
+            "}\n")
+
+
+def generate_tproxy_dns_listener_guard(version: ConfigurationVersion) -> str:
+    """OFFLINE-only INPUT boundary for a future two-process Unbound split.
+
+    DNS access to selected listener addresses is limited by actual ingress, not
+    just destination IP. No service is started and live nft/apply remain unchanged.
+    """
+    table = "inet vs_router_tproxy_dns_listener"
+    if not version.configuration.tproxy.enabled:
+        return f"destroy table {table}\n"
+    listeners = tproxy_unbound_listener_addresses(version)
+    sources = names(sorted(version.configuration.tproxy.ingress_interfaces))
+    selected = '{ ' + ', '.join(listeners["selected"]) + ' }'
+    return (f"destroy table {table}\n"
+            f"table {table} {{\n"
+            "    chain input {\n"
+            "        type filter hook input priority -10; policy accept;\n"
+            "        meta nfproto != ipv4 return\n"
+            "        meta l4proto != { tcp, udp } return\n"
+            '        iifname != "lo" ip daddr 127.0.0.1 th dport 15353 counter drop comment "tproxy_dns_stub_external"\n'
+            "        th dport != 53 return\n"
+            f'        iifname {sources} ip daddr != {selected} counter drop comment "tproxy_dns_selected_wrong_listener"\n'
+            f'        iifname != {sources} ip daddr {selected} counter drop comment "tproxy_dns_unselected_wrong_listener"\n'
+            "    }\n"
+            "}\n")
+
+
+def generate_tproxy_dns_output_guard(version: ConfigurationVersion, selected_uid: int) -> str:
+    """OFFLINE-only selected-resolver socket boundary, not client attribution.
+
+    The selected resolver may reach the local stub or configured explicit
+    forward destinations. Its unmatched upstream must never use the ordinary
+    resolver's global WAN upstream. No service/UID lifecycle is implemented.
+    """
+    table = "inet vs_router_tproxy_dns_output"
+    if not version.configuration.tproxy.enabled:
+        return f"destroy table {table}\n"
+    tproxy_unbound_listener_addresses(version)
+    if type(selected_uid) is not int or not 100 <= selected_uid <= 65535:
+        raise ValueError("tproxy.dns_output_invalid_uid")
+    upstreams = sorted({u for f in version.configuration.dns.forwards for u in f.upstreams})
+    if any(ip_address(u).version != 4 for u in upstreams):
+        raise ValueError("tproxy.dns_output_ipv4_required")
+    lines = [f"destroy table {table}", f"table {table} {{",
+             "    chain output {", "        type filter hook output priority -20; policy accept;"]
+    interfaces = {i.name: i for i in version.configuration.interfaces}
+    for name in sorted(version.configuration.tproxy.ingress_interfaces):
+        for value in sorted(interfaces[name].addresses):
+            listener_ip = ip_interface(value).ip
+            lines.append(f'        meta skuid {selected_uid} oifname "{name}" '
+                         f'ip saddr {listener_ip} meta l4proto {{ tcp, udp }} th sport 53 '
+                         'counter return comment "tproxy_dns_client_reply"')
+    lines.append(f'        meta skuid {selected_uid} ip daddr 127.0.0.1 '
+                 'meta l4proto { tcp, udp } th dport 15353 counter return comment "tproxy_dns_stub"')
+    if upstreams:
+        destinations = '{ ' + ', '.join(upstreams) + ' }'
+        lines.append(f'        meta skuid {selected_uid} ip daddr {destinations} '
+                     'meta l4proto { tcp, udp } th dport 53 counter return comment "tproxy_dns_explicit_forward"')
+    lines += [f'        meta skuid {selected_uid} counter drop comment "tproxy_dns_output_denied"',
+              "    }", "}"]
+    return "\n".join(lines) + "\n"
 
 
 def generate_tproxy_preauthorization(version: ConfigurationVersion) -> str:

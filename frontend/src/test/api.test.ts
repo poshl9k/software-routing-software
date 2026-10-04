@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { api, request } from "../api";
 describe("API client", () => {
+  it("sends backup password in POST body, never URL", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('{"versions":[]}'));
+    vi.stubGlobal("fetch", fetch);
+    await api.backupExport(true, "sample-password");
+    expect(fetch).toHaveBeenCalledWith("/api/backup/export", expect.objectContaining({
+      method: "POST", body: '{"include_secrets":true,"password":"sample-password"}',
+    }));
+  });
   it("sends cookies and the exact apply contract", async () => {
     const fetch = vi
       .fn()

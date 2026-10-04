@@ -124,7 +124,8 @@ def counters(ns, table, chain):
 def check_fixture(f):
     require(type(f) is dict and f.get('kind') == 'tproxy_dns_boundary_vm_v1', 'fixture kind')
     require(all(isinstance(f.get(k), str) for k in
-                ('firewall','preauth','guard_on','guard_off','preauth_off')), 'fixture fields')
+                ('firewall','preauth','guard_on','guard_off','preauth_off',
+                 'dns_ingress_on','dns_ingress_off','dns_listener_on','dns_listener_off')), 'fixture fields')
     fw, pre, guard = f['firewall'], f['preauth'], f['guard_on']
     require('iifname { "lan0", "lan1" }' in fw and 'oifname { "wan0" }' in fw,
             'ordinary interface selection')
@@ -138,6 +139,19 @@ def check_fixture(f):
     require(f['guard_off'].strip() == 'destroy table inet vs_router_tproxy_guard' and
             f['preauth_off'].strip() == 'destroy table inet vs_router_tproxy_preauth',
             'off must remove lab tables')
+    dns_ingress = str(f['dns_ingress_on'])
+    require('iifname != { "lan0" } return' in dns_ingress and
+            'fib daddr type local return' in dns_ingress and
+            'th dport 53 counter drop comment "tproxy_dns_direct"' in dns_ingress and
+            str(f['dns_ingress_off']).strip() == 'destroy table inet vs_router_tproxy_dns_ingress',
+            'DNS ingress/off boundary')
+    listener = str(f['dns_listener_on'])
+    require('priority -10; policy accept' in listener and
+            'iifname != "lo" ip daddr 127.0.0.1 th dport 15353 counter drop' in listener and
+            'iifname { "lan0" } ip daddr != { 10.212.1.1 }' in listener and
+            'iifname != { "lan0" } ip daddr { 10.212.1.1 }' in listener and
+            str(f['dns_listener_off']).strip() == 'destroy table inet vs_router_tproxy_dns_listener',
+            'DNS listener/off boundary')
 
 
 def apply(ns, path, content):
@@ -191,6 +205,9 @@ def main(argv=None):
                     run('ip','-n',ns[peer],'addr','add',ORIGIN+'/32','dev',remote)
                 else:
                     run('ip','-n',ns[peer],'route','add',ORIGIN+'/32','via',router_ip.split('/')[0])
+                    other_local = OTHER_ROUTER if peer == 'selected' else ROUTER
+                    run('ip','-n',ns[peer],'route','add',other_local+'/32',
+                        'via',router_ip.split('/')[0])
             run('ip','-n',ns['router'],'route','add',ORIGIN+'/32','via','10.212.2.2')
             for subnet in ('10.212.1.0/24','10.212.3.0/24'):
                 run('ip','-n',ns['origin'],'route','add',subnet,'via','10.212.2.1')
@@ -208,21 +225,25 @@ table inet vs_router_dns_observer {
             ingress = Child(ns['router'],CAPTURE,'lan0'); children.append(ingress); ingress.take('ready')
             other_ingress = Child(ns['router'],CAPTURE,'lan1'); children.append(other_ingress); other_ingress.take('ready')
             outside = Child(ns['origin'],CAPTURE,f'vdb{suffix[:6]}2'); children.append(outside); outside.take('ready')
-            local = Child(ns['router'],RECEIVER,'0.0.0.0'); children.append(local); local.take('ready')
+            local_selected = Child(ns['router'],RECEIVER,ROUTER); children.append(local_selected); local_selected.take('ready')
+            local_other = Child(ns['router'],RECEIVER,OTHER_ROUTER); children.append(local_other); local_other.take('ready')
             origin = Child(ns['origin'],RECEIVER,ORIGIN); children.append(origin); origin.take('ready')
 
             def trial(label, client, capture, target, port, reaches, guard=False):
-                for child in (ingress,other_ingress,outside,local,origin): child.drain()
+                for child in (ingress,other_ingress,outside,local_selected,local_other,origin): child.drain()
                 before = counters(ns['router'],'vs_router_tproxy_guard','forward').get('tproxy_containment',0) if guard else 0
                 token = f'{suffix}-{label}'
                 result = client.send(target,port,token)
                 time.sleep(WINDOW)
-                incoming = capture.drain(); wire = outside.drain(); local_events = local.drain(); received = origin.drain()
+                incoming = capture.drain(); wire = outside.drain()
+                local_events = local_selected.drain() + local_other.drain()
+                received = origin.drain()
                 require(any(e.get('token') == token and e.get('dst') == target and
                             e.get('port') == port for e in incoming), f'{label}: ingress missing')
                 if target in (ROUTER,OTHER_ROUTER):
-                    require(any(e.get('token') == token and e.get('kind') == 'receive'
-                                for e in local_events), f'{label}: local receiver missing')
+                    local_seen = any(e.get('token') == token and e.get('kind') == 'receive'
+                                     for e in local_events)
+                    require(local_seen == reaches, f'{label}: local receiver={local_seen}, expected={reaches}')
                     require(not any(e.get('token') == token for e in wire+received),
                             f'{label}: local escaped to origin')
                 else:
@@ -242,6 +263,48 @@ table inet vs_router_dns_observer {
             trial('selected-local-before',selected,ingress,ROUTER,53,True)
             trial('other-local-before',other,other_ingress,OTHER_ROUTER,53,True)
             source_port = trial('selected-direct-unsafe-control',selected,ingress,ORIGIN,53,True)
+            apply(ns['router'],path,fixture['dns_ingress_on'])
+            trial('selected-local-dns-ingress',selected,ingress,ROUTER,53,True)
+            before_dns = counters(ns['router'],'vs_router_tproxy_dns_ingress','prerouting').get('tproxy_dns_direct',0)
+            require(trial('selected-direct-dns-ingress',selected,ingress,ORIGIN,53,False)
+                    == source_port, 'DNS ingress guard changed selected socket')
+            require(counters(ns['router'],'vs_router_tproxy_dns_ingress','prerouting')
+                    .get('tproxy_dns_direct',0) > before_dns, 'DNS ingress drop counter unchanged')
+            trial('other-direct-dns-ingress',other,other_ingress,ORIGIN,53,True)
+            trial('selected-other-port-dns-ingress',selected,ingress,ORIGIN,19090,True)
+            apply(ns['router'],path,fixture['dns_ingress_off'])
+            trial('selected-direct-dns-off',selected,ingress,ORIGIN,53,True)
+            apply(ns['router'],path,'''destroy table inet vs_router_dns_input_observer
+table inet vs_router_dns_input_observer {
+ chain input { type filter hook input priority -20; policy accept;
+  iifname "lan0" ip daddr 10.212.3.1 udp dport 53 ct state established counter comment "selected_established_input"
+  iifname "lan1" ip daddr 10.212.1.1 udp dport 53 ct state established counter comment "other_established_input"
+ }
+}
+''')
+            selected_port = trial('selected-wrong-before',selected,ingress,OTHER_ROUTER,53,True)
+            other_port = trial('other-wrong-before',other,other_ingress,ROUTER,53,True)
+            apply(ns['router'],path,fixture['dns_listener_on'])
+            trial('selected-own-listener',selected,ingress,ROUTER,53,True)
+            trial('other-own-listener',other,other_ingress,OTHER_ROUTER,53,True)
+            selected_before = counters(ns['router'],'vs_router_tproxy_dns_listener','input').get('tproxy_dns_selected_wrong_listener',0)
+            other_before = counters(ns['router'],'vs_router_tproxy_dns_listener','input').get('tproxy_dns_unselected_wrong_listener',0)
+            require(trial('selected-wrong-listener',selected,ingress,OTHER_ROUTER,53,False)
+                    == selected_port, 'selected established INPUT socket changed')
+            require(trial('other-wrong-listener',other,other_ingress,ROUTER,53,False)
+                    == other_port, 'other established INPUT socket changed')
+            current = counters(ns['router'],'vs_router_tproxy_dns_listener','input')
+            require(current.get('tproxy_dns_selected_wrong_listener',0) > selected_before
+                    and current.get('tproxy_dns_unselected_wrong_listener',0) > other_before,
+                    'DNS listener INPUT drop counters unchanged')
+            observed = counters(ns['router'],'vs_router_dns_input_observer','input')
+            require(observed.get('selected_established_input',0) > 0 and
+                    observed.get('other_established_input',0) > 0,
+                    'established INPUT cross-listener packets not observed before guard')
+            apply(ns['router'],path,fixture['dns_listener_off'])
+            trial('selected-wrong-listener-off',selected,ingress,OTHER_ROUTER,53,True)
+            trial('other-wrong-listener-off',other,other_ingress,ROUTER,53,True)
+            apply(ns['router'],path,'destroy table inet vs_router_dns_input_observer\n')
             apply(ns['router'],path,fixture['guard_on'])
             established_before = counters(ns['router'],'vs_router_dns_observer','forward').get('selected_established',0)
             require(trial('selected-local-guard',selected,ingress,ROUTER,53,True) == source_port,

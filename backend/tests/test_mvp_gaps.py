@@ -1,6 +1,7 @@
 """Coverage for the MVP-gap endpoints: aliases import/export, backup round-trip,
 diagnostics parsing/validation, Kea leases error handling and tunnel QR export."""
 import base64
+import json
 import os
 
 import pytest
@@ -81,10 +82,162 @@ async def test_backup_roundtrip_without_password_redacts_secrets(api):
     assert all(v['configuration'] != {} for v in archive['versions'])
 
     restored = await client.post('/api/backup/restore', json=archive)
+    assert restored.status_code == 409
+    assert restored.json()['code'] == 'draft.exists'
+    assert (await client.delete('/api/draft')).status_code == 204
+    restored = await client.post('/api/backup/restore', json=archive)
+    assert restored.status_code == 409
+    assert restored.json()['code'] == 'backup.partial_requires_confirmation'
+    assert (await client.get('/api/versions')).json() == []
+    restored = await client.post('/api/backup/restore', json={**archive, 'allow_partial': True})
     assert restored.status_code == 200
-    # restore drops secret-bearing records whose secrets were redacted
+    assert restored.json()['restored'] == 1
+    # Import is an unapplied draft, never a fake confirmed host snapshot.
     versions = (await client.get('/api/versions')).json()
-    assert len(versions) >= 1
+    assert len(versions) == 1
+    assert versions[0]['status'] == 'draft'
+    assert versions[0]['configuration']['tunnels'] == []
+
+
+async def test_backup_import_only_latest_as_draft_keeps_confirmed_history(api):
+    from vs_router.db import ConfigurationRow, Session
+    client = await _confirm_sample(api)
+    _, engine, _ = api
+    with Session(engine) as session:
+        row = session.get(ConfigurationRow, 1)
+        assert row is not None
+        row.status = 'confirmed'
+        session.commit()
+    archive = (await client.get('/api/backup/export')).json()
+    newer = {**archive['versions'][0], 'id': 42,
+             'configuration': {**archive['versions'][0]['configuration'], 'aliases': []}}
+    archive['versions'].append(newer)
+    response = await client.post('/api/backup/restore', json={**archive, 'allow_partial': True})
+    assert response.status_code == 200
+    assert response.json() == {'restored': 1, 'skipped': 1}
+    versions = (await client.get('/api/versions')).json()
+    assert [(v['id'], v['status']) for v in versions] == [(2, 'draft'), (1, 'confirmed')]
+    assert versions[0]['configuration']['aliases'] == []
+    assert versions[1]['configuration']['aliases'] != []
+
+
+async def test_backup_import_does_not_parse_skipped_history(api):
+    client = await _confirm_sample(api)
+    archive = (await client.get('/api/backup/export')).json()
+    archive['versions'].insert(0, {'invalid': 'skipped'})
+    assert (await client.delete('/api/draft')).status_code == 204
+    response = await client.post('/api/backup/restore', json={**archive, 'allow_partial': True})
+    assert response.status_code == 200
+    assert response.json() == {'restored': 1, 'skipped': 1}
+
+
+async def test_password_backup_export_uses_post_body(api, monkeypatch):
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', key)
+    client = await _confirm_sample(api, key=key)
+    response = await client.post('/api/backup/export', json={
+        'include_secrets': True, 'password': 'local-example-password',
+    })
+    assert response.status_code == 200
+    assert response.headers['cache-control'] == 'no-store'
+    assert response.json()['versions'][0]['secret_blob']['ciphertext']
+    assert response.json()['versions'][0]['configuration']['tunnels'][0]['private_key'] == {'redacted': True}
+    legacy = await client.get('/api/backup/export', params={'include_secrets': 'true', 'password': 'ignored'})
+    assert legacy.status_code == 200
+    assert 'secret_blob' not in legacy.json()['versions'][0]
+
+
+async def test_password_backup_import_rejects_different_host_key(api, monkeypatch):
+    from vs_router.api.backup import _derive_key
+    from vs_router.db import ConfigurationRow, Session
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', key)
+    client = await _confirm_sample(api, key=key)
+    archive = (await client.post('/api/backup/export', json={
+        'include_secrets': True, 'password': 'example-password',
+    })).json()
+    # Old archives wrapped host-key ciphertext without a format tag.
+    with Session(api[1]) as db:
+        source = db.get(ConfigurationRow, 1)
+        assert source is not None
+        configuration = source.snapshot().model_dump(mode='json')['configuration']
+    salt = os.urandom(16)
+    archive['versions'][0]['secret_blob'] = {
+        'salt': base64.b64encode(salt).decode(),
+        'ciphertext': Fernet(_derive_key('example-password', salt)).encrypt(
+            json.dumps(configuration).encode()).decode(),
+    }
+    assert (await client.delete('/api/draft')).status_code == 204
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', Fernet.generate_key().decode())
+    response = await client.post('/api/backup/restore', json={**archive, 'password': 'example-password'})
+    assert response.status_code == 400
+    assert response.json()['code'] == 'backup.secret_key_mismatch'
+    assert (await client.get('/api/versions')).json() == []
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', key)
+    response = await client.post('/api/backup/restore', json={**archive, 'password': 'example-password'})
+    assert response.status_code == 200
+    versions = (await client.get('/api/versions')).json()
+    assert versions[0]['status'] == 'draft'
+    assert len(versions[0]['configuration']['tunnels']) == 1
+
+
+async def test_password_backup_import_requires_archive_password(api, monkeypatch):
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', key)
+    client = await _confirm_sample(api, key=key)
+    archive = (await client.post('/api/backup/export', json={
+        'include_secrets': True, 'password': 'example-password',
+    })).json()
+    assert (await client.delete('/api/draft')).status_code == 204
+    response = await client.post('/api/backup/restore', json=archive)
+    assert response.status_code == 400
+    assert response.json()['code'] == 'backup.password_required'
+    assert (await client.get('/api/versions')).json() == []
+
+
+async def test_password_backup_reencrypts_secrets_for_another_host(api, monkeypatch):
+    from vs_router.db import ConfigurationRow, Session
+    from vs_router.schema import Configuration
+    from vs_router.secrets import decrypt_secret
+    source_key = Fernet.generate_key()
+    target_key = Fernet.generate_key()
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', source_key.decode())
+    client = await _confirm_sample(api, key=source_key.decode())
+    _, engine, _ = api
+    with Session(engine) as db:
+        source = db.get(ConfigurationRow, 1)
+        assert source is not None
+        updated = source.configuration.model_dump(mode='json')
+        updated['tunnels'][0]['peers'][0]['preshared_key'] = encrypt_secret(
+            'ephemeral-peer-key', source_key).model_dump(mode='json')
+        source.configuration = Configuration.model_validate(updated)
+        db.commit()
+        original = source.configuration.tunnels[0].private_key
+        original_peer = source.configuration.tunnels[0].peers[0].preshared_key
+    archive = (await client.post('/api/backup/export', json={
+        'include_secrets': True, 'password': 'example-password',
+    })).json()
+    assert archive['versions'][0]['secret_blob']['format'] == 'plaintext-v1'
+    assert 'ephemeral-peer-key' not in json.dumps(archive)
+    assert decrypt_secret(original, source_key) not in json.dumps(archive)
+    assert (await client.delete('/api/draft')).status_code == 204
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', target_key.decode())
+    rejected = await client.post('/api/backup/restore', json={**archive, 'password': 'wrong-password'})
+    assert rejected.status_code == 400
+    assert rejected.json()['code'] == 'backup.bad_payload'
+    assert (await client.get('/api/versions')).json() == []
+    response = await client.post('/api/backup/restore', json={**archive, 'password': 'example-password'})
+    assert response.status_code == 200
+    with Session(engine) as db:
+        imported = db.get(ConfigurationRow, 1)
+        assert imported is not None
+        replacement = imported.configuration.tunnels[0].private_key
+        replacement_peer = imported.configuration.tunnels[0].peers[0].preshared_key
+    assert replacement.ciphertext != original.ciphertext
+    assert decrypt_secret(replacement, target_key) == decrypt_secret(original, source_key)
+    assert original_peer is not None and replacement_peer is not None
+    assert replacement_peer.ciphertext != original_peer.ciphertext
+    assert decrypt_secret(replacement_peer, target_key) == decrypt_secret(original_peer, source_key)
 
 
 async def test_diag_ping_parse_and_input_validation(api):

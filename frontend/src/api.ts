@@ -2,6 +2,7 @@ import type {
   HostInterface,
   ApplyRequest,
   ApplyResult,
+  ApplyMarker,
   Configuration,
   ConfigurationVersion,
   Credentials,
@@ -85,6 +86,8 @@ export const api = {
     }),
   deleteDraft: () => request<void>("/api/draft", { method: "DELETE" }),
   apply: (body: ApplyRequest) => post<ApplyResult>("/api/apply", body),
+  applyStatus: (signal?: AbortSignal) =>
+    request<ApplyMarker | null>("/api/apply/status", { signal }),
   confirm: (version_id: number) =>
     post<ApplyResult>("/api/confirm", { version_id }),
   rollback: () => post<ApplyResult>("/api/rollback", {}),
@@ -104,8 +107,8 @@ export const api = {
     if (!response.ok) throw await responseError(response);
     return response.blob();
   },
-  backupExport: (include_secrets: boolean, password?: string) => request<{ schema_version: number; versions: unknown[]; users: unknown[] }>(`/api/backup/export?include_secrets=${include_secrets}${password ? `&password=${encodeURIComponent(password)}` : ""}`),
-  backupRestore: (body: { schema_version: number; versions: unknown[]; password?: string }) => post<{ restored: number }>("/api/backup/restore", body),
+  backupExport: (include_secrets: boolean, password?: string) => post<{ schema_version: number; versions: unknown[]; users: unknown[] }>("/api/backup/export", { include_secrets, ...(password ? { password } : {}) }),
+  backupRestore: (body: { schema_version: number; versions: unknown[]; password?: string; allow_partial: boolean }) => post<{ restored: number; skipped: number }>("/api/backup/restore", body),
   ping: (body: { host: string; count: number; source_interface?: string }) => post<PingResult>("/api/diag/ping", body),
   traceroute: (host: string) => post<string[]>("/api/diag/traceroute", { host }),
   rulesCounters: () => request<Record<string, { packets: number; bytes: number }>>("/api/diag/rules-counters"),

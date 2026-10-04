@@ -43,3 +43,30 @@ it("renders and validates the ping host field",async()=>{
 it("renders the maintenance screen through its route",async()=>{
   setup(emptyConfiguration);render(<MemoryRouter initialEntries={["/maintenance"]}><App/></MemoryRouter>);expect(await screen.findByRole("heading",{name:"Обслуживание",level:1})).toBeVisible();
 });
+it("warns that backup import needs a free draft and does not activate host config",async()=>{
+  setup(emptyConfiguration);mount(<Maintenance/>);
+  expect(await screen.findByText(/Перед импортом сбросьте текущий черновик/)).toBeVisible();
+  expect(screen.getByText(/Импорт создаёт черновик, не применяет конфигурацию/)).toBeVisible();
+});
+it("imports backup into a draft without applying it",async()=>{
+  let imported=false;
+  const fetch=vi.fn(async(path:string)=>new Response(JSON.stringify(
+    path==="/api/versions"?[{id:imported?2:1,status:imported?"draft":"confirmed",configuration:emptyConfiguration}]:
+    path==="/api/auth/me"?{id:1,username:"admin",role:"admin"}:
+    path==="/api/apply/status"?null:
+    path==="/api/backup/restore"?(imported=true,{restored:1,skipped:1}):{},
+  )));
+  vi.stubGlobal("fetch",fetch);
+  render(<MemoryRouter initialEntries={["/maintenance"]}><App/></MemoryRouter>);
+  await screen.findByText("admin");
+  const file=new File(["{}"],"backup.json",{type:"application/json"});
+  Object.defineProperty(file,"text",{value:async()=>JSON.stringify({schema_version:1,versions:[{},{}],users:[]})});
+  await userEvent.upload(screen.getByRole("button",{name:"Выбрать файл импорта"}).querySelector("input")!,file);
+  await userEvent.click(await screen.findByRole("checkbox",{name:/Разрешить пропуск записей без секретов/}));
+  await userEvent.click(await screen.findByRole("button",{name:"Импортировать в черновик"}));
+  expect(await screen.findByText(/Создан черновик из последней версии; пропущено версий: 1/)).toBeVisible();
+  expect(fetch).toHaveBeenCalledWith("/api/backup/restore",expect.objectContaining({
+    method:"POST",body:expect.stringContaining('"allow_partial":true'),
+  }));
+  expect(fetch.mock.calls.some(([path])=>path==="/api/apply")).toBe(false);
+});

@@ -196,8 +196,13 @@ class ApplyEngine:
                     validate_site_bindings(version, management)
             except (OSError, ValueError) as exc:
                 raise ApplyError('management.access_invalid') from exc
+            if management is None:
+                raise ApplyError('management.assignment_required')
         if management is not None and backup is None:
-            # No rollback target exists. The host guard is mandatory instead.
+            # No rollback target exists: never mutate the host if the panel is
+            # already unreachable over the provisioned management HTTPS path.
+            if self.panel_probe is None or not self.panel_probe():
+                raise ApplyError('panel.unavailable')
             safe_mode = False
         elif management is not None and backup is not None:
             old = ConfigurationVersion.model_validate(backup['version_snapshot']).configuration

@@ -88,3 +88,42 @@ def test_offline_containment_off_removes_only_its_own_table():
     assert nftables.generate_tproxy_containment(ConfigurationVersion()) == (
         "destroy table inet vs_router_tproxy_guard\n"
     )
+
+
+def _dns_guard_version():
+    version = ConfigurationVersion.model_validate({"configuration": {
+        "interfaces": [{"name": "lan0", "zone": "lan", "addresses": ["10.212.1.1/24"]},
+                       {"name": "lan1", "zone": "lan", "addresses": ["10.213.1.1/24"]},
+                       {"name": "wan0", "zone": "wan", "addresses": ["10.212.2.1/24"]}],
+        "tproxy": {"ingress_interfaces": ["lan0"]},
+    }})
+    policy = version.configuration.tproxy.model_copy(update={"enabled": True})
+    return version.model_copy(update={"configuration": version.configuration.model_copy(
+        update={"tproxy": policy})})
+
+
+def test_offline_dns_ingress_guard_scope_and_order():
+    version = _dns_guard_version()
+    rules = nftables.generate_tproxy_dns_ingress_guard(version)
+    assert rules == nftables.generate_tproxy_dns_ingress_guard(version)
+    assert 'type filter hook prerouting priority -110; policy accept;' in rules
+    assert 'iifname != { "lan0" } return' in rules
+    assert rules.index('fib daddr type local return') < rules.index('th dport 53 counter drop')
+    assert 'meta nfproto != ipv4 return' in rules
+    assert 'meta l4proto != { tcp, udp } return' in rules
+    assert 'hook output' not in rules and 'hook forward' not in rules
+    assert 'lan1' not in rules and 'wan0' not in rules
+    assert nftables.generate_tproxy_dns_ingress_guard(ConfigurationVersion()) == (
+        'destroy table inet vs_router_tproxy_dns_ingress\n')
+    with pytest.raises(ValueError, match='tproxy.not_available'):
+        ConfigurationVersion.model_validate(version.model_dump())
+
+
+@pytest.mark.parametrize('sources', [[], ['wan0'], ['missing'], ['lan0', 'lan0']])
+def test_offline_dns_ingress_guard_rejects_invalid_sources(sources):
+    version = _dns_guard_version()
+    policy = version.configuration.tproxy.model_copy(update={'ingress_interfaces': tuple(sources)})
+    version = version.model_copy(update={'configuration': version.configuration.model_copy(
+        update={'tproxy': policy})})
+    with pytest.raises(ValueError, match='tproxy.dns_invalid_ingress'):
+        nftables.generate_tproxy_dns_ingress_guard(version)

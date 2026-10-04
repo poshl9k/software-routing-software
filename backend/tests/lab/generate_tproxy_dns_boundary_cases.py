@@ -5,6 +5,8 @@ from pathlib import Path
 
 from vs_router.generators.nftables import (generate_nftables,
                                           generate_tproxy_containment,
+                                          generate_tproxy_dns_ingress_guard,
+                                          generate_tproxy_dns_listener_guard,
                                           generate_tproxy_preauthorization)
 from vs_router.schema import ConfigurationVersion
 
@@ -25,6 +27,7 @@ def generate_cases():
              'protocol': 'udp', 'destination_ports': '19090', 'action': 'pass'},
         ],
         'outbound_nat_mode': 'disabled', 'anti_lockout': False,
+        'dns': {'interfaces': ['lan0', 'lan1'], 'access_control': ['10.212.0.0/16']},
         'tproxy': {'enabled': False, 'ingress_interfaces': ['lan0']},
     }})
     policy = version.configuration.tproxy.model_copy(update={'enabled': True})
@@ -35,6 +38,10 @@ def generate_cases():
             'preauth': generate_tproxy_preauthorization(enabled),
             'guard_on': generate_tproxy_containment(enabled),
             'guard_off': generate_tproxy_containment(version),
+            'dns_ingress_on': generate_tproxy_dns_ingress_guard(enabled),
+            'dns_ingress_off': generate_tproxy_dns_ingress_guard(version),
+            'dns_listener_on': generate_tproxy_dns_listener_guard(enabled),
+            'dns_listener_off': generate_tproxy_dns_listener_guard(version),
             'preauth_off': generate_tproxy_preauthorization(version)}
 
 

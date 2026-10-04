@@ -192,7 +192,7 @@ export interface ApplyResult {
   phases?: Record<string, string>;
   error?: ErrorBody | null;
 }
-/** Agent RPC status shape; currently not exposed over HTTP. */
+/** Host-owned agent marker returned by GET /api/apply/status. */
 export interface ApplyMarker extends ApplyResult {
   applied_at: number;
   deadline: number | null;

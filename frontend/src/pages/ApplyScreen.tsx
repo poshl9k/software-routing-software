@@ -10,11 +10,12 @@ import {
 } from "@mui/material";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { useApplyCommands, statusLabels, useCountdown, useRouterState } from "../state";
-import { Badge, Card, DataTable, ErrorNotice, Todo, fmtDateTime } from "../ui";
+import { observation, useApplyCommands, statusLabels, useCountdown, useRouterState } from "../state";
+import { Badge, Card, DataTable, ErrorNotice, fmtDateTime } from "../ui";
 import type { ApplyResult } from "../types";
 export default function ApplyScreen() {
-  const { uncertain, busy, applyState, discardDraft, setNotice } =
+  const { uncertain, busy, applyState, discardDraft, setNotice, user,
+    setApplyState, setApplyError, setUncertain } =
     useRouterState();
   const {
     drafts,
@@ -33,8 +34,32 @@ export default function ApplyScreen() {
   const [selected, setSelected] = useState<number | "">("");
   const [diff, setDiff] = useState<unknown[] | null>(null);
   const [diffError, setDiffError] = useState<unknown>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [statusRefresh, setStatusRefresh] = useState(0);
   const shownDraft =
     drafts.find((v) => v.id === selected) ?? draft;
+  useEffect(() => {
+    if (user?.role !== "admin" || busy) return;
+    const controller = new AbortController();
+    setStatusLoading(true);
+    api.applyStatus(controller.signal)
+      .then((marker) => {
+        if (controller.signal.aborted) return;
+        setApplyState((previous) => marker ? observation(marker) :
+          previous && ["confirmed", "rolled_back", "failed"].includes(previous.result.status)
+            ? previous : null);
+        setUncertain(false);
+        if (statusRefresh) setApplyError(null);
+        setStatusLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setApplyError(err);
+        setUncertain(true);
+        setStatusLoading(false);
+      });
+    return () => controller.abort();
+  }, [user?.role, busy, statusRefresh, setApplyState, setApplyError, setUncertain]);
   useEffect(() => {
     let cancelled = false;
     setDiff(null);
@@ -57,12 +82,8 @@ export default function ApplyScreen() {
       <Typography component="h1" variant="h1" className="page-title">
         Применение изменений
       </Typography>
-      <Todo>
-        HTTP-чтение маркера агента отсутствует. Здесь показан только последний
-        ответ команды в этой вкладке. После перезагрузки состояние неизвестно;
-        БД не заменяет маркер.
-      </Todo>
-      <ErrorNotice error={error} />
+      <ErrorNotice error={error || (state?.error ?
+        new Error(`${state.error.message} · ${state.error.code}`) : null)} />
       {!confirmed && (
         <Alert severity="warning">
           Первое применение выполняется без автоотката: подтверждённой версии ещё нет.
@@ -91,8 +112,7 @@ export default function ApplyScreen() {
                 : "info"
           }
         >
-          {statusLabels[state.status]} · v{state.version_id} · последний ответ
-          команды
+          {statusLabels[state.status]} · v{state.version_id} · состояние агента
         </Alert>
       )}
       {pending && (
@@ -129,7 +149,7 @@ export default function ApplyScreen() {
             label="Черновик"
             value={draft?.id ?? ""}
             onChange={(e) => setSelected(Number(e.target.value))}
-            disabled={busy || !!active}
+            disabled={busy || !!active || user?.role !== "admin"}
           >
             {drafts
               .map((v) => (
@@ -147,7 +167,7 @@ export default function ApplyScreen() {
                 id="safe-apply-switch"
                 inputProps={{ "aria-label": "Безопасная настройка" }}
                 checked={preferences.safe}
-                disabled={busy || !!active}
+                disabled={busy || !!active || user?.role !== "admin"}
                 onChange={(_, safe) => setPreferences((p) => ({ ...p, safe }))}
               />
             }
@@ -156,7 +176,7 @@ export default function ApplyScreen() {
             type="number"
             label="Окно подтверждения (секунды)"
             value={preferences.timeout}
-            disabled={busy || !!active}
+            disabled={busy || !!active || user?.role !== "admin"}
             error={!timeoutValid}
             helperText="60–600 секунд; по умолчанию 180"
             slotProps={{ htmlInput: { min: 60, max: 600 } }}
@@ -210,9 +230,17 @@ export default function ApplyScreen() {
       </Card>
       <div className="footer-actions">
         <Button
+          disabled={busy || statusLoading || user?.role !== "admin"}
+          onClick={() => setStatusRefresh((value) => value + 1)}
+        >
+          Обновить состояние
+        </Button>
+        <Button
           variant="contained"
           disabled={
             busy ||
+            statusLoading ||
+            user?.role !== "admin" ||
             !!active ||
             uncertain ||
             !draft ||
@@ -224,7 +252,7 @@ export default function ApplyScreen() {
         </Button>
         <Button
           variant="contained"
-          disabled={busy || !pending || seconds === 0 || seconds === null}
+          disabled={busy || user?.role !== "admin" || statusLoading || uncertain || !pending || seconds === 0 || seconds === null}
           onClick={() => void command("confirm")}
         >
           Подтвердить изменения
@@ -232,17 +260,19 @@ export default function ApplyScreen() {
         <Button
           color="error"
           variant="contained"
-          disabled={busy || !(active || uncertain)}
+          disabled={busy || user?.role !== "admin" || !(active || uncertain)}
           onClick={() => void command("rollback")}
         >
           Откатить сейчас
         </Button>
         <Button
           color="error"
-          disabled={busy || !draft || !!active}
+          disabled={busy || user?.role !== "admin" || !draft || !!active}
           onClick={() => {
             if (window.confirm("Сбросить черновик? Изменения будут потеряны."))
-              void discardDraft().then(() => setNotice("Черновик сброшен"));
+              void discardDraft()
+                .then(() => setNotice("Черновик сброшен"))
+                .catch((err: unknown) => setApplyError(err));
           }}
         >
           Сбросить черновик

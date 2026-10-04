@@ -63,7 +63,7 @@ def question(data):
 
 def answer(query, ip):
     name, end = question(query)
-    require(name in ('www.forward.test.', 'tcp.forward.test.'),
+    require(name in ('www.forward.test.', 'tcp.forward.test.', 'guard.forward.test.'),
             'origin received unexpected DNS question')
     header = query[:2] + struct.pack('!HHHHH', 0x8180, 1, 1, 0, 0)
     rr = b'\xc0\x0c' + struct.pack('!HHIH', 1, 1, 60, 4) + socket.inet_aton(ip)
@@ -152,7 +152,7 @@ def respond(data, peer, transport):
     q,end=name(data)
     print(json.dumps({'kind':'receive','name':q,'transport':transport,
         'peer':peer[0], 'id':struct.unpack_from('!H',data)[0]}),flush=True)
-    if q not in ('www.forward.test.', 'tcp.forward.test.') or data[end:end+4] != b'\x00\x01\x00\x01': return None
+    if q not in ('www.forward.test.', 'tcp.forward.test.', 'guard.forward.test.') or data[end:end+4] != b'\x00\x01\x00\x01': return None
     return (data[:2]+struct.pack('!HHHHH',0x8180,1,1,0,0)+data[12:end+4]
         +b'\xc0\x0c'+struct.pack('!HHIH',1,1,60,4)+socket.inet_aton(ANSWER))
 def tcp_client(c,peer):
@@ -376,6 +376,58 @@ def main():
                                             for e in received), f'{transport} {case} reached origin server')
                         if case == 'direct': require(drop_count(router)>before,'FORWARD drop did not increase')
                         print(f'{transport} {case}: PASS',flush=True)
+                # A selected-source FORWARD guard cannot contain resolver OUTPUT:
+                # the local listener accepts INPUT, then Unbound sends a new packet.
+                # A following allow supplies a positive control for the guard:
+                # without it, the ordinary firewall already denies direct DNS.
+                run('ip','netns','exec',router,'nft','insert','rule','inet','vs_router',
+                    'forward','iifname','lan0','ip','daddr','198.18.0.2',
+                    'udp','dport','53','accept')
+                run('ip','netns','exec',router,'nft','insert','rule','inet','vs_router',
+                    'forward','iifname','lan0','counter','drop','comment','"dns_selected_guard"')
+                before_guard = guard_count(router)
+                ingress.drain(); outside.drain(); server.drain()
+                ident = int.from_bytes(os.urandom(2),'big')
+                result = json.loads(run('ip','netns','exec',client,sys.executable,
+                                        '-c',CLIENT,'udp','10.212.1.1',
+                                        'guard.forward.test.',str(ident)))
+                require(not result['timeout'], 'guarded client DNS request timed out')
+                rcode, addresses = parse_response(bytes.fromhex(result['response']),
+                                                  ident,'guard.forward.test.')
+                require(rcode == 0 and '203.0.113.7' in addresses, 'guarded DNS response mismatch')
+                time.sleep(.25)
+                wire_in, wire_out, received = ingress.drain(), outside.drain(), server.drain()
+                require(any(e.get('kind') == 'dns' and e.get('name') == 'guard.forward.test.'
+                            and e.get('id') == ident and e.get('src') == '10.212.1.2'
+                            for e in wire_in), 'guarded client ingress missing')
+                upstream = [e for e in wire_out if e.get('kind') == 'dns'
+                            and e.get('name') == 'guard.forward.test.'
+                            and e.get('src') == '10.212.2.1' and e.get('dst') == '198.18.0.2']
+                accepted = [e for e in received if e.get('kind') == 'receive'
+                            and e.get('name') == 'guard.forward.test.'
+                            and e.get('peer') == '10.212.2.1']
+                require(upstream and accepted and any(a['id'] == b['id']
+                    and a['transport'] == b['transport'] for a in upstream for b in accepted),
+                    'guarded DNS upstream wire/receiver missing')
+                require(guard_count(router) == before_guard,
+                        'guarded flow unexpectedly hit selected FORWARD guard')
+                print('selected FORWARD guard does not contain Unbound OUTPUT: PASS',flush=True)
+                ingress.drain(); outside.drain(); server.drain()
+                direct_ident = int.from_bytes(os.urandom(2),'big')
+                direct = json.loads(run('ip','netns','exec',client,sys.executable,
+                                        '-c',CLIENT,'udp','198.18.0.2',
+                                        'www.forward.test.',str(direct_ident)))
+                require(direct['timeout'] and guard_count(router) > before_guard,
+                        'selected FORWARD guard failed to block allowed direct DNS')
+                time.sleep(.25)
+                require(any(e.get('kind') == 'dns' and e.get('id') == direct_ident
+                            and e.get('dst') == '198.18.0.2' for e in ingress.drain()),
+                        'direct control ingress missing')
+                require(not any(e.get('kind') == 'dns' and e.get('id') == direct_ident
+                                for e in outside.drain()), 'direct control reached origin wire')
+                require(not any(e.get('kind') == 'receive' and e.get('name') == 'www.forward.test.'
+                                for e in server.drain()), 'direct control reached origin server')
+                print('selected FORWARD guard direct DNS control: PASS',flush=True)
             finally:
                 service.terminate()
                 try: service.communicate(timeout=3)
@@ -393,6 +445,12 @@ def drop_count(ns):
     data=json.loads(run('ip','netns','exec',ns,'nft','-j','list','chain','inet','vs_router','forward'))
     return sum(expr['counter']['packets'] for entry in data['nftables']
                if entry.get('rule',{}).get('comment') == 'dns_baseline_drop'
+               for expr in entry['rule']['expr'] if 'counter' in expr)
+
+def guard_count(ns):
+    data=json.loads(run('ip','netns','exec',ns,'nft','-j','list','chain','inet','vs_router','forward'))
+    return sum(expr['counter']['packets'] for entry in data['nftables']
+               if entry.get('rule',{}).get('comment') == 'dns_selected_guard'
                for expr in entry['rule']['expr'] if 'counter' in expr)
 
 

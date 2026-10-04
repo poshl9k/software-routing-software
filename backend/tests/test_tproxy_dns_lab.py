@@ -72,6 +72,22 @@ def test_dns_wire_helpers_offline():
     response = module.answer(query, '203.0.113.7')
     assert module.parse_response(response, ident, 'www.forward.test.') == (0, ['203.0.113.7'])
     assert socket.inet_aton('203.0.113.7') in response
+    guard_query = struct.pack('!HHHHHH', ident, 0x0100, 1, 0, 0, 0)
+    guard_query += module.name_wire('guard.forward.test.') + struct.pack('!HH', 1, 1)
+    assert module.parse_response(module.answer(guard_query, '203.0.113.7'),
+                                 ident, 'guard.forward.test.') == (0, ['203.0.113.7'])
+
+
+def test_guard_counter_is_scoped_to_selected_forward_rule(monkeypatch):
+    module = load_probe()
+    import json
+    rules = {'nftables': [
+        {'rule': {'comment': 'dns_selected_guard', 'expr': [{'counter': {'packets': 0}}]}},
+        {'rule': {'comment': 'dns_baseline_drop', 'expr': [{'counter': {'packets': 4}}]}},
+    ]}
+    monkeypatch.setattr(module, 'run', lambda *args: json.dumps(rules))
+    assert module.guard_count('router') == 0
+    assert module.drop_count('router') == 4
 
 
 def test_vm_probe_accounts_for_resolver_cache_and_upstream_ids():

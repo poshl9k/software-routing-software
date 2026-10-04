@@ -27,9 +27,11 @@ import { DHCP, DNS, Proxy, Tunnels } from "./pages/Services";
 import ApplyScreen from "./pages/ApplyScreen";
 import Maintenance from "./pages/Maintenance";
 import Onboarding, { Login } from "./pages/Onboarding";
+import { api } from "./api";
 import { theme } from "./theme";
 import {
   RouterProvider,
+  observation,
   useApplyCommands,
   useConfiguration,
   useRouterState,
@@ -37,7 +39,34 @@ import {
 import { Badge, ErrorNotice, Todo, fmtDateTime } from "./ui";
 function ApplyTopButton() {
   const { demo } = useConfiguration();
-  const { uncertain } = useRouterState();
+  const { uncertain, busy, user, setApplyState, setApplyError, setUncertain } = useRouterState();
+  const location = useLocation();
+  const [checking, setChecking] = useState(true);
+  useEffect(() => {
+    if (location.pathname === "/apply") {
+      setChecking(true); // The Apply screen owns this read and its confirmation button.
+      return;
+    }
+    if (user?.role !== "admin" || busy) return;
+    const controller = new AbortController();
+    setChecking(true);
+    api.applyStatus(controller.signal)
+      .then((marker) => {
+        if (controller.signal.aborted) return;
+        setApplyState((previous) => marker ? observation(marker) :
+          previous && ["confirmed", "rolled_back", "failed"].includes(previous.result.status)
+            ? previous : null);
+        setUncertain(false);
+        setChecking(false);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setApplyError(error);
+        setUncertain(true);
+        setChecking(false);
+      });
+    return () => controller.abort();
+  }, [location.pathname, user?.role, busy, setApplyState, setApplyError, setUncertain]);
   const {
     draft,
     confirmed,
@@ -47,7 +76,7 @@ function ApplyTopButton() {
     timeoutValid,
     command,
   } = useApplyCommands();
-  if (demo) return null;
+  if (demo || user?.role !== "admin") return null;
   const mmss =
     seconds === null
       ? null
@@ -59,7 +88,7 @@ function ApplyTopButton() {
           <Button
             variant="contained"
             color="success"
-            disabled={seconds === 0 || seconds === null}
+            disabled={busy || checking || uncertain || seconds === 0 || seconds === null}
             onClick={() => void command("confirm")}
           >
             Подтвердить{mmss ? ` · ${mmss}` : ""}
@@ -84,7 +113,7 @@ function ApplyTopButton() {
       </Tooltip>
     );
   if (!draft) return null;
-  const applyDisabled = !timeoutValid;
+  const applyDisabled = checking || uncertain || busy || !timeoutValid;
   const when = fmtDateTime(draft.created_at);
   return (
     <Tooltip
@@ -140,6 +169,7 @@ function Layout() {
     notice,
     setNotice,
     applyError,
+    setApplyError,
   } = useConfiguration();
   useEffect(() => {
     void loadUser();
@@ -209,6 +239,7 @@ function Layout() {
               <Button
                 onClick={() =>
                   void signOut().then(() => navigate("/login"))
+                    .catch((err: unknown) => setApplyError(err))
                 }
               >
                 Выйти

@@ -29,6 +29,12 @@ def test_generated_boundary_fixture(tmp_path):
     assert 'udp dport 53' in fixture['firewall']
     assert 'comment "tproxy_containment"' in fixture['guard_on']
     assert 'lan1' not in fixture['guard_on']
+    assert 'hook prerouting priority -110' in fixture['dns_ingress_on']
+    assert 'th dport 53 counter drop' in fixture['dns_ingress_on']
+    assert fixture['dns_ingress_off'] == 'destroy table inet vs_router_tproxy_dns_ingress\n'
+    assert 'priority -10; policy accept;' in fixture['dns_listener_on']
+    assert 'ip daddr != { 10.212.1.1 }' in fixture['dns_listener_on']
+    assert fixture['dns_listener_off'] == 'destroy table inet vs_router_tproxy_dns_listener\n'
     path = tmp_path / 'fixture.json'
     generator.main([str(path)])
     assert json.loads(path.read_text()) == fixture
@@ -47,7 +53,9 @@ def test_imported_fixture_rejected_if_boundary_is_wrong():
     fixture = load('generate_tproxy_dns_boundary_cases').generate_cases()
     probe = load('tproxy_dns_boundary_probe')
     for key, bad in [('kind','wrong'), ('guard_on',fixture['guard_off']),
-                     ('preauth',fixture['preauth_off']), ('firewall','table inet x {}')]:
+                     ('preauth',fixture['preauth_off']), ('firewall','table inet x {}'),
+                     ('dns_ingress_on',fixture['dns_ingress_off']),
+                     ('dns_listener_on',fixture['dns_listener_off'])]:
         mutated = dict(fixture, **{key: bad})
         with pytest.raises(AssertionError):
             probe.check_fixture(mutated)

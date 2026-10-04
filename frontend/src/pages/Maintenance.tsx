@@ -9,30 +9,36 @@ function download(data: Blob, filename: string) {
   const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
 }
 export default function Maintenance() {
-  const { configuration } = useConfiguration();
+  const { configuration, versions, refresh, user } = useConfiguration();
+  const admin = user?.role === "admin";
   const [error, setError] = useState<unknown>(null); const [notice, setNotice] = useState("");
   const [secrets, setSecrets] = useState(false); const [password, setPassword] = useState("");
   const [backup, setBackup] = useState<{schema_version:number; versions:unknown[]; users:unknown[]}|null>(null);
   const [restorePassword, setRestorePassword] = useState("");
+  const [allowPartial, setAllowPartial] = useState(false);
   const [host, setHost] = useState(""); const [count, setCount] = useState(4); const [iface, setIface] = useState("");
   const [ping, setPing] = useState<{sent:number;received:number;loss_pct:number;min_avg_max_ms:number[]}|null>(null);
   const [trace, setTrace] = useState<string[]>([]); const [counters, setCounters] = useState<Record<string,{packets:number;bytes:number}>>({});
   const [busy, setBusy] = useState(false);
   const perform = async (fn:()=>Promise<void>) => { setError(null); setNotice(""); setBusy(true); try { await fn(); } catch(e) { setError(e); } finally { setBusy(false); } };
   const refreshCounters = () => perform(async()=>setCounters(await api.rulesCounters()));
-  useEffect(()=>{void refreshCounters();},[]);
-  const restoreFile = async (file?: File) => { if (!file) return; void perform(async()=>{ const parsed=JSON.parse(await file.text()); if (!parsed || typeof parsed.schema_version!=="number" || !Array.isArray(parsed.versions) || !Array.isArray(parsed.users)) throw new Error("Некорректный файл резервной копии"); setBackup(parsed); }); };
+  useEffect(()=>{if(admin) void refreshCounters();},[admin]);
+  const restoreFile = async (file?: File) => { if (!file) return; void perform(async()=>{ const parsed=JSON.parse(await file.text()); if (!parsed || typeof parsed.schema_version!=="number" || !Array.isArray(parsed.versions) || !Array.isArray(parsed.users)) throw new Error("Некорректный файл резервной копии"); setAllowPartial(false); setBackup(parsed); }); };
   return <>
     <Typography component="h1" variant="h1" className="page-title">Обслуживание</Typography>
     <ErrorNotice error={error}/>{notice&&<Alert severity="success">{notice}</Alert>}
     <Card title="Резервная копия">
+      <Alert severity="info">Импорт создаёт черновик, не применяет конфигурацию. Из архива берётся только последняя версия. Новые парольные архивы перешифровываются для этого хоста; старым архивам нужен прежний ключ.</Alert>
+      {versions.some(v=>v.status==="draft")&&<Alert severity="warning">Перед импортом сбросьте текущий черновик на странице «Применение».</Alert>}
       <FormControlLabel control={<Checkbox checked={secrets} onChange={e=>setSecrets(e.target.checked)}/>} label="Включая секреты"/>
       {secrets&&<TextField size="small" label="Пароль шифрования" type="password" value={password} onChange={e=>setPassword(e.target.value)}/>}
-      <div className="footer-actions"><Button disabled={busy||(secrets&&!password)} onClick={()=>void perform(async()=>{const b=await api.backupExport(secrets,secrets?password:undefined); download(new Blob([JSON.stringify(b,null,2)],{type:"application/json"}),"vs-router-backup.json");})}>Экспорт</Button>
-      <Button component="label">Выбрать файл импорта<input hidden type="file" accept="application/json,.json" onChange={e=>void restoreFile(e.target.files?.[0])}/></Button></div>
+      <div className="footer-actions"><Button disabled={!admin||busy||(secrets&&!password)} onClick={()=>void perform(async()=>{const b=await api.backupExport(secrets,secrets?password:undefined); download(new Blob([JSON.stringify(b,null,2)],{type:"application/json"}),"vs-router-backup.json");})}>Экспорт</Button>
+      <Button component="label" disabled={!admin}>Выбрать файл импорта<input hidden disabled={!admin} type="file" accept="application/json,.json" onChange={e=>void restoreFile(e.target.files?.[0])}/></Button></div>
       {backup&&<><DataTable heads={["Параметр","Значение"]} rows={[["Версия схемы",backup.schema_version],["Версий конфигурации",backup.versions.length],["Пользователей",backup.users.length]]}/>
         <TextField size="small" label="Пароль (если требуется)" type="password" value={restorePassword} onChange={e=>setRestorePassword(e.target.value)}/>
-        <Button disabled={busy} onClick={()=>void perform(async()=>{const result=await api.backupRestore({...backup,...(restorePassword?{password:restorePassword}:{})});setNotice(`Восстановлено: ${result.restored}`);})}>Восстановить</Button></>}
+        <Alert severity="warning">Если в архиве нет секретов, туннели, DDNS и сайты с ручными сертификатами могут быть пропущены. Проверьте черновик перед применением.</Alert>
+        <FormControlLabel control={<Checkbox checked={allowPartial} onChange={e=>setAllowPartial(e.target.checked)}/>} label="Разрешить пропуск записей без секретов"/>
+        <Button disabled={!admin||busy||versions.some(v=>v.status==="draft")} onClick={()=>void perform(async()=>{const result=await api.backupRestore({...backup,allow_partial:allowPartial,...(restorePassword?{password:restorePassword}:{})});await refresh();setNotice(`Создан черновик из последней версии; пропущено версий: ${result.skipped}. Примените его отдельно.`);})}>Импортировать в черновик</Button></>}
     </Card>
     <Card title="Диагностика ping">
       <div className="diag-controls">
@@ -72,7 +78,7 @@ export default function Maintenance() {
           </Select>
         </FormControl>
         <Button
-          disabled={busy || !host.trim() || count < 1 || count > 5}
+          disabled={!admin || busy || !host.trim() || count < 1 || count > 5}
           onClick={() =>
             void perform(async () =>
               setPing(
@@ -105,7 +111,7 @@ export default function Maintenance() {
           onChange={(e) => setHost(e.target.value)}
         />
         <Button
-          disabled={busy || !host.trim()}
+          disabled={!admin || busy || !host.trim()}
           onClick={() =>
             void perform(async () =>
               setTrace(await api.traceroute(host.trim())),
@@ -119,6 +125,6 @@ export default function Maintenance() {
         <div key={i}>{line}</div>
       ))}
     </Card>
-    <Card title="Счётчики правил" action={<Button onClick={()=>void refreshCounters()} disabled={busy}>Обновить</Button>}><DataTable heads={["Правило","Пакеты","Байты"]} rows={Object.entries(counters).map(([name,value])=>[name,value.packets,value.bytes])}/></Card>
+    <Card title="Счётчики правил" action={<Button onClick={()=>void refreshCounters()} disabled={!admin||busy}>Обновить</Button>}><DataTable heads={["Правило","Пакеты","Байты"]} rows={Object.entries(counters).map(([name,value])=>[name,value.packets,value.bytes])}/></Card>
   </>;
 }
