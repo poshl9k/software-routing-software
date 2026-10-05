@@ -78,7 +78,9 @@ def test_reload_tunnel(config, alive, protocol):
         executor.calls.append((argv, timeout))
         return SimpleNamespace(returncode=int(not alive and argv[:2] == ['systemctl', 'is-active']))
     executor.run = run
-    WireGuardReloader(executor, fs, sleep=lambda _: None)(source)
+    # Force the userspace daemon path; kernel selection is covered separately.
+    WireGuardReloader(executor, fs, sleep=lambda _: None,
+                      kernel_probe=lambda *_: False)(source)
     calls = [a for a, _ in executor.calls]
     assert (['systemctl', 'restart', f'vs-router-{protocol}@wg0.service'] in calls) == (not alive)
     setconf = [protocol, 'setconf', 'wg0', '/etc/vs-router/wireguard/vpn.conf']
@@ -87,8 +89,30 @@ def test_reload_tunnel(config, alive, protocol):
     assert ['ip', '-4', 'route', 'replace', 'default', 'dev', 'wg0', 'metric', '100'] in calls
     assert ['ip', '-6', 'route', 'replace', '2001:db8::/64', 'dev', 'wg0'] in calls
     fs.write(source, serialize_wireguard({'manifest.json': '{}\n'}))
-    WireGuardReloader(executor, fs)(source)
+    WireGuardReloader(executor, fs, kernel_probe=lambda *_: False)(source)
     assert ['systemctl', 'disable', '--now', f'vs-router-{protocol}@wg0.service'] in [a for a, _ in executor.calls]
+
+
+def test_reload_tunnel_uses_kernel_when_available(config):
+    fs, executor = FakeFS(), FakeExecutor()
+    t = config['configuration']['tunnels'][0]
+    t.update(role='client', protocol='wg', peers=[], endpoint='203.0.113.1:51820',
+             server_public_key='SERVER', allowed_ips=['0.0.0.0/0'], obfuscation={})
+    source = APPLIED_DIR / 'wireguard.conf'
+    fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
+    present = set()
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv[:3] == ['ip', 'link', 'show']:
+            return SimpleNamespace(returncode=0 if argv[4] in present else 1)
+        return SimpleNamespace(returncode=0)
+    executor.run = run
+    WireGuardReloader(executor, fs, sleep=lambda _: None, kernel_probe=lambda *_: True)(source)
+    calls = [a for a, _ in executor.calls]
+    assert ['ip', 'link', 'add', 'dev', 'wg0', 'type', 'wireguard'] in calls
+    assert ['systemctl', 'enable', 'vs-router-wg@wg0.service'] not in calls
+    assert ['wg', 'setconf', 'wg0', '/etc/vs-router/wireguard/vpn.conf'] in calls
+    assert ['ip', 'addr', 'replace', '10.66.66.1/24', 'dev', 'wg0'] in calls
 
 
 @pytest.mark.parametrize('failure', [None, 'validate', 'http'])
@@ -162,12 +186,34 @@ def test_tunnel_start_readiness_and_failure(config, tmp_path):
     for name, content in files.items():
         (tmp_path / name).write_text(content)
     executor = FakeExecutor()
+    # No link yet: the userspace daemon has to come up before `wg show` answers.
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        return SimpleNamespace(returncode=1 if argv[:3] == ['ip', 'link', 'show'] else 0)
+    executor.run = run
     configure('wg0', executor, tmp_path, lambda _: None)
-    assert executor.calls[0][0] == ['wg', 'show', 'wg0']
-    assert executor.calls[1][0] == ['wg', 'setconf', 'wg0', str(tmp_path / 'vpn.conf')]
-    executor.fail = True
+    assert executor.calls[0][0] == ['ip', 'link', 'show', 'dev', 'wg0']
+    assert executor.calls[1][0] == ['wg', 'show', 'wg0']
+    assert executor.calls[2][0] == ['wg', 'setconf', 'wg0', str(tmp_path / 'vpn.conf')]
+    # A daemon that never becomes ready must fail the phase, not pass silently.
+    broken = FakeExecutor()
+    broken.fail = True
     with pytest.raises(ApplyError):
-        configure('wg0', executor, tmp_path, lambda _: None)
+        configure('wg0', broken, tmp_path, lambda _: None)
+
+
+def test_tunnel_start_skips_wait_for_existing_link(config, tmp_path):
+    """An in-kernel device already exists; `wg show` answers immediately."""
+    from vs_router.agent.tunnel_start import configure
+    files = generate_wg_bundle(ConfigurationVersion.model_validate(config), {})
+    for name, content in files.items():
+        (tmp_path / name).write_text(content)
+    executor = FakeExecutor()
+    configure('wg0', executor, tmp_path, lambda _: None)
+    calls = [argv for argv, _ in executor.calls]
+    assert ['wg', 'show', 'wg0'] not in calls
+    assert calls[0] == ['ip', 'link', 'show', 'dev', 'wg0']
+    assert calls[1] == ['wg', 'setconf', 'wg0', str(tmp_path / 'vpn.conf')]
 
 
 def test_tunnel_reload_setconf_failure(config):
@@ -193,10 +239,12 @@ def test_boot_only_restores_files(config, tmp_path, monkeypatch):
     fs = FakeFS()
     fs.write(tmp_path / 'wireguard.conf', (tmp_path / 'wireguard.conf').read_text())
     fs.write(tmp_path / 'caddy.conf', (tmp_path / 'caddy.conf').read_text())
+    # Files only: this host has no kernel support, so no link is created.
     monkeypatch.setattr('vs_router.agent.apply.LocalFileSystem', lambda: fs)
-    # Exercise the real installers against a fake filesystem, never host paths.
-    monkeypatch.setattr(WireGuardReloader, '__init__', lambda self, **kw: (
-        setattr(self, 'fs', fs), setattr(self, 'config_dir', Path('/wg')))[-1])
+    executor = FakeExecutor()
+    monkeypatch.setattr('vs_router.agent.services.SubprocessExecutor', lambda: executor)
+    monkeypatch.setattr(WireGuardReloader, 'probe_kernel_wireguard',
+                        staticmethod(lambda executor, protocol='wg': False))
     monkeypatch.setattr(CaddyReloader, '__init__', lambda self, **kw: (
         setattr(self, 'fs', fs), setattr(self, 'config_path', Path('/caddy.json')),
         setattr(self, 'cert_dir', Path('/certs')))[-1])
@@ -205,8 +253,41 @@ def test_boot_only_restores_files(config, tmp_path, monkeypatch):
     monkeypatch.setattr(boot_restore.os, 'chmod', lambda *args: None)
     monkeypatch.setattr(boot_restore, 'run', lambda *_: pytest.fail('must not start services'))
     assert boot_restore.restore_tunnel_proxy_files() == 0
-    assert 'Address =' not in fs.read(Path('/wg/vpn.conf'))
+    assert 'Address =' not in fs.read(Path('/etc/vs-router/wireguard/vpn.conf'))
     assert json.loads(fs.read(Path('/caddy.json')))['apps']['layer4']
+    assert not any(argv[:3] == ['ip', 'link', 'add'] for argv, _ in executor.calls)
+
+
+def test_boot_restores_kernel_tunnel_without_a_daemon(config, tmp_path, monkeypatch):
+    """An in-kernel device has no unit, so boot must recreate the link."""
+    from vs_router.agent import boot_restore
+    monkeypatch.setattr(boot_restore, 'APPLIED', str(tmp_path))
+    version = ConfigurationVersion.model_validate(config)
+    (tmp_path / 'wireguard.conf').write_text(serialize_wireguard(generate_wg_bundle(version, {})))
+    fs = FakeFS()
+    fs.write(tmp_path / 'wireguard.conf', (tmp_path / 'wireguard.conf').read_text())
+    # WireGuardReloader.install() writes to config_dir via LocalFileSystem;
+    # monkeypatch it so the restore path never touches the real filesystem.
+    monkeypatch.setattr('vs_router.agent.apply.LocalFileSystem', lambda: fs)
+    # The interface does not exist yet; ip link show must return non-zero so
+    # configure_kernel creates the link before calling setconf.
+    executor = FakeExecutor()
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv[:3] == ['ip', 'link', 'show']:
+            return SimpleNamespace(returncode=1)
+        return SimpleNamespace(returncode=0)
+    executor.run = run
+    monkeypatch.setattr('vs_router.agent.services.SubprocessExecutor', lambda: executor)
+    monkeypatch.setattr(WireGuardReloader, 'probe_kernel_wireguard',
+                        staticmethod(lambda executor, protocol='wg': True))
+    monkeypatch.setattr(boot_restore.os, 'chown', lambda *args: None)
+    assert boot_restore.restore_tunnel_proxy_files() == 0
+    calls = [tuple(argv) for argv, _ in executor.calls]
+    assert ('ip', 'link', 'add', 'dev', 'wg0', 'type', 'wireguard') in calls
+    assert ('wg', 'setconf', 'wg0', '/etc/vs-router/wireguard/vpn.conf') in calls
+    assert ('ip', 'addr', 'replace', '10.66.66.1/24', 'dev', 'wg0') in calls
+    assert not any(argv[:1] == ('systemctl',) for argv in calls)
 
 
 def test_caddy_unbound_sites_share_primary_wan(config):

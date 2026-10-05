@@ -247,6 +247,13 @@ stage_awg() {
         # (plus the awg-quick bash script) — no manual file copying.
         make -C "$workdir/amneziawg-tools/src" PREFIX=/usr BINDIR=/usr/local/bin install
     fi
+    # The in-kernel implementation is preferred and needs no userspace build.
+    # Build the pinned wg-go fallback only when the kernel cannot provide it.
+    if ip link add vsrwprobe0 type wireguard 2>/dev/null; then
+        ip link del vsrwprobe0
+        log 'Kernel WireGuard available; skipping the userspace wg-go build'
+        return
+    fi
     if [[ -x /usr/local/bin/wg-go ]] \
             && [[ $(binary_revision /usr/local/bin/wg-go) == "$WIREGUARD_GO_REVISION" ]] \
             && [[ $(binary_toolchain /usr/local/bin/wg-go) == "$GO_TOOLCHAIN_VERSION" ]]; then

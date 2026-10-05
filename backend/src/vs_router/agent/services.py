@@ -125,14 +125,38 @@ class NetworkdReloader:
 
 
 class WireGuardReloader:
-    """Install private bundles, then configure userspace devices after readiness."""
+    """Install private bundles, then configure devices after readiness.
+
+    Both protocols prefer their in-kernel implementation when the host
+    provides it and fall back to the pinned userspace daemon otherwise, so one
+    install works across kernels with and without native support. Neither
+    binary starts while its module is loaded, which is exactly when the kernel
+    path is the correct one.
+    """
     def __init__(self, executor=None, filesystem=None,
-                 config_dir=Path('/etc/vs-router/wireguard'), sleep=None):
+                 config_dir=Path('/etc/vs-router/wireguard'), sleep=None,
+                 kernel_probe=None):
         import time
         self.executor = executor or SubprocessExecutor()
         self.fs = filesystem or LocalFileSystem()
         self.config_dir = config_dir
         self.sleep = sleep or time.sleep
+        self.kernel_probe = kernel_probe or self.probe_kernel_wireguard
+
+    @staticmethod
+    def probe_kernel_wireguard(executor, protocol='wg'):
+        """Ask the kernel for the link type directly; a probe link is never kept."""
+        kind = 'wireguard' if protocol == 'wg' else 'amneziawg'
+        probe = 'vsrwprobe0'
+        executor.run(['ip', 'link', 'del', probe], 15)
+        if executor.run(['ip', 'link', 'add', probe, 'type', kind], 15).returncode:
+            return False
+        executor.run(['ip', 'link', 'del', probe], 15)
+        return True
+
+    def backend(self, protocol):
+        """'kernel' or 'userspace' for one tunnel, decided by the running kernel."""
+        return 'kernel' if self.kernel_probe(self.executor, protocol) else 'userspace'
 
     def install(self, path):
         from ..generators.wireguard import deserialize_wireguard
@@ -174,29 +198,49 @@ class WireGuardReloader:
                     checked(self.executor, self.route('del', route, iface))
                 for address in sorted(set(old['addresses']) - set(new['addresses'])):
                     checked(self.executor, ['ip', 'addr', 'del', address, 'dev', iface])
+                # A kernel link replaces a userspace device: retire the daemon
+                # first, it refuses to start while its module is loaded.
+                if self.backend(old['protocol']) == 'kernel':
+                    self.executor.run(
+                        ['systemctl', 'disable', '--now', f'vs-router-{old["protocol"]}@{iface}.service'], 15)
         for iface, entry in manifest.items():
-            unit = f'vs-router-{entry["protocol"]}@{iface}.service'
+            protocol = entry['protocol']
+            if self.backend(protocol) == 'kernel':
+                self.configure_kernel(iface, entry)
+                continue
+            unit = f'vs-router-{protocol}@{iface}.service'
             checked(self.executor, ['systemctl', 'enable', unit])
             present = self.executor.run(['ip', 'link', 'show', 'dev', iface], 15).returncode == 0
             alive = self.executor.run(['systemctl', 'is-active', '--quiet', unit], 15).returncode == 0
             if not (present and alive):
                 checked(self.executor, ['systemctl', 'restart', unit])
                 for attempt in range(50):
-                    if self.executor.run([entry['protocol'], 'show', iface], 15).returncode == 0:
+                    if self.executor.run([protocol, 'show', iface], 15).returncode == 0:
                         break
                     self.sleep(0.1)
                 else:
                     raise ApplyError('agent.reload_failed')
-            checked(self.executor, [entry['protocol'], 'setconf', iface, str(self.config_dir / entry['file'])])
-            for address in entry['addresses']:
-                checked(self.executor, ['ip', 'addr', 'replace', address, 'dev', iface])
-            checked(self.executor, ['ip', 'link', 'set', 'dev', iface, 'up'])
-            for route in entry['routes']:
-                checked(self.executor, self.route('replace', route, iface))
+            self.configure(iface, entry, protocol)
         for entry in previous.values():
             if entry['file'] not in files:
                 self.fs.remove(self.config_dir / entry['file'])
         self.fs.write(self.config_dir / 'manifest.json', files['manifest.json'])
+
+    def configure(self, iface, entry, protocol):
+        checked(self.executor, [protocol, 'setconf', iface, str(self.config_dir / entry['file'])])
+        for address in entry['addresses']:
+            checked(self.executor, ['ip', 'addr', 'replace', address, 'dev', iface])
+        checked(self.executor, ['ip', 'link', 'set', 'dev', iface, 'up'])
+        for route in entry['routes']:
+            checked(self.executor, self.route('replace', route, iface))
+
+    def configure_kernel(self, iface, entry):
+        """No userspace daemon: the kernel creates the link, its tool configures it."""
+        kind = 'wireguard' if entry['protocol'] == 'wg' else 'amneziawg'
+        present = self.executor.run(['ip', 'link', 'show', 'dev', iface], 15).returncode == 0
+        if not present:
+            checked(self.executor, ['ip', 'link', 'add', 'dev', iface, 'type', kind])
+        self.configure(iface, entry, entry['protocol'])
 
     @staticmethod
     def route(action, value, iface):

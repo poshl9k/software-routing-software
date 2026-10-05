@@ -58,9 +58,14 @@ def parse_bundle(path: str) -> dict[str, str]:
 
 
 def restore_tunnel_proxy_files() -> int:
-    """Only unpack files. systemd owns daemon startup and post-start setconf."""
+    """Unpack files, then bring up kernel tunnels that have no daemon unit.
+
+    systemd owns daemon startup and post-start setconf for userspace tunnels.
+    In-kernel devices have no unit, so they must be created here or a reboot
+    silently drops every configured tunnel.
+    """
     from pathlib import Path
-    from .apply import LocalFileSystem
+    from .apply import ApplyError, LocalFileSystem
     from .services import WireGuardReloader, CaddyReloader
     fs = LocalFileSystem()
     wireguard = Path(APPLIED) / 'wireguard.conf'
@@ -68,6 +73,13 @@ def restore_tunnel_proxy_files() -> int:
         adapter = WireGuardReloader(filesystem=fs)
         files, _, _ = adapter.install(wireguard)
         fs.write(adapter.config_dir / 'manifest.json', files['manifest.json'])
+        manifest = json.loads(files['manifest.json'])
+        for iface, entry in manifest.items():
+            if adapter.backend(entry['protocol']) == 'kernel':
+                try:
+                    adapter.configure_kernel(iface, entry)
+                except (OSError, ValueError, ApplyError):
+                    return 1
     caddy = Path(APPLIED) / 'caddy.conf'
     if caddy.exists():
         import grp
