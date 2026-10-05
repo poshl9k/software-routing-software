@@ -75,7 +75,8 @@ def test_dhcp_convention(zone, addresses, dhcp):
     output = generate_networkd(version)['10-vs-router-eth0.network']
     assert ('DHCP=ipv4' in output) == dhcp
     if dhcp:
-        assert 'UseRoutes=no' in output and 'UseDNS=no' in output
+        assert 'UseRoutes=yes' in output and 'UseGateway=yes' in output
+        assert 'UseDNS=no' in output
 
 
 @pytest.mark.parametrize('bundle', [

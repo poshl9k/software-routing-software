@@ -450,14 +450,25 @@ describe("screens", () => {
   });
   it("onboarding submits credentials, then login, then a network draft", async () => {
     const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/host/interfaces" ? [
+        { name: "enp1s0", kind: "physical", mac: "52:54:00:00:00:01" },
+        { name: "enp2s0", kind: "physical", mac: "52:54:00:00:00:02" },
+      ] : path === "/api/versions" ? [] : {},
+    ))));
     const user = userEvent.setup();
     open("/onboarding");
+    expect(fetch.mock.calls.some(([path]) => path === "/api/host/interfaces")).toBe(false);
     await user.type(
       screen.getByLabelText("Пароль", { exact: false }),
       "strong-password",
     );
     await user.click(screen.getByRole("button", { name: "Продолжить →" }));
     await screen.findByRole("heading", { name: "Базовая сеть" });
+    expect(fetch.mock.calls.findIndex(([path]) => path === "/api/host/interfaces"))
+      .toBeGreaterThan(fetch.mock.calls.findIndex(([path]) => path === "/api/auth/login"));
+    expect(screen.getByRole("button", { name: "Продолжить →" })).toBeDisabled();
+    await user.selectOptions(screen.getByRole("combobox"), "enp2s0");
     await user.click(screen.getByRole("button", { name: "Продолжить →" }));
     await user.click(
       screen.getByRole("button", { name: "Сохранить" }),
@@ -480,10 +491,27 @@ describe("screens", () => {
       password: "strong-password",
     });
     expect(JSON.parse(mutations[2][1].body).interfaces[0]).toMatchObject({
-      name: "eth1",
+      name: "enp2s0",
       zone: "lan",
       addresses: ["192.168.10.1/24"],
     });
+  });
+  it("onboarding blocks draft creation while host inventory is unavailable", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(
+      JSON.stringify(path === "/api/host/interfaces"
+        ? { code: "host.interfaces_unavailable", message: "host.interfaces_unavailable", details: [] }
+        : path === "/api/versions" ? [] : {}),
+      { status: path === "/api/host/interfaces" ? 503 : 200 },
+    )));
+    const user = userEvent.setup();
+    open("/onboarding");
+    await user.type(screen.getByLabelText("Пароль", { exact: false }), "strong-password");
+    await user.click(screen.getByRole("button", { name: "Продолжить →" }));
+    await screen.findByRole("heading", { name: "Базовая сеть" });
+    expect(screen.getByRole("button", { name: "Продолжить →" })).toBeDisabled();
+    expect(screen.getByText(/Не удалось получить список интерфейсов/)).toBeVisible();
+    expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(false);
   });
   it("countdown clamps at zero and never confirms automatically", () => {
     vi.useFakeTimers();

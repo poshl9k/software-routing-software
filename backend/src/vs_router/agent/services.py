@@ -36,6 +36,9 @@ class UnboundReloader:
         # HUP rereads configuration after Unbound has dropped privileges.
         checked(self.executor, ['chmod', '0644', str(path), str(self.include_path)])
         checked(self.executor, ['unbound-checkconf', str(self.config_path)])
+        if self.executor.run(['systemctl', 'is-active', '--quiet', 'unbound'], 15).returncode:
+            checked(self.executor, ['systemctl', 'start', 'unbound'])
+            return
         if self.executor.run(['systemctl', 'reload', 'unbound'], 15).returncode:
             checked(self.executor, ['systemctl', 'kill', '--kill-whom=main', '-s', 'HUP', 'unbound'])
 

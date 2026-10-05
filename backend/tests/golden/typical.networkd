@@ -42,8 +42,8 @@ LinkLocalAddressing=no
 UseDNS=no
 UseNTP=no
 UseHostname=no
-UseRoutes=no
-UseGateway=no
+UseRoutes=yes
+UseGateway=yes
 ### FILE: 10-vs-router-eth1.network
 [Match]
 Name=eth1

@@ -123,6 +123,7 @@ stage_networkd() {
         [[ -f /etc/vs-router/networkd-manifest.conf ]] || fail 'existing networkd configuration requires console review'
         { printf '### FILE: %s\n' "${file##*/}"; cat "$file"; } | cmp -s - /etc/vs-router/networkd-manifest.conf || fail 'networkd ownership mismatch'
     fi
+    install -d -m 0700 /etc/vs-router
     install -d -m 0755 /etc/systemd/network
     printf '[Match]\nName=%s\nMACAddress=%s\n\n[Network]\nDHCP=ipv4\nKeepConfiguration=yes\nIPv6AcceptRA=no\nLinkLocalAddressing=no\n\n[DHCPv4]\nClientIdentifier=mac\n' "$iface" "$mac" > "$file"
     chmod 0644 "$file"

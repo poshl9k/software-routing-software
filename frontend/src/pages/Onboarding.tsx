@@ -19,7 +19,7 @@ export default function Onboarding() {
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [accountCreated, setAccountCreated] = useState(false);
-  const [lan, setLan] = useState("eth1");
+  const [lan, setLan] = useState("");
   const [address, setAddress] = useState("192.168.10.1/24");
   const [preferences, setPreferences] = useState(readPreferences);
   const [busy, setBusy] = useState(false);
@@ -28,32 +28,23 @@ export default function Onboarding() {
   const [hostError, setHostError] = useState<unknown>(null);
   const lock = useRef(false);
   const { refresh, loadUser } = useRouterState();
-  // Pick the LAN interface from the real host inventory (with MAC for clarity).
   const physicalNics = hostInterfaces.filter(
     (i) => i.kind === "physical" && i.name !== "lo",
   );
-  useEffect(() => {
-    let active = true;
-    api
-      .hostInterfaces()
-      .then(
-        (interfaces) => {
-          if (active) setHostInterfaces(interfaces);
-        },
-        (err: unknown) => {
-          if (active) setHostError(err);
-        },
-      );
-    return () => {
-      active = false;
-    };
-  }, []);
-  // Default the selection to the first real NIC until the user picks one.
-  useEffect(() => {
-    if (lan === "eth1" && physicalNics.length > 0) {
-      setLan(physicalNics[0].name);
+  async function loadHostInterfaces() {
+    try {
+      const interfaces = await api.hostInterfaces();
+      setHostInterfaces(interfaces);
+      setHostError(null);
+      setLan((selected) => interfaces.some(
+        (i) => i.kind === "physical" && i.name !== "lo" && i.name === selected,
+      ) ? selected : "");
+    } catch (err) {
+      setHostInterfaces([]);
+      setLan("");
+      setHostError(err);
     }
-  }, [physicalNics]);
+  }
   async function next(event: FormEvent) {
     event.preventDefault();
     if (lock.current) return;
@@ -71,10 +62,14 @@ export default function Onboarding() {
         // Populate the session user so the topbar shows "Выйти", not "Вход".
         await loadUser();
         setPassword("");
+        await loadHostInterfaces();
         setStep(1);
       } else if (step === 1) {
         setStep(2);
       } else if (step === 2) {
+        if (!physicalNics.some((i) => i.name === lan)) {
+          throw new Error("Выберите LAN-интерфейс из списка портов системы");
+        }
         await api.createDraft({
           ...emptyConfiguration,
           interfaces: [
@@ -176,13 +171,11 @@ export default function Onboarding() {
                 required
                 label="LAN-интерфейс"
                 value={lan}
-                disabled={busy}
+                disabled={busy || physicalNics.length === 0}
                 SelectProps={{ native: true }}
                 onChange={(e) => setLan(e.target.value)}
               >
-                {physicalNics.length === 0 && (
-                  <option value={lan}>{lan} (нет данных от агента)</option>
-                )}
+                <option value="">Выберите порт LAN</option>
                 {physicalNics.map((i) => (
                   <option key={i.name} value={i.name}>
                     {i.name} · {i.mac}
@@ -204,8 +197,15 @@ export default function Onboarding() {
                 агент.
               </Alert>
             )}
+            {physicalNics.length === 0 && (
+              <Button disabled={busy} onClick={() => void loadHostInterfaces()}>
+                Обновить список интерфейсов
+              </Button>
+            )}
             <Alert severity="info">
-              TODO-API · обнаружение портов и DHCP-клиент WAN пока отсутствуют.
+              Выберите назначенный с консоли LAN-порт, не WAN. Перед первым
+              применением проверьте WAN и маршрут по умолчанию с локальной
+              консоли: у первого apply нет автоотката.
             </Alert>
           </>
         )}
@@ -276,7 +276,7 @@ export default function Onboarding() {
                 ← Назад
               </Button>
             )}
-            <Button type="submit" variant="contained" disabled={busy}>
+            <Button type="submit" variant="contained" disabled={busy || (step === 1 && !physicalNics.some((i) => i.name === lan))}>
               {busy
                 ? "Сохранение…"
                 : step === 2

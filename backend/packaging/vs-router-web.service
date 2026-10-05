@@ -9,7 +9,10 @@ WorkingDirectory=/var/lib/vs-router
 Environment=VS_ROUTER_DATABASE_URL=sqlite:////var/lib/vs-router/vs-router.db
 Environment=VS_ROUTER_STATIC_DIR=/var/lib/vs-router/ui
 EnvironmentFile=-/etc/vs-router/secrets.env
-ExecStart=/usr/bin/python3 -m uvicorn vs_router.app:app --uds /run/vs-router/web/web.sock
+# Only Caddy and the web user can traverse /run/vs-router/web. UDS clients
+# have no IP address, so Uvicorn's 127.0.0.1 default ignores Caddy's HTTPS
+# X-Forwarded-Proto and rejects same-origin browser POSTs as cross-origin.
+ExecStart=/usr/bin/python3 -m uvicorn vs_router.app:app --uds /run/vs-router/web/web.sock --proxy-headers --forwarded-allow-ips="*"
 Restart=on-failure
 CapabilityBoundingSet=
 AmbientCapabilities=

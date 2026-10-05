@@ -118,9 +118,9 @@ fi
 chmod o+x /etc/vs-router /etc/vs-router/applied
 if [ -d /etc/unbound ]; then
     install -d -m 0755 /etc/unbound/unbound.conf.d
-    printf '%s\n' 'include: "/etc/vs-router/applied/unbound.conf"' > /etc/unbound/unbound.conf.d/vs-router.conf
-    chmod 0644 /etc/unbound/unbound.conf.d/vs-router.conf
     if [ -f /etc/vs-router/applied/unbound.conf ]; then
+        printf '%s\n' 'include: "/etc/vs-router/applied/unbound.conf"' > /etc/unbound/unbound.conf.d/vs-router.conf
+        chmod 0644 /etc/unbound/unbound.conf.d/vs-router.conf
         chmod 0644 /etc/vs-router/applied/unbound.conf
     fi
 fi

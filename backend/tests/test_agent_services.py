@@ -50,6 +50,29 @@ def test_unbound_full_check_and_fallback(failure):
         assert executor.calls[-1][0] == ['systemctl', 'kill', '--kill-whom=main', '-s', 'HUP', 'unbound']
 
 
+@pytest.mark.parametrize('start_succeeds', [True, False])
+def test_unbound_starts_when_initial_include_was_missing(start_succeeds):
+    fs, executor = FakeFS(), FakeExecutor()
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv == ['systemctl', 'is-active', '--quiet', 'unbound']:
+            return SimpleNamespace(returncode=3)
+        if argv == ['systemctl', 'start', 'unbound']:
+            assert fs.read(Path('/etc/unbound/unbound.conf.d/vs-router.conf')) == (
+                f'include: "{APPLIED_DIR}/unbound.conf"\n')
+            return SimpleNamespace(returncode=0 if start_succeeds else 1)
+        return SimpleNamespace(returncode=0)
+    executor.run = run
+    adapter = UnboundReloader(executor, fs)
+    if start_succeeds:
+        adapter(APPLIED_DIR / 'unbound.conf')
+    else:
+        with pytest.raises(ApplyError, match='agent.reload_failed'):
+            adapter(APPLIED_DIR / 'unbound.conf')
+    assert (['systemctl', 'start', 'unbound'], 15) in executor.calls
+    assert (['systemctl', 'reload', 'unbound'], 15) not in executor.calls
+
+
 @pytest.mark.parametrize('reply,status,ok', [('[{"result":0}]', 200, True),
     ('[{"result":1}]', 200, False), ('[]', 200, False), ('{}', 200, False),
     ('not json', 200, False), ('[{"result":false}]', 200, False),

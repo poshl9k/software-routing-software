@@ -10,15 +10,15 @@ _FILE = re.compile(r"10-vs-router-[a-zA-Z][a-zA-Z0-9_.-]{0,14}\.(?:network|netde
 def generate_networkd(version: ConfigurationVersion) -> dict[str, str]:
     """Return one .network per interface and .netdev files for assigned virtual links.
 
-    Convention: an addressless physical WAN uses DHCPv4. DHCP does not install
-    routes or DNS; those belong to separate configuration entities. Unassigned
+    Convention: an addressless physical WAN uses DHCPv4, including its gateway
+    and routes; DHCP DNS is ignored in favor of the configured resolver. Unassigned
     interfaces get only a minimal .network with DHCP, RA and link-local disabled,
     ignoring their addresses and L2 attachments (firewall enforces transit deny).
     Bridge members must also have a zone; addresses belong on the bridge.
     VLANs attach through VLAN= in the parent's [Network], including bridge parents;
     [VLAN] Id= is the canonical netdev syntax, with no Parent= or BridgeVLAN needed.
     WAN order is retained: primary keeps its prefix, additional IPv4 addresses use
-    /32 (IPv6 uses /128). No gateway or DNS settings are generated.
+    /32 (IPv6 uses /128). Static gateways and DNS settings are not generated.
     """
     interfaces = sorted(version.configuration.interfaces, key=lambda i: i.name)
     assigned = {i.name for i in interfaces if i.zone}
@@ -62,7 +62,7 @@ def generate_networkd(version: ConfigurationVersion) -> dict[str, str]:
                       if v.type == "vlan" and v.zone and v.parent == i.name]
             if dhcp:
                 lines += ["", "[DHCPv4]", "UseDNS=no", "UseNTP=no", "UseHostname=no",
-                          "UseRoutes=no", "UseGateway=no"]
+                          "UseRoutes=yes", "UseGateway=yes"]
         files[prefix + ".network"] = "\n".join(lines) + "\n"
     return dict(sorted(files.items()))
 

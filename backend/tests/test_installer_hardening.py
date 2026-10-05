@@ -227,6 +227,16 @@ def test_shell_syntax():
         subprocess.run(['bash', '-n', str(script)], check=True)
 
 
+def test_web_trusts_https_proxy_headers_only_on_restricted_unix_socket():
+    unit = (PACKAGING / 'vs-router-web.service').read_text()
+    command = next(line for line in unit.splitlines() if line.startswith('ExecStart='))
+    assert '--uds /run/vs-router/web/web.sock' in command
+    assert '--proxy-headers' in command
+    assert '--forwarded-allow-ips="*"' in command
+    assert '--host ' not in command and '--port ' not in command
+    assert 'UMask=0007' in unit
+
+
 @pytest.mark.parametrize('failure', ['bus', 'systemctl', 'networkctl', 'wait_online', 'lease', 'dns', None])
 def test_network_migration_requires_working_networkd(tmp_path, failure):
     from vs_router.generators.networkd import deserialize_networkd
@@ -239,8 +249,7 @@ def test_network_migration_requires_working_networkd(tmp_path, failure):
     source.write_text(script)
     (tmp_path / 'var/lib/vs-router-bootstrap').mkdir(parents=True)
     (tmp_path / 'var/lib/vs-router-bootstrap/installer-uplink').write_text('eth0 00:11:22:33:44:55\n')
-    (tmp_path / 'etc/vs-router').mkdir(parents=True)
-    (tmp_path / 'etc/network').mkdir()
+    (tmp_path / 'etc/network').mkdir(parents=True)
     (tmp_path / 'etc/network/interfaces').write_text('auto eth0\niface eth0 inet dhcp\n')
     for iface in ('eth0', 'eth1'):
         base = tmp_path / 'sys/class/net' / iface
@@ -403,6 +412,26 @@ chown() {{ :; }}
             revision = conn.execute('select version_num from alembic_version').fetchone()[0]
         expected = ScriptDirectory.from_config(Config(str(ROOT / 'backend/alembic.ini'))).get_current_head()
         assert revision == expected
+
+
+def test_unbound_include_waits_for_first_applied_config(tmp_path):
+    source = (PACKAGING / 'install.sh').read_text()
+    block = source[source.index('if [ -d /etc/unbound ]; then'):
+                   source.index('# Allow the included configuration through Unbound')]
+    unbound = tmp_path / 'etc/unbound'
+    applied = tmp_path / 'etc/vs-router/applied'
+    unbound.mkdir(parents=True)
+    applied.mkdir(parents=True)
+    block = block.replace('/etc/unbound', str(unbound))
+    block = block.replace('/etc/vs-router/applied', str(applied))
+    include = unbound / 'unbound.conf.d/vs-router.conf'
+    result = bash(block)
+    assert result.returncode == 0, result.stderr
+    assert not include.exists()
+    (applied / 'unbound.conf').write_text('server:\n')
+    result = bash(block)
+    assert result.returncode == 0, result.stderr
+    assert include.read_text() == f'include: "{applied}/unbound.conf"\n'
 
 
 @pytest.mark.parametrize('identity,expected', [
