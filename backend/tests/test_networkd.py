@@ -145,6 +145,21 @@ def test_reload_failure_restores_files():
     assert fs.read(adapter.manifest_path) == ''
 
 
+def test_interface_description_is_metadata_not_configuration():
+    """description is operator-facing only: it round-trips but never reaches
+    generated networkd/nftables output, and it is length-limited."""
+    from vs_router.generators.nftables import generate_nftables
+    version = ConfigurationVersion(configuration={'interfaces': [
+        {'name': 'eth1', 'zone': 'lan', 'addresses': ['192.168.10.1/24'],
+         'description': 'оптика провайдера'}]})
+    assert version.configuration.interfaces[0].description == 'оптика провайдера'
+    assert 'оптика' not in serialize_networkd(generate_networkd(version))
+    assert 'оптика' not in generate_nftables(version)
+    with pytest.raises(ValueError):
+        ConfigurationVersion(configuration={'interfaces': [
+            {'name': 'eth1', 'zone': 'lan', 'description': 'x' * 65}]})
+
+
 def test_reloader_rejects_unsafe_bundle_before_writes():
     fs, executor = FakeFS(), FakeExecutor()
     path = APPLIED_DIR / 'networkd.conf'

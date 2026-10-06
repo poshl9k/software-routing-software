@@ -15,6 +15,7 @@ const emptyInterface = (key: string): Editable => ({
   name: "",
   type: "physical",
   zone: null,
+  description: null,
   addressing: "static",
   addresses: [],
   parent: null,
@@ -107,6 +108,7 @@ export default function Network() {
       const interfaces: Interface[] = rows.map(({ key: _key, ...rest }) => ({
         ...rest,
         name: rest.name.trim(),
+        description: rest.description?.trim() || null,
         addresses: rest.addresses.filter((a) => a.trim()),
         members: rest.members.filter((m) => m.trim()),
       }));
@@ -168,8 +170,8 @@ export default function Network() {
             <DataTable
               heads={
                 isEditMode
-                  ? ["Интерфейс", "Тип", "Зона", "Режим", "Адреса (через запятую)", "VLAN ID", "Родитель / члены", ""]
-                  : ["Интерфейс", "Тип", "Зона", "Адресация", "IP-адрес", "Состояние", "Назначение"]
+                  ? ["Интерфейс", "Описание", "Тип", "Зона", "Режим", "Адреса (через запятую)", "VLAN ID", "Родитель / члены", ""]
+                  : ["Интерфейс", "Описание", "Тип", "Зона", "Адресация", "IP-адрес", "Состояние", "Назначение"]
               }
               rows={
                 isEditMode
@@ -199,6 +201,15 @@ export default function Network() {
                           <option key={p.name} value={p.name}>{p.name} ({p.operstate})</option>
                         ))}
                       </TextField>,
+                      <TextField
+                        size="small"
+                        value={i.description ?? ""}
+                        placeholder="напр. «оптика провайдера»"
+                        slotProps={{ htmlInput: { maxLength: 64 } }}
+                        onChange={(e) =>
+                          setField(i.key, { description: e.target.value || null })
+                        }
+                      />,
                       <TextField
                         select
                         size="small"
@@ -362,6 +373,11 @@ export default function Network() {
                     ])
                   : c.interfaces.map((i) => [
                       <b>{i.name}</b>,
+                      i.description ? (
+                        <span className="sub">{i.description}</span>
+                      ) : (
+                        <span className="sub">—</span>
+                      ),
                       {
                         physical: "Физический",
                         bridge: "Мост",

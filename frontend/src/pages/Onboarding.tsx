@@ -77,6 +77,7 @@ export default function Onboarding() {
               name: lan,
               type: "physical",
               zone: "lan",
+              description: null,
               addressing: "static",
               addresses: [address],
               parent: null,

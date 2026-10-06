@@ -119,31 +119,28 @@ export const theme = createTheme({
         },
       },
     },
-    MuiTextField: { defaultProps: { size: "small" } },
+    MuiTextField: { defaultProps: { size: "small", variant: "standard" } },
+    MuiSelect: { defaultProps: { variant: "standard" } },
     MuiInputBase: {
       styleOverrides: {
         root: {
-          backgroundColor: "rgba(255,255,255,0.02)",
+          backgroundColor: "transparent",
           borderRadius: 6,
         },
       },
     },
-    MuiOutlinedInput: {
+    // Flat fields: no outlined box. A whisper-thin bottom rule is the only
+    // affordance and it lifts to the accent colour on hover/focus.
+    MuiInput: {
       styleOverrides: {
-        notchedOutline: { borderColor: tokens.borderStrong },
         root: {
-          "&:hover .MuiOutlinedInput-notchedOutline": {
-            borderColor: tokens.accent,
+          "&:before": { borderBottomColor: tokens.borderStrong },
+          "&:hover:not(.Mui-disabled):before": {
+            borderBottomColor: tokens.accent,
           },
-          "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
-            borderColor: tokens.accent,
-          },
+          "&.Mui-focused:after": { borderBottomColor: tokens.accent },
+          "&.Mui-error:after": { borderBottomColor: tokens.error },
         },
-      },
-    },
-    MuiSelect: {
-      styleOverrides: {
-        select: { backgroundColor: "rgba(255,255,255,0.02)" },
       },
     },
     MuiSwitch: {

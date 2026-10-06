@@ -28,6 +28,10 @@ it("selects OS links, creates a VLAN and saves bridge members with draft referen
   expect(within(parent).getByRole("option", { name: "eth1" })).toBeVisible();
   expect(within(parent).queryByRole("option", { name: "bond0" })).toBeNull();
   await user.selectOptions(parent, "eth1");
+  await user.type(
+    within(vlanRow).getByPlaceholderText("напр. «оптика провайдера»"),
+    "гостевая сеть",
+  );
   await user.click(screen.getByRole("button", { name: "+ Мост" }));
   await user.click(screen.getByRole("button", { name: "+ участник" }));
   const bridgeRow = screen.getByDisplayValue("br1 (в черновике)").closest("tr")!;
@@ -37,7 +41,8 @@ it("selects OS links, creates a VLAN and saves bridge members with draft referen
   await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
   const saved = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === "PUT")![1].body));
   expect(saved.interfaces).toEqual(expect.arrayContaining([
-    expect.objectContaining({ name: "vlan1", type: "vlan", parent: "eth1", vlan_id: 1 }),
+    expect.objectContaining({ name: "vlan1", type: "vlan", parent: "eth1", vlan_id: 1,
+      description: "гостевая сеть" }),
     expect.objectContaining({ name: "br1", type: "bridge", members: ["bond0"] }),
     expect.objectContaining({ name: "eth1", zone: null }),
     expect.objectContaining({ name: "bond0", zone: null }),

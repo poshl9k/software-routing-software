@@ -21,6 +21,9 @@ class Interface(Model):
     name: InterfaceName
     type: Literal["physical", "bridge", "vlan"] = "physical"
     zone: Name | None = None
+    # Free-form operator note / friendly label. UI-only metadata: generators
+    # must never emit it into networkd/nftables/WireGuard output.
+    description: str | None = Field(default=None, max_length=64)
     # static: addresses are configured; dhcp: the interface is a DHCPv4 client
     # (any type/zone). DHCP is explicit so "no address" never silently changes
     # meaning; the management LAN and Kea server interfaces forbid it.
