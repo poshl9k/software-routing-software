@@ -103,5 +103,14 @@ bootstrap и без сигнала об ошибке.
 
 ## Проверка
 
-- [ ] Сквозной прогон на чистой VM (risky-пути: отказ этапа, первый apply,
+- [x] Сквозной прогон на чистой VM (risky-пути: отказ этапа, первый apply,
       reboot, смена MAC/интерфейса, один порт, доступ LAN/deny WAN).
+      Комментарий (2026-10-06): чистая установка из ISO `26e62fa`, образ с
+      `POWER_OFF=1`. Проверено: вендоренный `REVISION` = `26e62fa` в
+      `/opt/vs-router`; тарбол/sha убраны после успеха; маркера `incomplete`
+      нет; `succeeded` есть; `version.json` = commit+semver+source=iso;
+      firstboot disabled; kernel WG доступен, wg-go отсутствует; сервисы
+      active; управляющий LAN назначен → `https://192.168.10.1/` отдаёт 200,
+      `/health` ok, `/api/release` → 401 (маршрут под аутентификацией).
+      **Не пройдено:** первый apply, reboot, смена MAC/интерфейса, один порт,
+      deny-WAN.
