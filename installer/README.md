@@ -20,18 +20,26 @@ signed checksum verification). The builder checks that hash and the ISO's Debian
 13 label; it does not authenticate a hash supplied by an attacker. No ISO is
 automatically downloaded. Output: `vs-router-installer-amd64.iso`. Both BIOS and
 UEFI production paths use the semi-automatic preseed; the lab password is excluded
-from the production image. The source checkout is detached at the supplied commit.
-That commit must contain these installer changes; the builder does not publish
-local edits or commit them for you.
+from the production image.
+
+The image is **self-contained** (ADR-0008): the builder vendors the pinned release
+source (a `git archive` of `VS_ROUTER_REVISION`, git history excluded) under
+`/vs-router/`, together with `sha256.txt`, `REVISION` and `install-source.sh`.
+Installation unpacks it locally — no network and no published branch are needed —
+and `install-source.sh` verifies the sha256 in the target. A failure leaves
+`/var/lib/vs-router-bootstrap/incomplete` and prints the reason on the console;
+there are no silent or endless retries. The supplied commit must be committed in
+the build checkout; the builder does not commit local edits for you. Moving a
+running system to a newer release is an explicit online update to a pinned commit
+(`update.sh --release`), never a branch/`latest`.
 
 Unattended destructive lab installation requires `VS_ROUTER_UNATTENDED_LAB=1` at
 build time. Only that image contains the known lab account `vsr-admin / vsr-install`.
 It still requires a sudo password and keeps SSH closed. Never deploy that image
 on an untrusted network. Static-network and Wi-Fi build hooks are lab-only;
 automatic bootstrap migration currently supports **one wired DHCP uplink only**.
-`VS_ROUTER_TEST_GIT_URL` and `VS_ROUTER_TEST_POWER_OFF` are lab-only test hooks:
-they enable local source checkout and power off before the test install's first
-boot, so the host can switch boot order without restarting d-i.
+`VS_ROUTER_TEST_POWER_OFF` is a lab-only hook: it powers off before the test
+install's first boot, so the host can switch boot order without restarting d-i.
 
 The installer records the uplink name and MAC in the root-only directory
 `/var/lib/vs-router-bootstrap`. Bootstrap writes DHCP configuration only for that

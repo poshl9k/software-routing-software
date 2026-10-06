@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 # Supply an independently verified Debian 13 ISO and its trusted SHA-256.
 ISO=${1:?Usage: VS_ROUTER_REVISION=<40 hex commit> VS_ROUTER_ISO_SHA256=<trusted hash> make-iso.sh <Debian 13 ISO>}
 OUT=${OUT:-vs-router-installer-amd64.iso}
@@ -50,16 +51,19 @@ fi
 install -m 0644 "$SCRIPT_DIR/preseed-semiauto.cfg" "$workdir/iso/preseed-semiauto.cfg"
 
 grep -Eq 'Debian GNU/Linux 13[. /]' "$workdir/iso/.disk/info" || { echo 'Debian 13 ISO required' >&2; exit 1; }
-sed -i "s/@VS_ROUTER_REVISION@/$VS_ROUTER_REVISION/g" "$workdir/iso/"preseed*.cfg
-if [[ -n ${VS_ROUTER_TEST_GIT_URL:-} ]]; then
-    [[ ${VS_ROUTER_UNATTENDED_LAB:-0} == 1 ]] || { echo 'VS_ROUTER_TEST_GIT_URL requires VS_ROUTER_UNATTENDED_LAB=1' >&2; exit 1; }
-    [[ $VS_ROUTER_TEST_GIT_URL =~ ^git://[[:alnum:].:-]+/[[:alnum:]_.-]+(/[[:alnum:]_.-]+)*\.git$|^http://[[:alnum:].:-]+/[[:alnum:]_.-]+(/[[:alnum:]_.-]+)*\.git$ ]] || {
-        echo 'VS_ROUTER_TEST_GIT_URL must be a git:// or http:// test repository URL' >&2
-        exit 1
-    }
-    sed -i "s|https://github.com/poshl9k/software-routing-software.git|$VS_ROUTER_TEST_GIT_URL|g" \
-        "$workdir/iso/preseed.cfg" "$workdir/iso/preseed-semiauto.cfg"
-fi
+
+# Vendor the pinned release source into the image (ADR-0008): the ISO is
+# self-contained, so install needs no network and no published branch. Git
+# history is excluded (the working tree is small). Integrity is recorded as a
+# sha256 of the tarball; install-source.sh verifies it in the target.
+release_dir="$workdir/iso/vs-router"
+install -d -m 0755 "$release_dir"
+git -C "$REPO_ROOT" archive --format=tar.gz -o "$release_dir/source.tar.gz" "$VS_ROUTER_REVISION" \
+    || { echo "Revision ${VS_ROUTER_REVISION} not found in ${REPO_ROOT}" >&2; exit 1; }
+( cd "$release_dir" && sha256sum source.tar.gz > sha256.txt )
+printf '%s\n' "$VS_ROUTER_REVISION" > "$release_dir/REVISION"
+install -m 0755 "$SCRIPT_DIR/install-source.sh" "$release_dir/install-source.sh"
+echo "Vendored release ${VS_ROUTER_REVISION} ($(du -h "$release_dir/source.tar.gz" | cut -f1))"
 if [[ ${VS_ROUTER_TEST_POWER_OFF:-0} == 1 ]]; then
     [[ ${VS_ROUTER_UNATTENDED_LAB:-0} == 1 ]] || { echo 'VS_ROUTER_TEST_POWER_OFF requires VS_ROUTER_UNATTENDED_LAB=1' >&2; exit 1; }
     grep -Fq 'd-i debian-installer/exit/poweroff boolean false' "$workdir/iso/preseed.cfg" || {

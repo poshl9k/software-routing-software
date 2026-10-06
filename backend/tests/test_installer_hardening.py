@@ -89,6 +89,27 @@ def test_firstboot_explicit_retry_and_trace(tmp_path):
     assert log.stat().st_mode & 0o777 == 0o600
 
 
+def test_firstboot_refuses_incomplete_install(tmp_path):
+    """A broken install (marker present) must not silently run the bootstrap."""
+    state = tmp_path / 'state'
+    state.mkdir()
+    (state / 'incomplete').write_text('2026-10-05T00:00:00Z source extraction failed\n')
+    console = tmp_path / 'console'
+    script = (PACKAGING / 'firstboot-bootstrap.sh').read_text()
+    for old, new in [('/var/lib/vs-router-bootstrap', state),
+                     ('/root/bootstrap.log', tmp_path / 'bootstrap.log'),
+                     ('/dev/console', console)]:
+        script = script.replace(old, str(new))
+    wrapper = tmp_path / 'firstboot.sh'
+    wrapper.write_text(script)
+    result = subprocess.run(['bash', str(wrapper)], capture_output=True, text=True)
+    assert result.returncode == 1
+    assert 'incomplete' in (result.stdout + result.stderr).lower()
+    # The bootstrap stage must not have been attempted.
+    assert not (state / 'attempted').exists()
+    assert 'incomplete' in console.read_text().lower()
+
+
 def test_debian_installer_sources_are_snapshot_pinned():
     expected = (
         'd-i mirror/protocol string https',
@@ -115,7 +136,10 @@ def test_no_production_credentials_or_open_ssh():
     assert 'passwd/user-password password' not in production
     assert 'openssh-server' not in production
     assert 'nftables' in production
-    assert '@VS_ROUTER_REVISION@' in production
+    # Self-contained installer (ADR-0008): the source is vendored into the ISO,
+    # never cloned from the network at install time.
+    assert 'git clone' not in production
+    assert '/cdrom/vs-router/install-source.sh' in production
     bootstrap = (PACKAGING / 'bootstrap.sh').read_text()
     assert 'Environment=VS_ROUTER_KEA_API_PASSWORD=' not in bootstrap
     assert 'LoadCredential=kea-api-password:' in bootstrap
@@ -349,21 +373,28 @@ if '-extract' in args:
         p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content)
 else:
     root=Path('iso')
-    Path(os.environ['CAPTURE']).write_text(json.dumps({str(p.relative_to(root)):p.read_text() for p in root.rglob('*') if p.is_file()}))
+    data={}
+    for p in root.rglob('*'):
+        if p.is_file():
+            rel=str(p.relative_to(root))
+            try:
+                data[rel]=p.read_text()
+            except UnicodeDecodeError:
+                data[rel]='<binary:%d>'%p.stat().st_size
+    Path(os.environ['CAPTURE']).write_text(json.dumps(data))
 ''')
     xorriso.chmod(0o755)
     iso = tmp_path / 'input.iso'
     iso.write_bytes(b'isolated ISO fixture')
     capture = tmp_path / 'capture.json'
-    test_git_url = 'git://127.0.0.1:9418/vs-router.git'
+    revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
+                              capture_output=True, text=True, check=True).stdout.strip()
     env = dict(os.environ, PATH=f'{fakebin}:{os.environ["PATH"]}',
                CAPTURE=str(capture), OUT=str(tmp_path / 'output.iso'),
                VS_ROUTER_ISO_SHA256=hashlib.sha256(iso.read_bytes()).hexdigest(),
-               VS_ROUTER_REVISION='a' * 40, VS_ROUTER_UNATTENDED_LAB='1' if lab else '0')
-    env.pop('VS_ROUTER_TEST_GIT_URL', None)
+               VS_ROUTER_REVISION=revision, VS_ROUTER_UNATTENDED_LAB='1' if lab else '0')
     env.pop('VS_ROUTER_TEST_POWER_OFF', None)
     if lab:
-        env['VS_ROUTER_TEST_GIT_URL'] = test_git_url
         env['VS_ROUTER_TEST_POWER_OFF'] = '1'
     result = subprocess.run(['bash', str(ROOT / 'installer/make-iso.sh'), str(iso)],
                             env=env, capture_output=True, text=True)
@@ -371,7 +402,14 @@ else:
     staged = json.loads(capture.read_text())
     assert ('vsr-install' in staged['preseed.cfg']) == lab
     assert ('debian-installer/exit/poweroff boolean true' in staged['preseed.cfg']) == lab
-    assert ('git://127.0.0.1:9418/vs-router.git' in staged['preseed.cfg']) == lab
+    # The pinned release source is vendored into the image, with integrity data.
+    assert staged['vs-router/source.tar.gz'].startswith('<binary:')
+    assert staged['vs-router/sha256.txt'].split()[1] == 'source.tar.gz'
+    assert staged['vs-router/REVISION'].strip() == revision
+    assert '/cdrom/vs-router/install-source.sh' in staged['preseed.cfg']
+    assert '/cdrom/vs-router/install-source.sh' in staged['preseed-semiauto.cfg']
+    assert 'git clone' not in staged['preseed.cfg']
+    assert 'git clone' not in staged['preseed-semiauto.cfg']
     assert 'vsr-install' not in staged['preseed-semiauto.cfg']
     assert ('auto=true' in staged['isolinux/spkgtk.cfg']) == lab
     assert ('locale=en_US.UTF-8' in staged['isolinux/spkgtk.cfg']) == lab
@@ -448,3 +486,42 @@ def test_platform_validation(tmp_path, identity, expected):
     source.write_text(script)
     result = bash(f'source "{source}"; logger() {{ :; }}; run_stage platform stage_check_root')
     assert result.returncode == expected
+
+
+def test_updater_installs_a_pinned_release_not_a_branch():
+    """ADR-0005/0008: never update from a branch or `latest`."""
+    updater = (PACKAGING / 'update.sh').read_text()
+    assert 'git pull' not in updater
+    assert '--release' in updater
+    assert 'checkout --detach' in updater
+    assert 'release checkout mismatch' in updater
+    # A malformed release id must be rejected before any mutation.
+    assert '^[0-9a-f]{40}$' in updater
+
+
+def test_install_records_release_identity(tmp_path):
+    """install.sh records commit+semver+source for GET /api/release."""
+    source = (PACKAGING / 'install.sh').read_text()
+    assert '/etc/vs-router/version.json' in source
+    assert 'VS_ROUTER_RELEASE_SOURCE' in source
+    assert 'REVISION' in source  # fallback for a vendored, git-less tree
+    # Exercise the identity block against a fake repo with a REVISION file.
+    block = source[source.index('# Record the installed release identity'):
+                   source.index('chmod 0644 /etc/vs-router/version.json') + len(
+                       'chmod 0644 /etc/vs-router/version.json')]
+    repo = tmp_path / 'repo'
+    (repo / 'backend').mkdir(parents=True)
+    (repo / 'backend/pyproject.toml').write_text('[project]\nversion = "1.2.3"\n')
+    (repo / 'REVISION').write_text('a' * 40 + '\n')
+    out = tmp_path / 'etc/vs-router'
+    out.mkdir(parents=True)
+    block = block.replace('/etc/vs-router/version.json', str(out / 'version.json'))
+    block = block.replace('$(dirname -- "$packaging_dir")/..', str(repo))
+    result = bash(block, env={**os.environ, 'VS_ROUTER_RELEASE_SOURCE': 'online'})
+    assert result.returncode == 0, result.stderr
+    import json
+    recorded = json.loads((out / 'version.json').read_text())
+    assert recorded['commit'] == 'a' * 40
+    assert recorded['semver'] == '1.2.3'
+    assert recorded['source'] == 'online'
+    assert recorded['installed_at'].endswith('Z')

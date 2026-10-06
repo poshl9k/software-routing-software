@@ -4,7 +4,7 @@
 # (Caddy, amneziawg-tools, wireguard-go) that bootstrap.sh provisioned.
 #
 # What it does:
-#   1. git pull (fast-forward) the latest code
+#   1. move the tree to a pinned released commit (--release; never a branch)
 #   2. rebuild the frontend static bundle (frontend/dist) and the backend wheel
 #   3. reinstall the Python package (system python, matching bootstrap.sh)
 #   4. apply database migrations (alembic upgrade head) against the live DB
@@ -14,7 +14,7 @@
 # Re-run bootstrap.sh only when OS-level dependencies or the toolchain change
 # (new Caddy/AmneziaWG/WireGuard builds, new apt packages).
 #
-# Usage: sudo ./backend/packaging/update.sh [--skip-pull] [--skip-build]
+# Usage: sudo ./backend/packaging/update.sh [--release <40-hex-commit>] [--skip-build]
 set -euo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -27,24 +27,32 @@ fail() { printf '[vs-router-update] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'EOF'
-Usage: update.sh [--skip-pull] [--skip-build] [--help]
-  --skip-pull    Do not git pull; update from the current working tree.
+Usage: update.sh [--release <40-hex-commit>] [--skip-build] [--help]
+  --release SHA  Move the tree to this pinned release (commit id) and rebuild.
+                 Without it, rebuild from the currently checked-out release
+                 (never a branch). A branch/`latest` update is not supported.
   --skip-build   Do not rebuild frontend/backend; deploy what is already built.
+  --skip-pull    Deprecated alias: same as omitting --release.
   --help         Show this help.
 EOF
 }
 
-SKIP_PULL=0
+RELEASE=
 SKIP_BUILD=0
 while (($#)); do
     case $1 in
-        --skip-pull)  SKIP_PULL=1 ;;
+        --release)    RELEASE=${2:-}; shift ;;
+        --skip-pull)  warn '--skip-pull is deprecated; omit --release to update the current tree' ;;
         --skip-build) SKIP_BUILD=1 ;;
         --help|-h)    usage; exit 0 ;;
         *) usage >&2; fail "unknown option: $1" ;;
     esac
     shift
 done
+
+if [[ -n $RELEASE && ! $RELEASE =~ ^[0-9a-f]{40}$ ]]; then
+    fail "--release requires a full 40-character commit id (got: ${RELEASE})"
+fi
 
 if [[ ${EUID} -ne 0 ]]; then
     command -v sudo >/dev/null 2>&1 && fail 'run as root (sudo ./update.sh)'
@@ -53,11 +61,14 @@ fi
 
 cd "$REPO_ROOT"
 
-if (( ! SKIP_PULL )); then
-    log 'Pulling latest code'
-    if ! git pull --ff-only; then
-        warn 'git pull --ff-only failed; continuing with the current tree. Resolve divergence or use --skip-pull if intentional.'
-    fi
+# ADR-0005/0008: install only a pinned, verified release — never a branch/latest.
+if [[ -n $RELEASE ]]; then
+    log "Fetching pinned release ${RELEASE}"
+    git fetch --prune origin || fail 'git fetch failed; cannot reach the release source'
+    git checkout --detach "$RELEASE"
+    [[ "$(git rev-parse HEAD)" == "$RELEASE" ]] || fail "release checkout mismatch"
+else
+    log 'No --release given; updating from the currently checked-out release'
 fi
 
 if (( ! SKIP_BUILD )); then
@@ -82,7 +93,7 @@ else
 fi
 
 log 'Deploying UI bundle and systemd units'
-bash "$SCRIPT_DIR/install.sh"
+VS_ROUTER_RELEASE_SOURCE=online bash "$SCRIPT_DIR/install.sh"
 
 log 'Restarting runtime services'
 systemctl daemon-reload

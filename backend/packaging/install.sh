@@ -143,6 +143,23 @@ if [ -d "$UI_SRC" ] && [ -f "$UI_SRC/index.html" ]; then
     mv /var/lib/vs-router/ui.new /var/lib/vs-router/ui
     chmod -R a+rX /var/lib/vs-router/ui
 fi
+# Record the installed release identity (pinned commit + semver) for
+# GET /api/release. The commit comes from git when present, else a REVISION
+# file vendored into the ISO; it stays "unknown" when neither exists.
+repo_root=$(dirname -- "$packaging_dir")/..
+semver=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' "$repo_root/backend/pyproject.toml" 2>/dev/null | head -n1)
+commit=""
+if command -v git >/dev/null 2>&1 && git -C "$repo_root" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    commit=$(git -C "$repo_root" rev-parse HEAD)
+elif [ -f "$repo_root/REVISION" ]; then
+    commit=$(tr -d '[:space:]' < "$repo_root/REVISION")
+fi
+[ -n "$commit" ] || commit=unknown
+[ -n "$semver" ] || semver=unknown
+printf '{"commit":"%s","semver":"%s","installed_at":"%s","source":"%s"}\n' \
+    "$commit" "$semver" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${VS_ROUTER_RELEASE_SOURCE:-unknown}" \
+    > /etc/vs-router/version.json
+chmod 0644 /etc/vs-router/version.json
 systemctl enable vs-router-bootrestore.service
 systemctl daemon-reload
 systemctl restart vs-router-agent.service vs-router-web.service

@@ -17,6 +17,13 @@ case ${1:-} in
     '') ;;
     *) echo 'Usage: firstboot-bootstrap.sh [--retry]' >&2; exit 2 ;;
 esac
+if [[ -e $state/incomplete ]]; then
+    # The installer never staged the source (see install-source.sh). Do not run
+    # the software bootstrap on a broken install; the admin must repair first.
+    printf 'Bootstrap skipped: installation is incomplete. Fix the cause, re-run install-source.sh from the ISO, then: firstboot-bootstrap.sh --retry\n' > /dev/console || true
+    echo 'Installation is incomplete (source not staged); refusing to bootstrap.' >&2
+    exit 1
+fi
 if [[ -e $state/attempted ]]; then
     echo 'Previous bootstrap attempted. Use firstboot-bootstrap.sh --retry from the console.' >&2
     exit 1

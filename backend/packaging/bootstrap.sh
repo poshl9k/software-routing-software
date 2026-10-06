@@ -319,7 +319,7 @@ Environment=VS_ROUTER_KEA_API_USER=kea-api
 Environment=VS_ROUTER_KEA_API_PASSWORD_FILE=%d/kea-api-password
 EOF
     # Run via bash: a fresh clone may carry the file without the exec bit.
-    bash "$SCRIPT_DIR/install.sh"
+    VS_ROUTER_RELEASE_SOURCE=iso bash "$SCRIPT_DIR/install.sh"
     # Kea may be inactive on a fresh machine (no interfaces configured yet) —
     # its restart must not fail the bootstrap; the panel configures it later.
     systemctl restart kea-ctrl-agent kea-dhcp4-server 2>/dev/null || \
