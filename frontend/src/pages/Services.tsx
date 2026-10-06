@@ -1,34 +1,20 @@
 import { useState } from "react";
-import { Button, Tab, Tabs, TextField, Typography } from "@mui/material";
+import { Button, TextField } from "@mui/material";
 import { useConfiguration } from "../state";
-import { Badge, Card, DataTable, Todo } from "../ui";
+import { Badge } from "../components/Badge";
+import { Card } from "../components/Card";
+import { DataTable } from "../components/DataTable";
+import { EmptyState } from "../components/EmptyState";
+import { ErrorNotice } from "../components/ErrorNotice";
+import { InfoNote } from "../components/InfoNote";
+import { PageHeader } from "../components/PageHeader";
+import { PageTabs } from "../components/Tabs";
 import { DHCPEditor, DNSEditor } from "./ServiceEditors";
 import { Sites, DDNS } from "./ConnectionEditors";
 import { api, ApiError } from "../api";
-import type { DHCPLease } from "../types";
-import { ErrorNotice } from "../ui";
-import { Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
-function PageTabs({
-  values,
-  value,
-  change,
-}: {
-  values: string[];
-  value: number;
-  change: (n: number) => void;
-}) {
-  return (
-    <Tabs
-      value={value}
-      onChange={(_, n: number) => change(n)}
-      variant="scrollable"
-    >
-      {values.map((v) => (
-        <Tab key={v} label={v} />
-      ))}
-    </Tabs>
-  );
-}
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "../query";
+
 export function DHCP() {
   return (
     <DHCPEditor>
@@ -40,17 +26,21 @@ function DHCPReadOnly() {
   const { configuration: c } = useConfiguration();
   const [tab, setTab] = useState(0);
   const [query, setQuery] = useState("");
-  const [leases, setLeases] = useState<DHCPLease[]>([]); const [leaseError,setLeaseError]=useState<unknown>(null); const [loadingLeases,setLoadingLeases]=useState(false);
-  const loadLeases = async (q=query) => { setLoadingLeases(true); setLeaseError(null); try { setLeases(q.trim()?await api.searchLeases(q.trim()):await api.dhcpLeases()); } catch(e) { setLeaseError(e); setLeases([]); } finally { setLoadingLeases(false); } };
+  const [term, setTerm] = useState("");
+  // Server state: cached, deduped, and only fetched while the tab is open.
+  const leases = useQuery({
+    queryKey: queryKeys.dhcpLeases(term),
+    queryFn: () => (term ? api.searchLeases(term) : api.dhcpLeases()),
+    enabled: tab === 2,
+  });
+  const leaseError = leases.error;
   return (
     <>
-      <Typography component="h1" variant="h1" className="page-title">
-        DHCP (Kea)
-      </Typography>
+      <PageHeader>DHCP (Kea)</PageHeader>
       <PageTabs
         values={["Подсети", "Резервации", "Аренды"]}
         value={tab}
-        change={(n) => { setTab(n); if (n === 2) void loadLeases(""); }}
+        change={setTab}
       />
       {tab === 0 && (
         <Card title="Подсети и пулы">
@@ -68,7 +58,7 @@ function DHCPReadOnly() {
               s.interface,
               s.pools.map((p) => `${p.start}–${p.end}`).join(", "),
               `${s.routers.join(", ")} / ${s.dns_servers.join(", ")}`,
-              "TODO-API",
+              "—",
               s.reservations.length,
             ])}
           />
@@ -84,7 +74,7 @@ function DHCPReadOnly() {
                 r.hw_address,
                 r.ip_address,
                 s.subnet,
-                "TODO-API",
+                "—",
               ]),
             )}
           />
@@ -94,10 +84,10 @@ function DHCPReadOnly() {
           </p>
         </Card>
       )}
-      {tab===2&&<Card title="Текущие аренды" action={<Button onClick={()=>void loadLeases()} disabled={loadingLeases}>Обновить</Button>}>
-        <div className="footer-actions"><TextField label="Поиск: MAC, IP, hostname" size="small" value={query} onChange={e=>setQuery(e.target.value)}/><Button onClick={()=>void loadLeases()} disabled={loadingLeases}>Найти</Button></div>
+      {tab===2&&<Card title="Текущие аренды" action={<Button onClick={()=>void leases.refetch()} disabled={leases.isFetching}>Обновить</Button>}>
+        <div className="footer-actions"><TextField label="Поиск: MAC, IP, hostname" size="small" value={query} onChange={e=>setQuery(e.target.value)}/><Button onClick={()=>setTerm(query.trim())} disabled={leases.isFetching}>Найти</Button></div>
         {leaseError instanceof ApiError && (leaseError.status===502||leaseError.status===503) ? <Badge tone="amber">Kea ctrl-agent недоступен</Badge> : <ErrorNotice error={leaseError}/>}
-        <DataTable heads={["IP-адрес","MAC","Hostname","Подсеть","Истекает"]} rows={leases.map(l=>[l.ip,l.mac,l.hostname??"—",l.subnet,l.expires_in])}/>
+        <DataTable heads={["IP-адрес","MAC","Hostname","Подсеть","Истекает"]} rows={(leases.data??[]).map(l=>[l.ip,l.mac,l.hostname??"—",l.subnet,l.expires_in])} empty={<EmptyState>{leases.isLoading?"Загрузка аренд…":"Аренды не загружены"}</EmptyState>}/>
       </Card>}
     </>
   );
@@ -116,9 +106,7 @@ function DNSReadOnly() {
   const [tab, setTab] = useState(0);
   return (
     <>
-      <Typography component="h1" variant="h1" className="page-title">
-        DNS (Unbound)
-      </Typography>
+      <PageHeader>DNS (Unbound)</PageHeader>
       <PageTabs
         values={[
           "Записи и переадресация",
@@ -174,51 +162,26 @@ function DNSReadOnly() {
               </dl>
             </Card>
             <Card title="Диагностика резолвинга">
-              <Todo />
-              <DataTable
-                heads={["Время", "Запрос", "Результат"]}
-                rows={dnsDiagnostics.map((d) => [
-                  d.time,
-                  d.query,
-                  <Badge tone={d.ok ? "green" : "red"}>{d.result}</Badge>,
-                ])}
-              />
+              <InfoNote>Живая диагностика резолвинга пока недоступна.</InfoNote>
             </Card>
           </div>
         )}
       </div>
       {tab === 2 && (
         <Card title="Журнал запросов">
-          <Todo>Чтение журнала DNS пока недоступно.</Todo>
+          <InfoNote>Чтение журнала DNS пока недоступно.</InfoNote>
           <DataTable heads={["Время", "Клиент", "Запрос", "Ответ"]} rows={[]} />
         </Card>
       )}
     </>
   );
 }
-interface DNSDiagnostic {
-  time: string;
-  query: string;
-  result: string;
-  ok: boolean;
-}
-const dnsDiagnostics: DNSDiagnostic[] = [
-  {
-    time: "14:21:02",
-    query: "nas.home.lan",
-    result: "192.168.10.10 (local)",
-    ok: true,
-  },
-  { time: "14:18:12", query: "broken.invalid", result: "NXDOMAIN", ok: false },
-];
 export { Tunnels } from "./ConnectionEditors";
 export function Proxy() {
   const [tab, setTab] = useState(0);
   return (
     <>
-      <Typography component="h1" variant="h1" className="page-title">
-        Прокси (Caddy)
-      </Typography>
+      <PageHeader>Прокси (Caddy)</PageHeader>
       <PageTabs
         values={["Сайты", "DDNS", "Журнал"]}
         value={tab}
@@ -232,46 +195,13 @@ export function Proxy() {
       </div>
       {tab === 2 && (
         <Card title="Последние запросы к сайтам">
-          <Todo />
+          <InfoNote>Журнал запросов Caddy пока не подключён.</InfoNote>
           <DataTable
             heads={["Время", "Сайт", "Метод", "Путь", "Код", "Задержка"]}
-            rows={proxyLogs.map((l) => [
-              l.time,
-              l.site,
-              l.method,
-              l.path,
-              l.code,
-              l.latency,
-            ])}
+            rows={[]}
           />
         </Card>
       )}
     </>
   );
 }
-interface ProxyLog {
-  time: string;
-  site: string;
-  method: string;
-  path: string;
-  code: number;
-  latency: string;
-}
-const proxyLogs: ProxyLog[] = [
-  {
-    time: "14:22:41",
-    site: "home.example.ru",
-    method: "GET",
-    path: "/api/events",
-    code: 200,
-    latency: "34 мс",
-  },
-  {
-    time: "14:22:12",
-    site: "nastya.example.ru",
-    method: "GET",
-    path: "/",
-    code: 502,
-    latency: "backend недоступен",
-  },
-];

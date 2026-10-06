@@ -41,6 +41,40 @@ export const tokens = {
   tableHeader: "#141516",
 };
 
+/**
+ * Colour tokens are owned here and exposed to the layout stylesheet as CSS
+ * variables, so `styles.css` carries layout only — never a hard-coded colour.
+ * Injected once in `App` via MUI `<GlobalStyles>`.
+ */
+export const globalStyles = {
+  ":root": {
+    "--vs-bg": tokens.bg,
+    "--vs-panel": tokens.panel,
+    "--vs-surface": tokens.surface,
+    "--vs-surface-hover": tokens.surfaceHover,
+    "--vs-text": tokens.text,
+    "--vs-text-secondary": tokens.textSecondary,
+    "--vs-text-tertiary": tokens.textTertiary,
+    "--vs-brand": tokens.brand,
+    "--vs-accent": tokens.accent,
+    "--vs-accent-hover": tokens.accentHover,
+    "--vs-accent-soft": "rgba(113,112,255,0.10)",
+    "--vs-success": tokens.success,
+    "--vs-warning": tokens.warning,
+    "--vs-warning-soft": "rgba(242,201,76,0.10)",
+    "--vs-warning-border": "rgba(242,201,76,0.25)",
+    "--vs-error": tokens.error,
+    "--vs-border": tokens.border,
+    "--vs-border-subtle": tokens.borderSubtle,
+    "--vs-border-strong": tokens.borderStrong,
+    "--vs-wash": "rgba(255,255,255,0.02)",
+    "--vs-wash-hover": "rgba(255,255,255,0.04)",
+    "--vs-track": "rgba(255,255,255,0.08)",
+    "--vs-scrollbar": "rgba(255,255,255,0.14)",
+    "--vs-scrollbar-hover": "rgba(255,255,255,0.24)",
+  },
+} as const;
+
 export const theme = createTheme({
   palette: {
     mode: "dark",

@@ -1,28 +1,30 @@
 import { useState, type ReactNode } from "react";
-import { Button, TextField, Typography, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
+import { Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
 import type { Tunnel, CaddySite, DDNSUpdate, Secret } from "../types";
-import { Badge, Card, DataTable, ErrorNotice } from "../ui";
-import { api } from "../api";
+import { Badge } from "../components/Badge";
+import { Card } from "../components/Card";
+import { DataTable } from "../components/DataTable";
+import { ErrorNotice } from "../components/ErrorNotice";
+import { EditorShell } from "../components/EditorShell";
+import { Field } from "../components/Field";
+import { PageHeader } from "../components/PageHeader";
+import { Select, SelectField, InterfaceSelect } from "../components/Select";
 import {
-  Field,
-  SelectField,
-  InterfaceSelect,
-  EditorFooter,
   nameValid,
+  ifaceNameValid,
+  hostValid,
+  secretValid,
   portValid,
   addressValid,
-} from "../editor";
+  normalize,
+} from "../components/validators";
+import { useDraftEditor } from "../hooks/useDraftEditor";
+import { api } from "../api";
 
-const interfaceValid = (v: string) => /^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$/.test(v);
-const hostValid = (v: string, wildcard = false) =>
-  (wildcard ? /^[a-zA-Z0-9*.-]+$/ : /^[a-zA-Z0-9.-]+$/).test(v);
-const secretValid = (v: Secret | null) =>
-  !!v && (!("plaintext" in v) || !!v.plaintext.trim());
 const ipsValid = (v: string[]) =>
   v.filter((s) => s.trim()).every((s) => addressValid(s.trim()));
 const split = (v: string) => v.split(",");
-const normalize = (v: string[]) => v.map((s) => s.trim()).filter(Boolean);
 const awgRequired = ["Jc", "S1", "S2", "H1", "H2", "H3", "H4"];
 const awgFields = ["Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"];
 function SecretField({
@@ -57,6 +59,11 @@ function SecretField({
   );
 }
 type Row = Tunnel | CaddySite | DDNSUpdate;
+interface EditableRow<T> {
+  id: number;
+  created: boolean;
+  row: T;
+}
 function Collection<T extends Row>({
   kind,
   title,
@@ -74,58 +81,40 @@ function Collection<T extends Row>({
   empty: () => T;
   valid: (v: T) => boolean;
   clean?: (v: T) => T;
-  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, demo: boolean) => ReactNode;
+  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean) => ReactNode;
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
 }) {
-  const { configuration: c, version, saveDraft, demo, setNotice } =
-    useConfiguration();
-  const [editing, setEditing] = useState<
-    { id: number; created: boolean; row: T }[] | null
-  >(null);
+  const { configuration: c, version, noConfiguration } = useConfiguration();
+  const editor = useDraftEditor<EditableRow<T>[]>();
   const [next, setNext] = useState(0);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const rows = c[kind] as T[];
+  const collection = c[kind] as T[];
+  const editing = editor.value;
+  const isEdit = editor.isEdit;
   const allValid =
     !!editing &&
     editing.every(({ row }) => valid(row)) &&
     new Set(editing.map((v) => v.row.name)).size === editing.length;
-  async function save() {
-    if (!version || !editing || !allValid) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const saved = await saveDraft({
-        ...c,
-        tunnels: c.tunnels,
-        sites: c.sites,
-        ddns: c.ddns,
-        [kind]: editing.map((v) => clean(v.row)),
-      });
-      setNotice(`Черновик v${saved.id} сохранён`);
-      setEditing(null);
-    } catch (e) {
-      setError(e);
-    } finally {
-      setSaving(false);
-    }
-  }
+  const save = () =>
+    editor.save((value) => ({
+      ...c,
+      tunnels: c.tunnels,
+      sites: c.sites,
+      ddns: c.ddns,
+      [kind]: value.map((v) => clean(v.row)),
+    }));
   return (
     <>
-      <ErrorNotice error={error} />
+      <ErrorNotice error={editor.error} />
       <Card
         title={title}
         action={
-          !editing && (
+          !isEdit && (
             <Button
               disabled={!version}
               onClick={() => {
-                setEditing(
-                  rows.map((row, id) => ({ id, created: false, row })),
-                );
-                setNext(rows.length);
-                setError(null);
+                editor.begin(collection.map((row, id) => ({ id, created: false, row })));
+                setNext(collection.length);
               }}
             >
               Редактировать
@@ -133,49 +122,53 @@ function Collection<T extends Row>({
           )
         }
       >
-        {!editing ? (
-          <DataTable
-            heads={
-              kind === "tunnels"
-                ? ["Имя", "Роль", "Протокол", "Статус", "QR"]
-                : kind === "sites"
-                  ? ["Имя", "Hostname", "Upstream", "Сертификат", "Статус"]
-                  : ["Имя", "Провайдер", "Hostname", "Статус"]
-            }
-            rows={rows.map((row) => {
-              const cells = summary(row);
-              if (rowActions && !demo) {
-                const actions = rowActions(row);
-                if (actions) cells.push(actions);
+        <EditorShell
+          isEdit={isEdit}
+          saving={editor.saving}
+          valid={!!allValid && !!version}
+          onCancel={editor.cancel}
+          onSave={() => void save()}
+          view={
+            <DataTable
+              heads={
+                kind === "tunnels"
+                  ? ["Имя", "Роль", "Протокол", "Статус", "QR"]
+                  : kind === "sites"
+                    ? ["Имя", "Hostname", "Upstream", "Сертификат", "Статус"]
+                    : ["Имя", "Провайдер", "Hostname", "Статус"]
               }
-              return cells;
-            })}
-          />
-        ) : (
-          <>
-            <fieldset
-              disabled={saving}
-              style={{ border: 0, padding: 0, minWidth: 0 }}
-            >
+              rows={collection.map((row) => {
+                const cells = summary(row);
+                if (rowActions && !noConfiguration) {
+                  const actions = rowActions(row);
+                  if (actions) cells.push(actions);
+                }
+                return cells;
+              })}
+            />
+          }
+          edit={() =>
+            editing ? (
+            <>
               {editing.map(({ id, row, created }) => (
                 <Card key={id} title={row.name || "Новая запись"}>
                   {form(
                     row,
                     (patch) =>
-                      setEditing(
-                        editing.map((v) =>
+                      editor.setValue(
+                        editing!.map((v) =>
                           v.id === id
                             ? { ...v, row: { ...v.row, ...patch } }
                             : v,
                         ),
                       ),
                     created,
-                    demo,
+                    noConfiguration,
                   )}
                   <Button
                     color="error"
                     onClick={() =>
-                      setEditing(editing.filter((v) => v.id !== id))
+                      editor.setValue(editing!.filter((v) => v.id !== id))
                     }
                   >
                     Удалить
@@ -184,8 +177,8 @@ function Collection<T extends Row>({
               ))}
               <Button
                 onClick={() => {
-                  setEditing([
-                    ...editing,
+                  editor.setValue([
+                    ...editing!,
                     { id: next, created: true, row: empty() },
                   ]);
                   setNext(next + 1);
@@ -193,24 +186,16 @@ function Collection<T extends Row>({
               >
                 {addLabel}
               </Button>
-            </fieldset>
-            {!allValid && (
-              <p role="status">
-                Проверьте обязательные поля, формат значений и уникальность
-                имён.
-              </p>
-            )}
-            <EditorFooter
-              saving={saving}
-              valid={allValid && !!version}
-              save={() => void save()}
-              cancel={() => {
-                setEditing(null);
-                setError(null);
-              }}
-            />
-          </>
-        )}
+              {!allValid && (
+                <p role="status">
+                  Проверьте обязательные поля, формат значений и уникальность
+                  имён.
+                </p>
+              )}
+            </>
+            ) : null
+          }
+        />
       </Card>
     </>
   );
@@ -222,9 +207,7 @@ export function Tunnels() {
   return (
     <>
       {qrError && !qr && <ErrorNotice error={qrError} />}
-      <Typography component="h1" variant="h1" className="page-title">
-        Туннели
-      </Typography>
+      <PageHeader>Туннели</PageHeader>
       <Collection<Tunnel>
         kind="tunnels"
         title="Туннели"
@@ -257,7 +240,7 @@ export function Tunnels() {
         })}
         valid={(t) =>
           nameValid(t.name) &&
-          interfaceValid(t.interface) &&
+          ifaceNameValid(t.interface) &&
           secretValid(t.private_key) &&
           ipsValid(t.allowed_ips) &&
           Number.isInteger(t.keepalive) &&
@@ -289,9 +272,9 @@ export function Tunnels() {
           t.name,
           <Badge>{t.role === "server" ? "сервер" : "клиент"}</Badge>,
           t.protocol,
-          "TODO-API · handshake и трафик",
+          "—",
         ]}
-        form={(t, patch, created, demo) => (
+        form={(t, patch, created, disabled) => (
           <>
             {created ? (
               <Field
@@ -356,7 +339,7 @@ export function Tunnels() {
               value={t.private_key}
               change={(v) => patch({ private_key: v ?? { plaintext: "" } })}
             />
-            <Button disabled={demo} onClick={() => void api.keygenTunnel(t.protocol)
+            <Button disabled={disabled} onClick={() => void api.keygenTunnel(t.protocol)
               .then((keys) => patch({
                 private_key: { plaintext: keys.private_key },
                 ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}),
@@ -414,10 +397,10 @@ export function Tunnels() {
                       />
                       <SecretField label="Preshared key" value={p.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />
                       <SecretField label="Приватный ключ пира (входит в клиентский конфиг)" value={p.private_key ?? null} showOriginalHint={false} change={(private_key) => update({ private_key })} />
-                      <Button disabled={demo} onClick={() => void api.keygenPeerKeypair().then((pair) => update({ public_key: pair.public_key, private_key: { plaintext: pair.private_key } })).catch((e) => setQrError(e))}>Сгенерировать ключи пира</Button>
-                      <Button disabled={demo} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } })).catch((e) => setQrError(e))}>Сгенерировать PSK</Button>
+                      <Button disabled={disabled} onClick={() => void api.keygenPeerKeypair().then((pair) => update({ public_key: pair.public_key, private_key: { plaintext: pair.private_key } })).catch((e) => setQrError(e))}>Сгенерировать ключи пира</Button>
+                      <Button disabled={disabled} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } })).catch((e) => setQrError(e))}>Сгенерировать PSK</Button>
                       <Button onClick={()=>void showQr(t.name,p.name)}>QR-код</Button>
-                      <Button disabled>Экспорт пира · TODO-API-EXPORT</Button>
+                      <Button disabled>Экспорт пира</Button>
                       <Button
                         onClick={() =>
                           patch({
@@ -556,9 +539,7 @@ export function Sites() {
         s.hostname,
         s.upstream,
         s.certificate_mode,
-        s.certificate_mode === "passthrough"
-          ? "TLS не завершается · TODO-API"
-          : "TODO-API",
+        s.certificate_mode === "passthrough" ? "TLS не завершается" : "—",
       ]}
       form={(s, patch, created) => (
         <>
@@ -595,24 +576,18 @@ export function Sites() {
             options={["http01", "dns01", "manual", "passthrough"]}
             onChange={(certificate_mode) => patch({ certificate_mode })}
           />
-          <TextField
-            select
+          <Select
             label="WAN-адрес"
             value={s.wan_address ?? ""}
-            SelectProps={{ native: true }}
-            slotProps={{ inputLabel: { shrink: true } }}
-            onChange={(e) => patch({ wan_address: e.target.value || null })}
-          >
-            <option value="">Автоматически</option>
-            {Array.from(
+            placeholder={{ label: "Автоматически" }}
+            options={Array.from(
               new Set([
                 ...addresses,
                 ...(s.wan_address ? [s.wan_address] : []),
               ]),
-            ).map((a) => (
-              <option key={a}>{a}</option>
-            ))}
-          </TextField>
+            ).map((a) => ({ value: a, label: a }))}
+            onChange={(v) => patch({ wan_address: v || null })}
+          />
           {s.certificate_mode === "manual" && (
             <>
               <SecretField
@@ -682,7 +657,7 @@ export function DDNS() {
             ? !!d.zone?.trim()
             : !!d.server?.trim() && !!d.key_name?.trim())
         }
-        summary={(d) => [d.name, d.provider, d.hostname, "TODO-API статус"]}
+        summary={(d) => [d.name, d.provider, d.hostname, "—"]}
         form={(d, patch, created) => (
           <>
             {created ? (
@@ -753,9 +728,8 @@ export function DDNS() {
         )}
       />
       <p className="sub">
-        TODO-API статус: агент записывает name, provider, hostname, status
-        (ok/failed), error в /run/vs-router/ddns-status.json; HTTP API пока
-        недоступен.
+        Статус DDNS агент пока не отдаёт через HTTP API; результат последней
+        попытки обновления в панели не отображается.
       </p>
     </>
   );

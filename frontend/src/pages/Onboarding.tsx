@@ -10,8 +10,10 @@ import {
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { emptyConfiguration } from "../fixtures";
-import { ErrorNotice } from "../ui";
-import type { HostInterface } from "../types";
+import { ErrorNotice } from "../components/ErrorNotice";
+import { Select } from "../components/Select";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "../query";
 import { readPreferences, savePreferences } from "../preferences";
 import { useRouterState } from "../state";
 export default function Onboarding() {
@@ -24,27 +26,17 @@ export default function Onboarding() {
   const [preferences, setPreferences] = useState(readPreferences);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [hostInterfaces, setHostInterfaces] = useState<HostInterface[]>([]);
-  const [hostError, setHostError] = useState<unknown>(null);
   const lock = useRef(false);
   const { refresh, loadUser } = useRouterState();
-  const physicalNics = hostInterfaces.filter(
+  // Requires a session, so it is only enabled once the account step is passed.
+  const hostInterfaces = useQuery({
+    queryKey: queryKeys.hostInterfaces(),
+    queryFn: api.hostInterfaces,
+    enabled: step > 0,
+  });
+  const physicalNics = (hostInterfaces.data ?? []).filter(
     (i) => i.kind === "physical" && i.name !== "lo",
   );
-  async function loadHostInterfaces() {
-    try {
-      const interfaces = await api.hostInterfaces();
-      setHostInterfaces(interfaces);
-      setHostError(null);
-      setLan((selected) => interfaces.some(
-        (i) => i.kind === "physical" && i.name !== "lo" && i.name === selected,
-      ) ? selected : "");
-    } catch (err) {
-      setHostInterfaces([]);
-      setLan("");
-      setHostError(err);
-    }
-  }
   async function next(event: FormEvent) {
     event.preventDefault();
     if (lock.current) return;
@@ -62,7 +54,6 @@ export default function Onboarding() {
         // Populate the session user so the topbar shows "Выйти", not "Вход".
         await loadUser();
         setPassword("");
-        await loadHostInterfaces();
         setStep(1);
       } else if (step === 1) {
         setStep(2);
@@ -168,23 +159,17 @@ export default function Onboarding() {
               отдельное действие на экране применения.
             </p>
             <div className="fields">
-              <TextField
-                select
-                required
+              <Select
                 label="LAN-интерфейс"
                 value={lan}
                 disabled={busy || physicalNics.length === 0}
-                SelectProps={{ native: true }}
-                slotProps={{ inputLabel: { shrink: true } }}
-                onChange={(e) => setLan(e.target.value)}
-              >
-                <option value="">Выберите порт LAN</option>
-                {physicalNics.map((i) => (
-                  <option key={i.name} value={i.name}>
-                    {i.name} · {i.mac}
-                  </option>
-                ))}
-              </TextField>
+                placeholder={{ label: "Выберите порт LAN" }}
+                options={physicalNics.map((i) => ({
+                  value: i.name,
+                  label: `${i.name} · ${i.mac}`,
+                }))}
+                onChange={setLan}
+              />
               <TextField
                 required
                 label="Адрес LAN (CIDR)"
@@ -194,14 +179,14 @@ export default function Onboarding() {
                 helperText="Например, 192.168.10.1/24. Проверка выполняется API при сохранении."
               />
             </div>
-            {hostError && (
+            {hostInterfaces.error && (
               <Alert severity="warning">
                 Не удалось получить список интерфейсов из системы — проверьте
                 агент.
               </Alert>
             )}
             {physicalNics.length === 0 && (
-              <Button disabled={busy} onClick={() => void loadHostInterfaces()}>
+              <Button disabled={busy} onClick={() => void hostInterfaces.refetch()}>
                 Обновить список интерфейсов
               </Button>
             )}

@@ -205,7 +205,7 @@ describe("screens", () => {
     open("/");
     expect(await screen.findByText("Черновик v2")).toBeVisible();
     expect(
-      screen.getByText(/неподтверждённые изменения: неизвестно/),
+      screen.getByText(/статус агента не прочитан/),
     ).toBeVisible();
   });
   it("restores pending apply from the agent marker after opening the page", async () => {
@@ -510,7 +510,7 @@ describe("screens", () => {
     await user.click(screen.getByRole("button", { name: "Продолжить →" }));
     await screen.findByRole("heading", { name: "Базовая сеть" });
     expect(screen.getByRole("button", { name: "Продолжить →" })).toBeDisabled();
-    expect(screen.getByText(/Не удалось получить список интерфейсов/)).toBeVisible();
+    expect(await screen.findByText(/Не удалось получить список интерфейсов/)).toBeVisible();
     expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(false);
   });
   it("countdown clamps at zero and never confirms automatically", () => {

@@ -1,22 +1,28 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Alert,
   Button,
   FormControlLabel,
-  MenuItem,
   Switch,
   TextField,
-  Typography,
 } from "@mui/material";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { observation, useApplyCommands, statusLabels, useCountdown, useRouterState } from "../state";
-import { Badge, Card, DataTable, ErrorNotice, fmtDateTime } from "../ui";
-import type { ApplyResult } from "../types";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "../query";
+import { useApplyCommands, statusLabels, useRouterState } from "../state";
+import { useApplyStatus } from "../hooks/useApplyStatus";
+import { Badge } from "../components/Badge";
+import { Card } from "../components/Card";
+import { DataTable } from "../components/DataTable";
+import { ErrorNotice } from "../components/ErrorNotice";
+import { PageHeader } from "../components/PageHeader";
+import { Select } from "../components/Select";
+import { fmtDateTime } from "../components/format";
+
 export default function ApplyScreen() {
   const { uncertain, busy, applyState, discardDraft, setNotice, user,
-    setApplyState, setApplyError, setUncertain } =
-    useRouterState();
+    setApplyError } = useRouterState();
   const {
     drafts,
     draft,
@@ -32,56 +38,21 @@ export default function ApplyScreen() {
     command,
   } = useApplyCommands();
   const [selected, setSelected] = useState<number | "">("");
-  const [diff, setDiff] = useState<unknown[] | null>(null);
-  const [diffError, setDiffError] = useState<unknown>(null);
-  const [statusLoading, setStatusLoading] = useState(true);
   const [statusRefresh, setStatusRefresh] = useState(0);
+  const { loading: statusLoading } = useApplyStatus({
+    refreshToken: statusRefresh,
+    clearErrorOnRefresh: true,
+  });
   const shownDraft =
     drafts.find((v) => v.id === selected) ?? draft;
-  useEffect(() => {
-    if (user?.role !== "admin" || busy) return;
-    const controller = new AbortController();
-    setStatusLoading(true);
-    api.applyStatus(controller.signal)
-      .then((marker) => {
-        if (controller.signal.aborted) return;
-        setApplyState((previous) => marker ? observation(marker) :
-          previous && ["confirmed", "rolled_back", "failed"].includes(previous.result.status)
-            ? previous : null);
-        setUncertain(false);
-        if (statusRefresh) setApplyError(null);
-        setStatusLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setApplyError(err);
-        setUncertain(true);
-        setStatusLoading(false);
-      });
-    return () => controller.abort();
-  }, [user?.role, busy, statusRefresh, setApplyState, setApplyError, setUncertain]);
-  useEffect(() => {
-    let cancelled = false;
-    setDiff(null);
-    setDiffError(null);
-    if (confirmed && shownDraft)
-      api
-        .diff(confirmed.id, shownDraft.id)
-        .then((data: unknown[]) => {
-          if (!cancelled) setDiff(data);
-        })
-        .catch((err: unknown) => {
-          if (!cancelled) setDiffError(err);
-        });
-    return () => {
-      cancelled = true;
-    };
-  }, [confirmed?.id, shownDraft?.id]);
+  const diffQuery = useQuery({
+    queryKey: queryKeys.diff(confirmed?.id ?? null, shownDraft?.id ?? null),
+    queryFn: () => api.diff(confirmed!.id, shownDraft!.id),
+    enabled: !!confirmed && !!shownDraft,
+  });
   return (
     <div className="apply-wrap">
-      <Typography component="h1" variant="h1" className="page-title">
-        Применение изменений
-      </Typography>
+      <PageHeader>Применение изменений</PageHeader>
       <ErrorNotice error={error || (state?.error ?
         new Error(`${state.error.message} · ${state.error.code}`) : null)} />
       {!confirmed && (
@@ -144,22 +115,16 @@ export default function ApplyScreen() {
       )}
       <Card title="Параметры применения">
         <div className="fields">
-          <TextField
-            select
+          <Select
             label="Черновик"
-            value={draft?.id ?? ""}
-            slotProps={{ inputLabel: { shrink: true } }}
-            onChange={(e) => setSelected(Number(e.target.value))}
+            value={shownDraft ? String(shownDraft.id) : ""}
+            options={drafts.map((v) => ({
+              value: String(v.id),
+              label: `v${v.id}${fmtDateTime(v.created_at) ? ` · ${fmtDateTime(v.created_at)}` : ""}`,
+            }))}
             disabled={busy || !!active || user?.role !== "admin"}
-          >
-            {drafts
-              .map((v) => (
-                <MenuItem value={v.id} key={v.id}>
-                  v{v.id}
-                  {fmtDateTime(v.created_at) ? ` · ${fmtDateTime(v.created_at)}` : ""}
-                </MenuItem>
-              ))}
-          </TextField>
+            onChange={(value) => setSelected(Number(value))}
+          />
           <FormControlLabel
             label="Безопасная настройка"
             htmlFor="safe-apply-switch"
@@ -214,15 +179,15 @@ export default function ApplyScreen() {
         />
         <p className="sub">
           Фазы nftables, Unbound и Kea поступают в ответе команды. Поток
-          промежуточных фаз и Caddy: TODO-API.
+          промежуточных фаз и Caddy пока не транслируется.
         </p>
       </Card>
       <Card
         title={`Изменения (${confirmed ? `v${confirmed.id}${fmtDateTime(confirmed.created_at) ? ` от ${fmtDateTime(confirmed.created_at)}` : ""}` : "нет стабильной версии"} → ${draft ? `v${draft.id}${fmtDateTime(draft.created_at) ? ` от ${fmtDateTime(draft.created_at)}` : ""}` : "нет черновика"})`}
       >
-        <ErrorNotice error={diffError} />
-        {diff ? (
-          <pre className="diff">{JSON.stringify(diff, null, 2)}</pre>
+        <ErrorNotice error={diffQuery.error} />
+        {diffQuery.data ? (
+          <pre className="diff">{JSON.stringify(diffQuery.data, null, 2)}</pre>
         ) : (
           <p className="sub">
             Для diff нужны подтверждённая версия и черновик.

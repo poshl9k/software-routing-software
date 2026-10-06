@@ -1,10 +1,21 @@
-import { useEffect, useState } from "react";
-import { Button, Tab, Tabs, TextField, Typography } from "@mui/material";
+import { Button, Tab, Tabs } from "@mui/material";
 import { useSearchParams } from "react-router-dom";
 import { useConfiguration } from "../state";
 import { api } from "../api";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "../query";
 import type { HostInterface, Interface } from "../types";
-import { Badge, Card, DataTable, Todo, ErrorNotice } from "../ui";
+import { Badge } from "../components/Badge";
+import { Card } from "../components/Card";
+import { DataTable } from "../components/DataTable";
+import { EmptyState } from "../components/EmptyState";
+import { ErrorNotice } from "../components/ErrorNotice";
+import { InfoNote } from "../components/InfoNote";
+import { PageHeader } from "../components/PageHeader";
+import { Field } from "../components/Field";
+import { Select, type SelectOption } from "../components/Select";
+import { ifaceNameValid } from "../components/validators";
+import { useDraftEditor } from "../hooks/useDraftEditor";
 
 type Editable = Interface & { key: string };
 
@@ -24,34 +35,21 @@ const emptyInterface = (key: string): Editable => ({
 });
 
 export default function Network() {
-  const { configuration: c, version, saveDraft, draftDirty, setNotice } =
-    useConfiguration();
+  const { configuration: c, version, draftDirty } = useConfiguration();
+  const editor = useDraftEditor<Editable[]>();
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "interfaces";
   const knownTab = ["interfaces", "wan", "routes", "diagnostics"].includes(tab)
     ? tab
     : "interfaces";
 
-  // Локальная редактируемая копия; сохраняется только по кнопке «Сохранить».
-  const [editing, setEditing] = useState<Editable[] | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<unknown>(null);
+  const hostInterfaces = useQuery({ queryKey: queryKeys.hostInterfaces(), queryFn: api.hostInterfaces });
+  const hostError = hostInterfaces.error;
+  const physicalNics = (hostInterfaces.data ?? []).filter((i) => i.kind === "physical");
+  const allRealNics = hostInterfaces.data ?? [];
 
-  const [hostInterfaces, setHostInterfaces] = useState<HostInterface[]>([]);
-  const [hostError, setHostError] = useState<unknown>(null);
-  useEffect(() => {
-    let active = true;
-    api.hostInterfaces().then(
-      (interfaces) => { if (active) setHostInterfaces(interfaces); },
-      (err: unknown) => { if (active) setHostError(err); },
-    );
-    return () => { active = false; };
-  }, []);
-  const physicalNics = hostInterfaces.filter((i) => i.kind === "physical");
-  const allRealNics = hostInterfaces;
-
-  const rows: Editable[] = editing ?? c.interfaces.map((i) => ({ ...i, key: i.name }));
-  const isEditMode = editing !== null;
+  const rows: Editable[] = editor.value ?? c.interfaces.map((i) => ({ ...i, key: i.name }));
+  const isEditMode = editor.isEdit;
 
   const candidates = (i: Editable, host: HostInterface[]) =>
     [...new Set([
@@ -70,16 +68,12 @@ export default function Network() {
   };
 
   // Живые адреса с хоста: что реально получил интерфейс (важно для DHCP).
-  const [liveAddresses, setLiveAddresses] = useState<Record<string, string[]>>({});
-  useEffect(() => {
-    if (isEditMode) return;
-    let active = true;
-    api.hostAddresses().then(
-      (addresses) => { if (active) setLiveAddresses(addresses); },
-      () => { if (active) setLiveAddresses({}); },
-    );
-    return () => { active = false; };
-  }, [isEditMode]);
+  const hostAddresses = useQuery({
+    queryKey: queryKeys.hostAddresses(),
+    queryFn: api.hostAddresses,
+    enabled: !isEditMode,
+  });
+  const liveAddresses = hostAddresses.data ?? {};
 
   const setField = (key: string, patch: Partial<Editable>) => {
     const updated = rows.map((i) => (i.key === key ? { ...i, ...patch } : i));
@@ -88,7 +82,7 @@ export default function Network() {
       if (name && !updated.some((i) => i.name === name))
         updated.push({ ...emptyInterface(`host-${name}`), name });
     }
-    setEditing(updated);
+    editor.setValue(updated);
   };
 
   const addVirtual = (type: "vlan" | "bridge", parent: string | null = null) => {
@@ -100,43 +94,44 @@ export default function Network() {
       next.push({ ...emptyInterface(`host-${parent}`), name: parent });
     next.push({ ...emptyInterface(`new-${Date.now()}`), name: `${prefix}${id}`,
       type, parent, vlan_id: type === "vlan" ? 1 : null });
-    setEditing(next);
+    editor.setValue(next);
   };
 
-  const addRow = () => setEditing([...rows, emptyInterface(`new-${Date.now()}`)]);
-  const removeRow = (key: string) => setEditing(rows.filter((i) => i.key !== key));
+  const addRow = () => editor.setValue([...rows, emptyInterface(`new-${Date.now()}`)]);
+  const removeRow = (key: string) => editor.setValue(rows.filter((i) => i.key !== key));
 
   const save = async () => {
-    if (!version) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const interfaces: Interface[] = rows.map(({ key: _key, ...rest }) => ({
+    await editor.save((value) => ({
+      ...c,
+      interfaces: value.map(({ key: _key, ...rest }) => ({
         ...rest,
         name: rest.name.trim(),
         description: rest.description?.trim() || null,
         addresses: rest.addresses.filter((a) => a.trim()),
         members: rest.members.filter((m) => m.trim()),
-      }));
-      const saved = await saveDraft({ ...c, interfaces });
-      setNotice(`Черновик v${saved.id} сохранён`);
-      setEditing(null);
-    } catch (err) {
-      setError(err);
-    } finally {
-      setSaving(false);
-    }
+      })),
+    }));
   };
 
-  const nameValid = (i: Editable) =>
-    /^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$/.test(i.name.trim());
-  const allValid = rows.every((i) => nameValid(i));
+  const validName = (i: Editable) => ifaceNameValid(i.name.trim());
+  const allValid = rows.every(validName);
+
+  const nameOptions = (i: Editable): SelectOption[] => {
+    const options: SelectOption[] = [];
+    if (i.name && !allRealNics.some((p) => p.name === i.name))
+      options.push({
+        value: i.name,
+        label: `${optLabel(i.name)} (${i.type === "physical" ? "нет в ОС" : "в черновике"})`,
+        disabled: i.type === "physical",
+      });
+    for (const p of allRealNics.filter((p) => !usedByOtherRows(i).has(p.name)))
+      options.push({ value: p.name, label: `${p.name} (${p.operstate})` });
+    return options;
+  };
 
   return (
     <>
-      <Typography component="h1" variant="h1" className="page-title">
-        Сеть
-      </Typography>
+      <PageHeader>Сеть</PageHeader>
       <Tabs
         value={knownTab}
         onChange={(_, value: string) => setParams({ tab: value })}
@@ -154,13 +149,13 @@ export default function Network() {
 
       {knownTab === "interfaces" && (
         <>
-          <ErrorNotice error={error} />
+          <ErrorNotice error={editor.error} />
           <ErrorNotice error={hostError} />
           <Card
             title="Интерфейсы и зоны"
             action={
               isEditMode ? undefined : (
-                <Button size="small" onClick={() => setEditing(rows)}>
+                <Button size="small" onClick={() => editor.begin(rows)}>
                   Редактировать
                 </Button>
               )
@@ -182,122 +177,93 @@ export default function Network() {
               rows={
                 isEditMode
                   ? rows.map((i) => [
-                      <TextField
-                        size="small"
-                        select
-                        SelectProps={{ native: true }}
+                      <Select
+                        label="Интерфейс"
+                        ariaLabel={`Интерфейс ${i.key}`}
                         value={i.name}
-                        error={i.name.length > 0 && !nameValid(i)}
+                        error={i.name.length > 0 && !validName(i)}
                         helperText={
-                          i.name.length > 0 && !nameValid(i)
+                          i.name.length > 0 && !validName(i)
                             ? "латиница/цифры/._- до 15 симв."
                             : undefined
                         }
-                        onChange={(e) => setField(i.key, { name: e.target.value })}
-                      >
-                        <option value="">— выберите интерфейс —</option>
-                        {i.name && !allRealNics.some((p) => p.name === i.name) && (
-                          <option value={i.name} disabled={i.type === "physical"}>
-                            {optLabel(i.name)} ({i.type === "physical" ? "нет в ОС" : "в черновике"})
-                          </option>
-                        )}
-                        {allRealNics
-                          .filter((p) => !usedByOtherRows(i).has(p.name))
-                          .map((p) => (
-                          <option key={p.name} value={p.name}>{p.name} ({p.operstate})</option>
-                        ))}
-                      </TextField>,
-                      <TextField
-                        size="small"
+                        placeholder={{ label: "— выберите интерфейс —" }}
+                        options={nameOptions(i)}
+                        onChange={(name) => setField(i.key, { name })}
+                      />,
+                      <Field
                         value={i.description ?? ""}
                         placeholder="напр. «оптика провайдера»"
-                        slotProps={{ htmlInput: { maxLength: 64 } }}
-                        onChange={(e) =>
-                          setField(i.key, { description: e.target.value || null })
+                        maxLength={64}
+                        onChange={(v) =>
+                          setField(i.key, { description: v || null })
                         }
                       />,
-                      <TextField
-                        select
-                        size="small"
+                      <Select
+                        label="Тип"
+                        ariaLabel={`Тип ${i.key}`}
                         value={i.type}
-                        SelectProps={{ native: true }}
-                        onChange={(e) =>
-                          setField(i.key, { type: e.target.value as Interface["type"] })
+                        options={[
+                          { value: "physical", label: "physical" },
+                          { value: "bridge", label: "bridge" },
+                          { value: "vlan", label: "vlan" },
+                        ]}
+                        onChange={(v) =>
+                          setField(i.key, { type: v as Interface["type"] })
                         }
-                      >
-                        <option value="physical">physical</option>
-                        <option value="bridge">bridge</option>
-                        <option value="vlan">vlan</option>
-                      </TextField>,
-                      <TextField
-                        select
-                        size="small"
+                      />,
+                      <Select
+                        label="Зона"
+                        ariaLabel={`Зона ${i.key}`}
                         value={i.zone ?? ""}
-                        SelectProps={{ native: true }}
-                        onChange={(e) =>
-                          setField(i.key, { zone: e.target.value || null })
-                        }
-                      >
-                        <option value="">— (fail-closed)</option>
-                        {ZONES.map((z) => (
-                          <option key={z} value={z}>
-                            {z}
-                          </option>
-                        ))}
-                      </TextField>,
-                      <TextField
-                        select
-                        size="small"
+                        placeholder={{ label: "— (fail-closed)" }}
+                        options={ZONES.map((z) => ({ value: z, label: z }))}
+                        onChange={(v) => setField(i.key, { zone: v || null })}
+                      />,
+                      <Select
+                        label="Режим"
+                        ariaLabel={`Режим ${i.key}`}
                         value={i.addressing}
-                        SelectProps={{ native: true }}
-                        onChange={(e) =>
-                          setField(i.key, { addressing: e.target.value as Interface["addressing"] })
+                        options={[
+                          { value: "static", label: "static" },
+                          { value: "dhcp", label: "DHCP" },
+                        ]}
+                        onChange={(v) =>
+                          setField(i.key, { addressing: v as Interface["addressing"] })
                         }
-                      >
-                        <option value="static">static</option>
-                        <option value="dhcp">DHCP</option>
-                      </TextField>,
-                      <TextField
-                        size="small"
-                        fullWidth
+                      />,
+                      <Field
                         value={i.addressing === "dhcp" ? "" : i.addresses.join(", ")}
                         disabled={i.addressing === "dhcp"}
                         placeholder={i.addressing === "dhcp" ? "адрес по DHCP" : "192.168.10.1/24, 192.168.10.20/32"}
-                        onChange={(e) =>
+                        onChange={(v) =>
                           setField(i.key, {
-                            addresses: e.target.value.split(",").map((a) => a.trim()),
+                            addresses: v.split(",").map((a) => a.trim()),
                           })
                         }
                       />,
                       i.type === "vlan" ? (
-                        <TextField
-                          size="small"
+                        <Field
                           type="number"
                           value={i.vlan_id ?? ""}
-                          onChange={(e) =>
-                            setField(i.key, {
-                              vlan_id: Number(e.target.value) || null,
-                            })
+                          onChange={(v) =>
+                            setField(i.key, { vlan_id: Number(v) || null })
                           }
                         />
                       ) : (
                         "—"
                       ),
                       i.type === "vlan" ? (
-                        <TextField
-                          size="small"
-                          select
-                          SelectProps={{ native: true }}
+                        <Select
+                          label="Родитель"
+                          ariaLabel={`Родитель ${i.key}`}
                           value={i.parent ?? ""}
-                          onChange={(e) => setField(i.key, { parent: e.target.value || null })}
-                        >
-                          <option value="">— выберите —</option>
-                          {candidates(i, physicalNics)
+                          placeholder={{ label: "— выберите —" }}
+                          options={candidates(i, physicalNics)
                             .filter((name) => name === i.parent || !usedByOtherRows(i).has(name))
-                            .map((name) => (
-                            <option key={name} value={name}>{optLabel(name)}</option>
-                          ))}
-                        </TextField>
+                            .map((name) => ({ value: name, label: optLabel(name) }))}
+                          onChange={(v) => setField(i.key, { parent: v || null })}
+                        />
                       ) : (
                         "—"
                       ),
@@ -309,33 +275,30 @@ export default function Network() {
                             );
                             return (
                               <div key={m + index} className="members-row">
-                                <TextField
-                                  select
-                                  size="small"
-                                  SelectProps={{ native: true }}
+                                <Select
+                                  label="Участник"
+                                  ariaLabel={`Участник ${i.key} ${index}`}
                                   value={m}
                                   error={!m || !member || !member.zone}
-                                  onChange={(e) =>
+                                  placeholder={{ label: "— выберите —" }}
+                                  options={candidates(i, allRealNics)
+                                    .filter((name) => i.members.includes(name) || (!i.members.includes(name) && !usedByOtherRows(i).has(name)))
+                                    .map((name) => ({
+                                      value: name,
+                                      label: `${optLabel(name)}${rows.find((p) => p.name === name)?.zone ? "" : " (без зоны!)"}`,
+                                    }))}
+                                  onChange={(v) =>
                                     setField(i.key, {
                                       members: i.members.map((row, r) =>
-                                        r === index ? e.target.value : row,
+                                        r === index ? v : row,
                                       ),
                                     })
                                   }
-                                >
-                                  <option value="">— выберите —</option>
-                                  {candidates(i, allRealNics)
-                                    .filter((name) => i.members.includes(name) || (!i.members.includes(name) && !usedByOtherRows(i).has(name)))
-                                    .map((name) => (
-                                      <option key={name} value={name}>
-                                        {optLabel(name)}
-                                        {rows.find((p) => p.name === name)?.zone ? "" : " (без зоны!)"}
-                                      </option>
-                                    ))}
-                                </TextField>
+                                />
                                 <Button
                                   size="small"
                                   color="error"
+                                  aria-label={`Удалить участника ${m}`}
                                   onClick={() =>
                                     setField(i.key, {
                                       members: i.members.filter(
@@ -372,6 +335,7 @@ export default function Network() {
                       <Button
                         size="small"
                         color="error"
+                        aria-label={`Удалить интерфейс ${i.name}`}
                         onClick={() => removeRow(i.key)}
                       >
                         Удалить
@@ -431,16 +395,16 @@ export default function Network() {
                   + Мост
                 </Button>
                 <span className="spacer" />
-                <Button size="small" onClick={() => setEditing(null)}>
+                <Button size="small" onClick={editor.cancel}>
                   Отмена
                 </Button>
                 <Button
                   size="small"
                   variant="contained"
-                  disabled={saving || !allValid}
+                  disabled={editor.saving || !allValid}
                   onClick={() => void save()}
                 >
-                  {saving ? "Сохранение…" : "Сохранить"}
+                  {editor.saving ? "Сохранение…" : "Сохранить"}
                 </Button>
               </div>
             )}
@@ -481,7 +445,7 @@ export default function Network() {
             ))}
           {!c.interfaces.some((i) => i.zone === "wan") && (
             <Card title="WAN-адреса">
-              <Todo>Нет интерфейсов в зоне wan.</Todo>
+              <EmptyState>Нет интерфейсов в зоне wan.</EmptyState>
             </Card>
           )}
         </>
@@ -489,7 +453,7 @@ export default function Network() {
 
       {knownTab === "routes" && (
         <Card title="Статические маршруты">
-          <Todo>Маршруты отсутствуют в текущей модели API.</Todo>
+          <InfoNote>Маршруты отсутствуют в текущей модели API.</InfoNote>
           <DataTable
             heads={["Сеть назначения", "Шлюз", "Интерфейс", "Метрика"]}
             rows={[]}
@@ -499,45 +463,13 @@ export default function Network() {
 
       {knownTab === "diagnostics" && (
         <Card title="Диагностика (последние запуски)">
-          <Todo />
+          <InfoNote>История диагностики пока не сохраняется. Запустите ping или traceroute на странице «Обслуживание».</InfoNote>
           <DataTable
             heads={["Время", "Тип", "Интерфейс", "Цель", "Результат"]}
-            rows={diagnostics.map((d) => [
-              d.time,
-              d.kind,
-              d.interface,
-              d.target,
-              <Badge tone={d.success ? "green" : "red"}>{d.result}</Badge>,
-            ])}
+            rows={[]}
           />
         </Card>
       )}
     </>
   );
 }
-interface Diagnostic {
-  time: string;
-  kind: string;
-  interface: string;
-  target: string;
-  result: string;
-  success: boolean;
-}
-const diagnostics: Diagnostic[] = [
-  {
-    time: "14:18:02",
-    kind: "ping",
-    interface: "br0",
-    target: "192.168.10.45",
-    result: "ok · 1.2 мс",
-    success: true,
-  },
-  {
-    time: "14:10:11",
-    kind: "ping",
-    interface: "eth1",
-    target: "203.0.113.1",
-    result: "timeout",
-    success: false,
-  },
-];

@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   CssBaseline,
+  GlobalStyles,
   LinearProgress,
   Snackbar,
   TextField,
@@ -27,46 +28,28 @@ import { DHCP, DNS, Proxy, Tunnels } from "./pages/Services";
 import ApplyScreen from "./pages/ApplyScreen";
 import Maintenance from "./pages/Maintenance";
 import Onboarding, { Login } from "./pages/Onboarding";
-import { api } from "./api";
-import { theme } from "./theme";
+import { globalStyles, theme } from "./theme";
 import {
   RouterProvider,
-  observation,
   useApplyCommands,
   useConfiguration,
   useRouterState,
 } from "./state";
-import { Badge, ErrorNotice, Todo, fmtDateTime } from "./ui";
+import { useApplyStatus } from "./hooks/useApplyStatus";
+import { Badge } from "./components/Badge";
+import { ErrorNotice } from "./components/ErrorNotice";
+import { Icon } from "./components/Icon";
+import { InfoNote } from "./components/InfoNote";
+import { fmtDateTime } from "./components/format";
+
 function ApplyTopButton() {
-  const { demo } = useConfiguration();
-  const { uncertain, busy, user, setApplyState, setApplyError, setUncertain } = useRouterState();
+  const { noConfiguration } = useConfiguration();
+  const { uncertain, busy, user } = useRouterState();
   const location = useLocation();
-  const [checking, setChecking] = useState(true);
-  useEffect(() => {
-    if (location.pathname === "/apply") {
-      setChecking(true); // The Apply screen owns this read and its confirmation button.
-      return;
-    }
-    if (user?.role !== "admin" || busy) return;
-    const controller = new AbortController();
-    setChecking(true);
-    api.applyStatus(controller.signal)
-      .then((marker) => {
-        if (controller.signal.aborted) return;
-        setApplyState((previous) => marker ? observation(marker) :
-          previous && ["confirmed", "rolled_back", "failed"].includes(previous.result.status)
-            ? previous : null);
-        setUncertain(false);
-        setChecking(false);
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setApplyError(error);
-        setUncertain(true);
-        setChecking(false);
-      });
-    return () => controller.abort();
-  }, [location.pathname, user?.role, busy, setApplyState, setApplyError, setUncertain]);
+  // The Apply screen owns the read (and its confirm button) while it is open.
+  const { loading: checking } = useApplyStatus({
+    enabled: location.pathname !== "/apply",
+  });
   const {
     draft,
     confirmed,
@@ -76,7 +59,7 @@ function ApplyTopButton() {
     timeoutValid,
     command,
   } = useApplyCommands();
-  if (demo || user?.role !== "admin") return null;
+  if (noConfiguration || user?.role !== "admin") return null;
   const mmss =
     seconds === null
       ? null
@@ -139,19 +122,19 @@ function ApplyTopButton() {
   );
 }
 export const navigation = [
-  { to: "/", label: "Обзор", icon: "◱" },
-  { to: "/network", label: "Сеть", icon: "⑃" },
-  { to: "/dhcp", label: "DHCP", icon: "⇄" },
-  { to: "/dns", label: "DNS", icon: "⌾" },
-  { to: "/network?tab=routes", label: "Маршруты", icon: "⇋" },
-  { to: "/routing", label: "Маршрутизация", icon: "⤳" },
-  { to: "/tunnels", label: "Туннели", icon: "⚿" },
-  { to: "/proxy", label: "Прокси", icon: "◎" },
-  { to: "/firewall", label: "Правила", icon: "✉" },
-  { to: "/ssh", label: "SSH", icon: "⌘" },
-  { to: "/events", label: "Журнал", icon: "▤" },
-  { to: "/apply", label: "Применение", icon: "⚙" },
-  { to: "/maintenance", label: "Обслуживание", icon: "⌁" },
+  { to: "/", label: "Обзор", icon: "overview" },
+  { to: "/network", label: "Сеть", icon: "network" },
+  { to: "/dhcp", label: "DHCP", icon: "dhcp" },
+  { to: "/dns", label: "DNS", icon: "dns" },
+  { to: "/network?tab=routes", label: "Маршруты", icon: "routes" },
+  { to: "/routing", label: "Маршрутизация", icon: "routing" },
+  { to: "/tunnels", label: "Туннели", icon: "tunnels" },
+  { to: "/proxy", label: "Прокси", icon: "proxy" },
+  { to: "/firewall", label: "Правила", icon: "firewall" },
+  { to: "/ssh", label: "SSH", icon: "ssh" },
+  { to: "/events", label: "Журнал", icon: "events" },
+  { to: "/apply", label: "Применение", icon: "apply" },
+  { to: "/maintenance", label: "Обслуживание", icon: "maintenance" },
 ];
 function Layout() {
   const { pathname, search } = useLocation();
@@ -160,7 +143,7 @@ function Layout() {
   const {
     loading,
     error,
-    demo,
+    noConfiguration,
     version,
     refresh,
     user,
@@ -204,8 +187,8 @@ function Layout() {
                     : ""
                 }
               >
-                <span className="icon" aria-hidden="true">
-                  {n.icon}
+                <span className="icon">
+                  <Icon name={n.icon} />
                 </span>
                 {n.label}
               </NavLink>
@@ -217,7 +200,7 @@ function Layout() {
           <div className="breadcrumbs">
             vs-router › <b>{title}</b>
           </div>
-          {!demo && version && (
+          {!noConfiguration && version && (
             <Badge tone={version.status === "draft" ? "amber" : "green"}>
               v{version.id} ·{" "}
               {version.status === "draft" ? "черновик" : "подтверждена"}
@@ -263,10 +246,10 @@ function Layout() {
           onClose={() => setNotice(null)}
           message={notice ?? ""}
         />
-        {demo && (
-          <Todo>
+        {noConfiguration && (
+          <InfoNote>
             Нет сохранённой конфигурации — выполните первичную настройку (раздел «Первый запуск») или проверьте доступность панели.
-          </Todo>
+          </InfoNote>
         )}
         <Outlet />
       </main>
@@ -276,6 +259,7 @@ function Layout() {
 export default function App() {
   return (
     <ThemeProvider theme={theme}>
+      <GlobalStyles styles={globalStyles} />
       <CssBaseline />
       <RouterProvider>
         <Routes>

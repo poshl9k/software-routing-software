@@ -86,7 +86,7 @@ it("renders AWG server, locks role, preserves secrets and hides obfuscation for 
   expect(screen.getByLabelText("Приватный ключ")).toHaveValue("");
   expect(screen.getByText(/сохранён/)).toBeInTheDocument();
   expect(
-    screen.getByRole("button", { name: /TODO-API-EXPORT/ }),
+    screen.getByRole("button", { name: "Экспорт пира" }),
   ).toBeDisabled();
   fill("Протокол", "wg");
   expect(screen.queryByLabelText("Jc")).not.toBeInTheDocument();

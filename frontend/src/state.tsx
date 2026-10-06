@@ -10,6 +10,8 @@ import {
   type SetStateAction,
 } from "react";
 import { api, ApiError } from "./api";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { makeQueryClient } from "./query";
 import type {
   ApplyMarker,
   ApplyRequest,
@@ -73,6 +75,9 @@ interface RouterState {
 }
 const Context = createContext<RouterState | null>(null);
 export function RouterProvider({ children }: { children: ReactNode }) {
+  // One client per provider tree. Wrapping the app context provider means every
+  // consumer (and every test that mounts RouterProvider) has Query available.
+  const [queryClient] = useState(makeQueryClient);
   const [versions, setVersions] = useState<ConfigurationVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
@@ -155,6 +160,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     clearSession();
   }, [clearSession]);
   return (
+    <QueryClientProvider client={queryClient}>
     <Context.Provider
       value={{
         versions,
@@ -182,6 +188,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     >
       {children}
     </Context.Provider>
+    </QueryClientProvider>
   );
 }
 export function useRouterState() {
@@ -195,7 +202,7 @@ export function useConfiguration() {
   return {
     ...state,
     configuration: version?.configuration ?? emptyConfiguration,
-    demo: !version,
+    noConfiguration: !version,
     version,
   };
 }
@@ -251,7 +258,6 @@ export function useApplyCommands(
     setApplyState,
     applyError,
     setApplyError,
-    uncertain,
     setUncertain,
     busy,
     setBusy,

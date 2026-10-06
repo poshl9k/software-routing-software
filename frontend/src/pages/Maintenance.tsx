@@ -1,9 +1,14 @@
-import { useEffect, useState } from "react";
-import { Alert, Button, Checkbox, FormControlLabel, TextField, Typography } from "@mui/material";
+import { useState } from "react";
+import { Alert, Button, Checkbox, FormControlLabel, TextField } from "@mui/material";
 import { useConfiguration } from "../state";
 import { api } from "../api";
-import { Card, DataTable, ErrorNotice } from "../ui";
-import { InterfaceSelect } from "../editor";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "../query";
+import { Card } from "../components/Card";
+import { DataTable } from "../components/DataTable";
+import { ErrorNotice } from "../components/ErrorNotice";
+import { PageHeader } from "../components/PageHeader";
+import { InterfaceSelect } from "../components/Select";
 
 function download(data: Blob, filename: string) {
   const url = URL.createObjectURL(data);
@@ -19,14 +24,13 @@ export default function Maintenance() {
   const [allowPartial, setAllowPartial] = useState(false);
   const [host, setHost] = useState(""); const [count, setCount] = useState(4); const [iface, setIface] = useState("");
   const [ping, setPing] = useState<{sent:number;received:number;loss_pct:number;min_avg_max_ms:number[]}|null>(null);
-  const [trace, setTrace] = useState<string[]>([]); const [counters, setCounters] = useState<Record<string,{packets:number;bytes:number}>>({});
+  const [trace, setTrace] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const perform = async (fn:()=>Promise<void>) => { setError(null); setNotice(""); setBusy(true); try { await fn(); } catch(e) { setError(e); } finally { setBusy(false); } };
-  const refreshCounters = () => perform(async()=>setCounters(await api.rulesCounters()));
-  useEffect(()=>{if(admin) void refreshCounters();},[admin]);
+  const counters = useQuery({ queryKey: queryKeys.rulesCounters(), queryFn: () => api.rulesCounters(), enabled: admin });
   const restoreFile = async (file?: File) => { if (!file) return; void perform(async()=>{ const parsed=JSON.parse(await file.text()); if (!parsed || typeof parsed.schema_version!=="number" || !Array.isArray(parsed.versions) || !Array.isArray(parsed.users)) throw new Error("Некорректный файл резервной копии"); setAllowPartial(false); setBackup(parsed); }); };
   return <>
-    <Typography component="h1" variant="h1" className="page-title">Обслуживание</Typography>
+    <PageHeader>Обслуживание</PageHeader>
     <ErrorNotice error={error}/>{notice&&<Alert severity="success">{notice}</Alert>}
     <Card title="Резервная копия">
       <Alert severity="info">Импорт создаёт черновик, не применяет конфигурацию. Из архива берётся только последняя версия. Новые парольные архивы перешифровываются для этого хоста; старым архивам нужен прежний ключ.</Alert>
@@ -57,7 +61,7 @@ export default function Maintenance() {
           label="Количество"
           helperText="1–5"
           type="number"
-          inputProps={{ min: 1, max: 5 }}
+          slotProps={{ htmlInput: { min: 1, max: 5 } }}
           sx={{ width: 130 }}
           value={count}
           onChange={(e) => setCount(Number(e.target.value))}
@@ -118,6 +122,6 @@ export default function Maintenance() {
         <div key={i}>{line}</div>
       ))}
     </Card>
-    <Card title="Счётчики правил" action={<Button onClick={()=>void refreshCounters()} disabled={!admin||busy}>Обновить</Button>}><DataTable heads={["Правило","Пакеты","Байты"]} rows={Object.entries(counters).map(([name,value])=>[name,value.packets,value.bytes])}/></Card>
+    <Card title="Счётчики правил" action={<Button onClick={()=>void counters.refetch()} disabled={!admin||counters.isFetching}>Обновить</Button>}><DataTable heads={["Правило","Пакеты","Байты"]} rows={Object.entries(counters.data??{}).map(([name,value])=>[name,value.packets,value.bytes])}/></Card>
   </>;
 }

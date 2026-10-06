@@ -1,11 +1,16 @@
-import { Button, Typography } from "@mui/material";
+import { Button } from "@mui/material";
 import { Link } from "react-router-dom";
 import { useConfiguration, statusLabels } from "../state";
-import { Badge, Card, DataTable, Todo } from "../ui";
+import { Badge } from "../components/Badge";
+import { Card } from "../components/Card";
+import { DataTable } from "../components/DataTable";
+import { InfoNote } from "../components/InfoNote";
+import { PageHeader } from "../components/PageHeader";
+
 export function Events() {
   return (
     <Card title="Последние события">
-      <Todo />
+      <InfoNote>Журнал событий пока не подключён к API.</InfoNote>
       <DataTable
         heads={["Время", "Событие", "Сообщение"]}
         rows={[]}
@@ -18,29 +23,24 @@ export default function Dashboard() {
   const draft = versions.find((v) => v.status === "draft");
   return (
     <>
-      <Typography component="h1" variant="h1" className="page-title">
-        Обзор сети
-      </Typography>
+      <PageHeader>Обзор сети</PageHeader>
       <div className="status-strip">
         <div className="status-pill">
-          🌐{" "}
           <div>
             <b>Интернет</b>
-            <div className="sub">TODO-API · статус неизвестен</div>
+            <div className="sub">статус недоступен</div>
           </div>
         </div>
         <div className="status-pill">
-          ⇅{" "}
           <div>
             <b>WAN</b>
-            <div className="sub">TODO-API · скорость неизвестна</div>
+            <div className="sub">скорость неизвестна</div>
           </div>
         </div>
         <div className="status-pill">
-          ✔{" "}
           <div>
             <b>Система</b>
-            <div className="sub">TODO-API · телеметрия отсутствует</div>
+            <div className="sub">телеметрия недоступна</div>
           </div>
         </div>
         <div className="status-pill">
@@ -55,7 +55,7 @@ export default function Dashboard() {
             <div className="sub">
               {applyState
                 ? "Последний ответ команды в этой вкладке"
-                : "TODO-API · неподтверждённые изменения: неизвестно"}
+                : "статус агента не прочитан"}
             </div>
           </div>
         </div>
@@ -74,7 +74,7 @@ export default function Dashboard() {
                   <b>{i.name}</b>,
                   i.addresses.join(", "),
                   c.dns.upstreams.join(", "),
-                  "TODO-API",
+                  "—",
                 ])}
             />
           </Card>
@@ -101,7 +101,7 @@ export default function Dashboard() {
               rows={c.dhcp_subnets.map((s) => [
                 s.interface,
                 s.subnet,
-                "TODO-API",
+                "—",
                 "—",
               ])}
             />
@@ -114,7 +114,7 @@ export default function Dashboard() {
                 i.type,
                 <Badge>{i.zone ?? "fail-closed"}</Badge>,
                 i.addresses.join(", "),
-                "TODO-API",
+                "—",
               ])}
             />
           </Card>
@@ -126,7 +126,7 @@ export default function Dashboard() {
               rows={c.tunnels.map((t) => [
                 t.name,
                 t.protocol === "wg" ? "WireGuard" : "AmneziaWG",
-                "TODO-API",
+                "—",
                 t.role === "server" ? t.peers.length : "клиент",
                 "—",
               ])}
@@ -139,7 +139,7 @@ export default function Dashboard() {
                 s.hostname,
                 s.upstream,
                 s.certificate_mode,
-                "TODO-API",
+                "—",
               ])}
             />
           </Card>
