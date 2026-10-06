@@ -113,7 +113,8 @@ if [[ $UPLOAD == 1 ]]; then
     if gh release view "$tag" >/dev/null 2>&1; then
         gh release upload "$tag" --clobber "$OUT/$name" "$OUT/release.json"
     else
-        gh release create "$tag" --title "vs-router ${semver} (${COMMIT:0:7})" \
+        gh release create "$tag" --target "$COMMIT" \
+            --title "vs-router ${semver} (${COMMIT:0:7})" \
             --notes "Pinned vs-router release ${COMMIT}." \
             "$OUT/$name" "$OUT/release.json"
     fi
