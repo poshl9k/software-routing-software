@@ -157,18 +157,30 @@ def test_panel_exists_without_sites_and_rejects_wildcard():
     assert len(generate_caddy_json(configured, STATE)['apps']['http']['servers']) >= 2
 
 
-@pytest.mark.parametrize('changes', [
-    {'interfaces': []}, {'panel_port': 8443},
-    {'interfaces': [{'name': 'eth1', 'zone': 'wan', 'addresses': [STATE.address]}]},
-    {'port_forwards': [{'name': 'hijack', 'interface': 'eth0', 'protocol': 'tcp',
-                        'external_port': 443, 'target': '192.168.10.2', 'target_port': 443}]},
+@pytest.mark.parametrize('changes,code', [
+    ({'interfaces': []}, 'management.endpoint_required'),
+    ({'panel_port': 8443}, 'management.endpoint_required'),
+    ({'interfaces': [{'name': 'eth1', 'zone': 'wan', 'addresses': [STATE.address]}]},
+     'management.endpoint_required'),
+    ({'port_forwards': [{'name': 'hijack', 'interface': 'eth0', 'protocol': 'tcp',
+                         'external_port': 443, 'target': '192.168.10.2', 'target_port': 443}]},
+     'management.port_reserved'),
 ])
-def test_guard_rejects_before_mutations(changes):
+def test_guard_rejects_before_mutations(changes, code):
+    """The specific guard code is surfaced, not one opaque code."""
     fs = FakeFS()
     engine = ApplyEngine(filesystem=fs, executor=FakeExecutor(), management_provider=lambda: STATE)
-    with pytest.raises(ApplyError, match='management.access_invalid'):
+    with pytest.raises(ApplyError, match=code) as exc:
         engine.apply_version(version(**changes).model_dump(mode='json'))
+    assert exc.value.code == code
     assert not fs.files
+
+
+def test_guard_code_keeps_a_generic_fallback():
+    from vs_router.agent.apply import guard_code
+    assert guard_code(ValueError('management.endpoint_required')) == 'management.endpoint_required'
+    assert guard_code(ValueError('management.site_binding_conflict')) == 'management.site_binding_conflict'
+    assert guard_code(ValueError('boom, not a code')) == 'management.access_invalid'
 
 
 def test_apply_without_console_assigned_management_is_rejected_before_mutation():

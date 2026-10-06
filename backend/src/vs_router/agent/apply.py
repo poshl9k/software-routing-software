@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import time
@@ -88,6 +89,17 @@ class ApplyError(Exception):
     def __init__(self, code):
         self.code = code
         super().__init__(code)
+
+
+_GUARD = re.compile(r'[a-z0-9]+(?:\.[a-z0-9_]+)+')
+
+
+def guard_code(exc, fallback='management.access_invalid'):
+    """Surface a specific guard code (e.g. management.endpoint_required) from a
+    raised ValueError, so the panel can explain the rejection instead of showing
+    one opaque code. Unknown messages keep the generic fallback."""
+    message = str(exc)
+    return message if _GUARD.fullmatch(message) else fallback
 
 
 @dataclass
@@ -195,7 +207,7 @@ class ApplyEngine:
                     validate_management(version.configuration, management)
                     validate_site_bindings(version, management)
             except (OSError, ValueError) as exc:
-                raise ApplyError('management.access_invalid') from exc
+                raise ApplyError(guard_code(exc)) from exc
             if management is None:
                 raise ApplyError('management.assignment_required')
         if management is not None and backup is None:
