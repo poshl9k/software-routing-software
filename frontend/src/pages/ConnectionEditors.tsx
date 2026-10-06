@@ -505,6 +505,7 @@ export function Tunnels() {
                             value={p.allowed_ips.join(",")}
                             valid={ipsValid(p.allowed_ips)}
                             placeholder="10.66.66.2/32"
+                            hint="Пусто — адрес выдастся автоматически (.2, .3, … в подсети туннеля)"
                             onChange={(v) => update({ allowed_ips: split(v) })}
                           />
                           <SecretField label="Preshared key" value={p.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />

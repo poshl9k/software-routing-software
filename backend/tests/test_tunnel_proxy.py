@@ -181,9 +181,9 @@ def test_export_with_encrypted_peer_key(config):
 
 
 @pytest.mark.parametrize('role', ['server', 'client'])
-def test_setconf_conf_omits_an_empty_allowedips(config, role):
-    """`wg/awg setconf` rejects a dangling `AllowedIPs =` line, which a peer or
-    client with no AllowedIPs used to produce."""
+def test_peers_without_allowedips_get_an_address(config, role):
+    """A server peer (or client) with no AllowedIPs must produce a valid line:
+    the peer is auto-allocated a /32 in the tunnel subnet, never a dangling key."""
     data = json.loads(json.dumps(config))
     tunnel = data['configuration']['tunnels'][0]
     tunnel['allowed_ips'] = []
@@ -195,6 +195,25 @@ def test_setconf_conf_omits_an_empty_allowedips(config, role):
     files = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
     lines = files['vpn.conf'].splitlines()
     assert not any(line.replace(' ', '') == 'AllowedIPs=' for line in lines)
+    if role == 'server':
+        # server keeps .1, the peer takes .2 in the same /24
+        assert 'AllowedIPs = 10.66.66.2/32' in lines
+        assert 'Address = 10.66.66.2/32' in files['vpn.peer-alice.conf']
+
+
+def test_each_server_tunnel_gets_its_own_subnet(config):
+    data = json.loads(json.dumps(config))
+    second = json.loads(json.dumps(data['configuration']['tunnels'][0]))
+    second.update(name='vpn2', interface='wg1', allowed_ips=[])
+    second['peers'][0].update(name='bob', allowed_ips=[])
+    data['configuration']['tunnels'].append(second)
+    data['configuration']['interfaces'].append({'name': 'wg1', 'zone': 'lan'})
+    files = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    manifest = json.loads(files['manifest.json'])
+    # wg0 has an explicit address; the address-less wg1 takes the next pool slot.
+    assert manifest['wg0']['addresses'] == ['10.66.66.1/24']
+    assert manifest['wg1']['addresses'] == ['10.66.67.1/24']
+    assert 'AllowedIPs = 10.66.67.2/32' in files['vpn2.conf']
 
 
 def test_server_peer_export_without_wan_address_is_a_template(config):

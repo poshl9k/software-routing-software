@@ -32,8 +32,13 @@ def obfuscation(tunnel):
             if key in tunnel.obfuscation] if tunnel.protocol == 'awg' else []
 
 
-def generate_wg_conf(tunnel, key_material: dict) -> str:
-    """key_material is reserved for export metadata; schema secrets use the env key."""
+def generate_wg_conf(tunnel, key_material: dict, configuration=None) -> str:
+    """key_material is reserved for export metadata; schema secrets use the env key.
+
+    With `configuration`, a server peer that carries no AllowedIPs gets an
+    automatic /32 from the tunnel subnet (so `wg/awg setconf` always sees a
+    valid line and the peer has an address).
+    """
     lines = ['[Interface]', f'PrivateKey = {line(reveal(tunnel.private_key))}']
     if tunnel.listen_port is not None:
         lines.append(f'ListenPort = {tunnel.listen_port}')
@@ -51,17 +56,29 @@ def generate_wg_conf(tunnel, key_material: dict) -> str:
             lines += ['', '[Peer]', f'PublicKey = {line(peer.public_key)}']
             if peer.preshared_key:
                 lines.append(f'PresharedKey = {line(reveal(peer.preshared_key))}')
-            if peer.allowed_ips:
-                lines.append('AllowedIPs = ' + ', '.join(map(line, peer.allowed_ips)))
+            allowed = peer.allowed_ips or (
+                tuple(peer_address(tunnel, peer, configuration)) if configuration is not None else ())
+            if allowed:
+                lines.append('AllowedIPs = ' + ', '.join(map(line, allowed)))
     return '\n'.join(lines) + '\n'
 
 
-def tunnel_addresses(tunnel, configuration):
-    """TODO: add explicit tunnel addresses to schema; AllowedIPs are remote routes.
+# Deterministic MVP tunnel pool: the Nth tunnel (by name) owns
+# 10.66.<base+N>.0/24, so a single tunnel keeps the historical 10.66.66.0/24 and
+# further tunnels no longer collide. Explicit interface addresses always win.
+SUBNET_BASE = 66
 
-    Prefer configured interface addresses. Legacy MVP servers use the first host
-    of their non-default subnet; clients without addresses use 10.66.66.2/24.
-    This fallback is intentionally limited and cannot allocate multi-tunnel IPs.
+
+def tunnel_index(tunnel, configuration) -> int:
+    return sorted(t.name for t in configuration.tunnels).index(tunnel.name)
+
+
+def tunnel_addresses(tunnel, configuration):
+    """Addresses for the tunnel device.
+
+    Prefer declared interface addresses; a server may also take the first host of
+    a non-default subnet from its AllowedIPs. Otherwise the tunnel gets a
+    deterministic host in its own /24 slot (server .1, client .2).
     """
     for interface in configuration.interfaces:
         if interface.name == tunnel.interface and interface.addresses:
@@ -71,7 +88,26 @@ def tunnel_addresses(tunnel, configuration):
             net = ip_network(value, strict=False)
             if net.prefixlen and net.num_addresses > 1:
                 return [f'{next(net.hosts())}/{net.prefixlen}']
-    return ['10.66.66.1/24' if tunnel.role == 'server' else '10.66.66.2/24']
+    host = 1 if tunnel.role == 'server' else 2
+    return [f'10.66.{SUBNET_BASE + tunnel_index(tunnel, configuration)}.{host}/24']
+
+
+def peer_address(tunnel, peer, configuration):
+    """A server peer's tunnel address.
+
+    Its own AllowedIPs win; otherwise the peer gets the next free host in the
+    tunnel subnet (.2, .3, … in name order) as a /32, so every client receives a
+    usable address without hand-assignment.
+    """
+    if peer.allowed_ips:
+        return list(peer.allowed_ips)
+    network = ip_network(tunnel_addresses(tunnel, configuration)[0], strict=False)
+    order = [p.name for p in sorted(tunnel.peers, key=lambda p: p.name)]
+    host = 2 + order.index(peer.name)
+    if host >= network.num_addresses:
+        raise ValueError('wireguard.peer_pool_exhausted')
+    bits = network.max_prefixlen if network.version == 6 else 32
+    return [f'{network.network_address + host}/{bits}']
 
 
 def generate_wg_bundle(version, key_material) -> dict[str, str]:
@@ -85,9 +121,9 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
     for t in sorted(c.tunnels, key=lambda t: t.name):
         if t.interface in manifest:
             raise ValueError('wireguard.duplicate_interface')
-        files[f'{t.name}.conf'] = generate_wg_conf(t, key_material)
+        files[f'{t.name}.conf'] = generate_wg_conf(t, key_material, c)
         routes = t.allowed_ips if t.role == 'client' else tuple(
-            value for peer in t.peers for value in peer.allowed_ips)
+            value for peer in t.peers for value in peer_address(t, peer, c))
         manifest[t.interface] = {'file': f'{t.name}.conf', 'protocol': t.protocol,
                                  'addresses': tunnel_addresses(t, c),
                                  'routes': sorted({str(ip_network(v, strict=False)) for v in routes})}
@@ -132,9 +168,10 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
             if endpoint_missing:
                 placeholders.append('replace <WAN_ENDPOINT> with the router public address')
             lines = [f'# TEMPLATE: {"; ".join(placeholders)}.'] if placeholders else []
+            addresses = p.allowed_ips or tuple(peer_address(t, p, c))
             lines += ['[Interface]', f'PrivateKey = {line(private)}']
-            if p.allowed_ips:
-                lines.append('Address = ' + ', '.join(map(line, p.allowed_ips)))
+            if addresses:
+                lines.append('Address = ' + ', '.join(map(line, addresses)))
             lines += obfuscation(t)
             lines += ['', '[Peer]', f'PublicKey = {public}',
                       f'Endpoint = {line(endpoint if endpoint is not None else "<WAN_ENDPOINT>")}',
