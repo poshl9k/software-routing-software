@@ -218,6 +218,30 @@ it("auto-creates a LAN-zone interface for a new tunnel", async () => {
     }),
   );
 });
+it("offers to create a new interface for a tunnel bound to a physical NIC", async () => {
+  const nic = {
+    name: "eth0",
+    type: "physical" as const,
+    zone: "wan",
+    description: null,
+    addressing: "static" as const,
+    addresses: ["203.0.113.1/24"],
+    parent: null,
+    vlan_id: null,
+    members: [],
+  };
+  await open(<Tunnels />, {
+    ...emptyConfiguration,
+    interfaces: [nic],
+    tunnels: [{ ...server, interface: "eth0" }],
+  });
+  const select = screen.getByLabelText("Интерфейс") as HTMLSelectElement;
+  const option = Array.from(select.options).find((o) =>
+    o.textContent?.includes("создать новый интерфейс"),
+  );
+  // A fresh device name, so an existing tunnel can be moved off a NIC name.
+  expect(option?.value).toBe("tun0");
+});
 it("retains edits after API failure", async () => {
   await open(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true);
   fill("Порт", "51821");

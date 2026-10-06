@@ -39,6 +39,22 @@ function nextTunnelInterface(names: Iterable<string>): string {
   return `tun${index}`;
 }
 
+/** Placeholder interface shown in the picker for a device that will be created
+ * on save (it does not exist in the configuration yet). */
+function pendingInterface(name: string, description: string | null): Interface {
+  return {
+    name,
+    type: "physical",
+    zone: "lan",
+    description,
+    addressing: "static",
+    addresses: [],
+    parent: null,
+    vlan_id: null,
+    members: [],
+  };
+}
+
 /** Auto-create a LAN-zone interface for every tunnel device that is not yet
  * declared, so a tunnel never reuses (and breaks) a physical NIC's name.
  * Traffic from the tunnel then lands in the LAN zone by default. */
@@ -48,17 +64,7 @@ function withTunnelInterfaces(interfaces: Interface[], rows: Tunnel[]): Interfac
   for (const tunnel of rows) {
     if (!tunnel.interface || declared.has(tunnel.interface)) continue;
     declared.add(tunnel.interface);
-    created.push({
-      name: tunnel.interface,
-      type: "physical",
-      zone: "lan",
-      description: null,
-      addressing: "static",
-      addresses: [],
-      parent: null,
-      vlan_id: null,
-      members: [],
-    });
+    created.push(pendingInterface(tunnel.interface, null));
   }
   return [...interfaces, ...created];
 }
@@ -346,24 +352,22 @@ export function Tunnels() {
               <InterfaceSelect
                 label="Интерфейс"
                 value={t.interface}
-                interfaces={
-                  !t.interface || c.interfaces.some((i) => i.name === t.interface)
-                    ? c.interfaces
-                    : [
-                        ...c.interfaces,
-                        {
-                          name: t.interface,
-                          type: "physical",
-                          zone: "lan",
-                          description: "создастся автоматически",
-                          addressing: "static",
-                          addresses: [],
-                          parent: null,
-                          vlan_id: null,
-                          members: [],
-                        },
-                      ]
-                }
+                interfaces={(() => {
+                  const declared = c.interfaces.some((i) => i.name === t.interface);
+                  const free = nextTunnelInterface([
+                    ...c.interfaces.map((i) => i.name),
+                    t.interface,
+                  ]);
+                  return [
+                    ...c.interfaces,
+                    ...(t.interface && !declared
+                      ? [pendingInterface(t.interface, "создастся автоматически")]
+                      : []),
+                    ...(free === t.interface
+                      ? []
+                      : [pendingInterface(free, "создать новый интерфейс")]),
+                  ];
+                })()}
                 emptyLabel="Выберите интерфейс"
                 error={!t.interface}
                 helperText={!t.interface ? "Выберите значение" : undefined}
@@ -371,7 +375,8 @@ export function Tunnels() {
               />
               <p className="sub">
                 Устройство создаётся автоматически (зона LAN) и появится на
-                странице «Сеть». Не используйте имя физического NIC.
+                странице «Сеть». Не используйте имя физического NIC — выберите
+                «создать новый интерфейс».
               </p>
             </div>
             {created ? (
