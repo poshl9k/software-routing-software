@@ -5,9 +5,11 @@ import { api } from "../api";
 import { queryKeys } from "../query";
 import type { TProxy, TProxyRule } from "../types";
 import { addressValid, lines, nameValid } from "../components/validators";
+import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter } from "../components/EditorShell";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { Field } from "../components/Field";
+import { FormActions, FormGrid } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField, interfaceLabel } from "../components/Select";
 import { useDraftEditor } from "../hooks/useDraftEditor";
@@ -83,46 +85,55 @@ export default function Routing() {
                 : current.ingress_interfaces.filter((name) => name !== source.name) })} />}
           />)}
           <Typography variant="h2">Правила (первое совпадение)</Typography>
-          {current.rules.map((rule, index) => <div key={index} className="form-grid">
-            <Field label="Имя правила" value={rule.name} valid={nameValid(rule.name)}
-              onChange={(name) => updateRule(index, { name })} />
-            <Field label="Домены (по строкам)" multiline value={rule.domain_suffix.join("\n")}
-              valid={rule.domain_suffix.every(domainValid)}
-              onChange={(text) => updateRule(index, { domain_suffix: lines(text) })} />
-            <Field label="IPv4-сети (по строкам)" multiline value={rule.ip_cidr.join("\n")}
-              valid={rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
-              onChange={(text) => updateRule(index, { ip_cidr: lines(text) })} />
-            <SelectField label="Действие" value={rule.action} options={["direct", "block"]}
-              onChange={(action) => updateRule(index, { action })} />
-            <Button disabled={index === 0} onClick={() => {
-              const rules = [...current.rules];
-              [rules[index - 1], rules[index]] = [rules[index], rules[index - 1]];
-              patch({ rules: rules.map((r, order) => ({ ...r, order })) });
-            }}>Вверх {rule.name}</Button>
-            <Button color="error" onClick={() => patch({ rules: current.rules.filter((_, i) => i !== index)
-              .map((r, order) => ({ ...r, order })) })}>Удалить {rule.name}</Button>
+          {current.rules.map((rule, index) => <div key={index} className="rule-row">
+            <FormGrid>
+              <Field label="Имя правила" value={rule.name} valid={nameValid(rule.name)}
+                onChange={(name) => updateRule(index, { name })} />
+              <Field label="Домены (по строкам)" multiline value={rule.domain_suffix.join("\n")}
+                valid={rule.domain_suffix.every(domainValid)}
+                onChange={(text) => updateRule(index, { domain_suffix: lines(text) })} />
+              <Field label="IPv4-сети (по строкам)" multiline value={rule.ip_cidr.join("\n")}
+                valid={rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+                onChange={(text) => updateRule(index, { ip_cidr: lines(text) })} />
+              <SelectField label="Действие" value={rule.action} options={["direct", "block"]}
+                onChange={(action) => updateRule(index, { action })} />
+              <FormActions>
+                <Button disabled={index === 0} onClick={() => {
+                  const rules = [...current.rules];
+                  [rules[index - 1], rules[index]] = [rules[index], rules[index - 1]];
+                  patch({ rules: rules.map((r, order) => ({ ...r, order })) });
+                }}>Вверх {rule.name}</Button>
+                <DeleteButton
+                  label={`Удалить правило ${rule.name}`}
+                  onClick={() => patch({ rules: current.rules.filter((_, i) => i !== index)
+                    .map((r, order) => ({ ...r, order })) })}
+                />
+              </FormActions>
+            </FormGrid>
           </div>)}
           <Button onClick={() => patch({ rules: [...current.rules, {
             name: "", domain_suffix: [], ip_cidr: [], action: "direct", order: current.rules.length,
           }] })}>+ Добавить правило</Button>
           <Typography variant="h2">Обновление списков (после запуска TProxy)</Typography>
-          <SelectField label="Режим обновления" value={schedule.mode}
-            options={["interval", "window"]}
-            onChange={(mode) => patch({ update_schedule: { ...schedule, mode } })} />
-          {schedule.mode === "interval" ? (
-            <Field label="Интервал, часов" type="number" value={schedule.interval_hours}
-              valid={scheduleValid}
-              onChange={(value) => patch({ update_schedule: { ...schedule, interval_hours: Number(value) } })} />
-          ) : (
-            <>
-              <Field label="Начало окна" value={schedule.window_start}
-                valid={timeValid(schedule.window_start)}
-                onChange={(window_start) => patch({ update_schedule: { ...schedule, window_start } })} />
-              <Field label="Конец окна" value={schedule.window_end}
-                valid={timeValid(schedule.window_end) && schedule.window_start < schedule.window_end}
-                onChange={(window_end) => patch({ update_schedule: { ...schedule, window_end } })} />
-            </>
-          )}
+          <FormGrid>
+            <SelectField label="Режим обновления" value={schedule.mode}
+              options={["interval", "window"]}
+              onChange={(mode) => patch({ update_schedule: { ...schedule, mode } })} />
+            {schedule.mode === "interval" ? (
+              <Field label="Интервал, часов" type="number" value={schedule.interval_hours}
+                valid={scheduleValid}
+                onChange={(value) => patch({ update_schedule: { ...schedule, interval_hours: Number(value) } })} />
+            ) : (
+              <>
+                <Field label="Начало окна" value={schedule.window_start}
+                  valid={timeValid(schedule.window_start)}
+                  onChange={(window_start) => patch({ update_schedule: { ...schedule, window_start } })} />
+                <Field label="Конец окна" value={schedule.window_end}
+                  valid={timeValid(schedule.window_end) && schedule.window_start < schedule.window_end}
+                  onChange={(window_end) => patch({ update_schedule: { ...schedule, window_end } })} />
+              </>
+            )}
+          </FormGrid>
           <EditorFooter saving={editor.saving} valid={valid} cancel={editor.cancel}
             save={() => void save()} />
         </>

@@ -12,6 +12,8 @@ export function Field({
   type = "text",
   disabled = false,
   maxLength,
+  ariaLabel,
+  fullWidth = true,
 }: {
   label?: string;
   value: string | number;
@@ -23,10 +25,14 @@ export function Field({
   type?: string;
   disabled?: boolean;
   maxLength?: number;
+  /** Accessible name when the field has no visible label (e.g. a table cell). */
+  ariaLabel?: string;
+  fullWidth?: boolean;
 }) {
   return (
     <TextField
       size="small"
+      fullWidth={fullWidth}
       label={label}
       value={value}
       type={type}
@@ -37,11 +43,14 @@ export function Field({
       // A label with a placeholder and an empty value does not float and would
       // overlap the placeholder — float it whenever both are present.
       slotProps={{
-        ...(maxLength ? { htmlInput: { maxLength } } : {}),
+        htmlInput: {
+          ...(maxLength ? { maxLength } : {}),
+          ...(ariaLabel ? { "aria-label": ariaLabel } : {}),
+        },
         ...(label && placeholder ? { inputLabel: { shrink: true } } : {}),
       }}
       error={!valid}
-      helperText={!valid ? (hint ?? "Некорректное значение") : hint}
+      helperText={!valid ? (hint ?? "Некорректное значение") : (hint ?? " ")}
       onChange={(e) => onChange(e.target.value)}
     />
   );

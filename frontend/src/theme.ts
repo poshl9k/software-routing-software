@@ -137,6 +137,7 @@ export const theme = createTheme({
         root: {
           padding: "9px 12px",
           fontSize: 13,
+          verticalAlign: "top",
           borderBottom: `1px solid ${tokens.borderSubtle}`,
           color: tokens.textSecondary,
           overflowWrap: "anywhere",

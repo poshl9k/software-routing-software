@@ -5,8 +5,10 @@ import { useConfiguration } from "../state";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { DeleteButton } from "../components/DeleteButton";
 import { EditorShell } from "../components/EditorShell";
 import { Field } from "../components/Field";
+import { FormGrid } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField, InterfaceSelect } from "../components/Select";
 import { Toggle } from "../components/Toggle";
@@ -87,14 +89,13 @@ export function DHCPEditor({ children }: { children: ReactNode }) {
               key={index}
               title={`Подсеть ${s.id}`}
               action={
-                <Button
-                  color="error"
+                <DeleteButton
+                  label={`Удалить подсеть ${s.id}`}
                   onClick={() => editor.setValue(rows.filter((_, i) => i !== index))}
-                >
-                  Удалить подсеть
-                </Button>
+                />
               }
             >
+              <FormGrid>
               <Field
                 label="ID подсети"
                 type="number"
@@ -140,6 +141,7 @@ export function DHCPEditor({ children }: { children: ReactNode }) {
                 valid={listValid(s.dns_servers, ipv4)}
                 onChange={(v) => update(index, { dns_servers: v.split("\n") })}
               />
+              </FormGrid>
               <DataTable
                 heads={["Начало пула", "Конец пула", ""]}
                 rows={s.pools.map((p, pi) => {
@@ -151,28 +153,26 @@ export function DHCPEditor({ children }: { children: ReactNode }) {
                     });
                   return [
                     <Field
-                      label="Начало пула"
+                      ariaLabel="Начало пула"
                       value={p.start}
                       valid={poolValid(p)}
                       hint="IPv4; начало ≤ конец"
                       onChange={(start) => pool({ start })}
                     />,
                     <Field
-                      label="Конец пула"
+                      ariaLabel="Конец пула"
                       value={p.end}
                       valid={poolValid(p)}
                       onChange={(end) => pool({ end })}
                     />,
-                    <Button
-                      color="error"
+                    <DeleteButton
+                      label={`Удалить пул ${pi + 1}`}
                       onClick={() =>
                         update(index, {
                           pools: s.pools.filter((_, i) => i !== pi),
                         })
                       }
-                    >
-                      Удалить пул
-                    </Button>,
+                    />,
                   ];
                 })}
               />
@@ -196,26 +196,26 @@ export function DHCPEditor({ children }: { children: ReactNode }) {
                     });
                   return [
                     <Field
-                      label="IP резервации"
+                      ariaLabel="IP резервации"
                       value={r.ip_address}
                       valid={ipv4(r.ip_address)}
                       onChange={(ip_address) => reservation({ ip_address })}
                     />,
                     <Field
-                      label="MAC резервации"
+                      ariaLabel="MAC резервации"
                       value={r.hw_address}
                       valid={macValid(r.hw_address)}
                       hint="aa:bb:cc:dd:ee:ff"
                       onChange={(hw_address) => reservation({ hw_address })}
                     />,
                     <Field
-                      label="Hostname"
+                      ariaLabel="Hostname резервации"
                       value={r.hostname ?? ""}
                       valid={!r.hostname || /^[a-zA-Z0-9.-]+$/.test(r.hostname)}
                       onChange={(v) => reservation({ hostname: v || null })}
                     />,
-                    <Button
-                      color="error"
+                    <DeleteButton
+                      label={`Удалить резервацию ${ri + 1}`}
                       onClick={() =>
                         update(index, {
                           reservations: s.reservations.filter(
@@ -223,9 +223,7 @@ export function DHCPEditor({ children }: { children: ReactNode }) {
                           ),
                         })
                       }
-                    >
-                      Удалить резервацию
-                    </Button>,
+                    />,
                   ];
                 })}
               />
@@ -346,27 +344,27 @@ export function DNSEditor({ children }: { children: ReactNode }) {
                   });
                 return [
                   <Field
-                    label="Имя DNS-записи"
+                    ariaLabel="Имя DNS-записи"
                     value={r.name}
                     valid={domainValid(r.name)}
                     hint="Латинское DNS-имя"
                     onChange={(name) => record({ name })}
                   />,
                   <SelectField
-                    label="Тип записи"
+                    ariaLabel="Тип записи"
                     value={r.type}
                     options={["A", "CNAME"]}
                     onChange={(type) => record({ type })}
                   />,
                   <Field
-                    label="TTL"
+                    ariaLabel="TTL"
                     type="number"
                     value={r.ttl}
                     valid={Number.isInteger(r.ttl) && r.ttl >= 0}
                     onChange={(v) => record({ ttl: Number(v) })}
                   />,
                   <Field
-                    label="Значение записи"
+                    ariaLabel="Значение записи"
                     value={r.value}
                     valid={recordValid(r)}
                     hint={
@@ -378,16 +376,14 @@ export function DNSEditor({ children }: { children: ReactNode }) {
                     }
                     onChange={(value) => record({ value })}
                   />,
-                  <Button
-                    color="error"
+                  <DeleteButton
+                    label={`Удалить запись ${index + 1}`}
                     onClick={() =>
                       update({
                         records: dns.records.filter((_, i) => i !== index),
                       })
                     }
-                  >
-                    Удалить запись
-                  </Button>,
+                  />,
                 ];
               })}
             />
@@ -416,13 +412,13 @@ export function DNSEditor({ children }: { children: ReactNode }) {
                   });
                 return [
                   <Field
-                    label="Домен переадресации"
+                    ariaLabel="Домен переадресации"
                     value={f.domain}
                     valid={f.domain === "." || domainValid(f.domain)}
                     onChange={(domain) => forward({ domain })}
                   />,
                   <Field
-                    label="Upstreams домена (построчно)"
+                    ariaLabel="Upstreams домена (построчно)"
                     multiline
                     value={f.upstreams.join("\n")}
                     valid={
@@ -431,16 +427,14 @@ export function DNSEditor({ children }: { children: ReactNode }) {
                     }
                     onChange={(v) => forward({ upstreams: v.split("\n") })}
                   />,
-                  <Button
-                    color="error"
+                  <DeleteButton
+                    label={`Удалить переадресацию ${index + 1}`}
                     onClick={() =>
                       update({
                         forwards: dns.forwards.filter((_, i) => i !== index),
                       })
                     }
-                  >
-                    Удалить переадресацию
-                  </Button>,
+                  />,
                 ];
               })}
             />
@@ -458,23 +452,25 @@ export function DNSEditor({ children }: { children: ReactNode }) {
             </p>
           </Card>
           <Card title="Режим и привязка">
-            <Field
-              label="Upstream-серверы (построчно)"
-              multiline
-              value={dns.upstreams.join("\n")}
-              valid={listValid(dns.upstreams, ipValid)}
-              onChange={(v) => update({ upstreams: v.split("\n") })}
-            />
-            <Toggle
-              label="Рекурсия"
-              value={dns.recursive}
-              onChange={(recursive) => update({ recursive })}
-            />
-            <Toggle
-              label="Журнал запросов"
-              value={dns.log_queries}
-              onChange={(log_queries) => update({ log_queries })}
-            />
+            <FormGrid>
+              <Field
+                label="Upstream-серверы (построчно)"
+                multiline
+                value={dns.upstreams.join("\n")}
+                valid={listValid(dns.upstreams, ipValid)}
+                onChange={(v) => update({ upstreams: v.split("\n") })}
+              />
+              <Toggle
+                label="Рекурсия"
+                value={dns.recursive}
+                onChange={(recursive) => update({ recursive })}
+              />
+              <Toggle
+                label="Журнал запросов"
+                value={dns.log_queries}
+                onChange={(log_queries) => update({ log_queries })}
+              />
+            </FormGrid>
             {dns.interfaces.map((value, index) => (
               <div key={index}>
                 <InterfaceSelect
@@ -494,16 +490,14 @@ export function DNSEditor({ children }: { children: ReactNode }) {
                     })
                   }
                 />
-                <Button
-                  color="error"
+                <DeleteButton
+                  label={`Удалить привязку ${index + 1}`}
                   onClick={() =>
                     update({
                       interfaces: dns.interfaces.filter((_, i) => i !== index),
                     })
                   }
-                >
-                  Удалить привязку
-                </Button>
+                />
               </div>
             ))}
             <Button

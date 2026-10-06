@@ -5,9 +5,11 @@ import type { Tunnel, CaddySite, DDNSUpdate, Secret } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
+import { DeleteButton } from "../components/DeleteButton";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { EditorShell } from "../components/EditorShell";
 import { Field } from "../components/Field";
+import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
 import { Select, SelectField, InterfaceSelect } from "../components/Select";
 import {
@@ -43,6 +45,7 @@ function SecretField({
   return (
     <TextField
       size="small"
+      fullWidth
       label={label}
       type="password"
       autoComplete="new-password"
@@ -149,50 +152,55 @@ function Collection<T extends Row>({
           }
           edit={() =>
             editing ? (
-            <>
-              {editing.map(({ id, row, created }) => (
-                <Card key={id} title={row.name || "Новая запись"}>
-                  {form(
-                    row,
-                    (patch) =>
-                      editor.setValue(
-                        editing!.map((v) =>
-                          v.id === id
-                            ? { ...v, row: { ...v.row, ...patch } }
-                            : v,
-                        ),
-                      ),
-                    created,
-                    noConfiguration,
-                  )}
-                  <Button
-                    color="error"
-                    onClick={() =>
-                      editor.setValue(editing!.filter((v) => v.id !== id))
+              <>
+                {editing.map(({ id, row, created }) => (
+                  <Card
+                    key={id}
+                    title={row.name || "Новая запись"}
+                    action={
+                      <DeleteButton
+                        label={`Удалить ${row.name || "запись"}`}
+                        onClick={() =>
+                          editor.setValue(editing.filter((v) => v.id !== id))
+                        }
+                      />
                     }
                   >
-                    Удалить
+                    {form(
+                      row,
+                      (patch) =>
+                        editor.setValue(
+                          editing.map((v) =>
+                            v.id === id
+                              ? { ...v, row: { ...v.row, ...patch } }
+                              : v,
+                          ),
+                        ),
+                      created,
+                      noConfiguration,
+                    )}
+                  </Card>
+                ))}
+                <FormActions>
+                  <Button
+                    onClick={() => {
+                      editor.setValue([
+                        ...editing,
+                        { id: next, created: true, row: empty() },
+                      ]);
+                      setNext(next + 1);
+                    }}
+                  >
+                    {addLabel}
                   </Button>
-                </Card>
-              ))}
-              <Button
-                onClick={() => {
-                  editor.setValue([
-                    ...editing!,
-                    { id: next, created: true, row: empty() },
-                  ]);
-                  setNext(next + 1);
-                }}
-              >
-                {addLabel}
-              </Button>
-              {!allValid && (
-                <p role="status">
-                  Проверьте обязательные поля, формат значений и уникальность
-                  имён.
-                </p>
-              )}
-            </>
+                </FormActions>
+                {!allValid && (
+                  <p role="status">
+                    Проверьте обязательные поля, формат значений и уникальность
+                    имён.
+                  </p>
+                )}
+              </>
             ) : null
           }
         />
@@ -275,7 +283,7 @@ export function Tunnels() {
           "—",
         ]}
         form={(t, patch, created, disabled) => (
-          <>
+          <FormGrid>
             {created ? (
               <Field
                 label="Имя туннеля"
@@ -285,6 +293,8 @@ export function Tunnels() {
               />
             ) : (
               <TextField
+                size="small"
+                fullWidth
                 label="Имя туннеля"
                 value={t.name}
                 slotProps={{ input: { readOnly: true } }}
@@ -323,6 +333,8 @@ export function Tunnels() {
               />
             ) : (
               <TextField
+                size="small"
+                fullWidth
                 label="Роль"
                 value={t.role === "server" ? "сервер" : "клиент"}
                 slotProps={{ input: { readOnly: true } }}
@@ -334,19 +346,25 @@ export function Tunnels() {
               options={["wg", "awg"]}
               onChange={(protocol) => patch({ protocol })}
             />
-            <SecretField
-              label="Приватный ключ"
-              value={t.private_key}
-              change={(v) => patch({ private_key: v ?? { plaintext: "" } })}
-            />
-            <Button disabled={disabled} onClick={() => void api.keygenTunnel(t.protocol)
-              .then((keys) => patch({
-                private_key: { plaintext: keys.private_key },
-                ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}),
-              }))
-              .catch((e) => { setQrError(e); })}>Сгенерировать ключи</Button>
+            <div>
+              <SecretField
+                label="Приватный ключ"
+                value={t.private_key}
+                change={(v) => patch({ private_key: v ?? { plaintext: "" } })}
+              />
+              <FormActions>
+                <Button disabled={disabled} onClick={() => void api.keygenTunnel(t.protocol)
+                  .then((keys) => patch({
+                    private_key: { plaintext: keys.private_key },
+                    ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}),
+                  }))
+                  .catch((e) => { setQrError(e); })}>Сгенерировать ключи</Button>
+              </FormActions>
+            </div>
             {t.private_key && !("plaintext" in t.private_key) && (
-              <p className="sub">Публичный ключ этого туннеля для удалённых клиентов не отображается: он выводится из приватного на хосте при применении.</p>
+              <FormWide>
+                <p className="sub">Публичный ключ этого туннеля для удалённых клиентов не отображается: он выводится из приватного на хосте при применении.</p>
+              </FormWide>
             )}
             {t.role === "server" ? (
               <>
@@ -365,75 +383,92 @@ export function Tunnels() {
                       ),
                     });
                   return (
-                    <Card key={index} title="Пир">
-                      {p.preshared_key && "redacted" in p.preshared_key ? (
-                        <TextField
-                          label="Имя пира"
-                          value={p.name}
-                          slotProps={{ input: { readOnly: true } }}
-                          helperText="Имя сохраняет привязку секретов"
-                        />
-                      ) : (
-                        <Field
-                          label="Имя пира"
-                          value={p.name}
-                          valid={nameValid(p.name)}
-                          onChange={(name) => update({ name })}
-                        />
-                      )}
-                      <Field
-                        label="Публичный ключ пира"
-                        value={p.public_key}
-                        valid={!!p.public_key.trim()}
-                        hint={p.private_key ? "Сгенерирован панелью вместе с приватным" : "Введён вручную (клиентский)"}
-                        onChange={(public_key) => update({ public_key, private_key: null })}
-                      />
-                      <Field
-                        label="AllowedIPs пира"
-                        value={p.allowed_ips.join(",")}
-                        valid={ipsValid(p.allowed_ips)}
-                        placeholder="10.66.66.2/32"
-                        onChange={(v) => update({ allowed_ips: split(v) })}
-                      />
-                      <SecretField label="Preshared key" value={p.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />
-                      <SecretField label="Приватный ключ пира (входит в клиентский конфиг)" value={p.private_key ?? null} showOriginalHint={false} change={(private_key) => update({ private_key })} />
-                      <Button disabled={disabled} onClick={() => void api.keygenPeerKeypair().then((pair) => update({ public_key: pair.public_key, private_key: { plaintext: pair.private_key } })).catch((e) => setQrError(e))}>Сгенерировать ключи пира</Button>
-                      <Button disabled={disabled} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } })).catch((e) => setQrError(e))}>Сгенерировать PSK</Button>
-                      <Button onClick={()=>void showQr(t.name,p.name)}>QR-код</Button>
-                      <Button disabled>Экспорт пира</Button>
-                      <Button
-                        onClick={() =>
-                          patch({
-                            peers: t.peers.filter((_, i) => i !== index),
-                          })
+                    <FormWide key={index}>
+                      <Card
+                        title={p.name || "Новый пир"}
+                        action={
+                          <DeleteButton
+                            label={`Удалить пира ${p.name || index + 1}`}
+                            onClick={() =>
+                              patch({
+                                peers: t.peers.filter((_, i) => i !== index),
+                              })
+                            }
+                          />
                         }
                       >
-                        Удалить пира
-                      </Button>
-                    </Card>
+                        <FormGrid>
+                          {p.preshared_key && "redacted" in p.preshared_key ? (
+                            <TextField
+                              size="small"
+                              fullWidth
+                              label="Имя пира"
+                              value={p.name}
+                              slotProps={{ input: { readOnly: true } }}
+                              helperText="Имя сохраняет привязку секретов"
+                            />
+                          ) : (
+                            <Field
+                              label="Имя пира"
+                              value={p.name}
+                              valid={nameValid(p.name)}
+                              onChange={(name) => update({ name })}
+                            />
+                          )}
+                          <Field
+                            label="Публичный ключ пира"
+                            value={p.public_key}
+                            valid={!!p.public_key.trim()}
+                            hint={p.private_key ? "Сгенерирован панелью вместе с приватным" : "Введён вручную (клиентский)"}
+                            onChange={(public_key) => update({ public_key, private_key: null })}
+                          />
+                          <Field
+                            label="AllowedIPs пира"
+                            value={p.allowed_ips.join(",")}
+                            valid={ipsValid(p.allowed_ips)}
+                            placeholder="10.66.66.2/32"
+                            onChange={(v) => update({ allowed_ips: split(v) })}
+                          />
+                          <SecretField label="Preshared key" value={p.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />
+                          <FormWide>
+                            <SecretField label="Приватный ключ пира (входит в клиентский конфиг)" value={p.private_key ?? null} showOriginalHint={false} change={(private_key) => update({ private_key })} />
+                          </FormWide>
+                          <FormWide>
+                            <FormActions>
+                              <Button disabled={disabled} onClick={() => void api.keygenPeerKeypair().then((pair) => update({ public_key: pair.public_key, private_key: { plaintext: pair.private_key } })).catch((e) => setQrError(e))}>Сгенерировать ключи пира</Button>
+                              <Button disabled={disabled} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } })).catch((e) => setQrError(e))}>Сгенерировать PSK</Button>
+                              <Button onClick={()=>void showQr(t.name,p.name)}>QR-код</Button>
+                              <Button disabled>Экспорт пира</Button>
+                            </FormActions>
+                          </FormWide>
+                        </FormGrid>
+                      </Card>
+                    </FormWide>
                   );
                 })}
-                <Button
-                  onClick={() =>
-                    void api.keygenPeerKeypair()
-                      .then((pair) =>
-                        patch({
-                          peers: [
-                            ...t.peers,
-                            {
-                              name: "",
-                              public_key: pair.public_key,
-                              private_key: { plaintext: pair.private_key },
-                              preshared_key: null,
-                              allowed_ips: [],
-                            },
-                          ],
-                        }))
-                      .catch((e) => setQrError(e))
-                  }
-                >
-                  + Добавить пира
-                </Button>
+                <FormActions>
+                  <Button
+                    onClick={() =>
+                      void api.keygenPeerKeypair()
+                        .then((pair) =>
+                          patch({
+                            peers: [
+                              ...t.peers,
+                              {
+                                name: "",
+                                public_key: pair.public_key,
+                                private_key: { plaintext: pair.private_key },
+                                preshared_key: null,
+                                allowed_ips: [],
+                              },
+                            ],
+                          }))
+                        .catch((e) => setQrError(e))
+                    }
+                  >
+                    + Добавить пира
+                  </Button>
+                </FormActions>
               </>
             ) : (
               <>
@@ -469,29 +504,33 @@ export function Tunnels() {
               </>
             )}
             {t.protocol === "awg" && (
-              <Card title="Обфускация">
-                {awgFields.map((k) => (
-                  <Field
-                    key={k}
-                    label={k}
-                    type="number"
-                    value={t.obfuscation[k] ?? ""}
-                    valid={
-                      t.obfuscation[k] === undefined
-                        ? !awgRequired.includes(k)
-                        : Number.isInteger(t.obfuscation[k])
-                    }
-                    onChange={(v) => {
-                      const obfuscation = { ...t.obfuscation };
-                      if (v === "") delete obfuscation[k];
-                      else obfuscation[k] = Number(v);
-                      patch({ obfuscation });
-                    }}
-                  />
-                ))}
-              </Card>
+              <FormWide>
+                <Card title="Обфускация">
+                  <FormGrid>
+                    {awgFields.map((k) => (
+                      <Field
+                        key={k}
+                        label={k}
+                        type="number"
+                        value={t.obfuscation[k] ?? ""}
+                        valid={
+                          t.obfuscation[k] === undefined
+                            ? !awgRequired.includes(k)
+                            : Number.isInteger(t.obfuscation[k])
+                        }
+                        onChange={(v) => {
+                          const obfuscation = { ...t.obfuscation };
+                          if (v === "") delete obfuscation[k];
+                          else obfuscation[k] = Number(v);
+                          patch({ obfuscation });
+                        }}
+                      />
+                    ))}
+                  </FormGrid>
+                </Card>
+              </FormWide>
             )}
-          </>
+          </FormGrid>
         )}
       />
       <Dialog open={!!qr} onClose={()=>{if(qr)URL.revokeObjectURL(qr.url);setQr(null);}}>
@@ -542,7 +581,7 @@ export function Sites() {
         s.certificate_mode === "passthrough" ? "TLS не завершается" : "—",
       ]}
       form={(s, patch, created) => (
-        <>
+        <FormGrid>
           {created ? (
             <Field
               label="Имя сайта"
@@ -552,6 +591,8 @@ export function Sites() {
             />
           ) : (
             <TextField
+              size="small"
+              fullWidth
               label="Имя сайта"
               value={s.name}
               slotProps={{ input: { readOnly: true } }}
@@ -619,12 +660,14 @@ export function Sites() {
                     .find((i) => i.name === p.interface)
                     ?.addresses[0]?.split("/")[0]) === s.wan_address,
             ) && (
-              <p role="status">
-                Конфликт с port forward: HTTP-01 требует свободных портов
-                80/443.
-              </p>
+              <FormWide>
+                <p role="status">
+                  Конфликт с port forward: HTTP-01 требует свободных портов
+                  80/443.
+                </p>
+              </FormWide>
             )}
-        </>
+        </FormGrid>
       )}
     />
   );
@@ -659,7 +702,7 @@ export function DDNS() {
         }
         summary={(d) => [d.name, d.provider, d.hostname, "—"]}
         form={(d, patch, created) => (
-          <>
+          <FormGrid>
             {created ? (
               <Field
                 label="Имя DDNS"
@@ -669,6 +712,8 @@ export function DDNS() {
               />
             ) : (
               <TextField
+                size="small"
+                fullWidth
                 label="Имя DDNS"
                 value={d.name}
                 slotProps={{ input: { readOnly: true } }}
@@ -724,7 +769,7 @@ export function DDNS() {
               helperText={!d.wan_interface ? "Выберите значение" : undefined}
               onChange={(wan_interface) => patch({ wan_interface })}
             />
-          </>
+          </FormGrid>
         )}
       />
       <p className="sub">

@@ -316,6 +316,9 @@ a:hover {
   gap: 16px;
   margin: 20px 0;
 }
+.fields > .MuiFormControl-root {
+  width: 100%;
+}
 
 .safecard {
   background: var(--vs-warning-soft);
@@ -368,14 +371,54 @@ pre {
   align-items: center;
 }
 
-/* Rule/schedule rows: auto-fill grid, wraps instead of overflowing. */
+/* Form layout: one grid for every editor form. */
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px 20px;
   align-items: start;
-  padding: 12px 0;
+}
+.form-grid > * {
+  width: 100%;
+  min-width: 0;
+}
+.form-wide {
+  grid-column: 1 / -1;
+}
+.form-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Each rule / schedule row separated by a hairline. */
+.rule-row {
   border-top: 1px solid var(--vs-border-subtle);
+  padding-top: 16px;
+}
+
+/* Right-aligned page toolbar (the edit toggle lives here). */
+.toolbar-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* Table editors: controls fill their column so rows stay aligned. */
+.MuiTableCell-root .MuiFormControl-root {
+  width: 100%;
+  min-width: 100px;
+}
+/* Numeric cells (VLAN ID, порты) need far less room than text/select cells. */
+.MuiTableCell-root .MuiFormControl-root:has(input[type="number"]) {
+  min-width: 76px;
+}
+
+/* Reserve one helper line so every field is the same height (even forms). */
+.MuiFormHelperText-root {
+  min-height: 1.15em;
 }
 
 /* Diagnostic control rows (ping/traceroute): wrap instead of overflow,

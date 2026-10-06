@@ -33,9 +33,10 @@ export function Select({
   helperText,
   placeholder,
   ariaLabel,
+  fullWidth = true,
   sx,
 }: {
-  label: string;
+  label?: string;
   value: string;
   options: readonly SelectOption[];
   onChange: (v: string) => void;
@@ -45,17 +46,19 @@ export function Select({
   placeholder?: { label: string; disabled?: boolean };
   /** Distinct accessible name when several selects share a visible label. */
   ariaLabel?: string;
+  fullWidth?: boolean;
   sx?: SxProps<Theme>;
 }) {
   return (
     <TextField
       select
       size="small"
+      fullWidth={fullWidth}
       label={label}
       value={value}
       disabled={disabled}
       error={error}
-      helperText={helperText}
+      helperText={helperText ?? " "}
       SelectProps={{ native: true }}
       slotProps={{
         inputLabel: { shrink: true },
@@ -86,18 +89,21 @@ export function SelectField<T extends string>({
   onChange,
   disabled,
   required = false,
+  ariaLabel,
 }: {
-  label: string;
+  label?: string;
   value: T;
   options: readonly T[];
   onChange: (v: T) => void;
   disabled?: boolean;
   /** Opt-in: only mark an empty value as an error when the field is required. */
   required?: boolean;
+  ariaLabel?: string;
 }) {
   return (
     <Select
       label={label}
+      ariaLabel={ariaLabel}
       value={value}
       disabled={disabled}
       error={required && !value}

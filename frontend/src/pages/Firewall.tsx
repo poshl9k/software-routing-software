@@ -7,6 +7,7 @@ import type { Configuration, FirewallRule, Alias } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
+import { DeleteButton } from "../components/DeleteButton";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageHeader } from "../components/PageHeader";
 import { Field } from "../components/Field";
@@ -138,31 +139,31 @@ export default function Firewall() {
     }));
   };
   const remove = (fn: () => void) => (
-    <Button color="error" onClick={fn}>
-      Удалить
-    </Button>
+    <DeleteButton label="Удалить" onClick={fn} />
   );
   return (
     <>
       <PageHeader>Firewall</PageHeader>
       <ErrorNotice error={editor.error ?? apiError} />
       {!isEditMode && (
-        <Button
-          disabled={!version}
-          onClick={() => {
-            editor.begin({
-              firewall_rules: c.firewall_rules,
-              port_forwards: c.port_forwards,
-              outbound_nat: [...c.outbound_nat].sort(
-                (a, b) => a.order - b.order,
-              ),
-              outbound_nat_mode: c.outbound_nat_mode,
-              aliases: c.aliases,
-            });
-          }}
-        >
-          Редактировать
-        </Button>
+        <div className="toolbar-actions">
+          <Button
+            disabled={!version}
+            onClick={() => {
+              editor.begin({
+                firewall_rules: c.firewall_rules,
+                port_forwards: c.port_forwards,
+                outbound_nat: [...c.outbound_nat].sort(
+                  (a, b) => a.order - b.order,
+                ),
+                outbound_nat_mode: c.outbound_nat_mode,
+                aliases: c.aliases,
+              });
+            }}
+          >
+            Редактировать
+          </Button>
+        </div>
       )}
       <Tabs
         value={tab}
@@ -210,14 +211,14 @@ export default function Firewall() {
                         </Button>
                       </>,
                       <Field
-                        label="Имя правила"
+                        ariaLabel="Имя правила"
                         value={r.name}
                         valid={uniqueName(r.name, rows.firewall_rules)}
                         hint="Латиница, цифры, _; до 31 символа; уникальное имя"
                         onChange={(name) => updateRule(r.index, { name })}
                       />,
                       <SelectField
-                        label="Протокол"
+                        ariaLabel="Протокол"
                         value={r.protocol}
                         options={protocols}
                         onChange={(protocol) =>
@@ -225,21 +226,21 @@ export default function Firewall() {
                         }
                       />,
                       <Field
-                        label="Источник"
+                        ariaLabel="Источник"
                         value={r.src}
                         valid={endpointValid(r.src)}
                         hint="any, IP/CIDR, @алиас, zone:lan"
                         onChange={(src) => updateRule(r.index, { src })}
                       />,
                       <Field
-                        label="Назначение"
+                        ariaLabel="Назначение"
                         value={r.dst}
                         valid={endpointValid(r.dst)}
                         hint="any, IP/CIDR, @алиас, zone:lan"
                         onChange={(dst) => updateRule(r.index, { dst })}
                       />,
                       <SelectField
-                        label="Действие"
+                        ariaLabel="Действие"
                         value={r.action}
                         options={["pass", "block", "reject"]}
                         onChange={(action) => updateRule(r.index, { action })}
@@ -255,7 +256,7 @@ export default function Firewall() {
                         onChange={(log) => updateRule(r.index, { log })}
                       />,
                       <Field
-                        label="Порт / @алиас"
+                        ariaLabel="Порт / @алиас"
                         value={r.destination_ports ?? ""}
                         onChange={(destination_ports) =>
                           updateRule(r.index, {
@@ -346,7 +347,7 @@ export default function Firewall() {
                 return isEditMode
                   ? [
                       <Field
-                        label="Имя Port Forward"
+                        ariaLabel="Имя Port Forward"
                         value={p.name}
                         valid={uniqueName(p.name, rows.port_forwards)}
                         onChange={(name) => update({ name })}
@@ -361,7 +362,7 @@ export default function Firewall() {
                         onChange={(value) => update({ interface: value })}
                       />,
                       <SelectField
-                        label="Протокол"
+                        ariaLabel="Протокол"
                         value={p.protocol}
                         options={["tcp", "udp"]}
                         onChange={(protocol) => update({ protocol })}
@@ -481,39 +482,39 @@ export default function Firewall() {
                 return isEditMode
                   ? [
                       <Field
-                        label="Имя NAT"
+                        ariaLabel="Имя NAT"
                         value={n.name}
                         valid={uniqueName(n.name, rows.outbound_nat)}
                         onChange={(name) => update({ name })}
                       />,
                       <Field
-                        label="Зона выхода"
+                        ariaLabel="Зона выхода"
                         value={n.egress_zone}
                         valid={nameValid(n.egress_zone)}
                         onChange={(egress_zone) => update({ egress_zone })}
                       />,
                       <Field
-                        label="Источник NAT"
+                        ariaLabel="Источник NAT"
                         value={n.src}
                         valid={endpointValid(n.src)}
                         hint="any, IP/CIDR, @алиас, zone:lan"
                         onChange={(src) => update({ src })}
                       />,
                       <Field
-                        label="Назначение NAT"
+                        ariaLabel="Назначение NAT"
                         value={n.dst}
                         valid={endpointValid(n.dst)}
                         hint="any, IP/CIDR, @алиас, zone:lan"
                         onChange={(dst) => update({ dst })}
                       />,
                       <SelectField
-                        label="Протокол NAT"
+                        ariaLabel="Протокол NAT"
                         value={n.protocol}
                         options={["any", "tcp", "udp", "icmp"]}
                         onChange={(protocol) => update({ protocol })}
                       />,
                       <Field
-                        label="Translation"
+                        ariaLabel="Translation"
                         value={n.translation}
                         valid={
                           n.translation === "primary" || ipValid(n.translation)
@@ -595,20 +596,20 @@ export default function Firewall() {
                 return isEditMode
                   ? [
                       <Field
-                        label="Имя алиаса"
+                        ariaLabel="Имя алиаса"
                         value={a.name}
                         valid={uniqueName(a.name, rows.aliases)}
                         hint="Латиница, цифры, _; до 31 символа; уникальное имя"
                         onChange={(name) => update({ name })}
                       />,
                       <SelectField
-                        label="Тип алиаса"
+                        ariaLabel="Тип алиаса"
                         value={a.type}
                         options={["address", "port"]}
                         onChange={(type) => update({ type })}
                       />,
                       <Field
-                        label="Элементы (построчно)"
+                        ariaLabel="Элементы (построчно)"
                         multiline
                         value={a.elements.join("\n")}
                         valid={a.elements
@@ -626,7 +627,7 @@ export default function Firewall() {
                         onChange={(v) => update({ elements: v.split("\n") })}
                       />,
                       <Field
-                        label="Includes (построчно)"
+                        ariaLabel="Includes (построчно)"
                         multiline
                         value={a.includes.join("\n")}
                         valid={a.includes.filter(Boolean).every(nameValid)}

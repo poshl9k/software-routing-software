@@ -8,6 +8,7 @@ import type { HostInterface, Interface } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
+import { DeleteButton } from "../components/DeleteButton";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { InfoNote } from "../components/InfoNote";
@@ -178,9 +179,9 @@ export default function Network() {
                 isEditMode
                   ? rows.map((i) => [
                       <Select
-                        label="Интерфейс"
                         ariaLabel={`Интерфейс ${i.key}`}
                         value={i.name}
+                        sx={{ minWidth: 170 }}
                         error={i.name.length > 0 && !validName(i)}
                         helperText={
                           i.name.length > 0 && !validName(i)
@@ -193,6 +194,7 @@ export default function Network() {
                       />,
                       <Field
                         value={i.description ?? ""}
+                        ariaLabel={`Описание интерфейса ${i.key}`}
                         placeholder="напр. «оптика провайдера»"
                         maxLength={64}
                         onChange={(v) =>
@@ -200,7 +202,6 @@ export default function Network() {
                         }
                       />,
                       <Select
-                        label="Тип"
                         ariaLabel={`Тип ${i.key}`}
                         value={i.type}
                         options={[
@@ -213,7 +214,6 @@ export default function Network() {
                         }
                       />,
                       <Select
-                        label="Зона"
                         ariaLabel={`Зона ${i.key}`}
                         value={i.zone ?? ""}
                         placeholder={{ label: "— (fail-closed)" }}
@@ -221,7 +221,6 @@ export default function Network() {
                         onChange={(v) => setField(i.key, { zone: v || null })}
                       />,
                       <Select
-                        label="Режим"
                         ariaLabel={`Режим ${i.key}`}
                         value={i.addressing}
                         options={[
@@ -234,6 +233,7 @@ export default function Network() {
                       />,
                       <Field
                         value={i.addressing === "dhcp" ? "" : i.addresses.join(", ")}
+                        ariaLabel={`Адреса ${i.key}`}
                         disabled={i.addressing === "dhcp"}
                         placeholder={i.addressing === "dhcp" ? "адрес по DHCP" : "192.168.10.1/24, 192.168.10.20/32"}
                         onChange={(v) =>
@@ -245,6 +245,7 @@ export default function Network() {
                       i.type === "vlan" ? (
                         <Field
                           type="number"
+                          ariaLabel={`VLAN ID ${i.key}`}
                           value={i.vlan_id ?? ""}
                           onChange={(v) =>
                             setField(i.key, { vlan_id: Number(v) || null })
@@ -255,7 +256,6 @@ export default function Network() {
                       ),
                       i.type === "vlan" ? (
                         <Select
-                          label="Родитель"
                           ariaLabel={`Родитель ${i.key}`}
                           value={i.parent ?? ""}
                           placeholder={{ label: "— выберите —" }}
@@ -276,7 +276,6 @@ export default function Network() {
                             return (
                               <div key={m + index} className="members-row">
                                 <Select
-                                  label="Участник"
                                   ariaLabel={`Участник ${i.key} ${index}`}
                                   value={m}
                                   error={!m || !member || !member.zone}
@@ -295,10 +294,8 @@ export default function Network() {
                                     })
                                   }
                                 />
-                                <Button
-                                  size="small"
-                                  color="error"
-                                  aria-label={`Удалить участника ${m}`}
+                                <DeleteButton
+                                  label={`Удалить участника ${m}`}
                                   onClick={() =>
                                     setField(i.key, {
                                       members: i.members.filter(
@@ -306,9 +303,7 @@ export default function Network() {
                                       ),
                                     })
                                   }
-                                >
-                                  ✕
-                                </Button>
+                                />
                               </div>
                             );
                           })}
@@ -332,14 +327,10 @@ export default function Network() {
                       ) : (
                         "—"
                       ),
-                      <Button
-                        size="small"
-                        color="error"
-                        aria-label={`Удалить интерфейс ${i.name}`}
+                      <DeleteButton
+                        label={`Удалить интерфейс ${i.name}`}
                         onClick={() => removeRow(i.key)}
-                      >
-                        Удалить
-                      </Button>,
+                      />,
                     ])
                   : c.interfaces.map((i) => [
                       <b>{i.name}</b>,

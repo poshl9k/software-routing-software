@@ -5,6 +5,7 @@ import {
 } from "@mui/material";
 import { useConfiguration } from "../state";
 import { Card } from "../components/Card";
+import { EditorFooter } from "../components/EditorShell";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageHeader } from "../components/PageHeader";
 import { interfaceLabel } from "../components/Select";
@@ -53,15 +54,12 @@ export default function SSH() {
             onChange={() => toggle(iface.name)} disabled={editor.saving} />}
             label={`${interfaceLabel(iface.name, configuration.interfaces)} · ${iface.zone === "wan" ? "WAN" : iface.zone}`} />
         ))}
-        <div>
-          <Button variant="contained" disabled={!version || editor.saving || editor.value === null}
-            onClick={() => wan.length ? setConfirming(true) : void save()}>
-            Сохранить
-          </Button>
-          <Button disabled={editor.saving || editor.value === null} onClick={editor.cancel}>
-            Отменить
-          </Button>
-        </div>
+        <EditorFooter
+          saving={editor.saving}
+          valid={!!version && editor.value !== null}
+          cancel={editor.cancel}
+          save={() => { if (wan.length) setConfirming(true); else void save(); }}
+        />
       </Card>
       <Dialog open={confirming} onClose={() => setConfirming(false)}>
         <DialogTitle>Разрешить SSH из WAN?</DialogTitle>
