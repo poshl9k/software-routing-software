@@ -164,7 +164,7 @@ main() {
 
     if (( ! STAGED )) && [[ -n $RELEASE || -n $MANIFEST ]]; then
         stage_release
-    elif [[ -z $RELEASE && -z $MANIFEST ]]; then
+    elif (( ! STAGED )) && [[ -z $RELEASE && -z $MANIFEST ]]; then
         log 'No --release/--manifest given; updating from the currently checked-out tree'
     fi
 
