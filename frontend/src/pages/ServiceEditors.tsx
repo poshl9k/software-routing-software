@@ -6,6 +6,7 @@ import { Card, DataTable, ErrorNotice } from "../ui";
 import {
   Field,
   SelectField,
+  InterfaceSelect,
   Toggle,
   EditorFooter,
   ipValid,
@@ -126,10 +127,13 @@ export function DHCPEditor({ children }: { children: ReactNode }) {
                   hint="Положительное уникальное число"
                   onChange={(v) => update(index, { id: Number(v) })}
                 />
-                <SelectField
+                <InterfaceSelect
                   label="Интерфейс подсети"
                   value={s.interface}
-                  options={interfaces}
+                  interfaces={c.interfaces}
+                  emptyLabel="Выберите интерфейс"
+                  error={!s.interface}
+                  helperText={!s.interface ? "Выберите значение" : undefined}
                   onChange={(value) => update(index, { interface: value })}
                 />
                 <Field
@@ -528,12 +532,15 @@ export function DNSEditor({ children }: { children: ReactNode }) {
               />
               {dns.interfaces.map((value, index) => (
                 <div key={index}>
-                  <SelectField
+                  <InterfaceSelect
                     label="Слушает интерфейс"
                     value={value}
-                    options={interfaces.filter(
-                      (i) => i === value || !dns.interfaces.includes(i),
+                    interfaces={c.interfaces.filter(
+                      (i) => i.name === value || !dns.interfaces.includes(i.name),
                     )}
+                    emptyLabel="Выберите интерфейс"
+                    error={!value}
+                    helperText={!value ? "Выберите значение" : undefined}
                     onChange={(v) =>
                       update({
                         interfaces: dns.interfaces.map((row, i) =>

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Checkbox, FormControl, FormControlLabel, InputLabel, MenuItem, Select, TextField, Typography } from "@mui/material";
+import { Alert, Button, Checkbox, FormControlLabel, TextField, Typography } from "@mui/material";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { Card, DataTable, ErrorNotice } from "../ui";
+import { InterfaceSelect } from "../editor";
 
 function download(data: Blob, filename: string) {
   const url = URL.createObjectURL(data);
@@ -61,22 +62,14 @@ export default function Maintenance() {
           value={count}
           onChange={(e) => setCount(Number(e.target.value))}
         />
-        <FormControl size="small" sx={{ width: 200 }}>
-          <InputLabel id="maintenance-iface-label" shrink>Интерфейс</InputLabel>
-          <Select
-            labelId="maintenance-iface-label"
-            label="Интерфейс"
-            value={iface}
-            onChange={(e) => setIface(e.target.value)}
-          >
-            <MenuItem value="">Автоматически</MenuItem>
-            {configuration.interfaces.map((i) => (
-              <MenuItem key={i.name} value={i.name}>
-                {i.name}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <InterfaceSelect
+          label="Интерфейс"
+          value={iface}
+          interfaces={configuration.interfaces}
+          emptyLabel="Автоматически"
+          sx={{ width: 200 }}
+          onChange={setIface}
+        />
         <Button
           disabled={!admin || busy || !host.trim() || count < 1 || count > 5}
           onClick={() =>

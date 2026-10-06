@@ -1,4 +1,6 @@
 import { Button, FormControlLabel, Switch, TextField } from "@mui/material";
+import type { SxProps, Theme } from "@mui/material/styles";
+import type { Interface } from "./types";
 
 export const nameValid = (v: string) => /^[a-zA-Z][a-zA-Z0-9_]{0,30}$/.test(v);
 export const domainValid = (v: string) => /^[a-zA-Z0-9_.-]+$/.test(v);
@@ -121,6 +123,69 @@ export function SelectField<T extends string>({
     </TextField>
   );
 }
+/** Interface option text: name, plus the operator description when set. */
+export function interfaceLabel(
+  name: string,
+  interfaces: readonly Pick<Interface, "name" | "description">[],
+): string {
+  const description = interfaces
+    .find((i) => i.name === name)
+    ?.description?.trim();
+  return description ? `${name} — ${description}` : name;
+}
+
+/**
+ * Single interface picker used everywhere a network interface is chosen, so
+ * the operator description travels with the name and the label never overlaps
+ * the value. `emptyLabel` adds an optional blank/"auto" choice.
+ */
+export function InterfaceSelect({
+  label,
+  value,
+  interfaces,
+  onChange,
+  emptyLabel,
+  disabled = false,
+  error,
+  helperText,
+  sx,
+}: {
+  label: string;
+  value: string;
+  interfaces: readonly Interface[];
+  onChange: (v: string) => void;
+  emptyLabel?: string;
+  disabled?: boolean;
+  error?: boolean;
+  helperText?: string;
+  sx?: SxProps<Theme>;
+}) {
+  const names = interfaces.map((i) => i.name);
+  const options = value && !names.includes(value) ? [value, ...names] : names;
+  return (
+    <TextField
+      select
+      size="small"
+      label={label}
+      value={value}
+      disabled={disabled}
+      error={error}
+      helperText={helperText}
+      SelectProps={{ native: true }}
+      slotProps={{ inputLabel: { shrink: true } }}
+      sx={sx}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {emptyLabel !== undefined && <option value="">{emptyLabel}</option>}
+      {options.map((name) => (
+        <option key={name} value={name}>
+          {interfaceLabel(name, interfaces)}
+        </option>
+      ))}
+    </TextField>
+  );
+}
+
 export function Toggle({
   label,
   value,

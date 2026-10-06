@@ -3,7 +3,7 @@ import { Alert, Button, Checkbox, FormControlLabel, Typography } from "@mui/mate
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import type { TProxy, TProxyPreview, TProxyRule } from "../types";
-import { addressValid, EditorFooter, Field, lines, nameValid, SelectField } from "../editor";
+import { addressValid, EditorFooter, Field, interfaceLabel, lines, nameValid, SelectField } from "../editor";
 import { ErrorNotice } from "../ui";
 
 const domainValid = (domain: string) => /^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/.test(domain);
@@ -98,7 +98,7 @@ export default function Routing() {
           <Typography variant="h2">Источники трафика</Typography>
           {sources.map((source) => <FormControlLabel
             key={source.name}
-            label={source.name}
+            label={interfaceLabel(source.name, configuration.interfaces)}
             control={<Checkbox checked={current.ingress_interfaces.includes(source.name)}
               onChange={(_, checked) => patch({ ingress_interfaces: checked
                 ? [...current.ingress_interfaces, source.name]

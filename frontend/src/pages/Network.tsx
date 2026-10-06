@@ -63,6 +63,12 @@ export default function Network() {
   const usedByOtherRows = (i: Editable) =>
     new Set(rows.filter((r) => r.key !== i.key && r.name).map((r) => r.name));
 
+  // Текст опции: имя плюс описание из строки черновика.
+  const optLabel = (name: string) => {
+    const description = rows.find((r) => r.name === name)?.description?.trim();
+    return description ? `${name} — ${description}` : name;
+  };
+
   // Живые адреса с хоста: что реально получил интерфейс (важно для DHCP).
   const [liveAddresses, setLiveAddresses] = useState<Record<string, string[]>>({});
   useEffect(() => {
@@ -192,7 +198,7 @@ export default function Network() {
                         <option value="">— выберите интерфейс —</option>
                         {i.name && !allRealNics.some((p) => p.name === i.name) && (
                           <option value={i.name} disabled={i.type === "physical"}>
-                            {i.name} ({i.type === "physical" ? "нет в ОС" : "в черновике"})
+                            {optLabel(i.name)} ({i.type === "physical" ? "нет в ОС" : "в черновике"})
                           </option>
                         )}
                         {allRealNics
@@ -289,7 +295,7 @@ export default function Network() {
                           {candidates(i, physicalNics)
                             .filter((name) => name === i.parent || !usedByOtherRows(i).has(name))
                             .map((name) => (
-                            <option key={name} value={name}>{name}</option>
+                            <option key={name} value={name}>{optLabel(name)}</option>
                           ))}
                         </TextField>
                       ) : (
@@ -322,7 +328,7 @@ export default function Network() {
                                     .filter((name) => i.members.includes(name) || (!i.members.includes(name) && !usedByOtherRows(i).has(name)))
                                     .map((name) => (
                                       <option key={name} value={name}>
-                                        {name}
+                                        {optLabel(name)}
                                         {rows.find((p) => p.name === name)?.zone ? "" : " (без зоны!)"}
                                       </option>
                                     ))}

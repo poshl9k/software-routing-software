@@ -8,6 +8,7 @@ import { Badge, Card, DataTable, ErrorNotice } from "../ui";
 import {
   Field,
   SelectField,
+  InterfaceSelect,
   Toggle,
   EditorFooter,
   nameValid,
@@ -365,10 +366,13 @@ export default function Firewall() {
                         valid={uniqueName(p.name, rows.port_forwards)}
                         onChange={(name) => update({ name })}
                       />,
-                      <SelectField
+                      <InterfaceSelect
                         label="WAN-интерфейс"
                         value={p.interface}
-                        options={wan}
+                        interfaces={c.interfaces.filter((i) => i.zone === "wan")}
+                        emptyLabel="Выберите интерфейс"
+                        error={!p.interface}
+                        helperText={!p.interface ? "Выберите значение" : undefined}
                         onChange={(value) => update({ interface: value })}
                       />,
                       <SelectField

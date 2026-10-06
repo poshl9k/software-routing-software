@@ -5,6 +5,7 @@ import {
 } from "@mui/material";
 import { useConfiguration } from "../state";
 import { Card, ErrorNotice } from "../ui";
+import { interfaceLabel } from "../editor";
 
 export default function SSH() {
   const { configuration, version, saveDraft, setNotice } = useConfiguration();
@@ -52,7 +53,7 @@ export default function SSH() {
         {options.map((iface) => (
           <FormControlLabel key={iface.name} control={<Checkbox checked={chosen.includes(iface.name)}
             onChange={() => toggle(iface.name)} disabled={saving} />}
-            label={`${iface.name} · ${iface.zone === "wan" ? "WAN" : iface.zone}`} />
+            label={`${interfaceLabel(iface.name, configuration.interfaces)} · ${iface.zone === "wan" ? "WAN" : iface.zone}`} />
         ))}
         <div>
           <Button variant="contained" disabled={!version || saving || editing === null}

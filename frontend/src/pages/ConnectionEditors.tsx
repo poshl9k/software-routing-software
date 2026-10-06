@@ -7,6 +7,7 @@ import { api } from "../api";
 import {
   Field,
   SelectField,
+  InterfaceSelect,
   EditorFooter,
   nameValid,
   portValid,
@@ -308,10 +309,13 @@ export function Tunnels() {
               />
             )}
             <div>
-              <SelectField
+              <InterfaceSelect
                 label="Интерфейс"
                 value={t.interface}
-                options={c.interfaces.map((i) => i.name)}
+                interfaces={c.interfaces}
+                emptyLabel="Выберите интерфейс"
+                error={!t.interface}
+                helperText={!t.interface ? "Выберите значение" : undefined}
                 onChange={(v) => patch({ interface: v })}
               />
               <p className="sub">
@@ -736,10 +740,13 @@ export function DDNS() {
               value={d.api_token}
               change={(v) => patch({ api_token: v ?? { plaintext: "" } })}
             />
-            <SelectField
+            <InterfaceSelect
               label="WAN-интерфейс"
               value={d.wan_interface}
-              options={wan}
+              interfaces={c.interfaces.filter((i) => i.zone === "wan")}
+              emptyLabel="Выберите интерфейс"
+              error={!d.wan_interface}
+              helperText={!d.wan_interface ? "Выберите значение" : undefined}
               onChange={(wan_interface) => patch({ wan_interface })}
             />
           </>
