@@ -22,3 +22,25 @@ export function PageTabs({
     </Tabs>
   );
 }
+
+/**
+ * Value-driven tab strip: the active tab is a route/state key (a string), not
+ * an index. Used by screens whose tab lives in the URL or in string state.
+ */
+export function ValueTabs<T extends string>({
+  tabs,
+  value,
+  change,
+}: {
+  tabs: readonly { value: T; label: string }[];
+  value: T;
+  change: (v: T) => void;
+}) {
+  return (
+    <Tabs value={value} onChange={(_, v: T) => change(v)} variant="scrollable">
+      {tabs.map((t) => (
+        <Tab key={t.value} value={t.value} label={t.label} />
+      ))}
+    </Tabs>
+  );
+}

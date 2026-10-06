@@ -87,6 +87,9 @@ packaging scripts, ISO installs or live network/service changes as routine tests
   Use shared UI components/helpers, visible `ErrorNotice` errors and handled
   async failures; existing native MUI selects use `SelectProps={{ native: true }}`.
   UI is currently Russian; i18n remains a documented design/implementation gap.
+  Before any frontend change read `docs/ui-rules.md` — the canonical UI rule set
+  (one primitive per job, one place per action, `label` XOR `aria-label`, tokens
+  from `theme.ts`, and a pre-flight checklist).
 - Never restore fabricated production fallback data, LAB_MODE or insecure cookie
   toggles. Empty configuration must prompt setup; sample fixtures are test-only.
 - Inspect `git status` before edits; preserve unrelated changes, including the

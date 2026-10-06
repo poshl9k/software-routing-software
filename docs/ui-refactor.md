@@ -57,6 +57,8 @@ except where a change was explicitly agreed (TODO-API copy, `demo` rename).
 - [x] `Checkbox` stays only where it is semantically right: multi-select groups (Routing ingress, SSH interfaces). Standalone booleans use `Toggle`; two dense inline options in Maintenance keep `Checkbox` (a `Switch` would outweigh the compressed row)
 - [x] `Icon.name` narrowed from `string` to `IconName` (a typo is now a type error instead of a silently blank glyph); `navigation` is typed
 - [x] `api.release()` (unused client method) removed; `Firewall` row deletes now carry a per-row `aria-label` instead of a shared «Удалить»
+- [x] `ValueTabs` added to `Tabs.tsx` and `Network`/`Firewall` migrated: no page imports MUI `Tabs`/`Tab` any more (`PageTabs` = index strip, `ValueTabs` = route/state key)
+- [x] `docs/ui-rules.md` — the canonical UI rule set for future agents (rules + pre-flight checklist), referenced from `AGENTS.md`
 
 ## Verify
 - [x] `npx tsc --noEmit` — clean

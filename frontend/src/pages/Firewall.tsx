@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button, Tab, Tabs } from "@mui/material";
+import { Alert, Button } from "@mui/material";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import type { ImportPreview } from "../types";
@@ -8,6 +8,7 @@ import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
+import { ValueTabs } from "../components/Tabs";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageHeader } from "../components/PageHeader";
 import { Field } from "../components/Field";
@@ -165,15 +166,14 @@ export default function Firewall() {
           </Button>
         </div>
       )}
-      <Tabs
+      <ValueTabs
         value={tab}
-        onChange={(_, v: string) => setTab(v)}
-        variant="scrollable"
-      >
-        {[...zones, "Port Forward", "Outbound NAT", "Псевдонимы"].map((z) => (
-          <Tab key={z} value={z} label={z} />
-        ))}
-      </Tabs>
+        change={setTab}
+        tabs={[...zones, "Port Forward", "Outbound NAT", "Псевдонимы"].map((z) => ({
+          value: z,
+          label: z,
+        }))}
+      />
       <EditorFieldset disabled={editor.saving}>
         {zone && (
           <Card title={`Правила зоны ${tab}`}>

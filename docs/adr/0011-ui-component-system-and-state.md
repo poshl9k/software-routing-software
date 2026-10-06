@@ -58,7 +58,9 @@ with local loading/error state and no cache.
    `autoComplete`, `readOnly`, `required`, native `inputProps` (min/max/pattern),
    `className`/`sx` and an optional `onChange` (read-only values). `Toggle`
    (switch) is the standalone boolean; `Checkbox` remains for multi-select
-   groups and dense inline options.
+   groups and dense inline options. Tab strips are also a primitive: `PageTabs`
+   (index) and `ValueTabs` (route/state key) so no page imports MUI `Tabs`.
+   The full rule set for future changes lives in `docs/ui-rules.md`.
 
 ## Consequences
 

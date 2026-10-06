@@ -1,4 +1,4 @@
-import { Button, Tab, Tabs } from "@mui/material";
+import { Button } from "@mui/material";
 import { useSearchParams } from "react-router-dom";
 import { useConfiguration } from "../state";
 import { api } from "../api";
@@ -9,6 +9,7 @@ import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
+import { ValueTabs } from "../components/Tabs";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { InfoNote } from "../components/InfoNote";
@@ -133,20 +134,16 @@ export default function Network() {
   return (
     <>
       <PageHeader>Сеть</PageHeader>
-      <Tabs
+      <ValueTabs
         value={knownTab}
-        onChange={(_, value: string) => setParams({ tab: value })}
-        variant="scrollable"
-      >
-        {[
-          ["interfaces", "Интерфейсы"],
-          ["wan", "WAN-адреса"],
-          ["routes", "Статические маршруты"],
-          ["diagnostics", "Диагностика"],
-        ].map(([value, label]) => (
-          <Tab key={value} value={value} label={label} />
-        ))}
-      </Tabs>
+        change={(value) => setParams({ tab: value })}
+        tabs={[
+          { value: "interfaces", label: "Интерфейсы" },
+          { value: "wan", label: "WAN-адреса" },
+          { value: "routes", label: "Статические маршруты" },
+          { value: "diagnostics", label: "Диагностика" },
+        ]}
+      />
 
       {knownTab === "interfaces" && (
         <>
