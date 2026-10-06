@@ -61,14 +61,25 @@ function pendingInterface(name: string, description: string | null): Interface {
  * name is stored as the interface description so the Network page shows which
  * tunnel owns the device. */
 function withTunnelInterfaces(interfaces: Interface[], rows: Tunnel[]): Interface[] {
-  const declared = new Set(interfaces.map((i) => i.name));
-  const created: Interface[] = [];
+  const result = [...interfaces];
+  const byName = new Map(result.map((i) => [i.name, i]));
   for (const tunnel of rows) {
-    if (!tunnel.interface || declared.has(tunnel.interface)) continue;
-    declared.add(tunnel.interface);
-    created.push(pendingInterface(tunnel.interface, tunnelDescription(tunnel)));
+    if (!tunnel.interface) continue;
+    const description = tunnelDescription(tunnel);
+    const existing = byName.get(tunnel.interface);
+    if (!existing) {
+      const created = pendingInterface(tunnel.interface, description);
+      byName.set(tunnel.interface, created);
+      result.push(created);
+    } else if (!existing.description && description) {
+      // Fill an empty description with the owning tunnel's name; an operator-set
+      // description on the Network page is left untouched.
+      const updated = { ...existing, description };
+      byName.set(tunnel.interface, updated);
+      result[result.indexOf(existing)] = updated;
+    }
   }
-  return [...interfaces, ...created];
+  return result;
 }
 
 /** Interface description for an auto-created tunnel device (the tunnel name). */
