@@ -195,6 +195,29 @@ it.each(["cloudflare", "rfc2136"])(
     });
   },
 );
+it("auto-creates a LAN-zone interface for a new tunnel", async () => {
+  const fetch = await open(<Tunnels />, emptyConfiguration);
+  await userEvent.click(
+    screen.getByRole("button", { name: "+ Добавить туннель" }),
+  );
+  // The tunnel device name is generated; the operator does not pick a NIC.
+  expect(screen.getByLabelText("Интерфейс")).toHaveValue("tun0");
+  fill("Имя туннеля", "vpn");
+  fill("Приватный ключ", "key");
+  await userEvent.click(save());
+  const body = JSON.parse(
+    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
+  );
+  expect(body.tunnels[0].interface).toBe("tun0");
+  expect(body.interfaces).toContainEqual(
+    expect.objectContaining({
+      name: "tun0",
+      type: "physical",
+      zone: "lan",
+      addressing: "static",
+    }),
+  );
+});
 it("retains edits after API failure", async () => {
   await open(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true);
   fill("Порт", "51821");

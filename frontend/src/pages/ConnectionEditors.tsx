@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Button, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
-import type { Tunnel, CaddySite, DDNSUpdate, Secret } from "../types";
+import type { Tunnel, CaddySite, DDNSUpdate, Configuration, Interface, Secret } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
@@ -29,6 +29,39 @@ const ipsValid = (v: string[]) =>
 const split = (v: string) => v.split(",");
 const awgRequired = ["Jc", "S1", "S2", "H1", "H2", "H3", "H4"];
 const awgFields = ["Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"];
+
+/** First free tunnel device name (tun0, tun1, …), never colliding with a
+ * declared interface or a physical host NIC name. */
+function nextTunnelInterface(names: Iterable<string>): string {
+  const taken = new Set(names);
+  let index = 0;
+  while (taken.has(`tun${index}`)) index += 1;
+  return `tun${index}`;
+}
+
+/** Auto-create a LAN-zone interface for every tunnel device that is not yet
+ * declared, so a tunnel never reuses (and breaks) a physical NIC's name.
+ * Traffic from the tunnel then lands in the LAN zone by default. */
+function withTunnelInterfaces(interfaces: Interface[], rows: Tunnel[]): Interface[] {
+  const declared = new Set(interfaces.map((i) => i.name));
+  const created: Interface[] = [];
+  for (const tunnel of rows) {
+    if (!tunnel.interface || declared.has(tunnel.interface)) continue;
+    declared.add(tunnel.interface);
+    created.push({
+      name: tunnel.interface,
+      type: "physical",
+      zone: "lan",
+      description: null,
+      addressing: "static",
+      addresses: [],
+      parent: null,
+      vlan_id: null,
+      members: [],
+    });
+  }
+  return [...interfaces, ...created];
+}
 function SecretField({
   label,
   value,
@@ -73,16 +106,20 @@ function Collection<T extends Row>({
   summary,
   clean = (v) => v,
   rowActions,
+  configPatch,
 }: {
   kind: "tunnels" | "sites" | "ddns";
   title: string;
   addLabel: string;
-  empty: () => T;
+  empty: (rows: T[]) => T;
   valid: (v: T) => boolean;
   clean?: (v: T) => T;
   form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean) => ReactNode;
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
+  /** Extra configuration derived from the edited rows (e.g. auto-created
+   * tunnel interfaces). Merged into the whole-configuration save. */
+  configPatch?: (rows: T[]) => Partial<Configuration>;
 }) {
   const { configuration: c, version, noConfiguration } = useConfiguration();
   const editor = useDraftEditor<EditableRow<T>[]>();
@@ -95,13 +132,17 @@ function Collection<T extends Row>({
     editing.every(({ row }) => valid(row)) &&
     new Set(editing.map((v) => v.row.name)).size === editing.length;
   const save = () =>
-    editor.save((value) => ({
-      ...c,
-      tunnels: c.tunnels,
-      sites: c.sites,
-      ddns: c.ddns,
-      [kind]: value.map((v) => clean(v.row)),
-    }));
+    editor.save((value) => {
+      const rows = value.map((v) => v.row);
+      return {
+        ...c,
+        tunnels: c.tunnels,
+        sites: c.sites,
+        ddns: c.ddns,
+        [kind]: rows.map((v) => clean(v)),
+        ...(configPatch ? configPatch(rows) : {}),
+      };
+    });
   return (
     <>
       <ErrorNotice error={editor.error} />
@@ -182,7 +223,7 @@ function Collection<T extends Row>({
                     onClick={() => {
                       editor.setValue([
                         ...editing,
-                        { id: next, created: true, row: empty() },
+                        { id: next, created: true, row: empty(editing.map((v) => v.row)) },
                       ]);
                       setNext(next + 1);
                     }}
@@ -228,9 +269,15 @@ export function Tunnels() {
             </div>
           ) : null
         }
-        empty={() => ({
+        configPatch={(rows) => ({
+          interfaces: withTunnelInterfaces(c.interfaces, rows),
+        })}
+        empty={(rows) => ({
           name: "",
-          interface: "",
+          interface: nextTunnelInterface([
+            ...c.interfaces.map((i) => i.name),
+            ...rows.map((t) => t.interface),
+          ]),
           role: "server",
           protocol: "wg",
           private_key: { plaintext: "" },
@@ -299,15 +346,32 @@ export function Tunnels() {
               <InterfaceSelect
                 label="Интерфейс"
                 value={t.interface}
-                interfaces={c.interfaces}
+                interfaces={
+                  !t.interface || c.interfaces.some((i) => i.name === t.interface)
+                    ? c.interfaces
+                    : [
+                        ...c.interfaces,
+                        {
+                          name: t.interface,
+                          type: "physical",
+                          zone: "lan",
+                          description: "создастся автоматически",
+                          addressing: "static",
+                          addresses: [],
+                          parent: null,
+                          vlan_id: null,
+                          members: [],
+                        },
+                      ]
+                }
                 emptyLabel="Выберите интерфейс"
                 error={!t.interface}
                 helperText={!t.interface ? "Выберите значение" : undefined}
                 onChange={(v) => patch({ interface: v })}
               />
               <p className="sub">
-                Туннель привязывается к интерфейсу из конфигурации — сначала
-                добавьте его на странице «Сеть» (например, wg0/amnezia0).
+                Устройство создаётся автоматически (зона LAN) и появится на
+                странице «Сеть». Не используйте имя физического NIC.
               </p>
             </div>
             {created ? (
