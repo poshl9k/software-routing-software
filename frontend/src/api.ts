@@ -10,6 +10,7 @@ import type {
   User,
   TProxyPreview,
   Alias, DHCPLease, ImportPreview, PingResult,
+  ReleaseInfo, UpdateStatus, UpdateStart,
 } from "./types";
 export class ApiError extends Error {
   constructor(
@@ -113,6 +114,9 @@ export const api = {
   ping: (body: { host: string; count: number; source_interface?: string }) => post<PingResult>("/api/diag/ping", body),
   traceroute: (host: string) => post<string[]>("/api/diag/traceroute", { host }),
   rulesCounters: () => request<Record<string, { packets: number; bytes: number }>>("/api/diag/rules-counters"),
+  release: () => request<ReleaseInfo>("/api/release"),
+  updateStatus: () => request<UpdateStatus>("/api/update"),
+  applyUpdate: (release: string) => post<UpdateStart>("/api/update", { release }),
 };
 
 async function responseError(response: Response): Promise<ApiError> {

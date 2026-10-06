@@ -5,10 +5,13 @@ import { api } from "../api";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
 import { Card } from "../components/Card";
+import { Badge } from "../components/Badge";
 import { DataTable } from "../components/DataTable";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 import { InterfaceSelect } from "../components/Select";
+import type { UpdateStatus } from "../types";
 
 function download(data: Blob, filename: string) {
   const url = URL.createObjectURL(data);
@@ -26,6 +29,7 @@ export default function Maintenance() {
   const [ping, setPing] = useState<{sent:number;received:number;loss_pct:number;min_avg_max_ms:number[]}|null>(null);
   const [trace, setTrace] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const perform = async (fn:()=>Promise<void>) => { setError(null); setNotice(""); setBusy(true); try { await fn(); } catch(e) { setError(e); } finally { setBusy(false); } };
   const counters = useQuery({ queryKey: queryKeys.rulesCounters(), queryFn: () => api.rulesCounters(), enabled: admin });
   const restoreFile = async (file?: File) => { if (!file) return; void perform(async()=>{ const parsed=JSON.parse(await file.text()); if (!parsed || typeof parsed.schema_version!=="number" || !Array.isArray(parsed.versions) || !Array.isArray(parsed.users)) throw new Error("Некорректный файл резервной копии"); setAllowPartial(false); setBackup(parsed); }); };
@@ -44,6 +48,68 @@ export default function Maintenance() {
         <Alert severity="warning">Если в архиве нет секретов, туннели, DDNS и сайты с ручными сертификатами могут быть пропущены. Проверьте черновик перед применением.</Alert>
         <FormControlLabel control={<Checkbox checked={allowPartial} onChange={e=>setAllowPartial(e.target.checked)}/>} label="Разрешить пропуск записей без секретов"/>
         <Button disabled={!admin||busy||versions.some(v=>v.status==="draft")} onClick={()=>void perform(async()=>{const result=await api.backupRestore({...backup,allow_partial:allowPartial,...(restorePassword?{password:restorePassword}:{})});await refresh();setNotice(`Создан черновик из последней версии; пропущено версий: ${result.skipped}. Примените его отдельно.`);})}>Импортировать в черновик</Button></>}
+    </Card>
+    <Card
+      title="Обновление продукта"
+      action={
+        <Button
+          disabled={!admin || busy}
+          onClick={() => void perform(async () => setUpdate(await api.updateStatus()))}
+        >
+          Проверить обновление
+        </Button>
+      }
+    >
+      <InfoNote>
+        Обновление ставит зафиксированный выпуск (манифест + SHA-256), не ветку.
+        Применение перезапустит сервисы — текущая сессия завершится, войдите заново.
+      </InfoNote>
+      {update && (
+        <>
+          <DataTable
+            heads={["Параметр", "Значение"]}
+            rows={[
+              ["Установленный выпуск", update.current.commit ? `${update.current.semver ?? "?"} · ${update.current.commit.slice(0, 7)}` : "неизвестно"],
+              ["Источник", update.current.source],
+              ["Манифест", update.configured ? update.manifest_url ?? "" : "не настроен"],
+              ["Доступный выпуск", update.available ? `${update.available.semver} · ${update.available.commit.slice(0, 7)}` : "—"],
+              ["Состояние", update.running ? "обновление выполняется" : update.last ? `последнее: ${update.last.status}` : "—"],
+            ]}
+          />
+          {update.error && (
+            <InfoNote severity="warning">Не удалось проверить выпуск: {update.error}</InfoNote>
+          )}
+          {!update.configured && (
+            <InfoNote severity="warning">
+              URL манифеста не задан на хосте (/etc/vs-router/update.json или VS_ROUTER_UPDATE_MANIFEST_URL).
+            </InfoNote>
+          )}
+          {update.configured && !update.error && (
+            update.update_available ? (
+              <div className="footer-actions">
+                <Badge tone="amber">Доступен новый выпуск</Badge>
+                <Button
+                  disabled={!admin || busy || update.running || !update.available}
+                  onClick={() =>
+                    void perform(async () => {
+                      const target = update.available;
+                      if (!target) return;
+                      if (!window.confirm(`Применить выпуск ${target.semver} (${target.commit.slice(0, 7)})? Панель перезапустится.`)) return;
+                      await api.applyUpdate(target.commit);
+                      setNotice("Обновление запущено; панель перезапустится и потребует входа.");
+                      setUpdate(await api.updateStatus());
+                    })
+                  }
+                >
+                  Применить обновление
+                </Button>
+              </div>
+            ) : (
+              <Badge tone="green">Установлен актуальный выпуск</Badge>
+            )
+          )}
+        </>
+      )}
     </Card>
     <Card title="Диагностика ping">
       <div className="diag-controls">

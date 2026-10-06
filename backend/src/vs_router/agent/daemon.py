@@ -303,11 +303,20 @@ def make_handlers(engine, database):
         check_deadline(engine.status(), engine.rollback, engine.clock)
         return engine.status()
 
+    def update_status():
+        from .update import release_status
+        return release_status()
+
+    def apply_update(release):
+        from .update import apply_update as start_update
+        return start_update(release)
+
     return {'apply_version': apply_version, 'confirm_version': confirm_version,
             'rollback': lambda: engine.rollback('requested'), 'status': status,
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
             'nft_counters': nft_counters, 'list_interfaces': list_interfaces,
-            'list_addresses': list_addresses}
+            'list_addresses': list_addresses, 'update_status': update_status,
+            'apply_update': apply_update}
 
 
 def main():

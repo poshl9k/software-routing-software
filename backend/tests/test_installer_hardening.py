@@ -4,6 +4,7 @@ These tests never invoke host service/network/package managers.
 """
 import os
 from pathlib import Path
+import re
 import subprocess
 import tomllib
 
@@ -488,15 +489,28 @@ def test_platform_validation(tmp_path, identity, expected):
     assert result.returncode == expected
 
 
-def test_updater_installs_a_pinned_release_not_a_branch():
-    """ADR-0005/0008: never update from a branch or `latest`."""
+def test_updater_downloads_a_verified_pinned_release():
+    """ADR-0010: the updater downloads a manifest-pinned artifact, verifies its
+    SHA-256 and its REVISION, and never fetches a git branch/`latest` (a
+    self-contained ISO tree has no `.git`, ADR-0008)."""
     updater = (PACKAGING / 'update.sh').read_text()
-    assert 'git pull' not in updater
+    assert not re.search(r'^\s*git\s+(fetch|pull|checkout)\b', updater, re.M)
     assert '--release' in updater
-    assert 'checkout --detach' in updater
-    assert 'release checkout mismatch' in updater
-    # A malformed release id must be rejected before any mutation.
+    assert '--manifest' in updater and '--manifest-url' in updater
+    assert 'VS_ROUTER_UPDATE_MANIFEST_URL' in updater
+    assert 'source_sha256' in updater
+    assert 'sha256sum -c' in updater
+    assert 'REVISION' in updater
+    # A malformed release id or manifest digest must be rejected.
     assert '^[0-9a-f]{40}$' in updater
+    assert '^[0-9a-f]{64}$' in updater
+    # Downloads are https-only; integrity verification is mandatory.
+    assert "--proto '=https'" in updater
+    # A failed install step must be fatal, never a warning that still reports
+    # success (a broken migration or restart silently leaves stale code).
+    assert "|| fail 'alembic upgrade failed" in updater
+    assert "|| fail 'one or more runtime services failed to restart" in updater
+    assert "|| warn 'alembic upgrade failed" not in updater
 
 
 def test_install_records_release_identity(tmp_path):
@@ -525,3 +539,41 @@ def test_install_records_release_identity(tmp_path):
     assert recorded['semver'] == '1.2.3'
     assert recorded['source'] == 'online'
     assert recorded['installed_at'].endswith('Z')
+
+
+def test_make_release_builds_a_verified_manifest(tmp_path):
+    """ADR-0010: the release artifact is the pinned commit's tree plus REVISION,
+    and release.json carries a SHA-256 that matches the artifact."""
+    import hashlib
+    import json
+    out = tmp_path / 'release'
+    revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    result = subprocess.run(
+        ['bash', str(PACKAGING / 'make-release.sh'), revision],
+        env={**os.environ, 'VS_ROUTER_RELEASE_OUT': str(out),
+             'VS_ROUTER_RELEASE_BASE_URL': 'https://example.invalid/download/vs-router-x'},
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    manifest = json.loads((out / 'release.json').read_text())
+    artifact = out / manifest['source_url'].rsplit('/', 1)[-1]
+    assert manifest['commit'] == revision
+    assert manifest['semver'] and manifest['min_os'] == 'debian-13'
+    assert hashlib.sha256(artifact.read_bytes()).hexdigest() == manifest['source_sha256']
+    # REVISION is inside the archive and equals the commit the manifest names.
+    revision_in_tar = subprocess.run(['tar', '-xzOf', str(artifact), './REVISION'],
+                                     capture_output=True, text=True, check=True).stdout.strip()
+    assert revision_in_tar == revision
+    # A malformed commit id is rejected before anything is written.
+    bad = subprocess.run(['bash', str(PACKAGING / 'make-release.sh'), 'not-a-commit'],
+                         env={**os.environ, 'VS_ROUTER_RELEASE_OUT': str(out)},
+                         capture_output=True, text=True)
+    assert bad.returncode != 0
+    assert 'full 40-character commit id' in bad.stdout + bad.stderr
+
+
+def test_make_release_never_uses_a_branch_or_latest_ref():
+    maker = (PACKAGING / 'make-release.sh').read_text()
+    assert not re.search(r'^\s*git\s+(fetch|pull|checkout)\b', maker, re.M)
+    assert '^[0-9a-f]{40}$' in maker
+    assert 'git archive' in maker

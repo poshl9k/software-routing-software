@@ -70,3 +70,63 @@ it("imports backup into a draft without applying it",async()=>{
   }));
   expect(fetch.mock.calls.some(([path])=>path==="/api/apply")).toBe(false);
 });
+
+const RELEASE_COMMIT = "a".repeat(40);
+const CURRENT_COMMIT = "b".repeat(40);
+function updateStatus(update_available=false, extra:Record<string,unknown>={}) {
+  return {configured:true,manifest_url:"https://example.invalid/release.json",
+    current:{commit:CURRENT_COMMIT,semver:"0.1.0",installed_at:"2026-10-06T00:00:00Z",source:"iso"},
+    available:{commit:RELEASE_COMMIT,semver:"0.2.0"},update_available,running:false,last:null,error:null,...extra};
+}
+function adminExtras(status:unknown) {
+  return (path:string) => path==="/api/auth/me"
+    ? new Response(JSON.stringify({id:1,username:"admin",role:"admin"}))
+    : path==="/api/apply/status" ? new Response("null")
+    : path==="/api/update" ? new Response(JSON.stringify(status)) : new Response("{}");
+}
+async function openMaintenance() {
+  render(<MemoryRouter initialEntries={["/maintenance"]}><App/></MemoryRouter>);
+  await screen.findByText("admin");
+  const check=await screen.findByRole("button",{name:"Проверить обновление"});
+  await waitFor(()=>expect(check).toBeEnabled());
+  return check;
+}
+
+it("checks the release manifest and offers the available update",async()=>{
+  setup(emptyConfiguration, adminExtras(updateStatus(true)));
+  const user=userEvent.setup();
+  const check=await openMaintenance();
+  await user.click(check);
+  expect(await screen.findByText("Доступен новый выпуск")).toBeVisible();
+  expect(screen.getByRole("button",{name:"Применить обновление"})).toBeEnabled();
+  expect(screen.getByText(/0\.2\.0 · aaaaaaa/)).toBeVisible();
+});
+
+it("does not apply the update when the confirmation is dismissed",async()=>{
+  const fetch=setup(emptyConfiguration, adminExtras(updateStatus(true)));
+  vi.spyOn(window,"confirm").mockReturnValue(false);
+  const user=userEvent.setup();
+  const check=await openMaintenance();
+  await user.click(check);
+  await user.click(await screen.findByRole("button",{name:"Применить обновление"}));
+  expect(fetch.mock.calls.some(([path,init])=>path==="/api/update"&&(init as RequestInit|undefined)?.method==="POST")).toBe(false);
+});
+
+it("applies the pinned release commit after confirmation",async()=>{
+  const fetch=setup(emptyConfiguration, adminExtras(updateStatus(true)));
+  vi.spyOn(window,"confirm").mockReturnValue(true);
+  const user=userEvent.setup();
+  const check=await openMaintenance();
+  await user.click(check);
+  await user.click(await screen.findByRole("button",{name:"Применить обновление"}));
+  await waitFor(()=>expect(fetch).toHaveBeenCalledWith("/api/update",expect.objectContaining({method:"POST",body:JSON.stringify({release:RELEASE_COMMIT})})));
+});
+
+it("shows that no update is available",async()=>{
+  setup(emptyConfiguration, adminExtras(updateStatus(false)));
+  const user=userEvent.setup();
+  const check=await openMaintenance();
+  await user.click(check);
+  expect(await screen.findByText("Установлен актуальный выпуск")).toBeVisible();
+  expect(screen.queryByRole("button",{name:"Применить обновление"})).toBeNull();
+});

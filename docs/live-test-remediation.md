@@ -99,23 +99,39 @@ bootstrap и без сигнала об ошибке.
 - [x] `GET /api/release` (read-only, аутентификация) — commit/semver/source.
       Комментарий: `api/release.py`, зарегистрирован в `app.py`; тесты
       `tests/test_release.py` (10). Мусор/битые поля → `null`/`unknown`, не 5xx.
-- [ ] Панель: показать текущий выпуск; «проверить обновление» → предложение.
-- [ ] `update.sh` → обновление до зафиксированного выпуска, не ветки.
+- [x] Панель: показать текущий выпуск; «проверить обновление» → предложение.
+      Комментарий: страница «Обслуживание», карточка «Обновление продукта»;
+      `GET /api/update` + карточка показывает установленный/доступный выпуск и
+      состояние; тесты `frontend/src/test/maintenance-features.test.tsx`.
+- [x] `update.sh` → обновление до зафиксированного выпуска, не ветки.
       **Механизм определён ADR-0010:** выпуск по проводу = `release.json`
       (commit/semver/source_url/source_sha256) + tar-артефакт (тот же
-      `git archive`, что вендорит ISO). `update.sh --release <40hex>`:
-      скачать → сверить sha256 и `REVISION`==коммит → распаковать (сохранив
-      прежнее дерево) → пересборка/`alembic upgrade head`/деплой/рестарт.
-      Ветки и `latest` запрещены (ADR-0005). Текущий `git fetch` в `--release`
-      на дереве без `.git` не работает — заменить на скачивание артефакта.
-      Комментарий: убран `git pull`; добавлен `--release <40hex>` с `checkout
-      --detach` и проверкой совпадения; без него — пересборка текущего дерева.
-      Тесты в `test_installer_hardening.py`.
-- [ ] Хост выпусков (assets GitHub Release на тег либо статический каталог) —
+      `git archive`, что вендорит ISO, + `REVISION` внутри архива).
+      Комментарий: `git fetch`/`checkout` убраны; `--release <40hex>` /
+      `--manifest <url>` → скачать манифест → сверить sha256 (fail-closed) и
+      `REVISION`==коммит → распаковать в `/opt/vs-router.new` (прежнее дерево
+      в `/opt/vs-router.prev`) → пересборка/`alembic upgrade head`/деплой/
+      рестарт. https-only; падение миграции/рестарта — фатально, не warning.
+      Без `--release/--manifest` — пересборка текущего дерева. Тесты:
+      `test_installer_hardening.py` + `test_update_staging.py`.
+- [x] Хост выпусков (assets GitHub Release на тег либо статический каталог) —
       решение и URL манифеста.
-- [ ] «Применить обновление» — привилегированное действие через whitelisted RPC
+      Комментарий: выбран **GitHub Release** (бесплатно, лимит 2 ГиБ на файл);
+      `backend/packaging/make-release.sh` собирает `vs-router-<commit>.tar.gz`
+      + `release.json`, `--upload` публикует через `gh release create` на тег
+      `vs-router-<commit>`. URL манифеста — `--manifest` или
+      `VS_ROUTER_UPDATE_MANIFEST_URL`. См. `docs/online-update.md`.
+- [x] «Применить обновление» — привилегированное действие через whitelisted RPC
       агента, только после явного согласия.
-- [ ] Откат: сохранять прежнее дерево; необратимые миграции → отказывать.
+      Комментарий: `POST /api/update` (admin) → RPC `apply_update`; агент
+      сверяет коммит с манифестом и стартует detached-юнит
+      `vs-router-update` (`update-run.sh`), не блокируя RPC; подтверждение в UI.
+      Тесты `tests/test_update.py`, `frontend/src/test/maintenance-features.test.tsx`.
+- [x] Откат: сохранять прежнее дерево; необратимые миграции → отказывать.
+      Комментарий: `update.sh` сохраняет `/opt/vs-router.prev`; падение
+      `alembic upgrade head` — фатально (было warning).
+      Оговорка: автоматического возврата при неудачном рестарте нет
+      (см. `docs/online-update.md`).
 - [x] `CONTEXT.md`: разграничить «версия конфигурации» и «выпуск установки».
       Комментарий: термин уточнён, добавлен пункт про разные сущности.
 - [x] ADR-0008: самодостаточный образ + онлайн-обновление по выпуску.

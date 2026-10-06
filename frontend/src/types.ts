@@ -223,3 +223,31 @@ export interface HostInterface {
   operstate: string;
   mac: string | null;
 }
+
+export interface ReleaseInfo {
+  commit: string | null;
+  semver: string | null;
+  installed_at: string | null;
+  source: "iso" | "online" | "unknown";
+}
+export interface UpdateRun {
+  status: "running" | "success" | "failed";
+  release: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  exit_code: number | null;
+}
+export interface UpdateStatus {
+  configured: boolean;
+  manifest_url: string | null;
+  current: ReleaseInfo;
+  available: { commit: string; semver: string } | null;
+  update_available: boolean;
+  running: boolean;
+  last: UpdateRun | null;
+  error: string | null;
+}
+export interface UpdateStart {
+  started: boolean;
+  release: string;
+}

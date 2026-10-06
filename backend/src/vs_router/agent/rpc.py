@@ -10,7 +10,7 @@ RequestID = StrictInt | StrictStr
 VersionID = Annotated[int, Field(strict=True, ge=1)]
 Method = Literal["apply_version", "confirm_version", "rollback", "status",
                  "diag_ping", "diag_traceroute", "nft_counters", "list_interfaces",
-                 "list_addresses"]
+                 "list_addresses", "update_status", "apply_update"]
 
 
 class ApplyParams(Model):
@@ -37,11 +37,18 @@ class HostParams(Model):
     host: StrictStr
 
 
+class ApplyUpdateParams(Model):
+    # A pinned release commit; validated again against the host manifest before
+    # anything runs (never an arbitrary value or a branch).
+    release: StrictStr = Field(pattern=r'^[0-9a-f]{40}$')
+
+
 PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "rollback": EmptyParams, "status": EmptyParams,
           "diag_ping": PingParams, "diag_traceroute": HostParams,
           "nft_counters": EmptyParams, "list_interfaces": EmptyParams,
-          "list_addresses": EmptyParams}
+          "list_addresses": EmptyParams, "update_status": EmptyParams,
+          "apply_update": ApplyUpdateParams}
 
 
 class RPCRequest(Model):
