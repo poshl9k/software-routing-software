@@ -1,5 +1,40 @@
 import { TextField, type SxProps, type Theme } from "@mui/material";
 
+/** Everything a `Field` needs regardless of whether it is editable. */
+type FieldCommon = {
+  label?: string;
+  value: string | number;
+  valid?: boolean;
+  hint?: string;
+  placeholder?: string;
+  multiline?: boolean;
+  type?: string;
+  disabled?: boolean;
+  maxLength?: number;
+  /** Accessible name when the field has no visible label (e.g. a table cell). */
+  ariaLabel?: string;
+  /** Browser autofill hint (login/secret fields). */
+  autoComplete?: string;
+  /** Marks the field as required (native `required` + the MUI asterisk). */
+  required?: boolean;
+  /** Extra attributes merged onto the native input (min/max/step/inputMode…). */
+  inputProps?: Record<string, unknown>;
+  className?: string;
+  sx?: SxProps<Theme>;
+  fullWidth?: boolean;
+};
+
+/**
+ * A read-only field carries no `onChange`; every editable field must pass one,
+ * so a controlled input that silently ignores typing cannot be created by
+ * mistake.
+ */
+type FieldProps = FieldCommon &
+  (
+    | { readOnly: true; onChange?: (v: string) => void }
+    | { readOnly?: false; onChange: (v: string) => void }
+  );
+
 /** Flat text field: label floats, error/hint shown inline, no outlined box. */
 export function Field({
   label,
@@ -20,31 +55,7 @@ export function Field({
   className,
   sx,
   fullWidth = true,
-}: {
-  label?: string;
-  value: string | number;
-  onChange?: (v: string) => void;
-  valid?: boolean;
-  hint?: string;
-  placeholder?: string;
-  multiline?: boolean;
-  type?: string;
-  disabled?: boolean;
-  maxLength?: number;
-  /** Accessible name when the field has no visible label (e.g. a table cell). */
-  ariaLabel?: string;
-  /** Browser autofill hint (login/secret fields). */
-  autoComplete?: string;
-  /** Read-only value the operator may see but not edit (identity fields). */
-  readOnly?: boolean;
-  /** Marks the field as required (adds the MUI asterisk + `aria-required`). */
-  required?: boolean;
-  /** Extra attributes merged onto the native input (min/max/step/inputMode…). */
-  inputProps?: Record<string, unknown>;
-  className?: string;
-  sx?: SxProps<Theme>;
-  fullWidth?: boolean;
-}) {
+}: FieldProps) {
   return (
     <TextField
       size="small"
