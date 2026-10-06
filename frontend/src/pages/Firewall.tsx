@@ -10,6 +10,7 @@ import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
 import { ValueTabs } from "../components/Tabs";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 import { Field } from "../components/Field";
 import { Select, SelectField, InterfaceSelect } from "../components/Select";
@@ -63,6 +64,10 @@ export default function Firewall() {
   const previewAliases=async(data:string)=>{editor.setError(null);try{let body:{aliases:Alias[]}|{data:string}={data};try{const parsed=JSON.parse(data);const imported=Array.isArray(parsed)?parsed:parsed?.aliases;if(Array.isArray(imported))body={aliases:imported as Alias[]};}catch{/* TXT/CSV input */}setPreview(await api.previewAliases(body));}catch(e){editor.setError(e);}};
   const importAliases=async()=>{if(!preview)return;editor.setError(null);try{await api.importAliases(preview.aliases,importMode);const aliases=importMode==="replace"?preview.aliases:[...c.aliases,...preview.aliases.filter(a=>!c.aliases.some(x=>x.name===a.name))];await saveDraft({...c,aliases});editor.setValue(editor.value?{...editor.value,aliases}:null);setPreview(null);}catch(e){editor.setError(e);}};
   const [tab, setTab] = useState("wan");
+  // Server tunnels that open their listen port on the WAN (generated rules).
+  const openTunnels = c.tunnels.filter(
+    (t) => t.role === "server" && t.open_port && t.listen_port,
+  );
   const rows: Editable = editor.value ?? c;
   const isEditMode = editor.isEdit;
   const patch = (value: Partial<Editable>) => editor.setValue({ ...rows, ...value });
@@ -177,6 +182,14 @@ export default function Firewall() {
       <EditorFieldset disabled={editor.saving}>
         {zone && (
           <Card title={`Правила зоны ${tab}`}>
+            {tab === "wan" && openTunnels.length > 0 && (
+              <InfoNote>
+                Сгенерированные правила туннелей (не редактируются здесь):{" "}
+                {openTunnels
+                  .map((t) => `${t.name} — udp/${t.listen_port} accept`)
+                  .join("; ")}
+              </InfoNote>
+            )}
             <DataTable
               heads={[
                 "Порядок",

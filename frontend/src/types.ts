@@ -103,6 +103,8 @@ export interface Tunnel {
   allowed_ips: string[];
   keepalive: number;
   obfuscation: Record<string, number>;
+  /** Server only: open udp/<listen_port> on the WAN zone (generated firewall rule). */
+  open_port: boolean;
 }
 export interface CaddySite {
   name: string;

@@ -20,6 +20,7 @@ import { Field } from "../components/Field";
 import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
 import { Select, SelectField, InterfaceSelect } from "../components/Select";
+import { Toggle } from "../components/Toggle";
 import {
   nameValid,
   ifaceNameValid,
@@ -419,6 +420,7 @@ export function Tunnels() {
           allowed_ips: [],
           keepalive: 25,
           obfuscation: {},
+          open_port: true,
         })}
         valid={(t) =>
           nameValid(t.name) &&
@@ -566,6 +568,11 @@ export function Tunnels() {
                   value={t.endpoint ?? ""}
                   hint="Домен или IP:порт для клиентов; пусто — адрес WAN, иначе шаблон"
                   onChange={(endpoint) => patch({ endpoint: endpoint || null })}
+                />
+                <Toggle
+                  label="Открыть порт на WAN"
+                  value={t.open_port}
+                  onChange={(open_port) => patch({ open_port })}
                 />
                 {t.peers.map((p, index) => {
                   const update = (v: Partial<typeof p>) =>

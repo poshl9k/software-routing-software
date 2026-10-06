@@ -25,6 +25,7 @@ const server: Tunnel = {
   allowed_ips: [],
   keepalive: 25,
   obfuscation: { Jc: 4, S1: 0, S2: 0, H1: 1, H2: 2, H3: 3, H4: 4 },
+    open_port: true,
 };
 const wan: Configuration = {
   ...emptyConfiguration,
@@ -344,6 +345,18 @@ it("saves a server's public endpoint for the client config", async () => {
     fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
   );
   expect(body.tunnels[0].endpoint).toBe("vpn.example.org");
+});
+it("saves the WAN port toggle for a server tunnel", async () => {
+  const fetch = await open(<Tunnels />, {
+    ...emptyConfiguration,
+    tunnels: [{ ...server, open_port: true }],
+  });
+  await userEvent.click(screen.getByRole("switch", { name: "Открыть порт на WAN" }));
+  await userEvent.click(save());
+  const body = JSON.parse(
+    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
+  );
+  expect(body.tunnels[0].open_port).toBe(false);
 });
 it("retains edits after API failure", async () => {
   await open(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true);

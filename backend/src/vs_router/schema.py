@@ -150,6 +150,9 @@ class Tunnel(Model):
     allowed_ips: tuple[str, ...] = ()
     keepalive: int = Field(default=0, ge=0, le=65535)
     obfuscation: dict[str, int] = Field(default_factory=dict)
+    # Server only: open udp/<listen_port> on the WAN zone so remote clients can
+    # reach the server. The panel shows the generated rule on the Firewall page.
+    open_port: bool = True
 
     @model_validator(mode="after")
     def check_role(self):

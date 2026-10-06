@@ -127,6 +127,13 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
         lines += ["        ct state invalid drop", "        ct state established,related accept"]
         if chain == "input" and c.anti_lockout and "lan" in zones:
             lines.append(f'        iifname {names(zones["lan"])} tcp dport {c.panel_port} counter accept comment "anti_lockout"')
+        if chain == "input" and "wan" in zones:
+            # A server tunnel needs its listen port reachable from the WAN;
+            # generated from the tunnel (toggle `open_port`), not hand-written.
+            for tunnel in c.tunnels:
+                if tunnel.role == "server" and tunnel.open_port and tunnel.listen_port:
+                    lines.append(f'        iifname {names(zones["wan"])} udp dport {tunnel.listen_port} '
+                                 f'counter accept comment "tunnel_{tunnel.name}"')
         if chain == "forward":
             for p in c.port_forwards:
                 if not p.enabled:

@@ -46,6 +46,7 @@ export const sampleConfiguration: Configuration = {
     allowed_ips: ["10.8.0.0/24"],
     keepalive: 0,
     obfuscation: {},
+    open_port: true,
     peers: [{
       name: "alina-laptop",
       public_key: "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",

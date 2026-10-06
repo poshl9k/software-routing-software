@@ -216,6 +216,17 @@ def test_each_server_tunnel_gets_its_own_subnet(config):
     assert 'AllowedIPs = 10.66.67.2/32' in files['vpn2.conf']
 
 
+def test_server_tunnel_opens_its_listen_port_on_the_wan(config):
+    """A server tunnel with `open_port` gets an INPUT accept for udp/<port> on
+    the WAN zone; turning it off removes the generated rule."""
+    from vs_router.generators import generate_nftables
+    output = generate_nftables(ConfigurationVersion.model_validate(config))
+    assert 'iifname { "wan0" } udp dport 51820 counter accept comment "tunnel_vpn"' in output
+    data = json.loads(json.dumps(config))
+    data['configuration']['tunnels'][0]['open_port'] = False
+    assert 'tunnel_vpn' not in generate_nftables(ConfigurationVersion.model_validate(data))
+
+
 def test_server_endpoint_is_advertised_to_clients(config):
     """A server's own endpoint (IP/hostname) replaces the WAN-derived value in
     the client export; a bare host gets the listen port appended."""

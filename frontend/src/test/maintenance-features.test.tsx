@@ -43,6 +43,26 @@ it("renders and validates the ping host field",async()=>{
 it("renders the maintenance screen through its route",async()=>{
   setup(emptyConfiguration);render(<MemoryRouter initialEntries={["/maintenance"]}><App/></MemoryRouter>);expect(await screen.findByRole("heading",{name:"Обслуживание",level:1})).toBeVisible();
 });
+it("shows the generated tunnel port rule on the WAN firewall tab", async () => {
+  setup({
+    ...sampleConfiguration,
+    interfaces: [
+      {
+        name: "eth0",
+        type: "physical",
+        zone: "wan",
+        description: null,
+        addressing: "static",
+        addresses: ["203.0.113.1/24"],
+        parent: null,
+        vlan_id: null,
+        members: [],
+      },
+    ],
+  });
+  mount(<Firewall />);
+  expect(await screen.findByText(/udp\/51820/)).toBeVisible();
+});
 it("warns that backup import needs a free draft and does not activate host config",async()=>{
   setup(emptyConfiguration);mount(<Maintenance/>);
   expect(await screen.findByText(/Перед импортом сбросьте текущий черновик/)).toBeVisible();
