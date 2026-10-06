@@ -138,8 +138,8 @@ export default function Firewall() {
       })),
     }));
   };
-  const remove = (fn: () => void) => (
-    <DeleteButton label="Удалить" onClick={fn} />
+  const remove = (fn: () => void, label: string) => (
+    <DeleteButton label={label} onClick={fn} />
   );
   return (
     <>
@@ -264,12 +264,14 @@ export default function Firewall() {
                           })
                         }
                       />,
-                      remove(() =>
-                        setZoneRules(
-                          rules
-                            .filter((rule) => rule.index !== r.index)
-                            .map(({ index: _index, ...rule }) => rule),
-                        ),
+                      remove(
+                        () =>
+                          setZoneRules(
+                            rules
+                              .filter((rule) => rule.index !== r.index)
+                              .map(({ index: _index, ...rule }) => rule),
+                          ),
+                        `Удалить правило ${r.name || `#${r.index + 1}`}`,
                       ),
                     ]
                   : [
@@ -399,12 +401,14 @@ export default function Firewall() {
                           value={p.enabled}
                           onChange={(enabled) => update({ enabled })}
                         />
-                        {remove(() =>
-                          patch({
-                            port_forwards: rows.port_forwards.filter(
-                              (_, i) => i !== index,
-                            ),
-                          }),
+                        {remove(
+                          () =>
+                            patch({
+                              port_forwards: rows.port_forwards.filter(
+                                (_, i) => i !== index,
+                              ),
+                            }),
+                          `Удалить перенаправление портов ${p.name || `#${index + 1}`}`,
                         )}
                       </>,
                     ]
@@ -527,12 +531,14 @@ export default function Firewall() {
                         value={n.do_not_nat}
                         onChange={(do_not_nat) => update({ do_not_nat })}
                       />,
-                      remove(() =>
-                        patch({
-                          outbound_nat: rows.outbound_nat.filter(
-                            (_, i) => i !== index,
-                          ),
-                        }),
+                      remove(
+                        () =>
+                          patch({
+                            outbound_nat: rows.outbound_nat.filter(
+                              (_, i) => i !== index,
+                            ),
+                          }),
+                        `Удалить правило NAT ${n.name || `#${index + 1}`}`,
                       ),
                     ]
                   : [
@@ -633,10 +639,12 @@ export default function Firewall() {
                         valid={a.includes.filter(Boolean).every(nameValid)}
                         onChange={(v) => update({ includes: v.split("\n") })}
                       />,
-                      remove(() =>
-                        patch({
-                          aliases: rows.aliases.filter((_, i) => i !== index),
-                        }),
+                      remove(
+                        () =>
+                          patch({
+                            aliases: rows.aliases.filter((_, i) => i !== index),
+                          }),
+                        `Удалить псевдоним ${a.name || `#${index + 1}`}`,
                       ),
                     ]
                   : [

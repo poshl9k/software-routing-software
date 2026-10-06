@@ -4,13 +4,13 @@ import {
   Button,
   FormControlLabel,
   Switch,
-  TextField,
   Typography,
 } from "@mui/material";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { emptyConfiguration } from "../fixtures";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { Field } from "../components/Field";
 import { Select } from "../components/Select";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
@@ -114,18 +114,17 @@ export default function Onboarding() {
               Учётная запись администратора
             </Typography>
             <div className="fields">
-              <TextField
+              <Field
                 required
                 label="Логин администратора"
                 value={username}
                 disabled={busy || accountCreated}
                 autoComplete="username"
-                slotProps={{
-                  htmlInput: { pattern: "[a-zA-Z0-9_.-]+", maxLength: 64 },
-                }}
-                onChange={(e) => setUsername(e.target.value)}
+                inputProps={{ pattern: "[a-zA-Z0-9_.-]+" }}
+                maxLength={64}
+                onChange={setUsername}
               />
-              <TextField
+              <Field
                 required
                 type="password"
                 label="Пароль"
@@ -134,9 +133,10 @@ export default function Onboarding() {
                 autoComplete={
                   accountCreated ? "current-password" : "new-password"
                 }
-                slotProps={{ htmlInput: { minLength: 8, maxLength: 1024 } }}
-                helperText="Минимум 8 символов (контракт API). Хранится как argon2id-хэш."
-                onChange={(e) => setPassword(e.target.value)}
+                inputProps={{ minLength: 8 }}
+                maxLength={1024}
+                hint="Минимум 8 символов (контракт API). Хранится как argon2id-хэш."
+                onChange={setPassword}
               />
             </div>
             {accountCreated && (
@@ -170,13 +170,13 @@ export default function Onboarding() {
                 }))}
                 onChange={setLan}
               />
-              <TextField
+              <Field
                 required
                 label="Адрес LAN (CIDR)"
                 value={address}
                 disabled={busy}
-                onChange={(e) => setAddress(e.target.value)}
-                helperText="Например, 192.168.10.1/24. Проверка выполняется API при сохранении."
+                hint="Например, 192.168.10.1/24. Проверка выполняется API при сохранении."
+                onChange={setAddress}
               />
             </div>
             {hostInterfaces.error && (
@@ -219,16 +219,16 @@ export default function Onboarding() {
                 }
               />
               <div className="fields">
-                <TextField
+                <Field
                   required
                   type="number"
                   label="Окно подтверждения (секунды)"
                   value={preferences.timeout}
-                  slotProps={{ htmlInput: { min: 60, max: 600, step: 1 } }}
-                  onChange={(e) =>
+                  inputProps={{ min: 60, max: 600, step: 1 }}
+                  onChange={(v) =>
                     setPreferences((p) => ({
                       ...p,
-                      timeout: Number(e.target.value),
+                      timeout: Number(v),
                     }))
                   }
                 />
@@ -315,20 +315,20 @@ export function Login() {
       <ErrorNotice error={error} />
       <form onSubmit={submit}>
         <div className="fields">
-          <TextField
+          <Field
             required
             label="Логин"
             autoComplete="username"
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            onChange={setUsername}
           />
-          <TextField
+          <Field
             required
             type="password"
             label="Пароль"
             autoComplete="current-password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={setPassword}
           />
         </div>
         <Button type="submit" variant="contained" disabled={busy}>

@@ -53,6 +53,10 @@ except where a change was explicitly agreed (TODO-API copy, `demo` rename).
 - [x] table editors (`Network`, `Firewall`, DHCP pools/reservations, DNS records/forwards): the column header is the only visible label — the per-cell name moved to `aria-label` (`getByLabelText` still matches); controls fill the cell (`min-width` floor, numeric cells narrower), `vertical-align: top`
 - [x] `Field`/`Select`/`InterfaceSelect` reserve one helper line so rows keep equal height; `SelectField`/`InterfaceSelect` gained `ariaLabel` + an optional `label`
 - [x] `.fields` (Onboarding/Apply) stretches its controls to full width
+- [x] `Field` API extended (`autoComplete`, `readOnly`, `required`, `inputProps`, `className`, `sx`, optional `onChange`) so the last raw MUI `TextField`s were migrated: Onboarding/Login, Maintenance (backup passwords, ping/traceroute, update), ApplyScreen (confirmation window), Services (lease search), the tunnel SecretField and the read-only identity fields — a page no longer hand-rolls a text input
+- [x] `Checkbox` stays only where it is semantically right: multi-select groups (Routing ingress, SSH interfaces). Standalone booleans use `Toggle`; two dense inline options in Maintenance keep `Checkbox` (a `Switch` would outweigh the compressed row)
+- [x] `Icon.name` narrowed from `string` to `IconName` (a typo is now a type error instead of a silently blank glyph); `navigation` is typed
+- [x] `api.release()` (unused client method) removed; `Firewall` row deletes now carry a per-row `aria-label` instead of a shared «Удалить»
 
 ## Verify
 - [x] `npx tsc --noEmit` — clean

@@ -4,7 +4,6 @@ import {
   Button,
   FormControlLabel,
   Switch,
-  TextField,
 } from "@mui/material";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -16,6 +15,7 @@ import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { Field } from "../components/Field";
 import { PageHeader } from "../components/PageHeader";
 import { Select } from "../components/Select";
 import { fmtDateTime } from "../components/format";
@@ -138,16 +138,16 @@ export default function ApplyScreen() {
               />
             }
           />
-          <TextField
+          <Field
             type="number"
             label="Окно подтверждения (секунды)"
             value={preferences.timeout}
             disabled={busy || !!active || user?.role !== "admin"}
-            error={!timeoutValid}
-            helperText="60–600 секунд; по умолчанию 180"
-            slotProps={{ htmlInput: { min: 60, max: 600 } }}
-            onChange={(e) =>
-              setPreferences((p) => ({ ...p, timeout: Number(e.target.value) }))
+            valid={timeoutValid}
+            hint="60–600 секунд; по умолчанию 180"
+            inputProps={{ min: 60, max: 600 }}
+            onChange={(v) =>
+              setPreferences((p) => ({ ...p, timeout: Number(v) }))
             }
           />
         </div>

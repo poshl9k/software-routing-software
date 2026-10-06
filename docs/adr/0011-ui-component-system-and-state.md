@@ -54,7 +54,11 @@ with local loading/error state and no cache.
    only visible label — the per-control name moves to `aria-label`, so
    `getByLabelText` in the tests still matches. `Field`/`Select` reserve one
    helper line so rows keep equal height instead of jumping when a message
-   appears.
+   appears. `Field` is the only text input a page uses: its API covers
+   `autoComplete`, `readOnly`, `required`, native `inputProps` (min/max/pattern),
+   `className`/`sx` and an optional `onChange` (read-only values). `Toggle`
+   (switch) is the standalone boolean; `Checkbox` remains for multi-select
+   groups and dense inline options.
 
 ## Consequences
 

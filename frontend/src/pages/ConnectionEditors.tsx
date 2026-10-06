@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
+import { Button, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
 import type { Tunnel, CaddySite, DDNSUpdate, Secret } from "../types";
 import { Badge } from "../components/Badge";
@@ -43,21 +43,17 @@ function SecretField({
   // An empty replacement restores the original opaque value, without displaying it.
   const [original] = useState(value && !("plaintext" in value) ? value : null);
   return (
-    <TextField
-      size="small"
-      fullWidth
+    <Field
       label={label}
       type="password"
       autoComplete="new-password"
       value={value && "plaintext" in value ? value.plaintext : ""}
-      helperText={
+      hint={
         original && showOriginalHint
           ? "(сохранён); пустое поле сохраняет прежний секрет"
           : "Новый секрет"
       }
-      onChange={(e) =>
-        change(e.target.value ? { plaintext: e.target.value } : original)
-      }
+      onChange={(v) => change(v ? { plaintext: v } : original)}
     />
   );
 }
@@ -292,13 +288,11 @@ export function Tunnels() {
                 onChange={(name) => patch({ name })}
               />
             ) : (
-              <TextField
-                size="small"
-                fullWidth
+              <Field
                 label="Имя туннеля"
                 value={t.name}
-                slotProps={{ input: { readOnly: true } }}
-                helperText="Имя сохраняет привязку секретов"
+                readOnly
+                hint="Имя сохраняет привязку секретов"
               />
             )}
             <div>
@@ -332,12 +326,10 @@ export function Tunnels() {
                 }
               />
             ) : (
-              <TextField
-                size="small"
-                fullWidth
+              <Field
                 label="Роль"
                 value={t.role === "server" ? "сервер" : "клиент"}
-                slotProps={{ input: { readOnly: true } }}
+                readOnly
               />
             )}
             <SelectField
@@ -399,13 +391,11 @@ export function Tunnels() {
                       >
                         <FormGrid>
                           {p.preshared_key && "redacted" in p.preshared_key ? (
-                            <TextField
-                              size="small"
-                              fullWidth
+                            <Field
                               label="Имя пира"
                               value={p.name}
-                              slotProps={{ input: { readOnly: true } }}
-                              helperText="Имя сохраняет привязку секретов"
+                              readOnly
+                              hint="Имя сохраняет привязку секретов"
                             />
                           ) : (
                             <Field
@@ -590,13 +580,11 @@ export function Sites() {
               onChange={(name) => patch({ name })}
             />
           ) : (
-            <TextField
-              size="small"
-              fullWidth
+            <Field
               label="Имя сайта"
               value={s.name}
-              slotProps={{ input: { readOnly: true } }}
-              helperText="Имя сохраняет привязку секретов"
+              readOnly
+              hint="Имя сохраняет привязку секретов"
             />
           )}
           <Field
@@ -711,13 +699,11 @@ export function DDNS() {
                 onChange={(name) => patch({ name })}
               />
             ) : (
-              <TextField
-                size="small"
-                fullWidth
+              <Field
                 label="Имя DDNS"
                 value={d.name}
-                slotProps={{ input: { readOnly: true } }}
-                helperText="Имя сохраняет привязку секретов"
+                readOnly
+                hint="Имя сохраняет привязку секретов"
               />
             )}
             <SelectField

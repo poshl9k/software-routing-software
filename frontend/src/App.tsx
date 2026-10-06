@@ -38,7 +38,7 @@ import {
 import { useApplyStatus } from "./hooks/useApplyStatus";
 import { Badge } from "./components/Badge";
 import { ErrorNotice } from "./components/ErrorNotice";
-import { Icon } from "./components/Icon";
+import { Icon, type IconName } from "./components/Icon";
 import { InfoNote } from "./components/InfoNote";
 import { fmtDateTime } from "./components/format";
 
@@ -121,7 +121,7 @@ function ApplyTopButton() {
     </Tooltip>
   );
 }
-export const navigation = [
+export const navigation: { to: string; label: string; icon: IconName }[] = [
   { to: "/", label: "Обзор", icon: "overview" },
   { to: "/network", label: "Сеть", icon: "network" },
   { to: "/dhcp", label: "DHCP", icon: "dhcp" },

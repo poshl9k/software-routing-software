@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Button, TextField } from "@mui/material";
+import { Button } from "@mui/material";
 import { useConfiguration } from "../state";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { Field } from "../components/Field";
 import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 import { PageTabs } from "../components/Tabs";
@@ -85,7 +86,7 @@ function DHCPReadOnly() {
         </Card>
       )}
       {tab===2&&<Card title="Текущие аренды" action={<Button onClick={()=>void leases.refetch()} disabled={leases.isFetching}>Обновить</Button>}>
-        <div className="footer-actions"><TextField label="Поиск: MAC, IP, hostname" size="small" value={query} onChange={e=>setQuery(e.target.value)}/><Button onClick={()=>setTerm(query.trim())} disabled={leases.isFetching}>Найти</Button></div>
+        <div className="footer-actions"><Field label="Поиск: MAC, IP, hostname" value={query} onChange={setQuery} fullWidth={false}/><Button onClick={()=>setTerm(query.trim())} disabled={leases.isFetching}>Найти</Button></div>
         {leaseError instanceof ApiError && (leaseError.status===502||leaseError.status===503) ? <Badge tone="amber">Kea ctrl-agent недоступен</Badge> : <ErrorNotice error={leaseError}/>}
         <DataTable heads={["IP-адрес","MAC","Hostname","Подсеть","Истекает"]} rows={(leases.data??[]).map(l=>[l.ip,l.mac,l.hostname??"—",l.subnet,l.expires_in])} empty={<EmptyState>{leases.isLoading?"Загрузка аренд…":"Аренды не загружены"}</EmptyState>}/>
       </Card>}

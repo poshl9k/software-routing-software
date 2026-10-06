@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button, Checkbox, FormControlLabel, TextField } from "@mui/material";
+import { Alert, Button, Checkbox, FormControlLabel } from "@mui/material";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { useQuery } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import { Card } from "../components/Card";
 import { Badge } from "../components/Badge";
 import { DataTable } from "../components/DataTable";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { Field } from "../components/Field";
 import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 import { InterfaceSelect } from "../components/Select";
@@ -40,11 +41,11 @@ export default function Maintenance() {
       <Alert severity="info">Импорт создаёт черновик, не применяет конфигурацию. Из архива берётся только последняя версия. Новые парольные архивы перешифровываются для этого хоста; старым архивам нужен прежний ключ.</Alert>
       {versions.some(v=>v.status==="draft")&&<Alert severity="warning">Перед импортом сбросьте текущий черновик на странице «Применение».</Alert>}
       <FormControlLabel control={<Checkbox checked={secrets} onChange={e=>setSecrets(e.target.checked)}/>} label="Включая секреты"/>
-      {secrets&&<TextField size="small" label="Пароль шифрования" type="password" value={password} onChange={e=>setPassword(e.target.value)}/>}
+      {secrets&&<Field label="Пароль шифрования" type="password" value={password} onChange={setPassword} fullWidth={false}/>}
       <div className="footer-actions"><Button disabled={!admin||busy||(secrets&&!password)} onClick={()=>void perform(async()=>{const b=await api.backupExport(secrets,secrets?password:undefined); download(new Blob([JSON.stringify(b,null,2)],{type:"application/json"}),"vs-router-backup.json");})}>Экспорт</Button>
       <Button component="label" disabled={!admin}>Выбрать файл импорта<input hidden disabled={!admin} type="file" accept="application/json,.json" onChange={e=>void restoreFile(e.target.files?.[0])}/></Button></div>
       {backup&&<><DataTable heads={["Параметр","Значение"]} rows={[["Версия схемы",backup.schema_version],["Версий конфигурации",backup.versions.length],["Пользователей",backup.users.length]]}/>
-        <TextField size="small" label="Пароль (если требуется)" type="password" value={restorePassword} onChange={e=>setRestorePassword(e.target.value)}/>
+        <Field label="Пароль (если требуется)" type="password" value={restorePassword} onChange={setRestorePassword} fullWidth={false}/>
         <Alert severity="warning">Если в архиве нет секретов, туннели, DDNS и сайты с ручными сертификатами могут быть пропущены. Проверьте черновик перед применением.</Alert>
         <FormControlLabel control={<Checkbox checked={allowPartial} onChange={e=>setAllowPartial(e.target.checked)}/>} label="Разрешить пропуск записей без секретов"/>
         <Button disabled={!admin||busy||versions.some(v=>v.status==="draft")} onClick={()=>void perform(async()=>{const result=await api.backupRestore({...backup,allow_partial:allowPartial,...(restorePassword?{password:restorePassword}:{})});await refresh();setNotice(`Создан черновик из последней версии; пропущено версий: ${result.skipped}. Примените его отдельно.`);})}>Импортировать в черновик</Button></>}
@@ -113,24 +114,24 @@ export default function Maintenance() {
     </Card>
     <Card title="Диагностика ping">
       <div className="diag-controls">
-        <TextField
+        <Field
           className="grow"
-          size="small"
           label="Узел"
           value={host}
-          error={!host.trim()}
-          helperText={!host.trim() ? "Укажите узел" : ""}
-          onChange={(e) => setHost(e.target.value)}
+          valid={!!host.trim()}
+          hint={!host.trim() ? "Укажите узел" : undefined}
+          onChange={setHost}
+          fullWidth={false}
         />
-        <TextField
-          size="small"
+        <Field
           label="Количество"
-          helperText="1–5"
+          hint="1–5"
           type="number"
-          slotProps={{ htmlInput: { min: 1, max: 5 } }}
+          inputProps={{ min: 1, max: 5 }}
           sx={{ width: 130 }}
           value={count}
-          onChange={(e) => setCount(Number(e.target.value))}
+          onChange={(v) => setCount(Number(v))}
+          fullWidth={false}
         />
         <InterfaceSelect
           label="Интерфейс"
@@ -166,13 +167,7 @@ export default function Maintenance() {
     </Card>
     <Card title="Traceroute">
       <div className="diag-controls">
-        <TextField
-          className="grow"
-          size="small"
-          label="Узел"
-          value={host}
-          onChange={(e) => setHost(e.target.value)}
-        />
+        <Field className="grow" label="Узел" value={host} onChange={setHost} fullWidth={false} />
         <Button
           disabled={!admin || busy || !host.trim()}
           onClick={() =>

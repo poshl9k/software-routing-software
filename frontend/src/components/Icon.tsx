@@ -78,9 +78,7 @@ export type IconName = keyof typeof paths;
 export function Icon({
   name,
   ...props
-}: { name: string } & SvgIconProps) {
-  const glyph = paths[name];
-  if (!glyph) return null;
+}: { name: IconName } & SvgIconProps) {
   return (
     <SvgIcon
       viewBox="0 0 24 24"
@@ -92,7 +90,7 @@ export function Icon({
       fontSize="small"
       {...props}
     >
-      {glyph}
+      {paths[name]}
     </SvgIcon>
   );
 }
