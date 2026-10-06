@@ -153,7 +153,10 @@ class Tunnel(Model):
 
     @model_validator(mode="after")
     def check_role(self):
-        if self.role == "server" and (self.endpoint or self.server_public_key or self.listen_port is None):
+        # A server may carry an explicit public endpoint (IP or hostname) that is
+        # advertised to its clients; without it the WAN address is used, else a
+        # template. server_public_key belongs to a client only.
+        if self.role == "server" and (self.server_public_key or self.listen_port is None):
             raise ValueError("tunnel.server_fields")
         if self.role == "client" and (self.peers or not self.endpoint or not self.server_public_key):
             raise ValueError("tunnel.client_fields")

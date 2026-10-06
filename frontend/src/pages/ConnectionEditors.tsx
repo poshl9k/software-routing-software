@@ -561,6 +561,12 @@ export function Tunnels() {
                   valid={portValid(t.listen_port ?? 0)}
                   onChange={(v) => patch({ listen_port: Number(v) })}
                 />
+                <Field
+                  label="Публичный адрес (endpoint)"
+                  value={t.endpoint ?? ""}
+                  hint="Домен или IP:порт для клиентов; пусто — адрес WAN, иначе шаблон"
+                  onChange={(endpoint) => patch({ endpoint: endpoint || null })}
+                />
                 {t.peers.map((p, index) => {
                   const update = (v: Partial<typeof p>) =>
                     patch({

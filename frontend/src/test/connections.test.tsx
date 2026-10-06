@@ -333,6 +333,18 @@ it("materializes the tunnel address and the peer /32 into the saved draft", asyn
   );
   expect(body.tunnels[0].peers[0].allowed_ips).toEqual(["10.66.66.2/32"]);
 });
+it("saves a server's public endpoint for the client config", async () => {
+  const fetch = await open(<Tunnels />, {
+    ...emptyConfiguration,
+    tunnels: [{ ...server, endpoint: null }],
+  });
+  fill("Публичный адрес (endpoint)", "vpn.example.org");
+  await userEvent.click(save());
+  const body = JSON.parse(
+    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
+  );
+  expect(body.tunnels[0].endpoint).toBe("vpn.example.org");
+});
 it("retains edits after API failure", async () => {
   await open(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true);
   fill("Порт", "51821");

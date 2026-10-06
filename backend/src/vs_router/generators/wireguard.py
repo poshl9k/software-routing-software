@@ -164,7 +164,9 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
         if t.role != 'server' or not t.peers:
             continue
         metadata = key_material.get(t.name, {})
-        endpoint = metadata.get('endpoint')
+        # Precedence: caller-provided endpoint (live/agent), the tunnel's own
+        # public endpoint, then the WAN address, else a template placeholder.
+        endpoint = metadata.get('endpoint') or t.endpoint
         endpoint_missing = False
         if endpoint is None:
             wan = next((ip_interface(i.addresses[0]).ip for i in c.interfaces
@@ -178,6 +180,9 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
                 endpoint_missing = True
             else:
                 endpoint = f'[{wan}]:{t.listen_port}' if wan.version == 6 else f'{wan}:{t.listen_port}'
+        elif ':' not in endpoint:
+            # A bare host/IP gets the listen port; a value with a port is kept.
+            endpoint = f'{endpoint}:{t.listen_port}'
         try:
             public = base64.b64encode(X25519PrivateKey.from_private_bytes(
                 base64.b64decode(reveal(t.private_key), validate=True)).public_key().public_bytes(

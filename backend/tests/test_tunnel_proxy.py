@@ -216,6 +216,20 @@ def test_each_server_tunnel_gets_its_own_subnet(config):
     assert 'AllowedIPs = 10.66.67.2/32' in files['vpn2.conf']
 
 
+def test_server_endpoint_is_advertised_to_clients(config):
+    """A server's own endpoint (IP/hostname) replaces the WAN-derived value in
+    the client export; a bare host gets the listen port appended."""
+    data = json.loads(json.dumps(config))
+    data['configuration']['tunnels'][0]['endpoint'] = 'vpn.example.org'
+    files = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    peer = files['vpn.peer-alice.conf']
+    assert 'Endpoint = vpn.example.org:51820' in peer
+    assert 'WAN_ENDPOINT' not in peer
+    data['configuration']['tunnels'][0]['endpoint'] = 'vpn.example.org:8443'
+    files = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    assert 'Endpoint = vpn.example.org:8443' in files['vpn.peer-alice.conf']
+
+
 def test_materialize_addresses_fills_tunnel_and_peer(config):
     """The stored configuration carries the deterministic addresses so every
     client shows them; explicit values are preserved (idempotent)."""
