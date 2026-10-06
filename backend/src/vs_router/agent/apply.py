@@ -108,6 +108,10 @@ class ApplyResult:
     status: str
     phases: dict
     error: dict | None = None
+    # Set on a rolled_back result: why the rollback ran and which service
+    # triggered it, so the panel can show an actionable reason.
+    reason: str | None = None
+    reason_service: str | None = None
 
     def to_dict(self):
         return asdict(self)
@@ -125,6 +129,9 @@ class ApplyEngine:
         self.panel_probe = panel_probe
         self.management_provider = management_provider
         self.ssh_controller = ssh_controller
+        # Name of the service whose reload failed in the current apply, so the
+        # operator sees which phase broke instead of a bare agent.reload_failed.
+        self._failed_service = None
 
     def status(self):
         for path in (JOURNAL_PATH, MARKER_PATH):
@@ -141,8 +148,13 @@ class ApplyEngine:
     def reload_service(self, name):
         command = self.reload_commands.get(name)
         if callable(command):
-            command(APPLIED_DIR / FILES[name])
+            try:
+                command(APPLIED_DIR / FILES[name])
+            except ApplyError:
+                self._failed_service = name
+                raise
         elif command and self.executor.run(command, 15).returncode:
+            self._failed_service = name
             raise ApplyError('agent.reload_failed')
 
     def _install(self, contents, marker, validators):
@@ -189,6 +201,7 @@ class ApplyEngine:
     def apply_version(self, version_snapshot: dict, safe_mode: bool = False,
                       confirmation_timeout: int = 180, validators=None) -> ApplyResult:
         previous = self.status()
+        self._failed_service = None
         if previous and previous['status'] not in ('confirmed', 'rolled_back', 'failed'):
             raise ApplyError('agent.apply_pending')
         if not 60 <= confirmation_timeout <= 600:
@@ -277,7 +290,16 @@ class ApplyEngine:
                     marker['error']['code'] = 'ssh.close_failed'
                     self.marker(marker)
             if mutated and backup is not None:
-                return self.rollback(code)
+                result = self.rollback(code)
+                # Keep the failing service on the rolled-back marker: the
+                # rollback rewrites phases, so the reason alone is not enough.
+                if self._failed_service:
+                    current = self.status()
+                    if isinstance(current, dict):
+                        current['reason_service'] = self._failed_service
+                        self.marker(current)
+                result.reason_service = self._failed_service
+                return result
             return ApplyResult(version.id, 'failed', marker['phases'], marker['error'])
 
     def confirm_version(self, version_id):
@@ -315,7 +337,7 @@ class ApplyEngine:
         marker['status'] = 'rolled_back'
         marker['phases']['rollback'] = 'rolled_back'
         self.marker(marker)
-        return ApplyResult(backup['version_id'], 'rolled_back', marker['phases'])
+        return ApplyResult(backup['version_id'], 'rolled_back', marker['phases'], reason=reason)
 
 
 def apply_version(version_snapshot, safe_mode=False, confirmation_timeout=180, validators=None, **dependencies):

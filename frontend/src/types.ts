@@ -195,6 +195,9 @@ export interface ApplyResult {
     | "rollback_failed";
   phases?: Record<string, string>;
   error?: ErrorBody | null;
+  /** Why a rolled_back result happened (agent marker) and which service broke. */
+  reason?: string | null;
+  reason_service?: string | null;
 }
 /** Host-owned agent marker returned by GET /api/apply/status. */
 export interface ApplyMarker extends ApplyResult {

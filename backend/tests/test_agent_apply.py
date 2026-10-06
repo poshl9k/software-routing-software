@@ -130,8 +130,13 @@ def test_reload_failure_rolls_back(pipeline):
             return SimpleNamespace(returncode=1)
         return original_run(argv, timeout)
     executor.run = run
-    assert engine.apply_version(snapshot(2), True).status == 'rolled_back'
+    result = engine.apply_version(snapshot(2), True)
+    assert result.status == 'rolled_back'
     assert engine.status()['reason'] == 'agent.reload_failed'
+    # The failing service is preserved so the panel can name it.
+    assert engine.status()['reason_service'] == 'nftables'
+    assert result.reason == 'agent.reload_failed'
+    assert result.reason_service == 'nftables'
 
 
 def test_injected_validator_callbacks(pipeline):

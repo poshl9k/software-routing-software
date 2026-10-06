@@ -20,6 +20,15 @@ import { PageHeader } from "../components/PageHeader";
 import { Select } from "../components/Select";
 import { fmtDateTime } from "../components/format";
 
+const reasonTexts: Record<string, string> = {
+  "agent.reload_failed": "не удалось применить конфигурацию сервиса",
+  "agent.validation_failed": "конфигурация сервиса не прошла проверку",
+  "panel.unavailable": "панель управления недоступна",
+  timeout: "истекло окно подтверждения",
+  requested: "откат запрошен вручную",
+};
+const reasonText = (code: string) => reasonTexts[code] ?? code;
+
 export default function ApplyScreen() {
   const { uncertain, busy, applyState, discardDraft, setNotice, user,
     setApplyError } = useRouterState();
@@ -78,12 +87,16 @@ export default function ApplyScreen() {
           severity={
             ["failed", "rollback_failed"].includes(state.status)
               ? "error"
-              : pending
+              : state.status === "rolled_back" || pending
                 ? "warning"
                 : "info"
           }
         >
-          {statusLabels[state.status]} · v{state.version_id} · состояние агента
+          {statusLabels[state.status]} · v{state.version_id}
+          {state.status === "rolled_back" && state.reason
+            ? ` · причина: ${reasonText(state.reason)}${state.reason_service ? ` (${state.reason_service})` : ""}`
+            : ""}
+          {" · состояние агента"}
         </Alert>
       )}
       {pending && (
