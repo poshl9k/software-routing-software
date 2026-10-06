@@ -266,6 +266,57 @@ it("fills an empty interface description with the owning tunnel name", async () 
   );
   expect(body.interfaces[0].description).toBe("vpn");
 });
+it("removes an auto-created tunnel interface when its tunnel is deleted", async () => {
+  const tun = {
+    name: "tun0",
+    type: "physical" as const,
+    zone: "lan",
+    description: "vpn",
+    addressing: "static" as const,
+    addresses: [],
+    parent: null,
+    vlan_id: null,
+    members: [],
+  };
+  const fetch = await open(<Tunnels />, {
+    ...emptyConfiguration,
+    interfaces: [tun],
+    tunnels: [{ ...server, interface: "tun0" }],
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Удалить vpn" }));
+  await userEvent.click(save());
+  const body = JSON.parse(
+    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
+  );
+  expect(body.tunnels).toEqual([]);
+  expect(body.interfaces).toEqual([]);
+});
+it("keeps a tunnel device that is still referenced elsewhere", async () => {
+  const tun = {
+    name: "tun0",
+    type: "physical" as const,
+    zone: "lan",
+    description: "vpn",
+    addressing: "static" as const,
+    addresses: [],
+    parent: null,
+    vlan_id: null,
+    members: [],
+  };
+  const fetch = await open(<Tunnels />, {
+    ...emptyConfiguration,
+    interfaces: [tun],
+    tunnels: [{ ...server, interface: "tun0" }],
+    ssh: { interfaces: ["tun0"], wan_confirmed_interfaces: [] },
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Удалить vpn" }));
+  await userEvent.click(save());
+  const body = JSON.parse(
+    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
+  );
+  expect(body.tunnels).toEqual([]);
+  expect(body.interfaces.map((i: { name: string }) => i.name)).toEqual(["tun0"]);
+});
 it("retains edits after API failure", async () => {
   await open(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true);
   fill("Порт", "51821");

@@ -55,15 +55,40 @@ function pendingInterface(name: string, description: string | null): Interface {
   };
 }
 
-/** Auto-create a LAN-zone interface for every tunnel device that is not yet
- * declared, so a tunnel never reuses (and breaks) a physical NIC's name.
- * Traffic from the tunnel then lands in the LAN zone by default. The tunnel
- * name is stored as the interface description so the Network page shows which
- * tunnel owns the device. */
-function withTunnelInterfaces(interfaces: Interface[], rows: Tunnel[]): Interface[] {
-  const result = [...interfaces];
-  const byName = new Map(result.map((i) => [i.name, i]));
-  for (const tunnel of rows) {
+/** Names that must keep their interface: referenced by another interface
+ * (bridge member / VLAN parent), DHCP, port-forward, DNS, DDNS, SSH, TProxy, or
+ * an edited tunnel. */
+function referencedInterfaces(configuration: Configuration, tunnels: Tunnel[]): Set<string> {
+  const used = new Set<string>();
+  for (const iface of configuration.interfaces) {
+    if (iface.parent) used.add(iface.parent);
+    for (const member of iface.members) used.add(member);
+  }
+  for (const subnet of configuration.dhcp_subnets) used.add(subnet.interface);
+  for (const forward of configuration.port_forwards) used.add(forward.interface);
+  for (const name of configuration.dns.interfaces) used.add(name);
+  for (const job of configuration.ddns) used.add(job.wan_interface);
+  for (const name of configuration.ssh.interfaces) used.add(name);
+  for (const name of configuration.ssh.wan_confirmed_interfaces) used.add(name);
+  for (const name of configuration.tproxy.ingress_interfaces) used.add(name);
+  for (const tunnel of tunnels) if (tunnel.interface) used.add(tunnel.interface);
+  return used;
+}
+
+/** Tunnel devices the editor owns are named `tun<N>`. */
+const AUTO_TUNNEL_NAME = /^tun\d+$/;
+
+/** Keep the configuration's tunnel devices in sync with the edited tunnels:
+ * create/fill a LAN-zone interface for each tunnel, and drop an orphaned
+ * auto-created device (`tun<N>` no longer owned by a tunnel or referenced
+ * anywhere). An operator-declared interface is never removed. */
+function reconcileTunnelInterfaces(configuration: Configuration, tunnels: Tunnel[]): Interface[] {
+  const referenced = referencedInterfaces(configuration, tunnels);
+  const byName = new Map(configuration.interfaces.map((i) => [i.name, i]));
+  const result = configuration.interfaces.filter(
+    (iface) => !(AUTO_TUNNEL_NAME.test(iface.name) && !referenced.has(iface.name)),
+  );
+  for (const tunnel of tunnels) {
     if (!tunnel.interface) continue;
     const description = tunnelDescription(tunnel);
     const existing = byName.get(tunnel.interface);
@@ -72,11 +97,12 @@ function withTunnelInterfaces(interfaces: Interface[], rows: Tunnel[]): Interfac
       byName.set(tunnel.interface, created);
       result.push(created);
     } else if (!existing.description && description) {
-      // Fill an empty description with the owning tunnel's name; an operator-set
-      // description on the Network page is left untouched.
+      // Fill an empty description with the owning tunnel's name; an
+      // operator-set description on the Network page is left untouched.
       const updated = { ...existing, description };
       byName.set(tunnel.interface, updated);
-      result[result.indexOf(existing)] = updated;
+      const index = result.indexOf(existing);
+      if (index >= 0) result[index] = updated;
     }
   }
   return result;
@@ -295,7 +321,7 @@ export function Tunnels() {
           ) : null
         }
         configPatch={(rows) => ({
-          interfaces: withTunnelInterfaces(c.interfaces, rows),
+          interfaces: reconcileTunnelInterfaces(c, rows),
         })}
         empty={(rows) => ({
           name: "",
