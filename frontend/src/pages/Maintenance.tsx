@@ -70,7 +70,7 @@ export default function Maintenance() {
             heads={["Параметр", "Значение"]}
             rows={[
               ["Установленный выпуск", update.current.commit ? `${update.current.semver ?? "?"} · ${update.current.commit.slice(0, 7)}` : "неизвестно"],
-              ["Источник", update.current.source],
+              ["Источник", { iso: "установка с ISO", online: "онлайн-обновление", unknown: "неизвестно" }[update.current.source]],
               ["Манифест", update.configured ? update.manifest_url ?? "" : "не настроен"],
               ["Доступный выпуск", update.available ? `${update.available.semver} · ${update.available.commit.slice(0, 7)}` : "—"],
               ["Состояние", update.running ? "обновление выполняется" : update.last ? `последнее: ${update.last.status}` : "—"],

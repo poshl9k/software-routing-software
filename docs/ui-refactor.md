@@ -46,11 +46,19 @@ except where a change was explicitly agreed (TODO-API copy, `demo` rename).
 - [x] `Select.ariaLabel` — unique accessible name for the repeated Network row selects (verified on the native `<select>`)
 - [x] removed dead `uncertain` destructure in `state.tsx`
 
+## Second pass — editor chrome
+- [x] `Form.tsx` — `FormGrid`/`FormWide`/`FormActions`; every editor form (Tunnels/Sites/DDNS, DHCP, DNS, Routing, SSH, Apply, Onboarding) lays out in one adaptive grid, so fields no longer sit as ragged `inline-flex` rows
+- [x] `DeleteButton.tsx` — one icon-only trash action (tooltip + `aria-label`) for card headers and row ends, replacing every ad-hoc red text button
+- [x] `EditorFooter` everywhere (incl. SSH); the edit toggle always sits right-aligned in `.toolbar-actions`
+- [x] table editors (`Network`, `Firewall`, DHCP pools/reservations, DNS records/forwards): the column header is the only visible label — the per-cell name moved to `aria-label` (`getByLabelText` still matches); controls fill the cell (`min-width` floor, numeric cells narrower), `vertical-align: top`
+- [x] `Field`/`Select`/`InterfaceSelect` reserve one helper line so rows keep equal height; `SelectField`/`InterfaceSelect` gained `ariaLabel` + an optional `label`
+- [x] `.fields` (Onboarding/Apply) stretches its controls to full width
+
 ## Verify
 - [x] `npx tsc --noEmit` — clean
 - [x] `npx tsc --noEmit --noUnusedLocals --noUnusedParameters` — clean
 - [x] `npx vitest run` — 67/67 green (2 selectors updated: `Экспорт пира`, `статус агента не прочитан`)
-- [x] `npm run build` — ok (bundle 670 kB / 207 kB gzip; chunk-size warning noted for phase b)
+- [x] `npm run build` — ok (manualChunks: app ~317 kB / 97 kB gzip, mui ~303 kB; no 500 kB warning)
 
 ## Result
 - `ui.tsx` and `editor.tsx` deleted; all consumers use `src/components/`.
@@ -68,5 +76,5 @@ except where a change was explicitly agreed (TODO-API copy, `demo` rename).
 - [x] TProxy preview (`Routing.tsx`): on-demand `enabled: false` + `refetch()`; `removeQueries` when entering edit / saving; error surfaced from the query
 - [x] apply status: **not** a Query (the RPC may perform an already-due rollback). Duplicated topbar/screen reads collapsed into one imperative `hooks/useApplyStatus.ts` (`enabled` parks it on the Apply screen; `refreshToken` forces the screen's manual re-read; `clearErrorOnRefresh`)
 - [ ] Zustand (or context selectors) only if over-render is measured
-- [ ] Code-split the MUI bundle (`manualChunks`) to clear the 500 kB warning
+- [x] Code-split the MUI bundle (`manualChunks`) to clear the 500 kB warning — split into react / mui / query vendor chunks (app ~317 kB, mui ~303 kB, react ~51 kB, query ~33 kB)
 - [ ] i18n extraction (documented gap)

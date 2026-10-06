@@ -125,9 +125,10 @@ export function InterfaceSelect({
   disabled = false,
   error,
   helperText,
+  ariaLabel,
   sx,
 }: {
-  label: string;
+  label?: string;
   value: string;
   interfaces: readonly Interface[];
   onChange: (v: string) => void;
@@ -135,6 +136,8 @@ export function InterfaceSelect({
   disabled?: boolean;
   error?: boolean;
   helperText?: string;
+  /** Accessible name when the picker has no visible label (e.g. a table cell). */
+  ariaLabel?: string;
   sx?: SxProps<Theme>;
 }) {
   const names = interfaces.map((i) => i.name);
@@ -142,6 +145,7 @@ export function InterfaceSelect({
   return (
     <Select
       label={label}
+      ariaLabel={ariaLabel}
       value={value}
       disabled={disabled}
       error={error}

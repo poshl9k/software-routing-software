@@ -353,7 +353,7 @@ export default function Firewall() {
                         onChange={(name) => update({ name })}
                       />,
                       <InterfaceSelect
-                        label="WAN-интерфейс"
+                        ariaLabel="WAN-интерфейс"
                         value={p.interface}
                         interfaces={c.interfaces.filter((i) => i.zone === "wan")}
                         emptyLabel="Выберите интерфейс"
@@ -368,27 +368,27 @@ export default function Firewall() {
                         onChange={(protocol) => update({ protocol })}
                       />,
                       <Field
-                        label="Внешний порт"
+                        ariaLabel="Внешний порт"
                         type="number"
                         value={p.external_port}
                         valid={portValid(p.external_port)}
                         onChange={(v) => update({ external_port: Number(v) })}
                       />,
                       <Field
-                        label="Цель"
+                        ariaLabel="Цель"
                         value={p.target}
                         valid={ipValid(p.target)}
                         onChange={(target) => update({ target })}
                       />,
                       <Field
-                        label="Порт цели"
+                        ariaLabel="Порт цели"
                         type="number"
                         value={p.target_port}
                         valid={portValid(p.target_port)}
                         onChange={(v) => update({ target_port: Number(v) })}
                       />,
                       <Field
-                        label="WAN-адрес (опционально)"
+                        ariaLabel="WAN-адрес (опционально)"
                         value={p.wan_address ?? ""}
                         valid={!p.wan_address || ipValid(p.wan_address)}
                         onChange={(v) => update({ wan_address: v || null })}

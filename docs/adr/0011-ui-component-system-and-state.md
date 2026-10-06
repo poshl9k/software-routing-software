@@ -44,6 +44,17 @@ with local loading/error state and no cache.
    already-due rollback, so it is read imperatively through one shared
    `useApplyStatus` hook rather than cached/deduped/background-refetched.
    Consider Zustand or context selectors only if over-rendering is measured.
+5. **One editor "chrome"** (follow-up pass after the primitives landed). Every
+   editor form is laid out by `FormGrid` (`FormWide` spans a row, `FormActions`
+   is a field-level button row); every removal is the same icon-only
+   `DeleteButton` (trash glyph, tooltip, `aria-label`) placed in the card header
+   or at the row end; the edit toggle sits right-aligned in `.toolbar-actions`
+   and every editor ends in `EditorFooter`. Inside a table a control fills its
+   cell (`min-width` floor, `vertical-align: top`) and the column header is the
+   only visible label — the per-control name moves to `aria-label`, so
+   `getByLabelText` in the tests still matches. `Field`/`Select` reserve one
+   helper line so rows keep equal height instead of jumping when a message
+   appears.
 
 ## Consequences
 
@@ -55,5 +66,7 @@ with local loading/error state and no cache.
   "not wired yet" rather than fake data.
 - Deferring a state manager keeps the change reviewable and avoids rewriting
   every test around a new data layer for an unproven performance gain. The cost
-  is that server-state caching stays manual until phase (b), and the bundle
-  still ships ~670 kB (MUI) in one chunk — a code-split is tracked separately.
+  is that server-state caching stays manual until phase (b). The single ~670 kB
+  MUI chunk that once tripped the 500 kB warning is now split by `manualChunks`
+  into react / mui / query vendor chunks (app ~317 kB, mui ~303 kB, react ~51 kB,
+  query ~33 kB).
