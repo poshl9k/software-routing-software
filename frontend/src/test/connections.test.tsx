@@ -130,7 +130,7 @@ it("creates a complete draft with a client and write-only new secret", async () 
   expect(call[1]!.method).toBe("POST");
   expect(JSON.parse(call[1]!.body as string)).toEqual({
     ...emptyConfiguration,
-    interfaces: [{ ...wg0, description: "client" }],
+    interfaces: [{ ...wg0, description: "client", addresses: ["10.66.66.2/24"] }],
     tunnels: [
       expect.objectContaining({
         name: "client",
@@ -316,6 +316,22 @@ it("keeps a tunnel device that is still referenced elsewhere", async () => {
   );
   expect(body.tunnels).toEqual([]);
   expect(body.interfaces.map((i: { name: string }) => i.name)).toEqual(["tun0"]);
+});
+it("materializes the tunnel address and the peer /32 into the saved draft", async () => {
+  const fetch = await open(<Tunnels />, {
+    ...emptyConfiguration,
+    tunnels: [
+      { ...server, allowed_ips: [], peers: [{ ...server.peers[0], allowed_ips: [] }] },
+    ],
+  });
+  await userEvent.click(save());
+  const body = JSON.parse(
+    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
+  );
+  expect(body.interfaces).toContainEqual(
+    expect.objectContaining({ name: "awg0", addresses: ["10.66.66.1/24"] }),
+  );
+  expect(body.tunnels[0].peers[0].allowed_ips).toEqual(["10.66.66.2/32"]);
 });
 it("retains edits after API failure", async () => {
   await open(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true);

@@ -1,7 +1,15 @@
 import { useState, type ReactNode } from "react";
 import { Button, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
-import type { Tunnel, CaddySite, DDNSUpdate, Configuration, Interface, Secret } from "../types";
+import type {
+  Tunnel,
+  Peer,
+  CaddySite,
+  DDNSUpdate,
+  Configuration,
+  Interface,
+  Secret,
+} from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
@@ -78,10 +86,70 @@ function referencedInterfaces(configuration: Configuration, tunnels: Tunnel[]): 
 /** Tunnel devices the editor owns are named `tun<N>`. */
 const AUTO_TUNNEL_NAME = /^tun\d+$/;
 
+// Deterministic pool mirrored from backend vs_router/generators/wireguard.py:
+// the Nth tunnel (by name) owns 10.66.<66+N>.0/24; a server is .1, a client .2.
+const TUNNEL_SUBNET_BASE = 66;
+
+function tunnelSlot(tunnels: Tunnel[], name: string): number {
+  return [...tunnels]
+    .map((t) => t.name)
+    .sort()
+    .indexOf(name);
+}
+
+/** The tunnel device's own address (server .1, client .2). */
+function tunnelAddress(tunnel: Tunnel, tunnels: Tunnel[]): string {
+  const host = tunnel.role === "server" ? 1 : 2;
+  return `10.66.${TUNNEL_SUBNET_BASE + tunnelSlot(tunnels, tunnel.name)}.${host}/24`;
+}
+
+/** Effective IPv4 network (`a.b.c`) for peer allocation: the declared
+ * interface address when set, else the derived tunnel address. */
+function tunnelNetwork(
+  tunnel: Tunnel,
+  interfaces: Interface[],
+  tunnels: Tunnel[],
+): string | null {
+  const declared = interfaces.find((i) => i.name === tunnel.interface)?.addresses[0];
+  const match = /^(\d+\.\d+\.\d+)\.\d+\/\d+$/.exec(declared ?? tunnelAddress(tunnel, tunnels));
+  return match ? match[1] : null;
+}
+
+/** A server peer's automatic /32 (the next free host, .2, .3, … in name order). */
+function peerAutoAddress(
+  tunnel: Tunnel,
+  peer: Peer,
+  interfaces: Interface[],
+  tunnels: Tunnel[],
+): string | null {
+  const network = tunnelNetwork(tunnel, interfaces, tunnels);
+  if (!network) return null;
+  const order = [...tunnel.peers]
+    .map((p) => p.name)
+    .sort();
+  return `${network}.${2 + order.indexOf(peer.name)}/32`;
+}
+
+/** Materialize the automatic addresses into the configuration (so the panel
+ * shows them and the operator can edit them). Explicit values always win. */
+function materializeTunnels(configuration: Configuration, rows: Tunnel[]): Tunnel[] {
+  return rows.map((tunnel) => {
+    if (tunnel.role !== "server") return tunnel;
+    const peers: Peer[] = tunnel.peers.map((peer) => {
+      if (peer.allowed_ips.length) return peer;
+      const address = peerAutoAddress(tunnel, peer, configuration.interfaces, rows);
+      return address ? { ...peer, allowed_ips: [address] } : peer;
+    });
+    return peers.some((peer, index) => peer !== tunnel.peers[index])
+      ? { ...tunnel, peers }
+      : tunnel;
+  });
+}
+
 /** Keep the configuration's tunnel devices in sync with the edited tunnels:
- * create/fill a LAN-zone interface for each tunnel, and drop an orphaned
- * auto-created device (`tun<N>` no longer owned by a tunnel or referenced
- * anywhere). An operator-declared interface is never removed. */
+ * create/fill a LAN-zone interface for each tunnel (with its automatic address),
+ * and drop an orphaned auto-created device (`tun<N>` no longer owned by a tunnel
+ * or referenced anywhere). An operator-declared interface is never removed. */
 function reconcileTunnelInterfaces(configuration: Configuration, tunnels: Tunnel[]): Interface[] {
   const referenced = referencedInterfaces(configuration, tunnels);
   const byName = new Map(configuration.interfaces.map((i) => [i.name, i]));
@@ -91,15 +159,26 @@ function reconcileTunnelInterfaces(configuration: Configuration, tunnels: Tunnel
   for (const tunnel of tunnels) {
     if (!tunnel.interface) continue;
     const description = tunnelDescription(tunnel);
+    const address = tunnelAddress(tunnel, tunnels);
     const existing = byName.get(tunnel.interface);
     if (!existing) {
-      const created = pendingInterface(tunnel.interface, description);
+      const created = {
+        ...pendingInterface(tunnel.interface, description),
+        addresses: [address],
+      };
       byName.set(tunnel.interface, created);
       result.push(created);
-    } else if (!existing.description && description) {
-      // Fill an empty description with the owning tunnel's name; an
-      // operator-set description on the Network page is left untouched.
-      const updated = { ...existing, description };
+      continue;
+    }
+    const patch: Partial<Interface> = {};
+    if (!existing.description && description) patch.description = description;
+    // Fill the tunnel's own address once so it is visible; never for a DHCP
+    // interface (addresses there are forbidden).
+    if (!existing.addresses.length && existing.addressing === "static") {
+      patch.addresses = [address];
+    }
+    if (Object.keys(patch).length) {
+      const updated = { ...existing, ...patch };
       byName.set(tunnel.interface, updated);
       const index = result.indexOf(existing);
       if (index >= 0) result[index] = updated;
@@ -184,13 +263,13 @@ function Collection<T extends Row>({
     new Set(editing.map((v) => v.row.name)).size === editing.length;
   const save = () =>
     editor.save((value) => {
-      const rows = value.map((v) => v.row);
+      const rows = value.map((v) => clean(v.row));
       return {
         ...c,
         tunnels: c.tunnels,
         sites: c.sites,
         ddns: c.ddns,
-        [kind]: rows.map((v) => clean(v)),
+        [kind]: rows,
         ...(configPatch ? configPatch(rows) : {}),
       };
     });
@@ -322,6 +401,7 @@ export function Tunnels() {
         }
         configPatch={(rows) => ({
           interfaces: reconcileTunnelInterfaces(c, rows),
+          tunnels: materializeTunnels(c, rows),
         })}
         empty={(rows) => ({
           name: "",
