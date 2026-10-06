@@ -9,6 +9,7 @@ from ..agent.rpc import ApplyParams, ConfirmParams, EmptyParams, build_request, 
 from ..agent.daemon import UnixSocketTransport
 from ..db import ConfigurationRow
 from ..generators.singbox import generate_singbox
+from ..generators.wireguard import materialize_addresses
 from ..schema import Configuration
 from .auth import admin, current_user, get_db
 from .configuration import check_roles, parse_configuration, redact, structural_diff, validate
@@ -74,6 +75,9 @@ def create_draft(body: dict | None = Body(default=None), db: Session = Depends(g
     old = previous.configuration if previous else Configuration()
     configuration = parse_configuration(body, old.model_dump(mode="json")) if body is not None else old
     check_roles(configuration, old)
+    # Store the deterministic tunnel/peer addresses so every client (any
+    # browser build) sees them; explicit values are preserved.
+    configuration = materialize_addresses(configuration)
     # Explicit monotonic allocation matches save_version's persisted snapshots.
     next_id = (db.scalar(select(func.max(ConfigurationRow.id))) or 0) + 1
     row = ConfigurationRow(id=next_id, status="draft", configuration=configuration)
@@ -91,6 +95,7 @@ def update_draft(body: dict = Body(), db: Session = Depends(get_db)):
     row = draft(db)
     configuration = parse_configuration(body, row.configuration.model_dump(mode="json"))
     check_roles(configuration, row.configuration)
+    configuration = materialize_addresses(configuration)
     row.configuration = configuration
     db.commit()
     return view(row)

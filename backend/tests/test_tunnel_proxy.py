@@ -216,6 +216,28 @@ def test_each_server_tunnel_gets_its_own_subnet(config):
     assert 'AllowedIPs = 10.66.67.2/32' in files['vpn2.conf']
 
 
+def test_materialize_addresses_fills_tunnel_and_peer(config):
+    """The stored configuration carries the deterministic addresses so every
+    client shows them; explicit values are preserved (idempotent)."""
+    from vs_router.generators.wireguard import materialize_addresses
+    data = json.loads(json.dumps(config))
+    tunnel = data['configuration']['tunnels'][0]
+    tunnel['allowed_ips'] = []
+    for peer in tunnel['peers']:
+        peer['allowed_ips'] = []
+    for interface in data['configuration']['interfaces']:
+        if interface['name'] == 'wg0':
+            interface['addresses'] = []
+    version = ConfigurationVersion.model_validate(data)
+    filled = materialize_addresses(version.configuration)
+    device = next(i for i in filled.interfaces if i.name == 'wg0')
+    assert list(device.addresses) == ['10.66.66.1/24']
+    assert list(filled.tunnels[0].peers[0].allowed_ips) == ['10.66.66.2/32']
+    again = materialize_addresses(filled)
+    assert next(i for i in again.interfaces if i.name == 'wg0').addresses == device.addresses
+    assert again.tunnels[0].peers[0].allowed_ips == filled.tunnels[0].peers[0].allowed_ips
+
+
 def test_server_peer_export_without_wan_address_is_a_template(config):
     """A DHCP/addressless WAN has no endpoint to derive: the router-side server
     config must still apply, and the client export degrades to a template."""

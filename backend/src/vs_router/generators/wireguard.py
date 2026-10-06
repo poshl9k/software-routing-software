@@ -110,6 +110,40 @@ def peer_address(tunnel, peer, configuration):
     return [f'{network.network_address + host}/{bits}']
 
 
+def materialize_addresses(configuration):
+    """Fill the deterministic tunnel/peer addresses into a configuration.
+
+    The stored configuration then carries them (the panel shows and can edit
+    them). Explicit values always win; a tunnel without a declared interface
+    address takes its own pool slot, a server peer without AllowedIPs takes the
+    next free /32 in the tunnel subnet.
+    """
+    peers_by_tunnel = []
+    for tunnel in configuration.tunnels:
+        peers = []
+        for peer in tunnel.peers:
+            if tunnel.role == 'server' and not peer.allowed_ips:
+                peers.append(peer.model_copy(
+                    update={'allowed_ips': tuple(peer_address(tunnel, peer, configuration))}))
+            else:
+                peers.append(peer)
+        peers_by_tunnel.append(tunnel.model_copy(update={'peers': tuple(peers)}))
+    filled = configuration.model_copy(update={'tunnels': tuple(peers_by_tunnel)})
+    index = {interface.name: position for position, interface in enumerate(configuration.interfaces)}
+    interfaces = list(configuration.interfaces)
+    for tunnel in filled.tunnels:
+        position = index.get(tunnel.interface)
+        if position is None:
+            continue
+        interface = interfaces[position]
+        # An interface without addresses keeps its DHCP/static semantics; only a
+        # static (or auto-created) device takes the tunnel's own address.
+        if not interface.addresses and interface.addressing != 'dhcp':
+            interfaces[position] = interface.model_copy(
+                update={'addresses': tuple(tunnel_addresses(tunnel, filled))})
+    return filled.model_copy(update={'interfaces': tuple(interfaces)})
+
+
 def generate_wg_bundle(version, key_material) -> dict[str, str]:
     """Metadata keyed by tunnel name: endpoint and peer_private_keys (encrypted).
 

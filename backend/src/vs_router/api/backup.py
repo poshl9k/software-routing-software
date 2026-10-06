@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import ConfigurationRow, UserRow
+from ..generators.wireguard import materialize_addresses
 from ..schema import Configuration
 from .auth import admin, get_db
 from .configuration import encrypt_inputs, redact
@@ -170,6 +171,8 @@ def restore(body: dict = Body(), db: Session = Depends(get_db)):
         raise APIError(409, 'draft.exists')
     if partial and body.get('allow_partial') is not True:
         raise APIError(409, 'backup.partial_requires_confirmation')
+    # Materialize the deterministic tunnel/peer addresses, as a draft save does.
+    configuration = materialize_addresses(configuration)
     next_id = db.scalar(select(func.max(ConfigurationRow.id))) or 0
     # Import one snapshot for explicit apply. Old archive history is not host state.
     db.add(ConfigurationRow(id=next_id + 1, status='draft', configuration=configuration))

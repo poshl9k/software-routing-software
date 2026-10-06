@@ -263,7 +263,10 @@ async def test_secrets_redacted_and_preserved(api):
     for path in ('/api/versions', '/api/versions/2', '/api/diff/1/2', '/api/draft/tproxy/preview'):
         text = (await client.get(path)).text
         assert 'ciphertext' not in text and 'gAAAA' not in text and ('private-value' not in text)
-    assert (await client.get('/api/diff/1/2')).json()[0]['path'] == '/tunnels/0/private_key'
+    diff = (await client.get('/api/diff/1/2')).json()
+    # The saved draft also carries the auto-materialized tunnel address, so the
+    # secret change is one entry among several.
+    assert any(entry['path'] == '/tunnels/0/private_key' for entry in diff)
     public['panel_port'] = 8443
     assert (await client.put('/api/draft', json=public)).status_code == 200
     with Session(engine) as db:
@@ -458,3 +461,25 @@ async def test_host_addresses_endpoint(api, monkeypatch):
     response = await client.get('/api/host/addresses')
     assert response.status_code == 503
     assert response.json()['code'] == 'host.interfaces_unavailable'
+
+
+async def test_draft_save_materializes_tunnel_and_peer_addresses(api, monkeypatch):
+    """Saving a draft stores the deterministic tunnel/peer addresses server-side,
+    independent of the client build."""
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', Fernet.generate_key().decode())
+    client, _, _ = api
+    await sign_in(client)
+    body = {
+        'schema_version': 1,
+        'interfaces': [{'name': 'tun0', 'zone': 'lan'}],
+        'tunnels': [{
+            'name': 'vpn', 'interface': 'tun0', 'role': 'server', 'protocol': 'wg',
+            'private_key': {'plaintext': 'k' * 44}, 'listen_port': 51820,
+            'peers': [{'name': 'phone', 'public_key': 'P' * 44}],
+        }],
+    }
+    response = await client.post('/api/draft', json=body)
+    assert response.status_code == 201, response.text
+    saved = response.json()['configuration']
+    assert saved['interfaces'][0]['addresses'] == ['10.66.66.1/24']
+    assert saved['tunnels'][0]['peers'][0]['allowed_ips'] == ['10.66.66.2/32']
