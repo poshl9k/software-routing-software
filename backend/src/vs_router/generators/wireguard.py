@@ -40,15 +40,19 @@ def generate_wg_conf(tunnel, key_material: dict) -> str:
     lines += obfuscation(tunnel)
     if tunnel.role == 'client':
         lines += ['', '[Peer]', f'PublicKey = {line(tunnel.server_public_key)}',
-                  f'Endpoint = {line(tunnel.endpoint)}',
-                  'AllowedIPs = ' + ', '.join(map(line, tunnel.allowed_ips)),
-                  f'PersistentKeepalive = {tunnel.keepalive}']
+                  f'Endpoint = {line(tunnel.endpoint)}']
+        # An empty AllowedIPs line is rejected by `wg/awg setconf`
+        # ("Line unrecognized"); omit it instead of emitting a dangling key.
+        if tunnel.allowed_ips:
+            lines.append('AllowedIPs = ' + ', '.join(map(line, tunnel.allowed_ips)))
+        lines.append(f'PersistentKeepalive = {tunnel.keepalive}')
     else:
         for peer in sorted(tunnel.peers, key=lambda p: p.name):
             lines += ['', '[Peer]', f'PublicKey = {line(peer.public_key)}']
             if peer.preshared_key:
                 lines.append(f'PresharedKey = {line(reveal(peer.preshared_key))}')
-            lines.append('AllowedIPs = ' + ', '.join(map(line, peer.allowed_ips)))
+            if peer.allowed_ips:
+                lines.append('AllowedIPs = ' + ', '.join(map(line, peer.allowed_ips)))
     return '\n'.join(lines) + '\n'
 
 
@@ -128,8 +132,10 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
             if endpoint_missing:
                 placeholders.append('replace <WAN_ENDPOINT> with the router public address')
             lines = [f'# TEMPLATE: {"; ".join(placeholders)}.'] if placeholders else []
-            lines += ['[Interface]', f'PrivateKey = {line(private)}',
-                      'Address = ' + ', '.join(map(line, p.allowed_ips))] + obfuscation(t)
+            lines += ['[Interface]', f'PrivateKey = {line(private)}']
+            if p.allowed_ips:
+                lines.append('Address = ' + ', '.join(map(line, p.allowed_ips)))
+            lines += obfuscation(t)
             lines += ['', '[Peer]', f'PublicKey = {public}',
                       f'Endpoint = {line(endpoint if endpoint is not None else "<WAN_ENDPOINT>")}',
                       'AllowedIPs = ' + ', '.join(map(line, t.allowed_ips or ('0.0.0.0/0',))),

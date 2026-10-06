@@ -180,6 +180,23 @@ def test_export_with_encrypted_peer_key(config):
     assert 'Endpoint = 203.0.113.1:51820' in files['vpn.peer-alice.conf']
 
 
+@pytest.mark.parametrize('role', ['server', 'client'])
+def test_setconf_conf_omits_an_empty_allowedips(config, role):
+    """`wg/awg setconf` rejects a dangling `AllowedIPs =` line, which a peer or
+    client with no AllowedIPs used to produce."""
+    data = json.loads(json.dumps(config))
+    tunnel = data['configuration']['tunnels'][0]
+    tunnel['allowed_ips'] = []
+    for peer in tunnel['peers']:
+        peer['allowed_ips'] = []
+    if role == 'client':
+        tunnel.update(role='client', peers=[], endpoint='203.0.113.1:51820',
+                      server_public_key='SERVER')
+    files = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    lines = files['vpn.conf'].splitlines()
+    assert not any(line.replace(' ', '') == 'AllowedIPs=' for line in lines)
+
+
 def test_server_peer_export_without_wan_address_is_a_template(config):
     """A DHCP/addressless WAN has no endpoint to derive: the router-side server
     config must still apply, and the client export degrades to a template."""
