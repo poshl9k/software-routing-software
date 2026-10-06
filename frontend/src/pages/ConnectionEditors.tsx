@@ -57,16 +57,24 @@ function pendingInterface(name: string, description: string | null): Interface {
 
 /** Auto-create a LAN-zone interface for every tunnel device that is not yet
  * declared, so a tunnel never reuses (and breaks) a physical NIC's name.
- * Traffic from the tunnel then lands in the LAN zone by default. */
+ * Traffic from the tunnel then lands in the LAN zone by default. The tunnel
+ * name is stored as the interface description so the Network page shows which
+ * tunnel owns the device. */
 function withTunnelInterfaces(interfaces: Interface[], rows: Tunnel[]): Interface[] {
   const declared = new Set(interfaces.map((i) => i.name));
   const created: Interface[] = [];
   for (const tunnel of rows) {
     if (!tunnel.interface || declared.has(tunnel.interface)) continue;
     declared.add(tunnel.interface);
-    created.push(pendingInterface(tunnel.interface, null));
+    created.push(pendingInterface(tunnel.interface, tunnelDescription(tunnel)));
   }
   return [...interfaces, ...created];
+}
+
+/** Interface description for an auto-created tunnel device (the tunnel name). */
+function tunnelDescription(tunnel: Tunnel): string | null {
+  const name = tunnel.name.trim().slice(0, 64);
+  return name || null;
 }
 function SecretField({
   label,
@@ -361,7 +369,7 @@ export function Tunnels() {
                   return [
                     ...c.interfaces,
                     ...(t.interface && !declared
-                      ? [pendingInterface(t.interface, "создастся автоматически")]
+                      ? [pendingInterface(t.interface, tunnelDescription(t) ?? "создастся автоматически")]
                       : []),
                     ...(free === t.interface
                       ? []

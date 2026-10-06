@@ -215,6 +215,7 @@ it("auto-creates a LAN-zone interface for a new tunnel", async () => {
       type: "physical",
       zone: "lan",
       addressing: "static",
+      description: "vpn",
     }),
   );
 });
