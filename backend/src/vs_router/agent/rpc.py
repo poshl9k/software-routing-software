@@ -9,7 +9,8 @@ from ..schema import Model
 RequestID = StrictInt | StrictStr
 VersionID = Annotated[int, Field(strict=True, ge=1)]
 Method = Literal["apply_version", "confirm_version", "rollback", "status",
-                 "diag_ping", "diag_traceroute", "nft_counters", "list_interfaces"]
+                 "diag_ping", "diag_traceroute", "nft_counters", "list_interfaces",
+                 "list_addresses"]
 
 
 class ApplyParams(Model):
@@ -39,7 +40,8 @@ class HostParams(Model):
 PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "rollback": EmptyParams, "status": EmptyParams,
           "diag_ping": PingParams, "diag_traceroute": HostParams,
-          "nft_counters": EmptyParams, "list_interfaces": EmptyParams}
+          "nft_counters": EmptyParams, "list_interfaces": EmptyParams,
+          "list_addresses": EmptyParams}
 
 
 class RPCRequest(Model):

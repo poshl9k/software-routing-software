@@ -24,14 +24,14 @@ it("selects OS links, creates a VLAN and saves bridge members with draft referen
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(await screen.findByRole("button", { name: "+ VLAN на eth0" }));
   const vlanRow = screen.getByDisplayValue("vlan1 (в черновике)").closest("tr")!;
-  const parent = within(vlanRow).getAllByRole("combobox")[3];
+  const parent = within(vlanRow).getAllByRole("combobox")[4];
   expect(within(parent).getByRole("option", { name: "eth1" })).toBeVisible();
   expect(within(parent).queryByRole("option", { name: "bond0" })).toBeNull();
   await user.selectOptions(parent, "eth1");
   await user.click(screen.getByRole("button", { name: "+ Мост" }));
   await user.click(screen.getByRole("button", { name: "+ участник" }));
   const bridgeRow = screen.getByDisplayValue("br1 (в черновике)").closest("tr")!;
-  const member = within(bridgeRow).getAllByRole("combobox")[3];
+  const member = within(bridgeRow).getAllByRole("combobox")[4];
   await user.selectOptions(member, "bond0");
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));

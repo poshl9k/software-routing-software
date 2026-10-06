@@ -15,6 +15,7 @@ const emptyInterface = (key: string): Editable => ({
   name: "",
   type: "physical",
   zone: null,
+  addressing: "static",
   addresses: [],
   parent: null,
   vlan_id: null,
@@ -60,6 +61,18 @@ export default function Network() {
   // Имена интерфейсов, уже занятые другими строками конфигурации.
   const usedByOtherRows = (i: Editable) =>
     new Set(rows.filter((r) => r.key !== i.key && r.name).map((r) => r.name));
+
+  // Живые адреса с хоста: что реально получил интерфейс (важно для DHCP).
+  const [liveAddresses, setLiveAddresses] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    if (isEditMode) return;
+    let active = true;
+    api.hostAddresses().then(
+      (addresses) => { if (active) setLiveAddresses(addresses); },
+      () => { if (active) setLiveAddresses({}); },
+    );
+    return () => { active = false; };
+  }, [isEditMode]);
 
   const setField = (key: string, patch: Partial<Editable>) => {
     const updated = rows.map((i) => (i.key === key ? { ...i, ...patch } : i));
@@ -155,7 +168,7 @@ export default function Network() {
             <DataTable
               heads={
                 isEditMode
-                  ? ["Интерфейс", "Тип", "Зона", "Адреса (через запятую)", "VLAN ID", "Родитель / члены", ""]
+                  ? ["Интерфейс", "Тип", "Зона", "Режим", "Адреса (через запятую)", "VLAN ID", "Родитель / члены", ""]
                   : ["Интерфейс", "Тип", "Зона", "Адресация", "IP-адрес", "Состояние", "Назначение"]
               }
               rows={
@@ -216,10 +229,23 @@ export default function Network() {
                         ))}
                       </TextField>,
                       <TextField
+                        select
+                        size="small"
+                        value={i.addressing}
+                        SelectProps={{ native: true }}
+                        onChange={(e) =>
+                          setField(i.key, { addressing: e.target.value as Interface["addressing"] })
+                        }
+                      >
+                        <option value="static">static</option>
+                        <option value="dhcp">DHCP</option>
+                      </TextField>,
+                      <TextField
                         size="small"
                         fullWidth
-                        value={i.addresses.join(", ")}
-                        placeholder="192.168.10.1/24, 192.168.10.20/32"
+                        value={i.addressing === "dhcp" ? "" : i.addresses.join(", ")}
+                        disabled={i.addressing === "dhcp"}
+                        placeholder={i.addressing === "dhcp" ? "адрес по DHCP" : "192.168.10.1/24, 192.168.10.20/32"}
                         onChange={(e) =>
                           setField(i.key, {
                             addresses: e.target.value.split(",").map((a) => a.trim()),
@@ -354,9 +380,13 @@ export default function Network() {
                       >
                         {i.zone ?? "без зоны (fail-closed)"}
                       </Badge>,
-                      i.addresses.length ? "Статический" : "—",
-                      i.addresses.join(", "),
-                      "TODO-API",
+                      i.addressing === "dhcp" ? "DHCP" : "Статический",
+                      i.addressing === "dhcp"
+                        ? ((liveAddresses[i.name] ?? []).join(", ") || "ожидание…")
+                        : i.addresses.join(", "),
+                      i.addressing === "dhcp"
+                        ? ((liveAddresses[i.name] ?? []).length ? "адрес получен" : "нет адреса")
+                        : "—",
                       i.type === "vlan"
                         ? `на ${i.parent ?? "—"}`
                         : i.zone

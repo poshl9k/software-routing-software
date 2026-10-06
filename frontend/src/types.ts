@@ -6,6 +6,8 @@ export interface Interface {
   name: string;
   type: "physical" | "bridge" | "vlan";
   zone: string | null;
+  /** static: addresses are configured; dhcp: this interface is a DHCPv4 client. */
+  addressing: "static" | "dhcp";
   addresses: string[];
   parent: string | null;
   vlan_id: number | null;

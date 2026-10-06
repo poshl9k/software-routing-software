@@ -186,6 +186,32 @@ def list_interfaces() -> list[dict[str, str | None]]:
     return interfaces
 
 
+def list_addresses() -> dict[str, list[str]]:
+    """Read live IPv4 addresses per interface without changing configuration.
+
+    Used to show the address a DHCP client actually received, distinct from the
+    configured desired state.
+    """
+    try:
+        output = subprocess.run(['ip', '-j', '-4', 'addr', 'show'], capture_output=True,
+                                text=True, timeout=5, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        raise ApplyError('host.interfaces_unavailable') from None
+    try:
+        entries = json.loads(output)
+    except ValueError:
+        raise ApplyError('host.interfaces_unavailable') from None
+    addresses: dict[str, list[str]] = {}
+    for entry in entries:
+        name = entry.get('ifname')
+        if not name:
+            continue
+        addresses[name] = [f"{info.get('local')}/{info.get('prefixlen')}"
+                           for info in entry.get('addr_info', [])
+                           if info.get('family') == 'inet' and info.get('local')]
+    return addresses
+
+
 def make_handlers(engine, database):
     def safe_host(host):
         try:
@@ -280,7 +306,8 @@ def make_handlers(engine, database):
     return {'apply_version': apply_version, 'confirm_version': confirm_version,
             'rollback': lambda: engine.rollback('requested'), 'status': status,
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
-            'nft_counters': nft_counters, 'list_interfaces': list_interfaces}
+            'nft_counters': nft_counters, 'list_interfaces': list_interfaces,
+            'list_addresses': list_addresses}
 
 
 def main():

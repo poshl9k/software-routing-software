@@ -63,6 +63,10 @@ def host_management():
 def validate_management(configuration, state):
     """Pinned endpoint: migration is deliberately rejected until transactional TLS exists."""
     iface = next((i for i in configuration.interfaces if i.name == state.interface), None)
+    if iface is not None and iface.addressing == "dhcp":
+        # The management endpoint is pinned to a static address; a DHCP client
+        # would move it and lock the administrator out.
+        raise ValueError('management.dhcp_forbidden')
     if (iface is None or iface.type != 'physical' or iface.zone != 'lan'
             or IPv4Interface(state.address) not in [ip_interface(a) for a in iface.addresses]
             or any(state.interface in i.members for i in configuration.interfaces)

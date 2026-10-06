@@ -10,8 +10,9 @@ _FILE = re.compile(r"10-vs-router-[a-zA-Z][a-zA-Z0-9_.-]{0,14}\.(?:network|netde
 def generate_networkd(version: ConfigurationVersion) -> dict[str, str]:
     """Return one .network per interface and .netdev files for assigned virtual links.
 
-    Convention: an addressless physical WAN uses DHCPv4, including its gateway
-    and routes; DHCP DNS is ignored in favor of the configured resolver. Unassigned
+    Convention: an interface with addressing="dhcp" uses DHCPv4 (any type or
+    zone), including its gateway and routes; DHCP DNS is ignored in favor of the
+    configured resolver. Unassigned
     interfaces get only a minimal .network with DHCP, RA and link-local disabled,
     ignoring their addresses and L2 attachments (firewall enforces transit deny).
     Bridge members must also have a zone; addresses belong on the bridge.
@@ -33,7 +34,10 @@ def generate_networkd(version: ConfigurationVersion) -> dict[str, str]:
     files = {}
     for i in interfaces:
         prefix = f"10-vs-router-{i.name}"
-        dhcp = i.type == "physical" and i.zone == "wan" and not i.addresses and i.name not in bridges
+        # DHCP is explicit (addressing="dhcp") and allowed for any assigned type
+        # or zone; the management LAN and Kea server interfaces forbid it, and
+        # bridge members / trunk parents are excluded by validation.
+        dhcp = i.addressing == "dhcp"
         lines = ["[Match]", f"Name={i.name}", "", "[Network]",
                  f"DHCP={'ipv4' if dhcp else 'no'}", "IPv6AcceptRA=no", "LinkLocalAddressing=no"]
         if not i.zone:

@@ -16,3 +16,14 @@ def interfaces() -> list[dict[str, str | None]]:
         raise
     except Exception:
         raise APIError(503, 'host.interfaces_unavailable') from None
+
+
+@router.get('/host/addresses')
+def addresses() -> dict[str, list[str]]:
+    """Live IPv4 addresses per interface (desired state is in the draft)."""
+    try:
+        return agent_call('list_addresses', {})
+    except APIError:
+        raise
+    except Exception:
+        raise APIError(503, 'host.interfaces_unavailable') from None

@@ -21,6 +21,10 @@ class Interface(Model):
     name: InterfaceName
     type: Literal["physical", "bridge", "vlan"] = "physical"
     zone: Name | None = None
+    # static: addresses are configured; dhcp: the interface is a DHCPv4 client
+    # (any type/zone). DHCP is explicit so "no address" never silently changes
+    # meaning; the management LAN and Kea server interfaces forbid it.
+    addressing: Literal["static", "dhcp"] = "static"
     addresses: tuple[str, ...] = ()
     parent: InterfaceName | None = None
     vlan_id: int | None = Field(default=None, ge=1, le=4094)

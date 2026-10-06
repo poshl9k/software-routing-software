@@ -1,3 +1,4 @@
+import json
 import socket
 import threading
 import pytest
@@ -130,5 +131,36 @@ def test_list_interfaces_failure(monkeypatch: pytest.MonkeyPatch, failure: Excep
 
     monkeypatch.setattr(daemon.subprocess, 'run', Mock(side_effect=failure))
     result = daemon.dispatch(build_request('list_interfaces').model_dump_json(),
+                             daemon.make_handlers(None, None))
+    assert result.error.message == 'host.interfaces_unavailable'
+
+
+def test_list_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+    from subprocess import CompletedProcess
+    from vs_router.agent.rpc import build_request
+
+    command = ['ip', '-j', '-4', 'addr', 'show']
+    output = json.dumps([
+        {'ifname': 'lo', 'addr_info': [{'family': 'inet', 'local': '127.0.0.1', 'prefixlen': 8}]},
+        {'ifname': 'eth0', 'addr_info': [
+            {'family': 'inet', 'local': '192.168.122.253', 'prefixlen': 24},
+            {'family': 'inet6', 'local': 'fe80::1', 'prefixlen': 64}]},
+        {'ifname': 'eth1', 'addr_info': []},
+    ])
+    monkeypatch.setattr(daemon.subprocess, 'run',
+                        Mock(return_value=CompletedProcess(command, 0, stdout=output)))
+    result = daemon.dispatch(build_request('list_addresses', {}).model_dump_json(),
+                             daemon.make_handlers(None, None))
+    assert result.error is None
+    assert result.result == {'lo': ['127.0.0.1/8'], 'eth0': ['192.168.122.253/24'], 'eth1': []}
+
+
+def test_list_addresses_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+    from vs_router.agent.rpc import build_request
+
+    monkeypatch.setattr(daemon.subprocess, 'run', Mock(side_effect=FileNotFoundError()))
+    result = daemon.dispatch(build_request('list_addresses').model_dump_json(),
                              daemon.make_handlers(None, None))
     assert result.error.message == 'host.interfaces_unavailable'

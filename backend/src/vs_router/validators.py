@@ -90,6 +90,10 @@ def validate_configuration(c):
     if c.tproxy.enabled:
         fail("tproxy.not_available")
     zones = {i.zone for i in c.interfaces if i.zone}
+    members = {m for i in c.interfaces for m in i.members}
+    # A parent link that carries an assigned VLAN is a trunk: it must not also run
+    # its own DHCP client (two clients on one port).
+    vlan_parents = {i.parent for i in c.interfaces if i.type == "vlan" and i.zone and i.parent}
     for i in c.interfaces:
         if i.zone == "router":
             fail("interface.router_zone_reserved")
@@ -99,11 +103,19 @@ def validate_configuration(c):
             fail("interface.vlan_parent")
         if any(m not in interfaces or m == i.name for m in i.members):
             fail("interface.bridge_member")
+        if i.addressing == "dhcp":
+            if i.addresses:
+                fail("interface.dhcp_with_addresses")
+            if i.zone is None:
+                fail("interface.dhcp_unassigned")
+            if i.name in members:
+                fail("interface.dhcp_on_member")
+            if i.name in vlan_parents:
+                fail("interface.dhcp_on_trunk")
     selected = set(c.ssh.interfaces)
     confirmed = set(c.ssh.wan_confirmed_interfaces)
     if len(selected) != len(c.ssh.interfaces) or len(confirmed) != len(c.ssh.wan_confirmed_interfaces):
         fail("ssh.duplicate_interface")
-    members = {m for i in c.interfaces for m in i.members}
     for name in selected:
         if name not in interfaces or not interfaces[name].zone or name in members:
             fail("ssh.interface_binding_required")
@@ -158,6 +170,10 @@ def validate_configuration(c):
     for s in c.dhcp_subnets:
         if s.id in subnet_ids or s.interface not in interfaces:
             fail("dhcp.id_or_interface")
+        if interfaces[s.interface].addressing == "dhcp":
+            # A Kea server interface must not also be a DHCP client: the router
+            # would request the address it serves (lockout / ownership conflict).
+            fail("dhcp.client_conflict")
         subnet_ids.add(s.id)
         network = ip_network(s.subnet)
         if network.version != 4:

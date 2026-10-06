@@ -16,7 +16,7 @@ def scenario(name):
     interfaces = {
         'empty': [],
         'typical': [
-            {'name': 'eth0', 'zone': 'wan'},
+            {'name': 'eth0', 'zone': 'wan', 'addressing': 'dhcp'},
             {'name': 'eth1', 'zone': 'lan'},
             {'name': 'eth2', 'zone': 'lan'},
             {'name': 'br0', 'type': 'bridge', 'zone': 'lan',
@@ -66,12 +66,23 @@ def test_vlan_attachment_and_bridge_addresses():
     assert '[VLAN]\nId=20' in files['10-vs-router-br0.20.netdev']
 
 
-@pytest.mark.parametrize('zone,addresses,dhcp', [
-    ('wan', [], True), ('wan', ['203.0.113.2/24'], False),
-    ('lan', [], False), (None, [], False)])
-def test_dhcp_convention(zone, addresses, dhcp):
-    version = ConfigurationVersion(configuration={'interfaces': [
-        {'name': 'eth0', 'zone': zone, 'addresses': addresses}]})
+@pytest.mark.parametrize('addressing,zone,iface_type,addresses,dhcp', [
+    ('dhcp', 'wan', 'physical', [], True),
+    ('dhcp', 'lan', 'vlan', [], True),
+    ('dhcp', 'wan', 'bridge', [], True),
+    ('static', 'wan', 'physical', [], False),
+    ('static', 'wan', 'physical', ['203.0.113.2/24'], False),
+    ('static', 'lan', 'physical', ['192.168.10.1/24'], False),
+])
+def test_dhcp_is_explicit(addressing, zone, iface_type, addresses, dhcp):
+    """DHCP is driven by the addressing field, not by zone/type heuristics."""
+    iface = {'name': 'eth0', 'zone': zone, 'addressing': addressing,
+             'type': iface_type, 'addresses': addresses}
+    if iface_type == 'vlan':
+        iface.update(parent='eth9', vlan_id=10)
+    version = ConfigurationVersion(configuration={
+        'interfaces': ([{'name': 'eth9', 'zone': 'wan'}] if iface_type == 'vlan' else [])
+        + [iface]})
     output = generate_networkd(version)['10-vs-router-eth0.network']
     assert ('DHCP=ipv4' in output) == dhcp
     if dhcp:

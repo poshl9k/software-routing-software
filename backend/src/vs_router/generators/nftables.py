@@ -111,6 +111,13 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
             if management is not None:
                 lines += [f'        iifname "{management.interface}" ip daddr {management.ip} tcp dport 443 counter accept comment "management"',
                           f'        ip daddr {management.ip} tcp dport 443 drop']
+            # DHCP replies arrive before conntrack can classify a broadcast
+            # exchange, so this rule must precede the invalid/established checks.
+            # Applies to every interface that is a DHCP client, any zone/type.
+            dhcp_clients = sorted(i.name for i in c.interfaces
+                                  if i.zone and i.addressing == "dhcp")
+            if dhcp_clients:
+                lines.append(f'        iifname {names(dhcp_clients)} udp sport 67 udp dport 68 counter accept comment "dhcp_client"')
         if assigned:
             lines.append(f"        iifname != {names(assigned)} drop")
             if chain == "forward":

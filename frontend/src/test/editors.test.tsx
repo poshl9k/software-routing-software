@@ -138,6 +138,7 @@ it("saves DHCP reservations inside/outside the pool and DNS records/forwards thr
         name: "lan0",
         type: "physical",
         zone: "lan",
+        addressing: "static",
         addresses: ["192.168.1.1/24"],
         parent: null,
         vlan_id: null,
