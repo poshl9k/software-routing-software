@@ -91,12 +91,19 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
             continue
         metadata = key_material.get(t.name, {})
         endpoint = metadata.get('endpoint')
+        endpoint_missing = False
         if endpoint is None:
             wan = next((ip_interface(i.addresses[0]).ip for i in c.interfaces
                         if i.zone == 'wan' and i.addresses), None)
             if wan is None:
-                raise ValueError('wireguard.export_endpoint_required')
-            endpoint = f'[{wan}]:{t.listen_port}' if wan.version == 6 else f'{wan}:{t.listen_port}'
+                # A DHCP WAN carries no configured address to derive the client
+                # endpoint from. The router-side server config is still valid,
+                # so degrade the per-peer export to a fill-in template instead
+                # of failing the whole apply; generators stay I/O-free, so the
+                # live DHCP lease is deliberately not read here.
+                endpoint_missing = True
+            else:
+                endpoint = f'[{wan}]:{t.listen_port}' if wan.version == 6 else f'{wan}:{t.listen_port}'
         try:
             public = base64.b64encode(X25519PrivateKey.from_private_bytes(
                 base64.b64decode(reveal(t.private_key), validate=True)).public_key().public_bytes(
@@ -115,10 +122,16 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
                     raw = EncryptedSecret.model_validate(raw)
                 secret = raw
             private = reveal(secret) if secret else '<CLIENT_PRIVATE_KEY>'
-            lines = ([] if secret else ['# TEMPLATE: insert client private key before importing.'])
+            placeholders = []
+            if not secret:
+                placeholders.append('insert client private key before importing')
+            if endpoint_missing:
+                placeholders.append('replace <WAN_ENDPOINT> with the router public address')
+            lines = [f'# TEMPLATE: {"; ".join(placeholders)}.'] if placeholders else []
             lines += ['[Interface]', f'PrivateKey = {line(private)}',
                       'Address = ' + ', '.join(map(line, p.allowed_ips))] + obfuscation(t)
-            lines += ['', '[Peer]', f'PublicKey = {public}', f'Endpoint = {line(endpoint)}',
+            lines += ['', '[Peer]', f'PublicKey = {public}',
+                      f'Endpoint = {line(endpoint if endpoint is not None else "<WAN_ENDPOINT>")}',
                       'AllowedIPs = ' + ', '.join(map(line, t.allowed_ips or ('0.0.0.0/0',))),
                       f'PersistentKeepalive = {t.keepalive or 25}']
             if p.preshared_key:

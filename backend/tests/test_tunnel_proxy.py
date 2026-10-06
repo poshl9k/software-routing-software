@@ -180,6 +180,27 @@ def test_export_with_encrypted_peer_key(config):
     assert 'Endpoint = 203.0.113.1:51820' in files['vpn.peer-alice.conf']
 
 
+def test_server_peer_export_without_wan_address_is_a_template(config):
+    """A DHCP/addressless WAN has no endpoint to derive: the router-side server
+    config must still apply, and the client export degrades to a template."""
+    data = json.loads(json.dumps(config))
+    # The Caddy sites bind a WAN address; drop them so only the WAN addressing
+    # change is under test.
+    data['configuration']['sites'] = []
+    for interface in data['configuration']['interfaces']:
+        if interface.get('zone') == 'wan':
+            interface['addresses'] = []
+            interface['addressing'] = 'dhcp'
+    files = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    peer = files['vpn.peer-alice.conf']
+    assert 'Endpoint = <WAN_ENDPOINT>' in peer
+    assert 'TEMPLATE' in peer and 'WAN_ENDPOINT' in peer
+    # The server config itself carries no endpoint and is unaffected.
+    assert 'PrivateKey' in files['vpn.conf']
+    assert 'Endpoint' not in files['vpn.conf']
+    assert 'manifest.json' in files
+
+
 def test_tunnel_start_readiness_and_failure(config, tmp_path):
     from vs_router.agent.tunnel_start import configure
     files = generate_wg_bundle(ConfigurationVersion.model_validate(config), {})
