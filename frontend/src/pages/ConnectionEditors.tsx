@@ -596,6 +596,7 @@ export function Sites() {
             label="WAN-адрес"
             value={s.wan_address ?? ""}
             SelectProps={{ native: true }}
+            slotProps={{ inputLabel: { shrink: true } }}
             onChange={(e) => patch({ wan_address: e.target.value || null })}
           >
             <option value="">Автоматически</option>

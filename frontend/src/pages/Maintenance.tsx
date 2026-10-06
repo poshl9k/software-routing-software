@@ -62,7 +62,7 @@ export default function Maintenance() {
           onChange={(e) => setCount(Number(e.target.value))}
         />
         <FormControl size="small" sx={{ width: 200 }}>
-          <InputLabel id="maintenance-iface-label">Интерфейс</InputLabel>
+          <InputLabel id="maintenance-iface-label" shrink>Интерфейс</InputLabel>
           <Select
             labelId="maintenance-iface-label"
             label="Интерфейс"

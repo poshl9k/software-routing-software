@@ -148,6 +148,7 @@ export default function ApplyScreen() {
             select
             label="Черновик"
             value={draft?.id ?? ""}
+            slotProps={{ inputLabel: { shrink: true } }}
             onChange={(e) => setSelected(Number(e.target.value))}
             disabled={busy || !!active || user?.role !== "admin"}
           >

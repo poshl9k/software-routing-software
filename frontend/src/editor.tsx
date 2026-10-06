@@ -105,6 +105,9 @@ export function SelectField<T extends string>({
       error={!value}
       helperText={!value ? "Выберите значение" : undefined}
       SelectProps={{ native: true }}
+      // Always float the label: an empty select still shows a value line
+      // (placeholder option), so a non-shrunk label overlaps it.
+      slotProps={{ inputLabel: { shrink: true } }}
       onChange={(e) => onChange(e.target.value as T)}
     >
       <option value="" disabled>

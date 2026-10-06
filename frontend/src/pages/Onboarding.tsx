@@ -175,6 +175,7 @@ export default function Onboarding() {
                 value={lan}
                 disabled={busy || physicalNics.length === 0}
                 SelectProps={{ native: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
                 onChange={(e) => setLan(e.target.value)}
               >
                 <option value="">Выберите порт LAN</option>
