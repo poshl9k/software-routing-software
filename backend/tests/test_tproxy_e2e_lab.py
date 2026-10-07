@@ -45,6 +45,11 @@ def test_e2e_fixture_carries_the_whole_stack():
     assert "ct mark set ct mark | 0x200" in capture
     assert "ct mark & 0x200 == 0" in capture
     assert "meta mark set meta mark | 0x200" not in capture
+    # lab-31: capture is gated on the preauth stamp, and preauth really stamps it.
+    assert "meta mark & 0x400 == 0 return" in capture
+    assert 'meta mark set meta mark | 0x400 counter return comment "allow_tcp"' \
+        in fixture["preauth"]
+    assert "meta mark set meta mark | 0x400" not in fixture["off"]["interception"]
     for role in ("ingress", "listener", "output"):
         assert fixture["dns_guards"][role]
     assert "meta skuid 29092" in fixture["dns_guards"]["output"]

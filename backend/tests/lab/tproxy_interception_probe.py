@@ -67,7 +67,12 @@ def validate_fixture(policies):
                 'expected generated conntrack INPUT guard')
         require('meta mark set meta mark | 0x200' not in capture,
                 'capture must never set the forgeable packet proof bit')
+        require('meta mark & 0x400 == 0 return' in capture,
+                'expected generated preauth capture gate (lab-31)')
         require('ct status dnat return' in capture, 'expected DNAT exemption')
+    for gate_case in ('allow', 'allow_first'):
+        require('meta mark set meta mark | 0x400' in policies[gate_case],
+                'expected preauth capture-gate stamp on allowed transit')
     for key in ('off', 'off_guard', 'off_interception', 'allow_singbox'):
         require(isinstance(policies.get(key), str), f'missing generated policy: {key}')
     require(policies['off'] == 'destroy table inet vs_router_tproxy_preauth\n',

@@ -56,8 +56,13 @@ def test_combined_fixture_rules_are_narrow():
     assert 'type filter hook prerouting priority -90; policy accept;' in preauth
     assert 'iifname != ' in preauth              # non-selected ingress returned
     assert 'counter drop' in preauth            # default deny
-    assert ' accept ' not in preauth            # preauth grants no accept/marker
-    assert 'mark set' not in preauth            # never authorizes interception
+    assert ' accept ' not in preauth            # preauth grants no accept verdict
+    # lab-31: preauth no longer stops at "no marker" -- it stamps the reserved
+    # capture gate so interception depends on a live preauth, while never setting
+    # the forgeable packet proof bit or touching the conntrack space.
+    assert 'ct mark' not in preauth
+    assert 'meta mark set meta mark | 0x400' in preauth
+    assert 'meta mark set meta mark | 0x200' not in preauth
     guard = output['allow_guard']
     assert 'type filter hook forward priority -10; policy accept;' in guard
     assert guard.count('drop') == 1             # one containment drop rule

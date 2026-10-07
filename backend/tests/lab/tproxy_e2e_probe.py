@@ -17,13 +17,19 @@ network namespaces (router / selected-client / ordinary-client / origin):
   ``ip route local 0.0.0.0/0 dev lo table 100``) from ``marks.POLICY_ROUTES``.
 
 It then drives the norm, fault, recovery, emulated-reboot and off matrix. Each
-scenario records PASS, RESIDUAL (a documented design limit) or a hard failure;
-the process exits non-zero on any hard failure or cleanup error.
+scenario records PASS or a hard failure; the process exits non-zero on any hard
+failure or cleanup error.
 
 The public gate ``tproxy.not_available`` stays closed: the enabled configuration
 is only the offline ``model_copy`` fixture produced by
 ``generate_tproxy_e2e_cases.py``. Nothing here touches the guest root network
 namespace, its routes or its firewall; ``vsr-live-403ab3a`` is never involved.
+
+lab-31 (F4): capture is gated on the preauth stamp (``meta mark & 0x400``). With
+the preauth table removed the mark is absent, capture does not fire and selected
+transit falls through to FORWARD, where the independent containment (``-10``)
+holds it. Both allowed and denied selected flows therefore fail closed instead of
+being diverted into LOCAL_IN -> sing-box -> origin.
 
 LAB SCAFFOLD (explicit, not generator output): the product firewall default-denies
 INPUT, and the interception generator only supplies an INPUT *drop* guard, not an
@@ -854,26 +860,30 @@ class E2ELab:
         return "policy route loss -> fail-closed (no leak), deny held, mgmt kept, recovery ok"
 
     def _fault_preauth_lost(self):
+        # lab-31: capture is gated on the preauth stamp. Losing preauth removes
+        # the mark, so capture does not fire and selected transit falls through
+        # to the ordinary FORWARD path, where the independent containment (-10)
+        # holds it. Allowed AND denied selected flows must fail closed.
         self.nft(self.fx["off"]["preauth"])
+        guard_before = self.count("vs_router_tproxy_guard", "forward", "tproxy_containment")
         token = self.new_token("f4")
         res = self.send_tcp(SELECTED, ORIGIN_IP_EXPLICIT, ECHO_PORT, token)
-        require(res["reply"] == token, f"F4 allowed flow broke with preauth lost: {res}")
+        require(res["reply"] is None, f"F4 allowed flow delivered with preauth absent: {res}")
+        require(not self.origin_receives(token),
+                "F4 allowed selected token leaked to origin with preauth absent")
+        require(self.count("vs_router_tproxy_guard", "forward", "tproxy_containment") > guard_before,
+                "F4 containment did not catch the un-authorized selected transit")
         dtoken = self.new_token("f4d")
-        self.send_tcp(SELECTED, ORIGIN_IP_EXPLICIT, DENY_PORT, dtoken)
-        drecv = self.origin_receives(dtoken)
+        dres = self.send_tcp(SELECTED, ORIGIN_IP_EXPLICIT, DENY_PORT, dtoken)
+        require(dres["reply"] is None and not self.origin_receives(dtoken),
+                "F4 deny bypassed with preauth absent")
         require(self.mgmt_connect(SELECTED, SELECTED_IP).startswith("OK"),
                 "F4 management access lost")
         self.nft(self.fx["preauth"])
         self.healthy_tcp("f4recover")
-        if drecv:
-            self.record("fault_preauth_lost", "RESIDUAL",
-                        "denied selected flow reached origin (peer "
-                        f"{drecv[0]['peer']}) with preauth absent: the FORWARD "
-                        "default-deny bypass documented in lab-05 reappears; there is "
-                        "no independent crash guard for preauthorization (capture/proxy "
-                        "is routing, not policy enforcement).")
-            raise _Handled()
-        return "preauth loss -> deny still held (no residual observed)"
+        return ("preauth loss -> capture gate holds: allowed+denied selected "
+                "transit fail-closed at the independent containment (-10) "
+                "(capture requires the live preauth stamp); mgmt kept; recovery ok")
 
     def _fault_dns_stub_down(self):
         self.stop_stub()
@@ -987,10 +997,7 @@ class E2ELab:
             ("emulated_reboot_reapply", self._reboot),
             ("off_restores_ordinary", self._off),
         ):
-            try:
-                self.scenario(name, func)
-            except _Handled:
-                pass
+            self.scenario(name, func)
 
     # ------------------------------------------------------------- cleanup
     def cleanup(self):
@@ -1037,10 +1044,6 @@ class E2ELab:
         require(not routes.strip(), f"cleanup: route table {ROUTE_TABLE} not empty: {routes}")
         require(not errors, f"cleanup errors: {errors}")
         print("CLEANUP: netns/nft/ip-rule/route-table empty", flush=True)
-
-
-class _Handled(Exception):
-    pass
 
 
 def _parse_response(data, ident):
