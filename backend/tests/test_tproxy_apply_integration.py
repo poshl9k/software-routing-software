@@ -128,6 +128,11 @@ def _recording_validators(order):
 def test_enabled_apply_installs_guards_before_engine():
     engine, fs, executor = engine_with()
     order = []
+    # Isolate from the live readiness adapters (policy route + pinned engine):
+    # this test pins file/phase order, not the process. The adapters now verify
+    # the pinned binary and the config, which needs a real host.
+    engine.reload_commands = {tproxy_apply.POLICY_ROUTE_STEP: (lambda: None),
+                              tproxy_apply.SINGBOX_PROCESS_STEP: (lambda: None)}
     result = engine.apply_version(enabled_version(),
                                   validators=_recording_validators(order))
     assert result.status == "confirmed"

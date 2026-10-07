@@ -288,6 +288,11 @@ def test_enabled_apply_installs_capture_last():
         return SimpleNamespace(returncode=0)
 
     validators = {name: validator for name in {*FILES, *tproxy_apply.TPROXY_FILES}}
+    # Isolate from the live readiness adapters: this test pins capture-last file
+    # order, not the process. The engine adapter now verifies the pinned binary
+    # and the config, which needs a real host.
+    engine.reload_commands = {tproxy_apply.POLICY_ROUTE_STEP: (lambda: None),
+                              tproxy_apply.SINGBOX_PROCESS_STEP: (lambda: None)}
     result = engine.apply_version(enabled(), validators=validators)
     assert result.status == "confirmed"
     assert order[-5:] == ["tproxy_guards", "tproxy_unbound_selected",
