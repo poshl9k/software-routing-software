@@ -191,8 +191,12 @@ class ApplyEngine:
             self._failed_service = name
             raise ApplyError('agent.reload_failed')
 
-    def _install(self, contents, marker, validators, files=None):
+    def _install(self, contents, marker, validators, files=None, steps=None,
+                 steps_before=None):
         files = FILES if files is None else files
+        # Gated typed readiness steps, executed once just before ``steps_before``
+        # is activated. Empty (no-op) for every ordinary configuration.
+        steps = list(steps or [])
         # Upgrade pre-SSH backups to the closed default.
         contents = dict(contents)
         contents.setdefault('ssh', '{"interfaces": [], "wan_confirmed_interfaces": []}')
@@ -216,12 +220,63 @@ class ApplyEngine:
         if self.ssh_controller is not None:
             self.ssh_controller.close()
         for name, filename in files.items():
+            if steps and name == steps_before:
+                self._run_steps(steps, marker)
+                steps = []
             self.fs.atomic_move(PENDING_DIR / filename, APPLIED_DIR / filename)
             self.reload_service(name)
             marker['phases'][name] = 'applied'
             self.marker(marker)
         if self.ssh_controller is not None:
             self.ssh_controller.activate(json.loads(contents['ssh']))
+
+    def _run_steps(self, steps, marker):
+        """Execute gated typed readiness steps and record them in the marker.
+
+        A step is ``(name, callable)``. ``reload_commands`` may override the
+        action for a step name (the same injection point file services use), so
+        tests can supply a fake or failing engine without touching systemd.
+        """
+        for name, action in steps:
+            command = self.reload_commands.get(name, action)
+            if callable(command):
+                command()
+            elif command:
+                if self.executor.run(list(command), 15).returncode:
+                    raise ApplyError('agent.reload_failed')
+            marker['phases'][name] = 'applied'
+            self.marker(marker)
+
+    def _tproxy_readiness_steps(self, version):
+        """Typed, gated readiness actions: policy route, then engine start+ready.
+
+        Empty for every configuration reachable through the public contract
+        (``tproxy.enabled=False``), so the ordinary apply path runs no extra
+        command. Built from the fixed adapters; no caller data reaches argv.
+        """
+        if not tproxy_apply.required(version):
+            return []
+        from .policy_route import PolicyRouteLoader
+        from .singbox_service import SingboxService
+        return [(tproxy_apply.POLICY_ROUTE_STEP, PolicyRouteLoader(self.executor)),
+                (tproxy_apply.SINGBOX_PROCESS_STEP,
+                 SingboxService(self.executor, self.fs))]
+
+    def _teardown_tproxy_steps(self):
+        """Stop the engine and remove the owned policy route (best-effort).
+
+        Compensation for an interrupted or rolled-back TProxy apply: generated
+        ``destroy table`` text cannot stop a process or remove an ``ip rule``.
+        A failure here never masks the primary result.
+        """
+        from .policy_route import PolicyRouteLoader
+        from .singbox_service import SingboxService
+        for action in (SingboxService(self.executor, self.fs).stop,
+                       PolicyRouteLoader(self.executor).remove):
+            try:
+                action()
+            except (OSError, subprocess.SubprocessError, ValueError, ApplyError):
+                pass
 
     def _backup(self, version_id, files=None):
         files = FILES if files is None else files
@@ -327,7 +382,9 @@ class ApplyEngine:
             # Phase order: guards, then engine/readiness; no capture artifact is
             # generated while the gate is closed (see agent/tproxy_apply.py).
             contents.update(tproxy_apply.build_artifacts(version))
-            self._install(contents, marker, apply_validators, files=apply_files)
+            self._install(contents, marker, apply_validators, files=apply_files,
+                          steps=self._tproxy_readiness_steps(version),
+                          steps_before='tproxy_interception')
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
             if self.panel_probe is not None and not self.panel_probe():
@@ -374,6 +431,7 @@ class ApplyEngine:
                                   {'tproxy_cleanup': tproxy_apply.TPROXY_CLEANUP_VALIDATOR},
                                   files={'tproxy_cleanup': tproxy_apply.TPROXY_CLEANUP_FILE})
                     self._remove_tproxy_readiness_files()
+                    self._teardown_tproxy_steps()
                 except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError):
                     pass  # Report the primary failure; teardown is best-effort.
             return ApplyResult(version.id, 'failed', marker['phases'], marker['error'])
@@ -445,8 +503,10 @@ class ApplyEngine:
             raise ApplyError('agent.rollback_failed') from exc
         if not tproxy_files and tproxy_applied:
             # The confirmed target is not a TProxy state: drop the split resolver
-            # configs the interrupted apply staged, alongside the table teardown.
+            # configs the interrupted apply staged, alongside the table teardown,
+            # and stop the engine / remove the owned policy route.
             self._remove_tproxy_readiness_files()
+            self._teardown_tproxy_steps()
         self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(backup['version_snapshot']))
         marker['deadline'] = None
         marker['status'] = 'rolled_back'

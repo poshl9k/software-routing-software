@@ -115,6 +115,21 @@ PHASE_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("interception", ("tproxy_interception",)),
 )
 
+#: Typed, non-file readiness steps. They carry no artifact and add no key to
+#: :data:`TPROXY_FILES`; ``apply`` runs them after the readiness files and
+#: strictly before ``tproxy_interception``, so the routing table and the engine
+#: process are in place before traffic can ever be captured. The policy-route
+#: step installs the owned ``ip rule``/``ip route`` (:mod:`agent.policy_route`);
+#: the process step starts the pinned engine and proves readiness
+#: (:mod:`agent.singbox_service`).
+POLICY_ROUTE_STEP = "tproxy_policy_route"
+SINGBOX_PROCESS_STEP = "singbox_process"
+READINESS_STEPS: tuple[str, ...] = (POLICY_ROUTE_STEP, SINGBOX_PROCESS_STEP)
+
+#: Compensation order (reverse of activation): stop the engine, then remove the
+#: owned policy route. The generated ``destroy table`` text cannot do either.
+TEARDOWN_STEPS: tuple[str, ...] = (SINGBOX_PROCESS_STEP, POLICY_ROUTE_STEP)
+
 
 def required(version: ConfigurationVersion) -> bool:
     """True only for an (offline) enabled configuration; False for everything
@@ -217,6 +232,7 @@ def describe(version: ConfigurationVersion | None = None) -> dict:
         "required": True,
         "phase_order": [[phase, list(names)] for phase, names in PHASE_ORDER],
         "files": list(TPROXY_FILES),
+        "readiness_steps": list(READINESS_STEPS),
     }
     if version is not None:
         uid = tproxy_dns.selected_uid_for(version)
