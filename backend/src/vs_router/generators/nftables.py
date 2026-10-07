@@ -2,6 +2,7 @@
 from ipaddress import ip_address, ip_interface
 from ..schema import ConfigurationVersion
 from ..validators import address, expand_aliases
+from . import marks
 from .unbound import tproxy_unbound_listener_addresses
 
 
@@ -342,3 +343,82 @@ def generate_tproxy_preauthorization(version: ConfigurationVersion) -> str:
                                 actions={"pass": "return", "block": "drop", "reject": "drop"}))
     lines += ["        counter drop", "    }", "}"]
     return "\n".join(lines) + "\n"
+
+
+def generate_tproxy_interception(version: ConfigurationVersion) -> str:
+    """Deterministic TProxy capture rules; offline, no host I/O.
+
+    Emits the single ``inet vs_router_tproxy_interception`` table whose PREROUTING
+    chain runs strictly *after* the preauthorization chain (hook priority ``-80``
+    vs preauth ``-90``; nft evaluates lower priorities first). It therefore only
+    ever rewrites traffic preauth already authorized, and every packet re-enters
+    preauth first — there is no per-flow ``established`` shortcut here.
+
+    The capture keeps the exemptions the proven lab interception repeats:
+    non-selected ingress and non-IPv4/non-TCP/UDP return, local FIB destinations
+    and post-DNAT (``ct status dnat``) return. Matched selected IPv4 TCP/UDP is
+    marked with the TProxy routing mark (:data:`marks.MARK_TPROXY_ROUTE_VALUE`)
+    and ``tproxy``-redirected to the loopback sing-box listeners
+    (:data:`marks.TPROXY_TCP_PORT` / :data:`marks.TPROXY_UDP_PORT`). The same
+    mark drives the policy route helper, so a single owner
+    (:mod:`generators.marks`) covers table, hook priority, mark and table id.
+
+    Disabled returns only ``destroy table`` for its own table: an explicit off
+    removes exactly this table and no other. Mirrors the offline idiom of the
+    other TProxy generators: an enabled snapshot is only reachable through an
+    offline ``model_copy`` (the public gate stays closed), so everything else is
+    revalidated against the public contract instead of trusted.
+    """
+    table = "inet vs_router_tproxy_interception"
+    c = version.configuration
+    if not c.tproxy.enabled:
+        return f"destroy table {table}\n"
+    sources = c.tproxy.ingress_interfaces
+    allowed = {i.name for i in c.interfaces if i.zone and i.zone != "wan"}
+    if not sources or len(set(sources)) != len(sources) or not set(sources) <= allowed:
+        raise ValueError("tproxy.interception_invalid_ingress")
+    # Offline fixtures bypass only the public enabled gate; never render capture
+    # from an otherwise invalid model_copy snapshot.
+    data = version.model_dump()
+    data["configuration"]["tproxy"]["enabled"] = False
+    ConfigurationVersion.model_validate(data)
+    mark = marks.MARK_TPROXY_ROUTE_VALUE
+    # Ownership check: the capture mark must stay inside the TProxy namespace.
+    marks.assert_no_collisions(mark, marks.Owner.TPROXY)
+    ingress = names(sorted(sources))
+    marked = f"meta mark set {mark:#x}"
+    lines = [f"destroy table {table}", f"table {table} {{",
+             "    chain prerouting {",
+             "        type filter hook prerouting priority -80; policy accept;",
+             f"        iifname != {ingress} return",
+             "        fib daddr type local return",
+             "        ct status dnat return",
+             "        meta nfproto != ipv4 return",
+             "        meta l4proto != { tcp, udp } return",
+             f'        meta nfproto ipv4 meta l4proto tcp {marked} '
+             f'tproxy ip to 127.0.0.1:{marks.TPROXY_TCP_PORT} counter accept comment "tproxy_tcp"',
+             f'        meta nfproto ipv4 meta l4proto udp {marked} '
+             f'tproxy ip to 127.0.0.1:{marks.TPROXY_UDP_PORT} counter accept comment "tproxy_udp"',
+             "    }", "}"]
+    return "\n".join(lines) + "\n"
+
+
+def tproxy_policy_route_commands(action: str = "add") -> tuple[tuple[str, ...], ...]:
+    """Deterministic ``ip rule`` / ``ip route`` argv for the TProxy capture mark.
+
+    Data only — no shell, no I/O. The rule steers the marked packets into the
+    registered loopback table and the local route makes them deliverable to the
+    ``127.0.0.1`` TProxy listeners. Values come from the single ownership
+    registry (:data:`marks.POLICY_ROUTES`), so the generator, the agent scaffold
+    and a future typed loader cannot drift. ``action`` is ``"add"`` or ``"del"``;
+    the inverse of add removes exactly these two owned entries.
+    """
+    if action not in ("add", "del"):
+        raise ValueError("tproxy.policy_route_action")
+    route = marks.POLICY_ROUTES[0]
+    return (
+        ("ip", "rule", action, "priority", str(route.rule_priority),
+         "fwmark", f"{route.fwmark:#x}", "lookup", str(route.table_id)),
+        ("ip", "route", action, "local", "0.0.0.0/0", "dev", "lo",
+         "table", str(route.table_id)),
+    )
