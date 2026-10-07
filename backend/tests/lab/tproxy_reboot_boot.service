@@ -1,0 +1,12 @@
+[Unit]
+Description=vs-router TProxy REAL-reboot LAB harness (guards->readiness->interception)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/vs-router/lab-boot.sh
+
+[Install]
+WantedBy=multi-user.target
