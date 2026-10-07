@@ -109,7 +109,13 @@ export default function Network() {
         ...rest,
         name: rest.name.trim(),
         description: rest.description?.trim() || null,
-        addresses: rest.addresses.filter((a) => a.trim()),
+        // A DHCP client owns no static address: never send the address a row
+        // held before it was switched to DHCP (avoids interface.dhcp_with_addresses
+        // and a stale-address conflict at apply time).
+        addresses:
+          rest.addressing === "dhcp"
+            ? []
+            : rest.addresses.filter((a) => a.trim()),
         members: rest.members.filter((m) => m.trim()),
       })),
     }));
@@ -225,7 +231,12 @@ export default function Network() {
                           { value: "dhcp", label: "DHCP" },
                         ]}
                         onChange={(v) =>
-                          setField(i.key, { addressing: v as Interface["addressing"] })
+                          setField(
+                            i.key,
+                            v === "dhcp"
+                              ? { addressing: "dhcp", addresses: [] }
+                              : { addressing: "static" },
+                          )
                         }
                       />,
                       <Field
