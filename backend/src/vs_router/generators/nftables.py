@@ -198,6 +198,70 @@ def generate_tproxy_containment(version: ConfigurationVersion) -> str:
             "}\n")
 
 
+def generate_tproxy_ipv6_guard(version: ConfigurationVersion) -> str:
+    """Gate the selected sources' IPv6 transit out of the router.
+
+    The first TProxy delivery routes IPv4 only; there is no equivalent IPv6
+    interception, so any selected-source IPv6 that is *routed* by this router
+    would leave through the WAN outside the proxy (plan semantic §5). This
+    offline, gated guard closes that escape fail-closed: on the FORWARD path it
+    drops every IPv6 packet arriving on a selected ingress whose destination is
+    not local to this router.
+
+    Narrowness / what is deliberately preserved:
+
+    * unselected ingress returns untouched -- only the configured
+      ``tproxy.ingress_interfaces`` are gated;
+    * ``fib daddr type local return`` keeps every destination the router owns
+      (management/panel addresses, loopback, the router's own interface
+      addresses) reachable -- these terminate locally anyway, but the explicit
+      exemption documents that the panel is never blocked;
+    * link-local (``fe80::/10``) and multicast (``ff00::/8``) destinations are
+      preserved: they are link/scope-local and never a WAN escape;
+    * IPv4 and non-IP are untouched (``meta nfproto != ipv6 return``), so the
+      IPv4 TProxy tract is unaffected;
+    * the source interface is matched, not its address, so a selected host
+      cannot evade the guard by changing its IPv6 address.
+
+    The independent FORWARD drop re-evaluates every packet: there is no
+    per-flow ``established`` shortcut, so an already-open selected IPv6 flow is
+    cut the moment the guard loads. Off returns ``destroy table`` for exactly
+    its own table, removing nothing else. As with the other offline TProxy
+    generators, an enabled snapshot is only reachable through an offline
+    ``model_copy`` (the public ``tproxy.not_available`` gate stays closed), so
+    the ingress is revalidated here rather than trusted.
+
+    This is a fail-closed boundary for the specific routed-IPv6 escape on the
+    ordinary FORWARD path. It does **not** cover bridge/flow-offload fast paths
+    or iif/L4-dependent policy-routing/ECMP lookups that can bypass the regular
+    forwarding decision; those remain outside this experiment.
+    """
+    table = "inet vs_router_tproxy_ipv6_guard"
+    c = version.configuration
+    if not c.tproxy.enabled:
+        return f"destroy table {table}\n"
+    sources = c.tproxy.ingress_interfaces
+    allowed = {i.name for i in c.interfaces if i.zone and i.zone != "wan"}
+    if not sources or len(set(sources)) != len(sources) or not set(sources) <= allowed:
+        raise ValueError("tproxy.ipv6_guard_invalid_ingress")
+    # Offline fixtures bypass only the public enabled gate; never render rules
+    # from an otherwise invalid model_copy snapshot.
+    data = version.model_dump()
+    data["configuration"]["tproxy"]["enabled"] = False
+    ConfigurationVersion.model_validate(data)
+    return (f"destroy table {table}\n"
+            f"table {table} {{\n"
+            "    chain forward {\n"
+            "        type filter hook forward priority -11; policy accept;\n"
+            f"        iifname != {names(sorted(sources))} return\n"
+            "        meta nfproto != ipv6 return\n"
+            "        fib daddr type local return\n"
+            "        ip6 daddr { fe80::/10, ff00::/8 } return\n"
+            '        counter drop comment "tproxy_ipv6_guard"\n'
+            "    }\n"
+            "}\n")
+
+
 def generate_tproxy_dns_ingress_guard(version: ConfigurationVersion) -> str:
     """OFFLINE experiment: drop selected clients' direct IPv4 DNS before routing.
 

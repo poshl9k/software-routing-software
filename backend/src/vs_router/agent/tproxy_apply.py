@@ -60,6 +60,7 @@ from ..generators import marks
 from ..generators import tproxy_dns
 from ..generators.nftables import (generate_tproxy_containment,
                                    generate_tproxy_interception,
+                                   generate_tproxy_ipv6_guard,
                                    generate_tproxy_preauthorization)
 from ..generators.singbox import generate_singbox
 from ..schema import ConfigurationVersion
@@ -172,11 +173,12 @@ def guard_content(version: ConfigurationVersion) -> str:
     """Render the protective nftables text (phase 1).
 
     Concatenation of the existing offline generators, in the order a packet
-    sees them: FORWARD containment (priority -10), PREROUTING preauthorization
-    (-90) and the three DNS guards from :func:`plan` — PREROUTING ingress
-    (-110), INPUT listener boundary (-10) and the UID-scoped OUTPUT boundary
-    (-20). Each generator already returns its own ``destroy table`` header, so
-    the file is idempotent and valid ``nft -f`` input.
+    sees them: FORWARD containment (priority -10), the FORWARD IPv6-WAN-escape
+    guard (-11), PREROUTING preauthorization (-90) and the three DNS guards from
+    :func:`plan` -- PREROUTING ingress (-110), INPUT listener boundary (-10) and
+    the UID-scoped OUTPUT boundary (-20). Each generator already returns its own
+    ``destroy table`` header, so the file is idempotent and valid ``nft -f``
+    input.
 
     The DNS guards (including OUTPUT, which needs the selected UID) come
     byte-for-byte from :func:`plan`, so the phase-1 text and the resolver configs
@@ -184,6 +186,7 @@ def guard_content(version: ConfigurationVersion) -> str:
     """
     return (
         generate_tproxy_containment(version)
+        + generate_tproxy_ipv6_guard(version)
         + generate_tproxy_preauthorization(version)
         + "".join(guard.content for guard in plan(version).nft_guards)
     )
