@@ -430,8 +430,7 @@ class ApplyEngine:
                                   cleanup_marker,
                                   {'tproxy_cleanup': tproxy_apply.TPROXY_CLEANUP_VALIDATOR},
                                   files={'tproxy_cleanup': tproxy_apply.TPROXY_CLEANUP_FILE})
-                    self._remove_tproxy_readiness_files()
-                    self._teardown_tproxy_steps()
+                    self._teardown_tproxy_artifacts()
                 except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError):
                     pass  # Report the primary failure; teardown is best-effort.
             return ApplyResult(version.id, 'failed', marker['phases'], marker['error'])
@@ -443,7 +442,12 @@ class ApplyEngine:
         if marker['deadline'] is not None and self.clock() >= marker['deadline']:
             self.rollback('timeout')
             raise ApplyError('agent.confirmation_expired')
-        self._backup(version_id)
+        # Back up the whole confirmed configuration. An enabled (offline) apply
+        # carries the additive TProxy file map, recorded under the marker's
+        # ``tproxy`` key; a FILES-only backup would silently drop the guard /
+        # engine / capture artifacts and make this confirmed state inconsistent.
+        files = ({**FILES, **tproxy_apply.TPROXY_FILES} if 'tproxy' in marker else None)
+        self._backup(version_id, files=files)
         self.fs.remove(MARKER_PATH)
         self.fs.remove(JOURNAL_PATH)
         return {'version_id': version_id, 'status': 'confirmed'}
@@ -456,19 +460,27 @@ class ApplyEngine:
         phases = current.get('phases') or {}
         return any(name in phases for name in tproxy_apply.TPROXY_FILES)
 
-    def _remove_tproxy_readiness_files(self):
-        """Unlink the split resolver configs a torn-down TProxy apply staged.
+    def _teardown_tproxy_artifacts(self):
+        """Leave the host boot-safe after an abandoned TProxy apply.
 
-        ``destroy table`` text cannot remove a file, so compensation must also
-        drop the readiness configs; otherwise an aborted contour leaves its
-        selected/ordinary resolver configs on disk. Best-effort: a missing file
-        is not an error.
+        ``boot_restore.restore_tproxy_protection`` loads ``tproxy-guards.nft``
+        first on every boot, *before* any tract opens. An abandoned apply left
+        the *protective* guard text there, so a reboot would re-raise fail-closed
+        guard tables on a confirmed state that is not TProxy. Overwrite the guard
+        with destroy-only teardown (mirroring ``recover_interrupted_apply``),
+        unlink the remaining TProxy-owned artifacts (resolver configs, engine
+        JSON, capture table — none belong in a non-TProxy state) and stop the
+        engine / remove the owned policy route. Destroy-only nft text is a no-op
+        on a host with no owned tables; a missing file is not an error.
         """
-        for filename in tproxy_apply.cleanup_files():
+        self.fs.write(APPLIED_DIR / tproxy_apply.TPROXY_FILES['tproxy_guards'],
+                      tproxy_apply.cleanup_content())
+        for filename in tproxy_apply.teardown_files():
             try:
                 self.fs.remove(APPLIED_DIR / filename)
             except OSError:
                 pass
+        self._teardown_tproxy_steps()
 
     def rollback(self, reason):
         try:
@@ -503,10 +515,10 @@ class ApplyEngine:
             raise ApplyError('agent.rollback_failed') from exc
         if not tproxy_files and tproxy_applied:
             # The confirmed target is not a TProxy state: drop the split resolver
-            # configs the interrupted apply staged, alongside the table teardown,
-            # and stop the engine / remove the owned policy route.
-            self._remove_tproxy_readiness_files()
-            self._teardown_tproxy_steps()
+            # configs the interrupted apply staged, overwrite the boot-loaded
+            # guard with destroy-only text so a reboot cannot re-raise it, and
+            # stop the engine / remove the owned policy route.
+            self._teardown_tproxy_artifacts()
         self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(backup['version_snapshot']))
         marker['deadline'] = None
         marker['status'] = 'rolled_back'

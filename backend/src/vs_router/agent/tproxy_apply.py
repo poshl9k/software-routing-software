@@ -210,6 +210,20 @@ def cleanup_files() -> tuple[str, ...]:
     return tuple(TPROXY_FILES[name] for name in TPROXY_UNBOUND_FILES)
 
 
+def teardown_files() -> tuple[str, ...]:
+    """Filenames of every TProxy artifact to unlink on teardown.
+
+    Everything except the boot-loaded guard, which must instead be *overwritten*
+    with :func:`cleanup_content` (destroy-only): ``boot_restore`` loads the guard
+    file first on every boot, so an abandoned apply that left the protective
+    guard text there would re-raise fail-closed tables on a non-TProxy confirmed
+    state. The other artifacts (resolver configs, engine JSON, capture table)
+    have no place in a non-TProxy state and are unlinked.
+    """
+    return tuple(filename for name, filename in TPROXY_FILES.items()
+                 if name != "tproxy_guards")
+
+
 def cleanup_content() -> str:
     """Destroy-only nftables text removing every TProxy-owned table (phase 4).
 
