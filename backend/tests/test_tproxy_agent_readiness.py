@@ -33,9 +33,11 @@ def _recording_validators(order):
 
 def test_contract_exposes_typed_readiness_steps_without_touching_the_file_map():
     assert tproxy_apply.READINESS_STEPS == (
-        tproxy_apply.POLICY_ROUTE_STEP, tproxy_apply.SINGBOX_PROCESS_STEP)
+        tproxy_apply.POLICY_ROUTE_STEP, tproxy_apply.UNBOUND_PROCESS_STEP,
+        tproxy_apply.SINGBOX_PROCESS_STEP)
     assert tproxy_apply.TEARDOWN_STEPS == (
-        tproxy_apply.SINGBOX_PROCESS_STEP, tproxy_apply.POLICY_ROUTE_STEP)
+        tproxy_apply.SINGBOX_PROCESS_STEP, tproxy_apply.UNBOUND_PROCESS_STEP,
+        tproxy_apply.POLICY_ROUTE_STEP)
     # Steps are actions, not artifacts: they add no key to the closed file map.
     assert set(tproxy_apply.READINESS_STEPS).isdisjoint(tproxy_apply.TPROXY_FILES)
     assert tproxy_apply.describe()["readiness_steps"] == list(tproxy_apply.READINESS_STEPS)

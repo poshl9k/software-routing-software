@@ -15,6 +15,7 @@
 | --- | --- |
 | `backend/src/vs_router/agent/tproxy_apply.py` | Контракт каркаса: `TPROXY_FILES`, `TPROXY_VALIDATORS`, `PHASE_ORDER`, `required`, `build_artifacts`, `guard_content`, `cleanup_content`, `owned_tables`, `describe`. Нового контента не рендерит — только композиция существующих генераторов. |
 | `backend/src/vs_router/agent/singbox_service.py` | Типизированный адаптер движка: закреплённые константы бинарника (ADR-0012), юнит с `ExecStart` по закреплённому пути, fail-closed проверка версии/провенанс-ревизии/SHA256 бинарника, `sing-box check -c` на выложенном конфиге, `start`/`stop`/readiness через фиксированный argv. |
+| `backend/src/vs_router/agent/unbound_service.py` | Типизированный адаптер DNS-контура (ADR-0014): детерминированные юниты `vs-router-unbound-selected`/`-ordinary` с разными UID (29092/29093) и `CAP_NET_BIND_SERVICE`, фиксированный argv `unbound-checkconf`/`systemctl`, fail-closed readiness обоих резолверов до перехвата, best-effort stop. |
 | `backend/src/vs_router/agent/apply.py` | Условное подключение каркаса: `_tproxy_branch`, `_tproxy_branch_from_snapshot`, `_merged_validators`; `_install`/`_backup` принимают явную карту файлов; компенсация в rollback и в провале первого apply. |
 | `backend/src/vs_router/agent/boot_restore.py` | `restore_tproxy_protection()` (загружает guard первым), teardown в `recover_interrupted_apply`, порядок в `main()`. |
 | `backend/tests/test_tproxy_apply_integration.py` | Интеграционные тесты каркаса (инертность, порядок, откат, первый apply, boot). |
@@ -25,8 +26,12 @@
 1. guards       — защитные nftables-таблицы (containment + preauthorization +
                   DNS ingress/listener), ставятся ДО любого перехвата.
                   Если не загрузились — дальше не идём.
-2. readiness    — артефакт sing-box (config) выкладывается и проверяется,
-                  чтобы движок был заведомо готов до разрешения перехвата.
+2. readiness    — артефакты sing-box (config) и два split-конфига Unbound
+                  выкладываются и проверяются; затем типизированные шаги
+                  поднимают оба резолвера (`unbound_service`, fail-closed
+                  `unbound-checkconf` + `is-active`) и движок
+                  (`singbox_service`), чтобы и DNS-контур, и движок были
+                  заведомо готовы до разрешения перехвата.
 3. interception — правила захвата (mark/redirect). ПУСТО СОЗНАТЕЛЬНО:
                   генератора захвата нет, gate закрыт, тракт не открывается.
 4. compensation — при отказе восстанавливается подтверждённая цель и
@@ -59,6 +64,9 @@
   перезаписывается destroy-only текстом, чтобы boot снёс полуперехват, а не
   восстановил его. `restore_tproxy_protection()` загружает этот файл первым,
   до продуктового nftables и до открытия любых слушателей.
+  `restore_tproxy_resolvers()` поднимает оба резолвера ADR-0014 после guards и
+  строго до тракта (no-op, если split-конфигов нет); при прерванном apply
+  `recover_interrupted_apply` останавливает их.
 
 ## Доказательство инертности
 
@@ -141,6 +149,10 @@
 - DNS OUTPUT guard (selected UID), srs/rule-set, подписки, планировщик,
   lifecycle процесса sing-box/Unbound, packet-path матрица отказов и
   reboot с реальным перехватом — по-прежнему открыты (см.
-  `docs/sing-box-tproxy-plan.md`, `docs/lab-*`).
+  `docs/sing-box-tproxy-plan.md`, `docs/lab-*`). Адаптер DNS-контура
+  `unbound_service` и его VM-lifecycle закрыты отдельно (см.
+  `docs/lab-34-tproxy-unbound-lifecycle.md`): доказаны два реальных процесса
+  с разными UID, но на VM юниты ставились напрямую, а не через apply-цикл, и
+  остаются открытыми AppArmor-оверрайд (упаковка) и общий pidfile.
 - Тесты каркаса — unit/офлайн на `FakeFS`/`FakeExecutor`; фактического
   применения nftables/policy route/sing-box на Debian VM не выполнялось.

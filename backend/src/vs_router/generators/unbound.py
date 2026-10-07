@@ -3,11 +3,20 @@ from ipaddress import ip_interface
 from ..schema import ConfigurationVersion
 
 
-def _render_unbound(c, dns, root_forward=None) -> str:
+def _render_unbound(c, dns, root_forward=None, username: str | None = "unbound") -> str:
     interfaces = {i.name: i for i in c.interfaces}
     addresses = [str(ip_interface(a).ip) for name in dns.interfaces for a in interfaces[name].addresses]
-    lines = ["server:", '    username: "unbound"', '    interface-automatic: no',
-             f'    log-queries: {"yes" if dns.log_queries else "no"}']
+    lines = ["server:"]
+    # ``username`` requests unbound to drop to a named user; its compiled-in
+    # default is ``"unbound"`` and the drop is fatally rejected when the process
+    # is not root. The TProxy split runs each resolver under a dedicated systemd
+    # ``User=`` (ADR-0014), so it emits the documented empty value
+    # (``username=""``) to disable the drop and lets systemd own the UID. The
+    # ordinary product resolver keeps the historical ``username: "unbound"`` line.
+    if username is not None:
+        lines.append(f'    username: {json.dumps(username)}')
+    lines += ['    interface-automatic: no',
+              f'    log-queries: {"yes" if dns.log_queries else "no"}']
     if root_forward is not None:
         # Unbound's default refuses loopback upstreams even if checkconf exits 0.
         lines.append('    do-not-query-localhost: no')
@@ -83,6 +92,7 @@ def generate_tproxy_unbound_split(version: ConfigurationVersion) -> dict[str, st
     ordinary_dns = c.dns.model_copy(update={
         "interfaces": tuple(name for name in c.dns.interfaces if name not in sources)})
     return {
-        "selected": _render_unbound(c, selected_dns, "127.0.0.1@15353"),
-        "ordinary": _render_unbound(c, ordinary_dns),
+        "selected": _render_unbound(c, selected_dns, "127.0.0.1@15353",
+                                    username=""),
+        "ordinary": _render_unbound(c, ordinary_dns, username=""),
     }

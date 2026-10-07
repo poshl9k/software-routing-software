@@ -248,22 +248,27 @@ class ApplyEngine:
             self.marker(marker)
 
     def _tproxy_readiness_steps(self, version):
-        """Typed, gated readiness actions: policy route, then engine start+ready.
+        """Typed, gated readiness actions: policy route, resolvers, engine.
 
         Empty for every configuration reachable through the public contract
         (``tproxy.enabled=False``), so the ordinary apply path runs no extra
         command. Built from the fixed adapters; no caller data reaches argv.
+        Both DNS-contour Unbound processes must be ready before the engine and
+        strictly before capture (ADR-0014).
         """
         if not tproxy_apply.required(version):
             return []
         from .policy_route import PolicyRouteLoader
         from .singbox_service import SingboxService
+        from .unbound_service import UnboundService
         return [(tproxy_apply.POLICY_ROUTE_STEP, PolicyRouteLoader(self.executor)),
+                (tproxy_apply.UNBOUND_PROCESS_STEP,
+                 UnboundService(self.executor, self.fs)),
                 (tproxy_apply.SINGBOX_PROCESS_STEP,
                  SingboxService(self.executor, self.fs))]
 
     def _teardown_tproxy_steps(self):
-        """Stop the engine and remove the owned policy route (best-effort).
+        """Stop the engine and the two resolvers, remove the owned policy route.
 
         Compensation for an interrupted or rolled-back TProxy apply: generated
         ``destroy table`` text cannot stop a process or remove an ``ip rule``.
@@ -271,7 +276,9 @@ class ApplyEngine:
         """
         from .policy_route import PolicyRouteLoader
         from .singbox_service import SingboxService
+        from .unbound_service import UnboundService
         for action in (SingboxService(self.executor, self.fs).stop,
+                       UnboundService(self.executor, self.fs).stop,
                        PolicyRouteLoader(self.executor).remove):
             try:
                 action()

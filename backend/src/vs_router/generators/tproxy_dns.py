@@ -58,6 +58,12 @@ _HOOKS = {(h.table, h.chain): h for h in marks.HOOKS}
 #: (``100..65535``) use.
 TPROXY_SELECTED_UID = 29092
 
+#: Deterministic, reserved UID of the *ordinary* resolver process. Distinct from
+#: the selected UID (ADR-0014 fixes "разные numeric UID", probes used
+#: ``29092``/``29093``). Plan data only: this module and the planner create no
+#: user, process or service; the service adapter is the only consumer.
+TPROXY_ORDINARY_UID = 29093
+
 
 def selected_uid_for(version: ConfigurationVersion) -> int | None:
     """Deterministic selected-resolver UID, or ``None`` while the contour is off.
@@ -68,6 +74,17 @@ def selected_uid_for(version: ConfigurationVersion) -> int | None:
     the resolver configs and the guard tables cannot disagree about the contour.
     """
     return TPROXY_SELECTED_UID if version.configuration.tproxy.enabled else None
+
+
+def ordinary_uid_for(version: ConfigurationVersion) -> int | None:
+    """Deterministic ordinary-resolver UID, or ``None`` while the contour is off.
+
+    Sibling of :func:`selected_uid_for`: the ordinary resolver has no schema UID
+    field either, so the contour takes the reserved constant. Keeping both UIDs
+    in this module is what lets the service adapter prove they are distinct
+    without inventing literals.
+    """
+    return TPROXY_ORDINARY_UID if version.configuration.tproxy.enabled else None
 
 
 @dataclass(frozen=True)

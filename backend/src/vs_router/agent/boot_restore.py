@@ -109,6 +109,37 @@ def restore_tproxy_protection() -> int:
     return run(["/usr/sbin/nft", "-f", str(guard)])
 
 
+def _unbound_service():
+    from .apply import LocalFileSystem, SubprocessExecutor
+    from .unbound_service import UnboundService
+    return UnboundService(SubprocessExecutor(), LocalFileSystem())
+
+
+def restore_tproxy_resolvers() -> int:
+    """Start the two ADR-0014 resolvers *before* the product tract loads.
+
+    Inert for every current configuration: it acts only when an apply staged the
+    split resolver configs. Each config is re-checked by native
+    ``unbound-checkconf`` inside :meth:`UnboundService.start` (fail-closed), so a
+    corrupt staged config keeps the resolvers down instead of opening a listener
+    on an unproven state. A missing config means there is no DNS contour and this
+    is a no-op.
+    """
+    from pathlib import Path
+    from . import tproxy_apply
+    applied = Path(APPLIED)
+    if not any((applied / tproxy_apply.TPROXY_FILES[name]).exists()
+               for name in tproxy_apply.TPROXY_UNBOUND_FILES):
+        return 0
+    from .apply import ApplyError
+    try:
+        _unbound_service().start()
+    except (OSError, ValueError, ApplyError):
+        print("TProxy resolver restore failed", file=sys.stderr)
+        return 1
+    return 0
+
+
 def recover_interrupted_apply():
     """Reboot never promotes a pending/partially installed snapshot."""
     from pathlib import Path
@@ -152,6 +183,10 @@ def recover_interrupted_apply():
                 engine.fs.remove(Path(APPLIED) / filename)
             except OSError:
                 pass
+        # A resolver/engine process from the interrupted apply must not survive a
+        # reboot whose confirmed target is not a TProxy state. Routed through the
+        # engine's executor so no adapter bypasses the injected, typed surface.
+        engine._teardown_tproxy_steps()
     engine.fs.write(Path(APPLIED) / 'snapshot.json', json.dumps(backup['version_snapshot']))
     engine.marker({'version_id': backup['version_id'], 'status': 'rolled_back',
                    'deadline': None, 'reason': 'reboot', 'phases': {'rollback': 'rolled_back'}})
@@ -196,6 +231,15 @@ def main() -> int:
         failures += restore_tproxy_protection()
     except (OSError, ValueError, KeyError):
         print("TProxy protection restore failed", file=sys.stderr)
+        failures += 1
+
+    # Bring the ADR-0014 DNS resolvers up after the guards but strictly before
+    # the product tract, so a staged contour never serves DNS without its
+    # fail-closed boundary. No-op unless split resolver configs are present.
+    try:
+        failures += restore_tproxy_resolvers()
+    except (OSError, ValueError, KeyError):
+        print("TProxy resolver restore failed", file=sys.stderr)
         failures += 1
 
     try:
