@@ -230,3 +230,73 @@ def validate_configuration(c):
     for s in c.sites:
         if s.wan_address and s.wan_address not in wan_addresses:
             fail("caddy.wan_address")
+    validate_proxies(c)
+
+
+IMPLICIT_DIRECT_TAG = "direct"
+
+
+def validate_proxies(c):
+    """Disabled-by-default sing-box outbound/subscription/group contract.
+
+    Mirrors the plan's stage-1 semantics without any fetch, apply or UI:
+    unique tags, https-only subscriptions, no open administrative inbound, and
+    no recursive or self-addressed outbound. Secrets stay encrypted/redacted
+    (enforced by the schema type, not here)."""
+    proxies = c.proxies
+    tags = [o.tag for o in proxies.outbounds]
+    if len(set(tags)) != len(tags):
+        fail("proxy.duplicate_tag")
+    group_tags = [g.tag for g in proxies.groups]
+    if len(set(group_tags)) != len(group_tags):
+        fail("proxy.duplicate_group_tag")
+    # The generator always emits its own local ``direct`` outbound; a contract
+    # object must not shadow that tag or the route target would be ambiguous.
+    if IMPLICIT_DIRECT_TAG in tags or IMPLICIT_DIRECT_TAG in group_tags:
+        fail("proxy.tag_reserved")
+    known_tags = set(tags) | set(group_tags)
+    if len(known_tags) != len(tags) + len(group_tags):
+        fail("proxy.tag_collision")
+    if len({s.name for s in proxies.subscriptions}) != len(proxies.subscriptions):
+        fail("proxy.duplicate_subscription")
+    for s in proxies.subscriptions:
+        if not s.url.lower().startswith("https://"):
+            fail("proxy.subscription_https_required")
+    own_addresses = {str(ip_interface(a).ip) for i in c.interfaces for a in i.addresses}
+    for o in proxies.outbounds:
+        if o.server:
+            host = o.server.strip()
+            if host.lower() == "localhost":
+                fail("proxy.outbound_self_reference")
+            try:
+                ip = ip_address(host)
+            except ValueError:
+                ip = None
+            if ip is not None and (ip.is_loopback or ip.is_unspecified or str(ip) in own_addresses):
+                fail("proxy.outbound_self_reference")
+        if o.admin_listen:
+            try:
+                listen = ip_address(o.admin_listen)
+            except ValueError:
+                fail("proxy.admin_inbound_open")
+            else:
+                if not listen.is_loopback:
+                    fail("proxy.admin_inbound_open")
+    group_refs = {g.tag: tuple(g.outbounds) for g in proxies.groups}
+
+    def visit(tag, stack):
+        if tag in stack:
+            fail("proxy.group_recursive")
+        for ref in group_refs.get(tag, ()):
+            if ref in group_refs:
+                visit(ref, stack | {tag})
+
+    for tag, refs in group_refs.items():
+        if not refs:
+            fail("proxy.group_empty")
+        if tag in refs:
+            fail("proxy.group_recursive")
+        for ref in refs:
+            if ref not in known_tags:
+                fail("proxy.group_reference")
+        visit(tag, set())

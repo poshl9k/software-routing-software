@@ -146,6 +146,45 @@ export interface TProxy {
   final: "direct";
   update_schedule: TProxyUpdateSchedule;
 }
+export interface ProxyOutbound {
+  tag: string;
+  type:
+    | "direct"
+    | "block"
+    | "shadowsocks"
+    | "vmess"
+    | "vless"
+    | "trojan"
+    | "hysteria2"
+    | "tuic";
+  server: string | null;
+  port: number | null;
+  secret: Secret | null;
+  tls: boolean;
+  tls_server_name: string | null;
+  tls_insecure: boolean;
+  admin_listen: string | null;
+}
+export interface ProxySubscription {
+  name: string;
+  url: string;
+  format: "auto" | "sing-box" | "clash" | "v2ray" | "base64";
+  interval_hours: number;
+  enabled: boolean;
+}
+export interface ProxyGroup {
+  tag: string;
+  type: "selector" | "urltest";
+  outbounds: string[];
+  url: string | null;
+  interval_minutes: number | null;
+}
+export interface ProxySettings {
+  enabled: boolean;
+  outbounds: ProxyOutbound[];
+  subscriptions: ProxySubscription[];
+  groups: ProxyGroup[];
+}
 export interface TProxyPreview {
   version_id: number;
   singbox: Record<string, unknown>;
@@ -165,6 +204,7 @@ export interface Configuration {
   ddns: DDNSUpdate[];
   ssh: { interfaces: string[]; wan_confirmed_interfaces: string[] };
   tproxy: TProxy;
+  proxies: ProxySettings;
   anti_lockout: boolean;
   panel_port: number;
 }

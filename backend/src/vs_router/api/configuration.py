@@ -37,8 +37,10 @@ def restore_secrets(value, previous):
         return {k: restore_secrets(v, old.get(k)) for k, v in value.items()}
     if isinstance(value, list):
         old = previous if isinstance(previous, list) else []
-        named = {v["name"]: v for v in old if isinstance(v, dict) and "name" in v}
-        return [restore_secrets(v, named.get(v.get("name")) if isinstance(v, dict) else None)
+        named = {v[key]: v for v in old if isinstance(v, dict)
+                 for key in ("name", "tag") if key in v}
+        return [restore_secrets(v, named.get(v.get("name", v.get("tag")))
+                                if isinstance(v, dict) else None)
                 for v in value]
     return value
 
@@ -73,6 +75,12 @@ def encrypt_inputs(value):
             if isinstance(tunnel, dict) and isinstance(tunnel.get("peers"), list):
                 tunnel["peers"] = [convert(peer, ("preshared_key", "private_key"))
                                    for peer in tunnel["peers"]]
+    if isinstance(value.get("proxies"), dict):
+        proxies = {**value["proxies"]}
+        if isinstance(proxies.get("outbounds"), list):
+            proxies["outbounds"] = [convert(outbound, ("secret",))
+                                    for outbound in proxies["outbounds"]]
+        value["proxies"] = proxies
     return value
 
 

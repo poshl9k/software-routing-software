@@ -254,6 +254,60 @@ class TProxy(Model):
     update_schedule: TProxyUpdateSchedule = Field(default_factory=TProxyUpdateSchedule)
 
 
+class ProxyOutbound(Model):
+    """A future sing-box outbound. ``direct``/``block`` are local; every other
+    type needs a server. A ``secret`` is stored encrypted (secrets.py) and
+    returned redacted, never in plaintext — a raw string is rejected."""
+    tag: Name
+    type: Literal["direct", "block", "shadowsocks", "vmess", "vless",
+                  "trojan", "hysteria2", "tuic"]
+    server: str | None = None
+    port: Port | None = None
+    secret: EncryptedSecret | None = None
+    tls: bool = False
+    tls_server_name: str | None = None
+    tls_insecure: bool = False
+    # Optional local administrative endpoint. A non-loopback bind is an open
+    # administrative inbound and is rejected by validators by default.
+    admin_listen: str | None = None
+
+    @model_validator(mode="after")
+    def check_fields(self):
+        if self.type in ("direct", "block"):
+            if any((self.server, self.port, self.secret, self.tls, self.admin_listen)):
+                raise ValueError("proxy.outbound_local_fields")
+            return self
+        if not self.server or self.port is None:
+            raise ValueError("proxy.outbound_server_required")
+        return self
+
+
+class ProxySubscription(Model):
+    name: Name
+    url: str
+    format: Literal["auto", "sing-box", "clash", "v2ray", "base64"] = "auto"
+    interval_hours: int = Field(default=24, ge=1, le=168)
+    enabled: bool = False
+
+
+class ProxyGroup(Model):
+    tag: Name
+    type: Literal["selector", "urltest"]
+    outbounds: tuple[Name, ...] = ()
+    url: str | None = None
+    interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+
+
+class ProxySettings(Model):
+    """Outbounds, subscriptions and groups for the future sing-box engine.
+    Off and empty by default; nothing here is fetched or applied yet, and
+    enabling it does not open TProxy."""
+    enabled: bool = False
+    outbounds: tuple[ProxyOutbound, ...] = ()
+    subscriptions: tuple[ProxySubscription, ...] = ()
+    groups: tuple[ProxyGroup, ...] = ()
+
+
 class Configuration(Model):
     schema_version: Literal[1] = 1
     interfaces: tuple[Interface, ...] = ()
@@ -269,6 +323,7 @@ class Configuration(Model):
     ddns: tuple[DDNSUpdate, ...] = ()
     ssh: SSH = Field(default_factory=SSH)
     tproxy: TProxy = Field(default_factory=TProxy)
+    proxies: ProxySettings = Field(default_factory=ProxySettings)
     anti_lockout: bool = True
     panel_port: Port = 443
 
