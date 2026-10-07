@@ -1,14 +1,20 @@
-"""Host-only offline fixture for the two-process DNS namespace probe."""
+"""Host-only offline fixture for the two-process DNS namespace probe.
+
+The fixture is produced by the *integrated* contour path — the same
+:func:`generators.tproxy_dns.plan_tproxy_dns` plan and
+:mod:`vs_router.agent.tproxy_apply` artifacts that the gated apply scaffold
+installs — so the VM probe exercises the exact guard/config text apply would
+stage, not a hand-rolled copy. ``apply_guard``/``apply_files`` expose the
+phase-1 and phase-list text for host-side consistency checks.
+"""
 import argparse
 import json
 from pathlib import Path
 
+from vs_router.agent import tproxy_apply
+from vs_router.generators import tproxy_dns
+from vs_router.generators.nftables import generate_nftables
 from vs_router.schema import ConfigurationVersion
-from vs_router.generators.nftables import (generate_nftables,
-                                          generate_tproxy_dns_ingress_guard,
-                                          generate_tproxy_dns_listener_guard,
-                                          generate_tproxy_dns_output_guard)
-from vs_router.generators.unbound import generate_tproxy_unbound_split
 
 
 def generate_cases():
@@ -37,13 +43,24 @@ def generate_cases():
     policy = version.configuration.tproxy.model_copy(update={"enabled": True})
     enabled = version.model_copy(update={"configuration": version.configuration.model_copy(
         update={"tproxy": policy})})
+    plan = tproxy_dns.plan_tproxy_dns(enabled, tproxy_dns.selected_uid_for(enabled))
+    guards = {guard.role: guard.content for guard in plan.nft_guards}
+    artifacts = tproxy_apply.build_artifacts(enabled)
     return {
         "kind": "tproxy_dns_split_vm_v1",
+        "source": "plan_tproxy_dns+tproxy_apply",
+        "selected_uid": plan.selected_uid,
+        "listener_addresses": {k: list(v) for k, v in plan.listener_addresses.items()},
+        "apply_files": list(artifacts),
+        "apply_guard": artifacts["tproxy_guards"],
         "firewall": generate_nftables(version),
-        "unbound": generate_tproxy_unbound_split(enabled),
-        "listener_guard": generate_tproxy_dns_listener_guard(enabled),
-        "direct_guard": generate_tproxy_dns_ingress_guard(enabled),
-        "output_guard": generate_tproxy_dns_output_guard(enabled, 29092),
+        "unbound": {
+            "selected": artifacts["tproxy_unbound_selected"],
+            "ordinary": artifacts["tproxy_unbound_ordinary"],
+        },
+        "listener_guard": guards["listener"],
+        "direct_guard": guards["ingress"],
+        "output_guard": guards["output"],
     }
 
 
@@ -52,7 +69,8 @@ def main(argv=None):
     parser.add_argument("output", type=Path)
     args = parser.parse_args(argv)
     args.output.write_text(json.dumps(generate_cases(), indent=2) + "\n")
-    print("Generated offline DNS split fixture; no networking or services touched")
+    print("Generated offline DNS split fixture from the integrated plan; "
+          "no networking or services touched")
 
 
 if __name__ == "__main__":

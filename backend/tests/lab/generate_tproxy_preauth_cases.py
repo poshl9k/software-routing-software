@@ -10,18 +10,27 @@ from pathlib import Path
 
 from vs_router.schema import ConfigurationVersion
 from vs_router.generators.nftables import (
-    generate_nftables, generate_tproxy_preauthorization, generate_tproxy_containment,
+    generate_nftables, generate_tproxy_interception, generate_tproxy_preauthorization,
+    generate_tproxy_containment,
 )
 from vs_router.generators.singbox import generate_singbox
 
 
-def generate_cases(protocol='udp', *, input_proof=False, mark_collision=False):
+def generate_cases(protocol='udp', *, input_proof=False, mark_collision=False,
+                   ct_proof=False, interception=False):
     if mark_collision:
         if protocol != 'tcp':
             raise ValueError('TCP-only lab mark collision experiment')
         input_proof = True
     if input_proof and protocol != 'tcp':
         raise ValueError('TCP-only lab INPUT proof experiment')
+    if ct_proof:
+        if protocol != 'tcp':
+            raise ValueError('TCP-only lab conntrack INPUT proof experiment')
+        if input_proof or mark_collision:
+            raise ValueError('conntrack proof mode is standalone (no packet-mark proof)')
+    if interception and protocol != 'tcp':
+        raise ValueError('TCP-only TProxy interception experiment')
     interfaces = [{'name': 'lan0', 'zone': 'lan'}, {'name': 'wan0', 'zone': 'wan'}]
     allow = {'name': 'allow', 'ingress_zone': 'lan', 'dst': 'zone:wan', 'protocol': protocol,
              'destination_ports': '19090', 'action': 'pass', 'order': 10}
@@ -45,6 +54,9 @@ def generate_cases(protocol='udp', *, input_proof=False, mark_collision=False):
             version = version.model_copy(update={'configuration': config})
         outputs[name] = generate_tproxy_preauthorization(version)
         outputs[name + '_guard'] = generate_tproxy_containment(version)
+        if interception:
+            key = 'off_interception' if name == 'off' else name + '_interception'
+            outputs[key] = generate_tproxy_interception(version)
     # Real ordinary firewall: local INPUT allow, otherwise default deny.
     local = {'name': 'local_' + protocol, 'ingress_zone': 'lan', 'dst': 'zone:router',
              'protocol': protocol, 'destination_ports': '19090', 'action': 'pass'}
@@ -69,6 +81,8 @@ def generate_cases(protocol='udp', *, input_proof=False, mark_collision=False):
         outputs['__input_proof__'] = True
     if mark_collision:
         outputs['__mark_collision__'] = True
+    if ct_proof:
+        outputs['__ct_proof__'] = True
     return outputs
 
 
@@ -79,15 +93,36 @@ def main(argv=None):
     modes.add_argument('--combined', action='store_true')
     modes.add_argument('--tcp', action='store_true')
     modes.add_argument('--tcp-proof', action='store_true')
+    modes.add_argument('--tcp-preauth-combined', action='store_true')
+    modes.add_argument('--tcp-ct-proof', action='store_true')
+    modes.add_argument('--tproxy-interception', action='store_true')
     parser.add_argument('--tcp-mark-collision', action='store_true')
     args = parser.parse_args(argv)
     if args.tcp_mark_collision and not args.tcp:
         parser.error('--tcp-mark-collision requires --tcp')
-    outputs = generate_cases('tcp' if args.tcp or args.tcp_proof else 'udp',
-                             input_proof=args.tcp_proof,
-                             mark_collision=args.tcp_mark_collision)
-    if args.combined:
-        outputs['__combined__'] = 'udp'
+    if args.tproxy_interception:
+        # Real ordinary firewall + preauth + containment + generated TProxy
+        # capture + sing-box JSON for the interception probe. The capture text
+        # comes byte-for-byte from generate_tproxy_interception.
+        outputs = generate_cases('tcp', interception=True)
+        outputs['__tproxy_interception__'] = True
+    elif args.tcp_ct_proof:
+        # Standalone conntrack-mark INPUT authorization fixture for
+        # tproxy_tcp_ct_proof_probe.py; never carries the packet-mark proof mode.
+        outputs = generate_cases('tcp', ct_proof=True)
+    elif args.tcp_preauth_combined:
+        # Real ordinary firewall + preauth + containment + sing-box JSON for the
+        # combined TCP probe. INPUT proof mode is mandatory because that probe's
+        # fixture check requires it; the marker keeps this fixture distinct from
+        # the UDP --combined and the bare TCP --tcp-proof fixtures.
+        outputs = generate_cases('tcp', input_proof=True)
+        outputs['__tcp_preauth_combined__'] = 'tcp'
+    else:
+        outputs = generate_cases('tcp' if args.tcp or args.tcp_proof else 'udp',
+                                 input_proof=args.tcp_proof,
+                                 mark_collision=args.tcp_mark_collision)
+        if args.combined:
+            outputs['__combined__'] = 'udp'
     args.output.write_text(json.dumps(outputs))
     print('Generated test-only policies; no network changes')
 

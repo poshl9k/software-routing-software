@@ -38,6 +38,20 @@ def test_dns_split_fixture_is_isolated_from_live_generators():
     assert ConfigurationVersion.model_validate({"configuration": {}}).configuration.tproxy.enabled is False
 
 
+def test_dns_split_fixture_comes_from_the_integrated_contour():
+    fixture = load("generate_tproxy_dns_split_cases").generate_cases()
+    # The fixture is the gated apply scaffold's own output, not a copy.
+    assert fixture["source"] == "plan_tproxy_dns+tproxy_apply"
+    assert fixture["selected_uid"] == 29092
+    assert fixture["apply_files"] == [
+        "tproxy_guards", "tproxy_unbound_selected", "tproxy_unbound_ordinary",
+        "singbox", "tproxy_interception"]
+    # The three VM-probe guards are the exact phase-1 guard components.
+    for content in (fixture["listener_guard"], fixture["direct_guard"],
+                    fixture["output_guard"]):
+        assert content in fixture["apply_guard"]
+
+
 def test_dns_split_probe_import_does_not_change_host():
     for name in ("generate_tproxy_dns_split_cases", "tproxy_dns_split_probe"):
         tree = ast.parse((LAB / f"{name}.py").read_text())
