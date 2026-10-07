@@ -10,7 +10,8 @@ RequestID = StrictInt | StrictStr
 VersionID = Annotated[int, Field(strict=True, ge=1)]
 Method = Literal["apply_version", "confirm_version", "rollback", "status",
                  "diag_ping", "diag_traceroute", "nft_counters", "list_interfaces",
-                 "list_addresses", "update_status", "apply_update"]
+                 "list_addresses", "update_status", "apply_update",
+                 "update_source", "source_status"]
 
 
 class ApplyParams(Model):
@@ -43,12 +44,31 @@ class ApplyUpdateParams(Model):
     release: StrictStr = Field(pattern=r'^[0-9a-f]{40}$')
 
 
+class UpdateSourceParams(Model):
+    """Manual subscription/rule-set update (typed; no shell, no free-form args).
+
+    Only data crosses the RPC: a source name, an https URL, a kind/format and
+    the explicit user-source authorization flag plus limits. The agent decides
+    allowlisting and SSRF policy; the URL is never passed to a shell.
+    """
+    name: Annotated[str, Field(strict=True, pattern=r'^[a-zA-Z][a-zA-Z0-9_]{0,30}$')]
+    url: StrictStr
+    kind: Literal["subscription", "rule_set"] = "rule_set"
+    format: Literal["auto", "sing-box", "clash", "v2ray", "base64",
+                    "json", "rule-set", "text", "srs"] = "auto"
+    # Explicit, separate permission for a user-supplied (non-built-in) source.
+    authorized: StrictBool = False
+    max_bytes: StrictInt = Field(default=5_000_000, ge=1024, le=50_000_000)
+    timeout: StrictInt = Field(default=20, ge=1, le=120)
+
+
 PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "rollback": EmptyParams, "status": EmptyParams,
           "diag_ping": PingParams, "diag_traceroute": HostParams,
           "nft_counters": EmptyParams, "list_interfaces": EmptyParams,
           "list_addresses": EmptyParams, "update_status": EmptyParams,
-          "apply_update": ApplyUpdateParams}
+          "apply_update": ApplyUpdateParams,
+          "update_source": UpdateSourceParams, "source_status": EmptyParams}
 
 
 class RPCRequest(Model):

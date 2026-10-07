@@ -212,7 +212,7 @@ def list_addresses() -> dict[str, list[str]]:
     return addresses
 
 
-def make_handlers(engine, database):
+def make_handlers(engine, database, updater=None):
     def safe_host(host):
         try:
             import ipaddress
@@ -311,12 +311,35 @@ def make_handlers(engine, database):
         from .update import apply_update as start_update
         return start_update(release)
 
+    # Lazily construct the default downloader so merely building handlers (e.g.
+    # in tests) neither touches the network nor the source store. The updater,
+    # its transport, resolver and limits are all injectable.
+    updater_holder = [updater]
+
+    def get_updater():
+        if updater_holder[0] is None:
+            from .downloader import SourceUpdater
+            updater_holder[0] = SourceUpdater()
+        return updater_holder[0]
+
+    def update_source(name, url, kind="rule_set", format="auto", authorized=False,
+                      max_bytes=5_000_000, timeout=20):
+        # Typed, whitelisted data only: the URL is never handed to a shell and
+        # the agent re-applies its own allowlist/SSRF policy in build_spec.
+        return get_updater().update(name=name, url=url, kind=kind, format=format,
+                                    authorized=authorized, max_bytes=max_bytes,
+                                    timeout=timeout)
+
+    def source_status():
+        return get_updater().status()
+
     return {'apply_version': apply_version, 'confirm_version': confirm_version,
             'rollback': lambda: engine.rollback('requested'), 'status': status,
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
             'nft_counters': nft_counters, 'list_interfaces': list_interfaces,
             'list_addresses': list_addresses, 'update_status': update_status,
-            'apply_update': apply_update}
+            'apply_update': apply_update,
+            'update_source': update_source, 'source_status': source_status}
 
 
 def main():

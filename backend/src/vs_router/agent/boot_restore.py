@@ -92,6 +92,23 @@ def restore_tunnel_proxy_files() -> int:
     return 0
 
 
+def restore_tproxy_protection() -> int:
+    """Restore the TProxy protective state *before* any capture tract opens.
+
+    Scaffold, inert for every current configuration: the file below is only
+    written by the gated-off TProxy branch (or by :func:`recover_interrupted_apply`
+    as destroy-only compensation). When it exists it is loaded first, so the
+    fail-closed guard tables are up before the engine/interception artifacts.
+    A missing file means there is no TProxy state and this is a no-op.
+    """
+    from pathlib import Path
+    from . import tproxy_apply
+    guard = Path(APPLIED) / tproxy_apply.TPROXY_FILES['tproxy_guards']
+    if not guard.exists():
+        return 0
+    return run(["/usr/sbin/nft", "-f", str(guard)])
+
+
 def recover_interrupted_apply():
     """Reboot never promotes a pending/partially installed snapshot."""
     from pathlib import Path
@@ -114,6 +131,27 @@ def recover_interrupted_apply():
     files['nftables'] = generate_nftables(version, read_management())
     for name, filename in FILES.items():
         engine.fs.write(Path(APPLIED) / filename, files[name])
+    # Additive TProxy scaffold. Inert for every current configuration: the branch
+    # only runs when the confirmed target (or the interrupted marker) carries
+    # TProxy artifacts, which the closed gate prevents.
+    from . import tproxy_apply
+    if tproxy_apply.required(version):
+        for name, filename in tproxy_apply.TPROXY_FILES.items():
+            content = files.get(name)
+            if content is not None:
+                engine.fs.write(Path(APPLIED) / filename, content)
+    elif any(name in (marker.get('phases') or {}) for name in tproxy_apply.TPROXY_FILES):
+        # Interrupted apply had written TProxy artifacts but the confirmed target
+        # is not a TProxy state: overwrite the guard file with destroy-only text
+        # so boot tears the half-open tract down instead of restoring it, and
+        # drop the split resolver configs (destroy text cannot unlink a file).
+        engine.fs.write(Path(APPLIED) / tproxy_apply.TPROXY_FILES['tproxy_guards'],
+                        tproxy_apply.cleanup_content())
+        for filename in tproxy_apply.cleanup_files():
+            try:
+                engine.fs.remove(Path(APPLIED) / filename)
+            except OSError:
+                pass
     engine.fs.write(Path(APPLIED) / 'snapshot.json', json.dumps(backup['version_snapshot']))
     engine.marker({'version_id': backup['version_id'], 'status': 'rolled_back',
                    'deadline': None, 'reason': 'reboot', 'phases': {'rollback': 'rolled_back'}})
@@ -151,6 +189,14 @@ def main() -> int:
     except (OSError, ValueError, KeyError):
         print("interrupted apply recovery failed", file=sys.stderr)
         return 1
+
+    # Restore the TProxy fail-closed guards before anything routes or a listener
+    # opens. No-op unless a (gated-off) TProxy artifact is present.
+    try:
+        failures += restore_tproxy_protection()
+    except (OSError, ValueError, KeyError):
+        print("TProxy protection restore failed", file=sys.stderr)
+        failures += 1
 
     try:
         failures += restore_tunnel_proxy_files()

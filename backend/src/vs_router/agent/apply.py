@@ -15,6 +15,7 @@ from ..generators.wireguard import generate_wg_bundle, serialize_wireguard
 from ..generators.caddy import generate_caddy_bundle, serialize_caddy
 from ..secrets import decrypt_secret as _decrypt
 from ..schema import ConfigurationVersion
+from . import tproxy_apply
 
 PENDING_DIR = Path('/run/vs-router/pending')
 APPLIED_DIR = Path('/etc/vs-router/applied')
@@ -102,6 +103,39 @@ def guard_code(exc, fallback='management.access_invalid'):
     return message if _GUARD.fullmatch(message) else fallback
 
 
+def _tproxy_branch(version):
+    """Additive TProxy file/validator maps for an enabled version.
+
+    Returns ``({}, {})`` for every configuration reachable through the public
+    contract (``tproxy.enabled=False``), so the ordinary apply path is
+    unchanged. See :mod:`vs_router.agent.tproxy_apply` for the order contract.
+    """
+    if not tproxy_apply.required(version):
+        return {}, {}
+    return dict(tproxy_apply.TPROXY_FILES), dict(tproxy_apply.TPROXY_VALIDATORS)
+
+
+def _tproxy_branch_from_snapshot(snapshot):
+    """Best-effort variant of :func:`_tproxy_branch` for a stored snapshot dict.
+
+    Old snapshots and any snapshot the schema cannot re-validate (e.g. an
+    enabled one) fall back to the empty branch rather than raising mid-rollback.
+    """
+    try:
+        return _tproxy_branch(ConfigurationVersion.model_validate(snapshot))
+    except (ValueError, TypeError):
+        return {}, {}
+
+
+def _merged_validators(base, branch):
+    """Overlay the TProxy validators onto a base validator map without
+    overriding an explicitly injected validator for the same name."""
+    merged = dict(base)
+    for name, argv in branch.items():
+        merged.setdefault(name, argv)
+    return merged
+
+
 @dataclass
 class ApplyResult:
     version_id: int
@@ -157,16 +191,20 @@ class ApplyEngine:
             self._failed_service = name
             raise ApplyError('agent.reload_failed')
 
-    def _install(self, contents, marker, validators):
+    def _install(self, contents, marker, validators, files=None):
+        files = FILES if files is None else files
         # Upgrade pre-SSH backups to the closed default.
         contents = dict(contents)
         contents.setdefault('ssh', '{"interfaces": [], "wan_confirmed_interfaces": []}')
-        for name, content in contents.items():
-            self.fs.write(PENDING_DIR / FILES[name], content)
+        for name in files:
+            content = contents.get(name)
+            if content is None:
+                continue
+            self.fs.write(PENDING_DIR / files[name], content)
             marker['phases'][name] = 'generated'
-        for name in FILES:
+        for name in files:
             validator = validators[name]
-            path = PENDING_DIR / FILES[name]
+            path = PENDING_DIR / files[name]
             result = (validator(name, path) if callable(validator) else
                       self.executor.run([*validator, str(path)], 15))
             if result.returncode:
@@ -177,7 +215,7 @@ class ApplyEngine:
         self.marker(marker)
         if self.ssh_controller is not None:
             self.ssh_controller.close()
-        for name, filename in FILES.items():
+        for name, filename in files.items():
             self.fs.atomic_move(PENDING_DIR / filename, APPLIED_DIR / filename)
             self.reload_service(name)
             marker['phases'][name] = 'applied'
@@ -185,20 +223,21 @@ class ApplyEngine:
         if self.ssh_controller is not None:
             self.ssh_controller.activate(json.loads(contents['ssh']))
 
-    def _backup(self, version_id):
-        contents = {n: self.fs.read(APPLIED_DIR / f) for n, f in FILES.items()}
+    def _backup(self, version_id, files=None):
+        files = FILES if files is None else files
+        contents = {n: self.fs.read(APPLIED_DIR / f) for n, f in files.items()}
         # One atomic bundle is the authority, avoiding mixed backup generations.
         self.fs.write(CONFIRMED_DIR / 'snapshot.json', json.dumps(
             {'version_id': version_id, 'files': contents,
              'version_snapshot': json.loads(self.fs.read(APPLIED_DIR / 'snapshot.json'))}))
         for name, content in contents.items():
-            self.fs.write(CONFIRMED_DIR / FILES[name], content)
+            self.fs.write(CONFIRMED_DIR / files[name], content)
 
     def reveal_secret(self, secret):
         import os
         return _decrypt(secret, os.environ.get('VS_ROUTER_SECRET_KEY', '').encode())
 
-    def apply_version(self, version_snapshot: dict, safe_mode: bool = False,
+    def apply_version(self, version_snapshot: dict | ConfigurationVersion, safe_mode: bool = False,
                       confirmation_timeout: int = 180, validators=None) -> ApplyResult:
         previous = self.status()
         self._failed_service = None
@@ -206,7 +245,18 @@ class ApplyEngine:
             raise ApplyError('agent.apply_pending')
         if not 60 <= confirmation_timeout <= 600:
             raise ApplyError('agent.invalid_timeout')
-        version = ConfigurationVersion.model_validate(version_snapshot)
+        # An already-constructed ConfigurationVersion may be passed for the
+        # offline TProxy branch: the schema gate (tproxy.not_available) rejects
+        # an enabled snapshot on re-validation, exactly like the offline
+        # generators, so an enabled version only exists as a model_copy. The
+        # dict path (the only one the agent RPC uses) is unchanged and still
+        # re-validates.
+        if isinstance(version_snapshot, ConfigurationVersion):
+            version = version_snapshot
+            version_snapshot = version.model_dump(mode='json')
+        else:
+            version = ConfigurationVersion.model_validate(version_snapshot)
+        tproxy_files, tproxy_validators = _tproxy_branch(version)
         try:
             backup = json.loads(self.fs.read(CONFIRMED_DIR / 'snapshot.json'))
         except FileNotFoundError:
@@ -241,6 +291,13 @@ class ApplyEngine:
         marker = {'version_id': version.id, 'applied_at': now,
                   'deadline': now + confirmation_timeout if safe_mode else None,
                   'status': 'applying', 'phases': {}}
+        # Only an enabled (offline) version records the scaffold plan; the
+        # marker of every current configuration is unchanged.
+        if tproxy_files:
+            marker['tproxy'] = tproxy_apply.describe(version)
+        apply_files = {**FILES, **tproxy_files}
+        apply_validators = _merged_validators(
+            self.validators if validators is None else validators, tproxy_validators)
         try:
             contents = {name: gen(version) for name, gen in (
                 ('nftables', lambda v: generate_nftables(v, management)), ('unbound', generate_unbound), ('kea', generate_kea))}
@@ -267,7 +324,10 @@ class ApplyEngine:
             contents["wireguard"] = serialize_wireguard(generate_wg_bundle(version, {}))
             contents["ssh"] = version.configuration.ssh.model_dump_json()
             contents["caddy"] = serialize_caddy(generate_caddy_bundle(version, management))
-            self._install(contents, marker, self.validators if validators is None else validators)
+            # Phase order: guards, then engine/readiness; no capture artifact is
+            # generated while the gate is closed (see agent/tproxy_apply.py).
+            contents.update(tproxy_apply.build_artifacts(version))
+            self._install(contents, marker, apply_validators, files=apply_files)
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
             if self.panel_probe is not None and not self.panel_probe():
@@ -275,7 +335,7 @@ class ApplyEngine:
                     return self.rollback('panel.unavailable')
                 raise ApplyError('panel.unavailable')
             if not safe_mode:
-                self._backup(version.id)
+                self._backup(version.id, files=apply_files)
             self.marker(marker)
             return ApplyResult(version.id, marker['status'], marker['phases'])
         except (OSError, subprocess.SubprocessError, ValueError, ApplyError, KeyError) as exc:
@@ -300,6 +360,22 @@ class ApplyEngine:
                         self.marker(current)
                 result.reason_service = self._failed_service
                 return result
+            if mutated and backup is None and any(
+                    name in marker['phases'] for name in tproxy_files):
+                # No confirmed target to roll back to, but TProxy artifacts were
+                # already written: tear every owned table down so a half-open
+                # guard/capture cannot survive the failed first apply.
+                cleanup_marker = {'version_id': version.id, 'status': 'rolled_back',
+                                  'deadline': None, 'reason': 'tproxy_first_apply_failed',
+                                  'phases': {}}
+                try:
+                    self._install({'tproxy_cleanup': tproxy_apply.cleanup_content()},
+                                  cleanup_marker,
+                                  {'tproxy_cleanup': tproxy_apply.TPROXY_CLEANUP_VALIDATOR},
+                                  files={'tproxy_cleanup': tproxy_apply.TPROXY_CLEANUP_FILE})
+                    self._remove_tproxy_readiness_files()
+                except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError):
+                    pass  # Report the primary failure; teardown is best-effort.
             return ApplyResult(version.id, 'failed', marker['phases'], marker['error'])
 
     def confirm_version(self, version_id):
@@ -314,15 +390,50 @@ class ApplyEngine:
         self.fs.remove(JOURNAL_PATH)
         return {'version_id': version_id, 'status': 'confirmed'}
 
+    def _tproxy_artifacts_applied(self):
+        """True if the current marker shows any TProxy artifact went live."""
+        current = self.status()
+        if not isinstance(current, dict):
+            return False
+        phases = current.get('phases') or {}
+        return any(name in phases for name in tproxy_apply.TPROXY_FILES)
+
+    def _remove_tproxy_readiness_files(self):
+        """Unlink the split resolver configs a torn-down TProxy apply staged.
+
+        ``destroy table`` text cannot remove a file, so compensation must also
+        drop the readiness configs; otherwise an aborted contour leaves its
+        selected/ordinary resolver configs on disk. Best-effort: a missing file
+        is not an error.
+        """
+        for filename in tproxy_apply.cleanup_files():
+            try:
+                self.fs.remove(APPLIED_DIR / filename)
+            except OSError:
+                pass
+
     def rollback(self, reason):
         try:
             backup = json.loads(self.fs.read(CONFIRMED_DIR / 'snapshot.json'))
         except FileNotFoundError:
             raise ApplyError('agent.no_confirmed_version') from None
+        # Compensation for the TProxy scaffold: if the confirmed target is not a
+        # TProxy state but the interrupted apply had already written TProxy
+        # artifacts, the rollback must explicitly destroy every owned table
+        # (installing the old product nftables alone does not touch them).
+        tproxy_applied = self._tproxy_artifacts_applied()
+        tproxy_files, tproxy_validators = _tproxy_branch_from_snapshot(backup['version_snapshot'])
+        rollback_files = {**FILES, **tproxy_files}
+        rollback_validators = _merged_validators(self.validators, tproxy_validators)
+        contents = dict(backup['files'])
+        if not tproxy_files and tproxy_applied:
+            contents['tproxy_cleanup'] = tproxy_apply.cleanup_content()
+            rollback_files['tproxy_cleanup'] = tproxy_apply.TPROXY_CLEANUP_FILE
+            rollback_validators['tproxy_cleanup'] = tproxy_apply.TPROXY_CLEANUP_VALIDATOR
         marker = {'version_id': backup['version_id'], 'applied_at': self.clock(),
                   'deadline': self.clock(), 'status': 'rolling_back', 'reason': reason, 'phases': {}}
         try:
-            self._install(backup['files'], marker, self.validators)
+            self._install(contents, marker, rollback_validators, files=rollback_files)
         except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError) as exc:
             if self.ssh_controller is not None:
                 try:
@@ -332,6 +443,10 @@ class ApplyEngine:
             marker.update(status='rollback_failed', deadline=self.clock())
             self.marker(marker)
             raise ApplyError('agent.rollback_failed') from exc
+        if not tproxy_files and tproxy_applied:
+            # The confirmed target is not a TProxy state: drop the split resolver
+            # configs the interrupted apply staged, alongside the table teardown.
+            self._remove_tproxy_readiness_files()
         self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(backup['version_snapshot']))
         marker['deadline'] = None
         marker['status'] = 'rolled_back'
