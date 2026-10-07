@@ -121,6 +121,16 @@ def catalog_sources() -> dict[str, BuiltinSource]:
     }
 
 
+def selected_catalog_sources(keys: str) -> dict[str, BuiltinSource]:
+    """Select explicit catalog keys for the agent allowlist; empty means off."""
+    names = [key.strip() for key in keys.split(',') if key.strip()]
+    unknown = set(names) - CATALOG.keys()
+    if unknown:
+        raise ValueError('preset.unknown_key: ' + ', '.join(sorted(unknown)))
+    catalog = catalog_sources()
+    return {key: catalog[key] for key in names}
+
+
 def catalog_view() -> list[dict]:
     """Serializable, read-only view of the catalog for the panel/API layer."""
     return [

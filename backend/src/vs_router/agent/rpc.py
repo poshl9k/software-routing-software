@@ -58,6 +58,7 @@ class UpdateSourceParams(Model):
                     "json", "rule-set", "text", "srs"] = "auto"
     # Explicit, separate permission for a user-supplied (non-built-in) source.
     authorized: StrictBool = False
+    scheduled: StrictBool = False
     max_bytes: StrictInt = Field(default=5_000_000, ge=1024, le=50_000_000)
     timeout: StrictInt = Field(default=20, ge=1, le=120)
 

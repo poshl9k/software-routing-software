@@ -409,6 +409,22 @@ def test_source_status_takes_no_params():
     assert build_request("source_status", {}, request_id=1).params == {}
 
 
+def test_scheduled_update_is_rejected_while_apply_pending(tmp_path):
+    updater, _, transport = make_updater(tmp_path, responses=[], mapping={"public.example": [PUBLIC]})
+
+    class PendingEngine:
+        def status(self):
+            return {"status": "pending"}
+
+    handlers = daemon.make_handlers(PendingEngine(), None, updater=updater)
+    response = daemon.dispatch(build_request("update_source", {
+        "name": "sub1", "url": "https://public.example/x",
+        "authorized": True, "scheduled": True,
+    }).model_dump_json(), handlers)
+    assert response.error.message == "agent.apply_pending"
+    assert transport.calls == []
+
+
 def test_daemon_wires_update_source_and_maps_errors(tmp_path):
     updater, store, _ = make_updater(
         tmp_path, responses=[response(200, b'{"outbounds": []}')],

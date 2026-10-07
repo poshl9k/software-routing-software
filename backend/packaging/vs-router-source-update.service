@@ -1,0 +1,16 @@
+[Unit]
+Description=Update due vs-router rule-set sources
+Requires=vs-router-agent.service
+After=vs-router-agent.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=vs-router-web
+Group=vs-router-web
+WorkingDirectory=/var/lib/vs-router
+Environment=VS_ROUTER_DATABASE_URL=sqlite:////var/lib/vs-router/vs-router.db
+ExecStart=/usr/bin/python3 -m vs_router.agent.source_update_job
+NoNewPrivileges=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX

@@ -13,7 +13,16 @@ from test_downloader import FakeTransport, fixed_resolver
 from vs_router.agent.downloader import BuiltinSource, DownloadError, SourceStore, SourceUpdater
 from vs_router.agent.presets import (CATALOG, WARNING_LICENSE_MISSING,
                                      WARNING_LICENSE_UNVERIFIED, catalog_sources,
-                                     catalog_view)
+                                     catalog_view, selected_catalog_sources)
+
+
+def test_catalog_selection_is_off_by_default_and_validates_keys():
+    assert selected_catalog_sources('') == {}
+    chosen = selected_catalog_sources('sing_geosite, rockblack_ip')
+    assert set(chosen) == {'sing_geosite', 'rockblack_ip'}
+    assert chosen['sing_geosite'] == catalog_sources()['sing_geosite']
+    with pytest.raises(ValueError, match='preset.unknown_key'):
+        selected_catalog_sources('sing_geosite,missing')
 
 
 def test_catalog_is_a_small_nonempty_example_set():

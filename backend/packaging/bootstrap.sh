@@ -334,10 +334,10 @@ EOF
         log 'WARNING: kea services did not restart; the panel will configure them on first apply'
 
     systemctl daemon-reload
-    systemctl enable vs-router-agent vs-router-web vs-router-rollback.timer vs-router-ddns.timer
-    systemctl restart vs-router-agent vs-router-web vs-router-rollback.timer vs-router-ddns.timer
+    systemctl enable vs-router-agent vs-router-web vs-router-rollback.timer vs-router-ddns.timer vs-router-source-update.timer
+    systemctl restart vs-router-agent vs-router-web vs-router-rollback.timer vs-router-ddns.timer vs-router-source-update.timer
     local service
-    for service in vs-router-agent vs-router-web vs-router-rollback.timer vs-router-ddns.timer caddy; do
+    for service in vs-router-agent vs-router-web vs-router-rollback.timer vs-router-ddns.timer vs-router-source-update.timer caddy; do
         systemctl is-active --quiet "$service"
     done
     runuser -u vs-router-web -- test -r /var/lib/vs-router/ui/index.html

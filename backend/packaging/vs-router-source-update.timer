@@ -1,0 +1,10 @@
+[Unit]
+Description=Check vs-router rule-set sources hourly
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1h
+Unit=vs-router-source-update.service
+
+[Install]
+WantedBy=timers.target
