@@ -308,6 +308,29 @@ class ProxySettings(Model):
     groups: tuple[ProxyGroup, ...] = ()
 
 
+class RuleSetSource(Model):
+    """A *declared* rule-set source profile — a read-only web contract.
+
+    Off and empty by default; it carries no secret (a source is a name, a
+    format, an https URL and caps) and nothing here is fetched or applied by
+    this contract. The agent downloader owns fetching, SSRF policy, format
+    validation and status; this model only lets the panel/contract describe
+    which sources exist, with strict validation at the boundary so a malformed
+    declaration is rejected before any fetch is considered.
+    """
+    name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,30}$")
+    format: Literal["text-domain", "text-cidr", "json", "geosite", "geoip", "srs"]
+    url: str
+    max_records: int = Field(default=200_000, ge=1, le=5_000_000)
+    max_bytes: int = Field(default=5_000_000, ge=1024, le=50_000_000)
+
+    @model_validator(mode="after")
+    def check_url(self):
+        if not self.url.lower().startswith("https://"):
+            raise ValueError("ruleset.https_required")
+        return self
+
+
 class Configuration(Model):
     schema_version: Literal[1] = 1
     interfaces: tuple[Interface, ...] = ()
@@ -324,6 +347,7 @@ class Configuration(Model):
     ssh: SSH = Field(default_factory=SSH)
     tproxy: TProxy = Field(default_factory=TProxy)
     proxies: ProxySettings = Field(default_factory=ProxySettings)
+    rule_sets: tuple[RuleSetSource, ...] = ()
     anti_lockout: bool = True
     panel_port: Port = 443
 

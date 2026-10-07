@@ -1,10 +1,15 @@
 import { Button, Checkbox, FormControlLabel, Typography } from "@mui/material";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useConfiguration } from "../state";
+import { api } from "../api";
+import { queryKeys } from "../query";
 import type {
   ProxyGroup,
   ProxyOutbound,
   ProxySettings,
   ProxySubscription,
+  RuleSetStatus,
 } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
@@ -570,29 +575,80 @@ export function ProxiesEditor() {
   );
 }
 
+const RULESET_STATUS: Record<
+  RuleSetStatus["status"],
+  { label: string; tone: "blue" | "green" | "amber" | "red" }
+> = {
+  never: { label: "не обновлялся", tone: "amber" },
+  ok: { label: "ок", tone: "green" },
+  failed: { label: "ошибка", tone: "red" },
+  not_modified: { label: "не изменён", tone: "blue" },
+};
+
 /**
- * Read-only list of rule-set sources. The fetch/format/staleness logic lives in
- * the agent downloader (`update_source`/`source_status`); there is no read-only
- * web API or draft field for rule sets yet, so the list is honestly empty
- * rather than fabricated.
+ * Read-only list of rule-set sources, joined with the agent-owned update status
+ * (`GET /api/rulesets`). The privileged manual refresh goes through the typed
+ * `update_source` RPC; an operator sees the list but cannot trigger an update.
  */
 export function RuleSets() {
+  const { user } = useConfiguration();
+  const canUpdate = user?.role === "admin";
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const sources = useQuery({ queryKey: queryKeys.rulesets(), queryFn: api.rulesets });
+
+  const refresh = async (row: RuleSetStatus) => {
+    if (!canUpdate || !row.url) return;
+    setError(null);
+    setBusy(row.name);
+    try {
+      await api.updateRuleset({ name: row.name, url: row.url, authorized: true });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.rulesets() });
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <Card title="Rule-set (источники списков)">
+      <ErrorNotice error={error ?? sources.error} />
       <InfoNote>
-        rule-set'ы загружает агент (SSRF-защищённый downloader, статус
-        обновления и признак stale). Веб-интерфейс пока не читает историю
-        источников, а в сохранённый черновик rule-set'ы не входят — таблица
-        пуста, пока не появится read-only API агента.
+        Источники rule-set загружает агент (SSRF-защищённый downloader). Список —
+        только для чтения: имя, формат, URL и статус обновления. Ручное
+        обновление доступно администратору.
       </InfoNote>
       <DataTable
-        heads={["Имя", "Формат", "URL", "Статус"]}
-        rows={[]}
+        heads={["Имя", "Формат", "URL", "Статус", "Актуальность", "Обновление"]}
+        rows={(sources.data ?? []).map((row) => [
+          row.name,
+          row.format ?? "—",
+          row.url ?? "—",
+          <Badge tone={RULESET_STATUS[row.status].tone}>
+            {RULESET_STATUS[row.status].label}
+          </Badge>,
+          <Badge tone={row.stale ? "amber" : "green"}>
+            {row.stale ? "устарел" : "актуален"}
+          </Badge>,
+          row.url && canUpdate ? (
+            <Button
+              size="small"
+              disabled={busy === row.name}
+              aria-label={`Обновить ${row.name}`}
+              onClick={() => void refresh(row)}
+            >
+              Обновить
+            </Button>
+          ) : (
+            "—"
+          ),
+        ])}
         empty={
           <EmptyState title="Rule-set не подключены">
-            Источники доменов/IP (rule-set) станут доступны из панели после
-            подключения read-only API агента; тогда здесь появятся имя, формат,
-            URL и статус stale.
+            Источники доменов/IP (rule-set) появятся здесь, когда их объявит
+            контракт и агент вернёт статус обновления.
           </EmptyState>
         }
       />

@@ -29,6 +29,7 @@ export const emptyConfiguration: Configuration = {
     update_schedule: { mode: "interval", interval_hours: 6, window_start: "00:00", window_end: "05:00" },
   },
   proxies: { enabled: false, outbounds: [], subscriptions: [], groups: [] },
+  rule_sets: [],
   anti_lockout: true,
   panel_port: 443,
 };

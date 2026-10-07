@@ -6,11 +6,17 @@ import { expect, it, vi } from "vitest";
 import Routing from "../pages/Routing";
 import { RouterProvider, useRouterState } from "../state";
 import { emptyConfiguration } from "../fixtures";
-import type { ProxySettings } from "../types";
+import type { ProxySettings, RuleSetStatus } from "../types";
 
 type Role = "admin" | "operator";
 
-function setup(options?: { fail?: boolean; proxies?: ProxySettings; role?: Role }) {
+function setup(options?: {
+  fail?: boolean;
+  proxies?: ProxySettings;
+  role?: Role;
+  rulesets?: RuleSetStatus[];
+  updateFails?: boolean;
+}) {
   const configuration = {
     ...emptyConfiguration,
     proxies: options?.proxies ?? emptyConfiguration.proxies,
@@ -26,6 +32,20 @@ function setup(options?: { fail?: boolean; proxies?: ProxySettings; role?: Role 
           JSON.stringify({ id: 1, username: options?.role ?? "admin", role: options?.role ?? "admin" }),
         ),
       );
+    if (path === "/api/rulesets")
+      return Promise.resolve(
+        new Response(JSON.stringify(options?.rulesets ?? [])),
+      );
+    if (path === "/api/rulesets/update") {
+      if (options?.updateFails)
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ code: "download.http_error", message: "Ошибка загрузки", details: [] }),
+            { status: 409 },
+          ),
+        );
+      return Promise.resolve(new Response(JSON.stringify({ status: "ok", name: "geo" })));
+    }
     if (options?.fail)
       return Promise.resolve(
         new Response(
@@ -212,4 +232,64 @@ it("keeps proxy exits read-only for an operator", async () => {
     expect(screen.getByRole("button", { name: "Редактировать" })).toBeDisabled(),
   );
   expect(fetch.mock.calls.filter(([, init]) => (init as RequestInit)?.method)).toHaveLength(0);
+});
+
+const GEO: RuleSetStatus = {
+  name: "geo",
+  format: "geosite",
+  url: "https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/x",
+  kind: "rule_set",
+  status: "ok",
+  stale: false,
+  last_attempt: 100,
+  last_success: 100,
+  sha256: "abc",
+  declared: true,
+};
+
+it("lists rule-set sources with status/stale and refreshes via the typed RPC", async () => {
+  const fetch = setup({ rulesets: [GEO] });
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Rule-set");
+
+  expect(await screen.findByText("geo")).toBeVisible();
+  expect(screen.getByText("ок")).toBeVisible();
+  expect(screen.getByText("актуален")).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "Обновить geo" }));
+  await waitFor(() => {
+    const call = fetch.mock.calls.find(([path]) => path === "/api/rulesets/update");
+    expect(call).toBeTruthy();
+    expect(JSON.parse(String((call![1] as RequestInit).body))).toMatchObject({
+      name: "geo",
+      authorized: true,
+    });
+  });
+});
+
+it("shows a stale rule-set source with an honest status badge", async () => {
+  setup({ rulesets: [{ ...GEO, status: "never", stale: true, sha256: null }] });
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Rule-set");
+  expect(await screen.findByText("не обновлялся")).toBeVisible();
+  expect(screen.getByText("устарел")).toBeVisible();
+});
+
+it("surfaces a rejected rule-set update", async () => {
+  setup({ rulesets: [GEO], updateFails: true });
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Rule-set");
+  await user.click(await screen.findByRole("button", { name: "Обновить geo" }));
+  expect(await screen.findByText(/Ошибка загрузки/)).toBeVisible();
+});
+
+it("keeps the rule-set list read-only for an operator", async () => {
+  setup({ role: "operator", rulesets: [GEO] });
+  const user = userEvent.setup();
+  await openTab(user, "Rule-set");
+  expect(await screen.findByText("geo")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Обновить geo" })).not.toBeInTheDocument();
 });

@@ -40,9 +40,11 @@ class FakeTransport:
         self.responses = list(responses)
         self.calls = []
 
-    def fetch(self, *, url, connect_ip, timeout, max_bytes):
+    def fetch(self, *, url, connect_ip, timeout, max_bytes,
+              etag=None, last_modified=None):
         self.calls.append({"url": url, "connect_ip": connect_ip,
-                           "timeout": timeout, "max_bytes": max_bytes})
+                           "timeout": timeout, "max_bytes": max_bytes,
+                           "etag": etag, "last_modified": last_modified})
         item = self.responses.pop(0)
         if isinstance(item, BaseException):
             raise item
@@ -427,3 +429,127 @@ def test_daemon_wires_update_source_and_maps_errors(tmp_path):
     }).model_dump_json(), handlers)
     assert denied.error is not None
     assert denied.error.message == "download.user_authorization_required"
+
+
+# ---------------------------------------------------------------------------
+# Conditional HTTP: ETag / Last-Modified / 304
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value,expected", [
+    ("", None), ("   ", None), (None, None), (123, None),
+    ('"abc"', '"abc"'), ("Wed, 01 Oct 2025 00:00:00 GMT", "Wed, 01 Oct 2025 00:00:00 GMT"),
+    ("abc\r\nX-Evil: 1", None), ("line\nbreak", None), ("x" * 5000, None),
+])
+def test_conditional_validators_are_sanitized(value, expected):
+    from vs_router.agent.downloader import _header_value
+    assert _header_value(value) == expected
+
+
+def test_conditional_fetch_sends_etag_and_handles_304(tmp_path):
+    updater, store, transport = make_updater(
+        tmp_path,
+        responses=[response(200, b'{"outbounds": []}', headers={"ETag": '"v1"'}),
+                   response(304, headers={"ETag": '"v1"'})],
+        mapping={"public.example": [PUBLIC]})
+    first = updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    assert first["status"] == "ok"
+    assert transport.calls[0]["etag"] is None  # no prior validator yet
+    active_before = store.fs.read(store.active_path("sub1", "rule_set"))
+
+    second = updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    assert second["status"] == "not_modified"
+    # The stored validator was re-sent as If-None-Match.
+    assert transport.calls[1]["etag"] == '"v1"'
+    # The active set is untouched, and only the attempt bookkeeping moved.
+    assert store.fs.read(store.active_path("sub1", "rule_set")) == active_before
+    assert [entry["status"] for entry in updater.status()] == ["ok", "not_modified"]
+
+
+def test_last_modified_is_sent_as_if_modified_since(tmp_path):
+    stamp = "Wed, 01 Oct 2025 00:00:00 GMT"
+    updater, _, transport = make_updater(
+        tmp_path,
+        responses=[response(200, b'{"outbounds": []}', headers={"Last-Modified": stamp}),
+                   response(304, headers={"Last-Modified": stamp})],
+        mapping={"public.example": [PUBLIC]})
+    updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    record = updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    assert record["status"] == "not_modified"
+    assert transport.calls[1]["last_modified"] == stamp
+
+
+def test_304_keeps_active_set_and_skips_format_validation(tmp_path):
+    # A 304 has no body to validate; a bogus body must not fail the run.
+    updater, store, _ = make_updater(
+        tmp_path,
+        responses=[response(200, b'{"outbounds": []}', headers={"ETag": '"v1"'}),
+                   response(304, b"<html>not a set</html>", headers={"ETag": '"v1"'})],
+        mapping={"public.example": [PUBLIC]})
+    updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    before = store.fs.read(store.active_path("sub1", "rule_set"))
+    record = updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    assert record["status"] == "not_modified"
+    assert store.fs.read(store.active_path("sub1", "rule_set")) == before
+
+
+def test_validators_are_dropped_when_the_url_changes(tmp_path):
+    updater, store, transport = make_updater(
+        tmp_path,
+        responses=[response(200, b'{"outbounds": []}', headers={"ETag": '"v1"'}),
+                   response(200, b'{"outbounds": []}')],
+        mapping={"public.example": [PUBLIC], "other.example": [PUBLIC]})
+    updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    assert store.latest_validators("sub1", "https://public.example/x") == ('"v1"', None)
+    assert store.latest_validators("sub1", "https://other.example/x") == (None, None)
+    updater.update(name="sub1", url="https://other.example/x", authorized=True)
+    assert transport.calls[1]["etag"] is None
+
+
+def test_control_characters_in_a_response_validator_are_ignored(tmp_path):
+    updater, store, transport = make_updater(
+        tmp_path,
+        responses=[response(200, b'{"outbounds": []}', headers={"ETag": "a\r\nX-Evil: 1"}),
+                   response(200, b'{"outbounds": []}')],
+        mapping={"public.example": [PUBLIC]})
+    updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    # The crafted value never reaches the store, so it is never re-sent.
+    assert store.latest_validators("sub1", "https://public.example/x") == (None, None)
+    updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    assert transport.calls[1]["etag"] is None
+
+
+def test_failed_attempt_does_not_clear_stored_validators(tmp_path):
+    updater, store, transport = make_updater(
+        tmp_path,
+        responses=[response(200, b'{"outbounds": []}', headers={"ETag": '"v1"'}),
+                   response(500),
+                   response(304, headers={"ETag": '"v1"'})],
+        mapping={"public.example": [PUBLIC]})
+    updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    with pytest.raises(DownloadError):
+        updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    # A transient failure keeps the validator so the next attempt is conditional.
+    assert store.latest_validators("sub1", "https://public.example/x") == ('"v1"', None)
+    record = updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    assert record["status"] == "not_modified"
+    assert transport.calls[2]["etag"] == '"v1"'
+
+
+def test_validators_are_keyed_to_the_configured_url_across_redirect(tmp_path):
+    # The configured URL is what the next request dials, so the (final-hop)
+    # validator must be stored against it, not the redirect target.
+    builtin = {"geo": BuiltinSource(url="https://public.example/rules.json",
+                                    hosts=frozenset({"public.example", "cdn.example"}))}
+    updater, store, transport = make_updater(
+        tmp_path, responses=[
+            response(302, headers={"Location": "https://cdn.example/rules.json"}),
+            response(200, b'{"outbounds": []}', headers={"ETag": '"cdn-v1"'}),
+            response(302, headers={"Location": "https://cdn.example/rules.json"}),
+            response(304, headers={"ETag": '"cdn-v1"'})],
+        mapping={"public.example": [PUBLIC], "cdn.example": [PUBLIC]}, builtin=builtin)
+    updater.update(name="geo", url="https://public.example/rules.json")
+    assert store.latest_validators("geo", "https://public.example/rules.json") == ('"cdn-v1"', None)
+    # A second run re-sends the validator on the first hop of the chain.
+    record = updater.update(name="geo", url="https://public.example/rules.json")
+    assert record["status"] == "not_modified"
+    assert transport.calls[2]["etag"] == '"cdn-v1"'

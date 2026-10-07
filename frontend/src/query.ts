@@ -27,4 +27,5 @@ export const queryKeys = {
   hostAddresses: () => ["host", "addresses"] as const,
   tproxyPreview: (versionId: number | null) =>
     ["tproxy", "preview", versionId] as const,
+  rulesets: () => ["rulesets"] as const,
 };

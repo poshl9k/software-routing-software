@@ -137,7 +137,9 @@ def state_from_history(history: list[dict], name: str) -> RunState:
     last_attempt = entries[-1].get("at") if entries else None
     last_success = None
     for entry in reversed(entries):
-        if entry.get("status") == "ok":
+        # A ``not_modified`` 304 is a successful contact: the active set is
+        # confirmed current, so it counts as the last success for staleness.
+        if entry.get("status") in ("ok", "not_modified"):
             last_success = entry.get("at")
             break
     failures = 0

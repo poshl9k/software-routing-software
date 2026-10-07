@@ -214,6 +214,20 @@ def test_state_from_history_extracts_attempt_success_and_failures():
     assert state_from_history(history, "absent") == RunState()
 
 
+def test_state_from_history_treats_not_modified_as_success():
+    history = [
+        {"name": "s", "status": "ok", "at": 10.0},
+        {"name": "s", "status": "not_modified", "at": 20.0},
+    ]
+    assert state_from_history(history, "s") == RunState(
+        last_attempt=20.0, last_success=20.0, consecutive_failures=0)
+    # A trailing 304 resets a failure streak (it is a successful contact).
+    assert state_from_history([
+        {"name": "s", "status": "failed", "at": 5.0},
+        {"name": "s", "status": "not_modified", "at": 20.0},
+    ], "s").consecutive_failures == 0
+
+
 def test_describe_reports_local_next_time_and_due():
     schedule = SourceSchedule(mode="window", timezone="Europe/Moscow",
                               window_start="00:00", window_end="05:00", jitter_seconds=0)

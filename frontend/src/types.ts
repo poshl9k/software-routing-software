@@ -185,6 +185,36 @@ export interface ProxySettings {
   subscriptions: ProxySubscription[];
   groups: ProxyGroup[];
 }
+/** Declared rule-set source profile; read-only, secret-free (mirrors schema.py). */
+export interface RuleSetSource {
+  name: string;
+  format: "text-domain" | "text-cidr" | "json" | "geosite" | "geoip" | "srs";
+  url: string;
+  max_records: number;
+  max_bytes: number;
+}
+/** A rule-set source joined with its agent-owned update status (read-only). */
+export interface RuleSetStatus {
+  name: string;
+  format: string | null;
+  url: string | null;
+  kind: string;
+  status: "never" | "ok" | "failed" | "not_modified";
+  stale: boolean;
+  last_attempt: number | null;
+  last_success: number | null;
+  sha256: string | null;
+  declared: boolean;
+}
+export interface RuleSetUpdate {
+  name: string;
+  url: string;
+  kind?: "rule_set" | "subscription";
+  format?: "auto" | "sing-box" | "clash" | "v2ray" | "base64" | "json" | "rule-set" | "text" | "srs";
+  authorized?: boolean;
+  max_bytes?: number;
+  timeout?: number;
+}
 export interface TProxyPreview {
   version_id: number;
   singbox: Record<string, unknown>;
@@ -205,6 +235,7 @@ export interface Configuration {
   ssh: { interfaces: string[]; wan_confirmed_interfaces: string[] };
   tproxy: TProxy;
   proxies: ProxySettings;
+  rule_sets: RuleSetSource[];
   anti_lockout: boolean;
   panel_port: number;
 }

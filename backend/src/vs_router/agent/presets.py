@@ -139,3 +139,62 @@ def catalog_view() -> list[dict]:
         }
         for preset in sorted(CATALOG.values(), key=lambda p: p.key)
     ]
+
+
+def sources_view(declared: list[dict], history: list[dict], *, now: float,
+                 stale_after_seconds: int | None = None) -> list[dict]:
+    """Read-only, secret-free status view of rule-set sources.
+
+    ``declared`` is the contract's :class:`~vs_router.schema.RuleSetSource`
+    list (name/format/url); ``history`` is the downloader's append-only update
+    history. The two are joined by ``name`` and each row is reduced to
+    ``name/format/url/kind/status/stale/last_attempt/last_success/sha256`` —
+    never a secret, and never a fabricated value.
+
+    Status is ``never`` for a declared source with no run, otherwise the last
+    recorded status (``ok``/``failed``/``not_modified``). ``stale`` is computed
+    from the last successful contact against ``stale_after_seconds``; a source
+    that never succeeded (or a 304 that never followed a 200) is stale with an
+    unknown age. Rows are sorted by name for a stable table.
+    """
+    from .rulesets import DEFAULT_STALE_AFTER_SECONDS, staleness
+    threshold = DEFAULT_STALE_AFTER_SECONDS if stale_after_seconds is None else stale_after_seconds
+    rows: dict[str, dict] = {}
+    for entry in declared:
+        name = entry.get("name")
+        if not name:
+            continue
+        rows[name] = {
+            "name": name, "format": entry.get("format"), "url": entry.get("url"),
+            "kind": entry.get("kind", "rule_set"), "status": "never", "stale": True,
+            "last_attempt": None, "last_success": None, "sha256": None,
+            "declared": True,
+        }
+    for entry in history:
+        name = entry.get("name")
+        if not name:
+            continue
+        row = rows.get(name)
+        if row is None:
+            row = {"name": name, "format": None, "url": entry.get("url"),
+                   "kind": entry.get("kind", "rule_set"), "status": "never",
+                   "stale": True, "last_attempt": None, "last_success": None,
+                   "sha256": None, "declared": False}
+        if row.get("url") is None:
+            row["url"] = entry.get("url")
+        if not row.get("format") and entry.get("format"):
+            row["format"] = entry["format"]
+        if not row.get("kind") and entry.get("kind"):
+            row["kind"] = entry["kind"]
+        if entry.get("status"):
+            row["status"] = entry["status"]
+        row["last_attempt"] = entry.get("at")
+        if entry.get("status") in ("ok", "not_modified"):
+            row["last_success"] = entry.get("at")
+            if entry.get("sha256"):
+                row["sha256"] = entry["sha256"]
+        rows[name] = row
+    for row in rows.values():
+        row["stale"] = staleness(now=now, last_success=row["last_success"],
+                                 stale_after_seconds=threshold).stale
+    return sorted(rows.values(), key=lambda r: r["name"])

@@ -14,6 +14,12 @@ those are described, not implemented (see ``docs/tproxy-sources-downloader.md``)
 It opens no configuration gate: ``tproxy.not_available`` is untouched, and
 nothing here writes into the ordinary product bundle or the sing-box apply path.
 
+Conditional HTTP is supported: a prior ``ETag``/``Last-Modified`` for the *same*
+URL is stored (``validators.json``, separate from the history) and re-sent as
+``If-None-Match``/``If-Modified-Since``. A ``304`` keeps the active set and the
+previous content and records a ``not_modified`` attempt (a successful contact),
+refreshing only the validators.
+
 Threat model
 ------------
 The panel/web process is unprivileged and is assumed able to influence the
@@ -204,6 +210,26 @@ def _valid_host(host: str) -> bool:
         return bool(_HOST_RE.match(host))
 
 
+#: Control characters (incl. CR/LF) must never reach an outgoing header value.
+_CONTROL_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _header_value(value: str | None) -> str | None:
+    """Sanitize an opaque server-supplied validator before storing/re-sending it.
+
+    A conditional request re-sends a value the *server* previously chose; a
+    crafted ``ETag`` must not be able to inject a header (CRLF) or an
+    unbounded string. Control characters, blanks and over-long values collapse
+    to ``None`` (i.e. no conditional header), which is always safe.
+    """
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or _CONTROL_RE.search(value) or len(value) > 1024:
+        return None
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Typed request/result
 # ---------------------------------------------------------------------------
@@ -219,7 +245,13 @@ class BuiltinSource:
 
 @dataclass(frozen=True)
 class SourceSpec:
-    """A fully resolved, validated download request (no raw shell input)."""
+    """A fully resolved, validated download request (no raw shell input).
+
+    ``etag``/``last_modified`` are the conditional validators of the previously
+    fetched version of this exact URL (if any); they become ``If-None-Match`` /
+    ``If-Modified-Since``. They are opaque server strings and are sanitized
+    before use (see :func:`_header_value`).
+    """
     name: str
     url: str
     kind: str
@@ -229,6 +261,8 @@ class SourceSpec:
     builtin: bool
     allowed_hosts: frozenset[str]
     authorized: bool
+    etag: str | None = None
+    last_modified: str | None = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +271,11 @@ class FetchResult:
     content: str
     sha256: str
     size: int
+    #: True when the server answered ``304 Not Modified``: the caller must keep
+    #: the active set and only refresh attempt/validator bookkeeping.
+    not_modified: bool = False
+    etag: str | None = None
+    last_modified: str | None = None
 
 
 @dataclass(frozen=True)
@@ -248,8 +287,8 @@ class FetchResponse:
 
 
 class Transport(Protocol):
-    def fetch(self, *, url: str, connect_ip: str, timeout: float,
-              max_bytes: int) -> FetchResponse: ...
+    def fetch(self, *, url: str, connect_ip: str, timeout: float, max_bytes: int,
+              etag: str | None = None, last_modified: str | None = None) -> FetchResponse: ...
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +319,8 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 class UrllibTransport:
     """HTTPS GET transport whose connection is pinned to a checked IP."""
 
-    def fetch(self, *, url, connect_ip, timeout, max_bytes):
+    def fetch(self, *, url, connect_ip, timeout, max_bytes,
+              etag=None, last_modified=None):
         scheme, host, port = _split(url)
         parsed = urlsplit(url)
         target = parsed.path or '/'
@@ -290,12 +330,18 @@ class UrllibTransport:
         connection = _PinnedHTTPSConnection(
             host, connect_ip, context=context, port=port or (443 if scheme == 'https' else 80),
             timeout=timeout)
+        headers = {
+            'Host': parsed.netloc,
+            'User-Agent': 'vs-router-downloader/1',
+            'Accept': '*/*',
+        }
+        # Conditional fetch: only ever re-send a sanitized, server-provided value.
+        if etag:
+            headers['If-None-Match'] = etag
+        if last_modified:
+            headers['If-Modified-Since'] = last_modified
         try:
-            connection.request('GET', target, headers={
-                'Host': parsed.netloc,
-                'User-Agent': 'vs-router-downloader/1',
-                'Accept': '*/*',
-            })
+            connection.request('GET', target, headers=headers)
             response = connection.getresponse()
             body = response.read(max_bytes + 1)
             headers = {key.lower(): value for key, value in response.getheaders()}
@@ -330,7 +376,8 @@ def fetch(spec: SourceSpec, *, transport: Transport, resolver: Callable[[str], l
         connect_ip = addresses[0]
         try:
             response = transport.fetch(url=url, connect_ip=connect_ip,
-                                       timeout=spec.timeout, max_bytes=spec.max_bytes)
+                                       timeout=spec.timeout, max_bytes=spec.max_bytes,
+                                       etag=spec.etag, last_modified=spec.last_modified)
         except (socket.timeout, TimeoutError) as exc:
             raise DownloadError('download.timeout', str(exc)) from exc
         except (OSError, ssl.SSLError) as exc:
@@ -344,6 +391,13 @@ def fetch(spec: SourceSpec, *, transport: Transport, resolver: Callable[[str], l
                 raise DownloadError('download.invalid_redirect')
             url = urljoin(url, location)
             continue
+        if response.status == 304:
+            # Not Modified: the active set is unchanged. Only bookkeeping
+            # (attempt time + refreshed validators) may be updated by the caller.
+            return FetchResult(
+                url=url, content='', sha256='', size=0, not_modified=True,
+                etag=_header_value(headers.get('etag')) or spec.etag,
+                last_modified=_header_value(headers.get('last-modified')) or spec.last_modified)
         if response.status != 200:
             raise DownloadError('download.http_error', str(response.status))
         if len(response.body) > spec.max_bytes:
@@ -354,7 +408,9 @@ def fetch(spec: SourceSpec, *, transport: Transport, resolver: Callable[[str], l
             raise DownloadError('download.decode_failed', str(exc)) from exc
         return FetchResult(url=url, content=text,
                            sha256=hashlib.sha256(response.body).hexdigest(),
-                           size=len(response.body))
+                           size=len(response.body),
+                           etag=_header_value(headers.get('etag')),
+                           last_modified=_header_value(headers.get('last-modified')))
     raise DownloadError('download.too_many_redirects')
 
 
@@ -508,6 +564,9 @@ class SourceStore:
     def history_path(self) -> Path:
         return self.base / 'history.json'
 
+    def validators_path(self) -> Path:
+        return self.base / 'validators.json'
+
     def _read_or_none(self, path: Path) -> str | None:
         try:
             return self.fs.read(path)
@@ -540,6 +599,41 @@ class SourceStore:
         history.append(entry)
         self.fs.write(self.history_path(), json.dumps(history[-HISTORY_LIMIT:]))
         return entry
+
+    # -- conditional validators --------------------------------------------
+    def read_validators(self) -> dict:
+        """Map ``name -> {url, etag, last_modified}`` for conditional fetches.
+
+        Kept separate from the append-only history so the history entry shape is
+        unchanged. Only the latest validator per source is retained.
+        """
+        raw = self._read_or_none(self.validators_path())
+        if raw is None:
+            return {}
+        try:
+            loaded = json.loads(raw)
+        except ValueError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def latest_validators(self, name: str, url: str) -> tuple[str | None, str | None]:
+        """Return ``(etag, last_modified)`` for ``name`` **iff** the URL matches.
+
+        A validator is only meaningful for the resource it came from, so a URL
+        change drops it (no cross-resource ``304``).
+        """
+        entry = self.read_validators().get(name)
+        if not isinstance(entry, dict) or entry.get('url') != url:
+            return (None, None)
+        return (_header_value(entry.get('etag')), _header_value(entry.get('last_modified')))
+
+    def save_validators(self, name: str, *, url: str, etag: str | None,
+                        last_modified: str | None) -> None:
+        data = self.read_validators()
+        data[name] = {'url': url,
+                      'etag': _header_value(etag),
+                      'last_modified': _header_value(last_modified)}
+        self.fs.write(self.validators_path(), json.dumps(data))
 
     # -- activation ---------------------------------------------------------
     def activate(self, spec: SourceSpec, *, content: str, sha256: str, size: int,
@@ -607,7 +701,9 @@ class SourceUpdater:
     def build_spec(self, *, name: str, url: str, kind: str = 'rule_set',
                    format: str = 'auto', authorized: bool = False,
                    max_bytes: int = DEFAULT_MAX_BYTES,
-                   timeout: float = DEFAULT_TIMEOUT) -> SourceSpec:
+                   timeout: float = DEFAULT_TIMEOUT,
+                   etag: str | None = None,
+                   last_modified: str | None = None) -> SourceSpec:
         """Resolve authorization and allowlist for a request, before any I/O."""
         _, host, _ = _split(url)
         entry = self.builtin_sources.get(name)
@@ -617,12 +713,14 @@ class SourceUpdater:
             return SourceSpec(name=name, url=url, kind=entry.kind or kind,
                               format=entry.format or format, max_bytes=max_bytes,
                               timeout=timeout, builtin=True,
-                              allowed_hosts=entry.hosts, authorized=True)
+                              allowed_hosts=entry.hosts, authorized=True,
+                              etag=etag, last_modified=last_modified)
         if not authorized:
             raise DownloadError('download.user_authorization_required')
         return SourceSpec(name=name, url=url, kind=kind, format=format,
                           max_bytes=max_bytes, timeout=timeout, builtin=False,
-                          allowed_hosts=frozenset({host}), authorized=True)
+                          allowed_hosts=frozenset({host}), authorized=True,
+                          etag=etag, last_modified=last_modified)
 
     # -- manual update ------------------------------------------------------
     def update(self, *, name: str, url: str, kind: str = 'rule_set',
@@ -637,9 +735,20 @@ class SourceUpdater:
         """
         spec = self.build_spec(name=name, url=url, kind=kind, format=format,
                                authorized=authorized, max_bytes=max_bytes, timeout=timeout)
+        etag, last_modified = self.store.latest_validators(name, spec.url)
+        if etag or last_modified:
+            spec = self.build_spec(name=name, url=url, kind=kind, format=format,
+                                   authorized=authorized, max_bytes=max_bytes,
+                                   timeout=timeout, etag=etag, last_modified=last_modified)
         try:
             result = fetch(spec, transport=self.transport, resolver=self.resolver,
                            allow_plaintext=self.allow_plaintext)
+            if result.not_modified:
+                # Keep the active set and the previous content; refresh only the
+                # validators/attempt bookkeeping. Not a failure.
+                self.store.save_validators(name, url=spec.url, etag=result.etag,
+                                           last_modified=result.last_modified)
+                return self.store.record(spec, status='not_modified', url=result.url)
             detected = validate_content(result.content, spec.format)
             if self.config_validator is not None:
                 try:
@@ -650,6 +759,8 @@ class SourceUpdater:
                     raise DownloadError('download.config_invalid', str(exc)) from exc
             self.store.activate(spec, content=result.content, sha256=result.sha256,
                                 size=result.size, url=result.url, detected=detected)
+            self.store.save_validators(name, url=spec.url, etag=result.etag,
+                                       last_modified=result.last_modified)
         except DownloadError as exc:
             self.store.record(spec, status='failed', error=exc.code)
             raise
@@ -695,5 +806,6 @@ class SourceUpdater:
                     "error": exc.code,
                     "next_run": next_run(schedule, now=now, state=after, rng=rng)}
         after = state_from_history(self.store.read_history(), name)
-        return {"ran": True, "status": "ok", "record": record, "error": None,
+        return {"ran": True, "status": record.get("status", "ok"), "record": record,
+                "error": None,
                 "next_run": next_run(schedule, now=now, state=after, rng=rng)}

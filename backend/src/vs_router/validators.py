@@ -230,6 +230,8 @@ def validate_configuration(c):
     for s in c.sites:
         if s.wan_address and s.wan_address not in wan_addresses:
             fail("caddy.wan_address")
+    if len({r.name for r in c.rule_sets}) != len(c.rule_sets):
+        fail("ruleset.duplicate_name")
     validate_proxies(c)
 
 

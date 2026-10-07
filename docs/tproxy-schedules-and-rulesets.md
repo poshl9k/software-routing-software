@@ -195,14 +195,15 @@ run_scheduled(*, name, url, kind="rule_set", format="auto", authorized=False,
 
 ## Что НЕ покрыто (сознательно вне объёма)
 
-* **UI / ручной запуск из панели** — read-only runtime API для web-процесса нет.
+* **Демон-исполнитель расписания** — функции расчёта `next_run`/`is_due` есть, но
+  процесса, который по таймеру вызывает `run_scheduled`, нет.
 * **Реальный `sing-box check`** для собранного конфига с новым набором —
   `config_validator` остаётся инъектируемым (бинарник не закреплён, ADR-0005);
   в тестах — фейковый валидатор.
-* **Условные HTTP-запросы** (`If-None-Match`/`If-Modified-Since`): ETag/Last-Modified
-  в истории не хранятся и заголовки не отправляются. `backoff`/`jitter`/лимиты —
-  есть; условный фетч — нет.
-* **`If-Modified-Since`-совместимая 304-обработка** — не реализована.
+* **Не все каталожные пресеты подключены** — `downloader.BUILTIN_SOURCES` пуст;
+  каталог доступен как данные/адаптер, но автоматически не наполняется. Ручное
+  обновление и read-only список теперь есть (см. ниже), однако
+  `tproxy.not_available` не открывается.
 * **Бинарные `.srs`** — нет байт-точного хранилища и закреплённого компилятора;
   распознаются и честно помечаются, но не активируются.
 * **Сериализация активации с общим apply/rollback** — планировщик не
@@ -211,3 +212,15 @@ run_scheduled(*, name, url, kind="rule_set", format="auto", authorized=False,
 * **Гарантия прав на переупаковку** каталога — только провенанс и флаги; юридически
   не подтверждено (см. выше).
 * **Открытие `tproxy.not_available`** — gate не тронут.
+
+## Что добавлено поверх планировщика
+
+* **Условный HTTP** (`ETag`/`Last-Modified` → `If-None-Match`/`If-Modified-Since`)
+  и корректная обработка `304` (активный набор не меняется, пишется
+  `not_modified`, который считается `last_success`) — в `agent/downloader.py`;
+  валидаторы хранятся в `validators.json` и сбрасываются при смене URL. Детали
+  — в `docs/tproxy-sources-downloader.md`.
+* **Read-only web-контракт**: `schema.RuleSetSource` + `Configuration.rule_sets`
+  (пусто/выключено, без секретов, строгая валидация); `GET /api/rulesets`
+  (status/stale из истории агента) и admin-only `POST /api/rulesets/update`;
+  UI во вкладке «Rule-set» показывает список и ручное обновление.

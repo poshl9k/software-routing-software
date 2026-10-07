@@ -10,6 +10,7 @@ import type {
   User,
   TProxyPreview,
   Alias, DHCPLease, ImportPreview, PingResult,
+  RuleSetStatus, RuleSetUpdate,
   UpdateStatus, UpdateStart,
 } from "./types";
 export class ApiError extends Error {
@@ -114,6 +115,12 @@ export const api = {
   ping: (body: { host: string; count: number; source_interface?: string }) => post<PingResult>("/api/diag/ping", body),
   traceroute: (host: string) => post<string[]>("/api/diag/traceroute", { host }),
   rulesCounters: () => request<Record<string, { packets: number; bytes: number }>>("/api/diag/rules-counters"),
+  rulesets: () => request<RuleSetStatus[]>("/api/rulesets"),
+  updateRuleset: (body: RuleSetUpdate) =>
+    post<Record<string, unknown>>("/api/rulesets/update", {
+      kind: "rule_set", format: "auto", authorized: true,
+      max_bytes: 5_000_000, timeout: 20, ...body,
+    }),
   updateStatus: () => request<UpdateStatus>("/api/update"),
   applyUpdate: (release: string) => post<UpdateStart>("/api/update", { release }),
 };
