@@ -346,33 +346,49 @@ def generate_tproxy_preauthorization(version: ConfigurationVersion) -> str:
 
 
 def generate_tproxy_interception(version: ConfigurationVersion) -> str:
-    """Deterministic TProxy capture rules; offline, no host I/O.
+    """Deterministic TProxy capture + conntrack-mark INPUT authorization.
 
-    Emits the single ``inet vs_router_tproxy_interception`` table whose PREROUTING
-    chain runs strictly *after* the preauthorization chain (hook priority ``-80``
-    vs preauth ``-90``; nft evaluates lower priorities first). It therefore only
-    ever rewrites traffic preauth already authorized, and every packet re-enters
-    preauth first — there is no per-flow ``established`` shortcut here.
+    Offline, no host I/O. Emits three tables sharing one ownership contract
+    (:mod:`generators.marks`): a PREROUTING reset (``-85``), the PREROUTING
+    capture (``-80``) and an INPUT guard (``-20``). nft evaluates lower hook
+    priorities first, so a packet sees preauth (``-90``) → reset (``-85``) →
+    capture (``-80``); the guard then runs at INPUT (``-20``). Preauth therefore
+    strictly precedes capture and every packet re-enters it — there is no
+    per-flow ``established`` shortcut.
 
-    The capture keeps the exemptions the proven lab interception repeats:
-    non-selected ingress and non-IPv4/non-TCP/UDP return, local FIB destinations
-    and post-DNAT (``ct status dnat``) return. Matched selected IPv4 TCP/UDP is
-    marked with the TProxy routing mark (:data:`marks.MARK_TPROXY_ROUTE_VALUE`)
-    and ``tproxy``-redirected to the loopback sing-box listeners
-    (:data:`marks.TPROXY_TCP_PORT` / :data:`marks.TPROXY_UDP_PORT`). The same
-    mark drives the policy route helper, so a single owner
-    (:mod:`generators.marks`) covers table, hook priority, mark and table id.
+    The reset clears the reserved conntrack-proof bit
+    (:data:`marks.MARK_TPROXY_CT_PROOF_VALUE`) on every selected packet *before*
+    capture can re-set it. Capture keeps the proven exemptions (non-selected
+    ingress, non-IPv4/non-TCP/UDP, local FIB destinations, post-DNAT
+    ``ct status dnat``) and, for matched selected IPv4 TCP/UDP, sets the routing
+    packet mark (:data:`marks.MARK_TPROXY_ROUTE_VALUE`, drives the policy route)
+    **and** the conntrack-proof bit after the successful ``tproxy`` expression,
+    then ``tproxy``-redirects to the loopback sing-box listeners
+    (:data:`marks.TPROXY_TCP_PORT` / :data:`marks.TPROXY_UDP_PORT`).
 
-    Disabled returns only ``destroy table`` for its own table: an explicit off
-    removes exactly this table and no other. Mirrors the offline idiom of the
-    other TProxy generators: an enabled snapshot is only reachable through an
-    offline ``model_copy`` (the public gate stays closed), so everything else is
-    revalidated against the public contract instead of trusted.
+    The independent INPUT guard authorizes on the **conntrack** mark, never the
+    forgeable packet mark: a selected IPv4 TCP/UDP packet that reaches LOCAL_IN
+    with ``ct mark`` lacking the proof bit is dropped. The proof lives in the
+    separate 32-bit ``ct mark`` space (``docs/lab-26``), so the lab-09 packet-mark
+    forge (``meta mark set meta mark | 0x200``) does not reproduce the token. It
+    is **not** unforgeable against a competing privileged writer of ``ct mark``;
+    the real boundary is ADR-0013's single root apply-writer.
+
+    Disabled returns ``destroy table`` for each of its own tables: an explicit
+    off removes exactly the tables this generator owns and no other. As with the
+    other offline TProxy generators, an enabled snapshot is only reachable
+    through an offline ``model_copy`` (the public gate stays closed), so
+    everything else is revalidated against the public contract instead of
+    trusted.
     """
     table = "inet vs_router_tproxy_interception"
+    reset_table = "inet vs_router_tproxy_ct_reset"
+    guard_table = "inet vs_router_tproxy_input"
     c = version.configuration
     if not c.tproxy.enabled:
-        return f"destroy table {table}\n"
+        return (f"destroy table {reset_table}\n"
+                f"destroy table {table}\n"
+                f"destroy table {guard_table}\n")
     sources = c.tproxy.ingress_interfaces
     allowed = {i.name for i in c.interfaces if i.zone and i.zone != "wan"}
     if not sources or len(set(sources)) != len(sources) or not set(sources) <= allowed:
@@ -383,22 +399,43 @@ def generate_tproxy_interception(version: ConfigurationVersion) -> str:
     data["configuration"]["tproxy"]["enabled"] = False
     ConfigurationVersion.model_validate(data)
     mark = marks.MARK_TPROXY_ROUTE_VALUE
-    # Ownership check: the capture mark must stay inside the TProxy namespace.
+    # Ownership check: the routing packet mark must stay inside the TProxy
+    # namespace. The conntrack proof bit is a separate space (marks module) and
+    # is intentionally absent from the packet-mark REGISTRY.
     marks.assert_no_collisions(mark, marks.Owner.TPROXY)
+    ct_proof = marks.MARK_TPROXY_CT_PROOF_VALUE
+    ct_clear = marks.MARK_TPROXY_CT_PROOF_CLEAR_MASK
     ingress = names(sorted(sources))
     marked = f"meta mark set {mark:#x}"
-    lines = [f"destroy table {table}", f"table {table} {{",
+    set_ct = f"ct mark set ct mark | {ct_proof:#x}"
+    # Every own chain repeats the same exemptions the proven lab tracts use.
+    exemptions = (
+        f"        iifname != {ingress} return",
+        "        fib daddr type local return",
+        "        ct status dnat return",
+        "        meta nfproto != ipv4 return",
+        "        meta l4proto != { tcp, udp } return",
+    )
+    lines = [f"destroy table {reset_table}", f"table {reset_table} {{",
+             "    chain prerouting {",
+             "        type filter hook prerouting priority -85; policy accept;",
+             *exemptions,
+             f"        ct mark set ct mark & {ct_clear:#x}",
+             "    }", "}",
+             f"destroy table {table}", f"table {table} {{",
              "    chain prerouting {",
              "        type filter hook prerouting priority -80; policy accept;",
-             f"        iifname != {ingress} return",
-             "        fib daddr type local return",
-             "        ct status dnat return",
-             "        meta nfproto != ipv4 return",
-             "        meta l4proto != { tcp, udp } return",
-             f'        meta nfproto ipv4 meta l4proto tcp {marked} '
+             *exemptions,
+             f'        meta nfproto ipv4 meta l4proto tcp {marked} {set_ct} '
              f'tproxy ip to 127.0.0.1:{marks.TPROXY_TCP_PORT} counter accept comment "tproxy_tcp"',
-             f'        meta nfproto ipv4 meta l4proto udp {marked} '
+             f'        meta nfproto ipv4 meta l4proto udp {marked} {set_ct} '
              f'tproxy ip to 127.0.0.1:{marks.TPROXY_UDP_PORT} counter accept comment "tproxy_udp"',
+             "    }", "}",
+             f"destroy table {guard_table}", f"table {guard_table} {{",
+             "    chain input {",
+             "        type filter hook input priority -20; policy accept;",
+             *exemptions,
+             f'        ct mark & {ct_proof:#x} == 0 counter drop comment "tproxy_input_denied"',
              "    }", "}"]
     return "\n".join(lines) + "\n"
 

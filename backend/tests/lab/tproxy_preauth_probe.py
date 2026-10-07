@@ -317,6 +317,186 @@ for line in sys.stdin:
     print('PASS: combined UDP preauth/TProxy/containment, crash, interception/route loss, explicit off')
 
 
+# A TProxy capture that sets the routing packet mark but NOT the conntrack proof,
+# simulating a capture that omits the ct mark (or a stale/forged packet mark).
+# The reset chain leaves the conntrack bit clear, so the INPUT guard must drop
+# the intercepted packet: the packet mark alone must never authorize INPUT.
+CT_FORGE_UDP = '''table inet vsr_pa_ct_forge {{
+ chain prerouting {{ type filter hook prerouting priority -80; policy accept;
+  iifname "lan0" ip saddr 10.212.1.2 ip daddr 198.18.0.2 udp sport {port} udp dport 19090 meta mark set 0x100 tproxy ip to 127.0.0.1:51271 counter
+ }}
+}}'''
+
+
+def interception_ct_probe(ingress, origin):
+    """Generated TProxy capture + conntrack-mark INPUT guard, over UDP.
+
+    Lab-only scaffolding in three network namespaces. The capture/reset/guard text
+    is the byte-for-byte product generator output in
+    ``POLICIES['allow_interception']``; only the lab INPUT accept and the forge
+    injector are lab rules. Proves (a) allowed flow via proxy, (b) denied flow
+    dropped, (c) INPUT authorization by conntrack mark (a TProxy rule that sets
+    only the routing packet mark is dropped), (d) explicit off restores ordinary
+    routing.
+    """
+    binary = '/var/cache/vsr-singbox-probe'
+    interception = POLICIES['allow_interception']
+
+    def install(case):
+        apply_rules(POLICIES[case + '_firewall'] + POLICIES[case] + POLICIES[case + '_guard'])
+        ns(NAMES[0], 'nft', 'insert', 'rule', 'inet', 'vs_router', 'input',
+           'iifname', 'lan0', 'ip', 'saddr', '10.212.1.2', 'ip', 'daddr', '198.18.0.2',
+           'meta', 'mark', '0x100', 'meta', 'l4proto', 'udp',
+           'udp', 'dport', '19090', 'counter', 'accept', 'comment', 'lab_tproxy_input')
+
+    ns(NAMES[0], 'ip', 'route', 'add', 'default', 'via', '10.212.2.2')
+    ns(NAMES[0], 'ip', 'rule', 'add', 'priority', '100', 'fwmark', '0x100', 'lookup', '100')
+    ns(NAMES[0], 'ip', 'route', 'add', 'local', '0.0.0.0/0', 'dev', 'lo', 'table', '100')
+    install('allow')
+    apply_rules(interception)
+    apply_rules('''table inet vsr_pa_observe {
+        chain output { type filter hook output priority -10; policy accept;
+            ip daddr 198.18.0.2 udp dport 19090 counter
+        }
+        chain established { type filter hook prerouting priority -150; policy accept;
+            iifname "lan0" ip saddr 10.212.1.2 ip daddr 198.18.0.2 udp sport 25000 udp dport 19090 ct state established counter
+        }
+    }''')
+    with tempfile.TemporaryDirectory(prefix='vsr-singbox-', dir='/var/cache') as folder:
+        config = Path(folder) / 'config.json'
+        config.write_text(POLICIES['allow_singbox'])
+        ns(NAMES[0], binary, 'check', '-c', str(config))
+
+        def start():
+            log = open(Path(folder) / 'singbox.log', 'w+')
+            process = subprocess.Popen(['ip', 'netns', 'exec', NAMES[0], binary, 'run', '-c', str(config)],
+                                       stdout=log, stderr=log)
+            processes.append(process)
+            for _ in range(50):
+                if process.poll() is not None:
+                    log.seek(0)
+                    raise AssertionError(log.read())
+                if '127.0.0.1:51271' in ns(NAMES[0], 'ss', '-H', '-lun').stdout:
+                    log.close()
+                    return process
+                time.sleep(0.1)
+            raise AssertionError('sing-box UDP listener readiness timed out')
+
+        def counter(table, chain):
+            state = json.loads(ns(NAMES[0], 'nft', '-j', 'list', 'chain', 'inet', table, chain).stdout)
+            total = 0
+            for item in state['nftables']:
+                for expr in item.get('rule', {}).get('expr', []):
+                    if 'counter' in expr:
+                        total += expr['counter']['packets']
+            return total
+
+        persistent_code = r'''
+import json, socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(('10.212.1.2', 25000))
+print('READY', flush=True)
+for line in sys.stdin:
+    payload = line.strip().encode()
+    sent = s.sendto(payload, ('198.18.0.2', 19090))
+    reply, peer = None, None
+    deadline = time.monotonic() + 0.7
+    while time.monotonic() < deadline:
+        s.settimeout(deadline - time.monotonic())
+        try:
+            data, address = s.recvfrom(4096)
+        except socket.timeout:
+            break
+        if data == payload:
+            reply, peer = data.decode(), address
+            break
+    print(json.dumps({'sent_bytes': sent, 'reply': reply, 'peer': peer,
+                      'source_port': s.getsockname()[1]}), flush=True)
+'''
+        persistent = subprocess.Popen(['ip', 'netns', 'exec', NAMES[1], 'python3', '-u', '-c', persistent_code],
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        processes.append(persistent)
+        persistent_input, persistent_output = persistent.stdin, persistent.stdout
+        assert persistent_input is not None and persistent_output is not None
+        assert select.select([persistent_output], [], [], 5)[0]
+        assert persistent_output.readline().strip() == 'READY'
+
+        def send_persistent(token):
+            persistent_input.write(token + '\n')
+            persistent_input.flush()
+            assert select.select([persistent_output], [], [], 5)[0], 'persistent sender timed out'
+            response = json.loads(persistent_output.readline())
+            assert response['source_port'] == 25000
+            return response
+
+        def request(case, allowed, proxied=False):
+            before_output = counter('vsr_pa_observe', 'output')
+            probe(case, allowed, NAMES[1], '198.18.0.2', 19090, ingress, origin, proxied=proxied)
+            output_delta = counter('vsr_pa_observe', 'output') - before_output
+            assert output_delta > 0 if proxied else output_delta == 0
+            print(json.dumps({'case': case, 'proxy_output_delta': output_delta}), flush=True)
+            if proxied:
+                assert counter('vs_router_tproxy_interception', 'prerouting') > 0
+                assert counter('vs_router_tproxy_guard', 'forward') == 0
+
+        process = start()
+        # (a) allowed flow traverses the proxy.
+        request('ct_allow', True, proxied=True)
+        # (b) denied flows never reach the origin (preauth -90 before capture -80).
+        for case in ('deny_first', 'default_deny'):
+            install(case)
+            request('ct_' + case, False)
+        install('allow')
+        request('ct_allow_control', True, proxied=True)
+        # (c) conntrack INPUT authorization: hold one established UDP tuple,
+        #     remove ONLY the generated capture table, then forge the packet mark.
+        warm = send_persistent('vsr-pa-ct-guard-warm')
+        assert warm['reply'] == 'vsr-pa-ct-guard-warm', 'ct guard: warm-up failed'
+        healthy = send_persistent('vsr-pa-ct-guard-healthy')
+        assert healthy['reply'] == 'vsr-pa-ct-guard-healthy', 'ct guard: healthy flow failed'
+        assert counter('vsr_pa_observe', 'established') > 0, 'ct guard: tuple not established'
+        guard_before = counter('vs_router_tproxy_input', 'input')
+        apply_rules('destroy table inet vs_router_tproxy_interception\n')
+        apply_rules(CT_FORGE_UDP.format(port=25000))
+        established_before = counter('vsr_pa_observe', 'established')
+        output_before = counter('vsr_pa_observe', 'output')
+        forged = send_persistent('vsr-pa-ct-guard-forged')
+        time.sleep(0.2)
+        guard_delta = counter('vs_router_tproxy_input', 'input') - guard_before
+        established_delta = counter('vsr_pa_observe', 'established') - established_before
+        output_delta = counter('vsr_pa_observe', 'output') - output_before
+        print(json.dumps({'case': 'ct_guard_forge', 'sender': forged,
+                          'input_guard_drop_delta': guard_delta,
+                          'established_delta': established_delta,
+                          'proxy_output_delta': output_delta}), flush=True)
+        assert forged['reply'] is None, 'packet-mark-only TProxy was answered through the proxy'
+        assert guard_delta > 0, 'conntrack INPUT guard was not reached'
+        assert established_delta > 0, 'packet was not established before the guard'
+        assert output_delta == 0, 'packet-mark-only packet reached proxy OUTPUT'
+        forbidden_tokens.add('vsr-pa-ct-guard-forged')
+        # recovery: restore the generated capture and confirm the flow proxies again.
+        apply_rules('destroy table inet vsr_pa_ct_forge\n')
+        apply_rules(interception)
+        recovered = send_persistent('vsr-pa-ct-guard-recovered')
+        assert recovered['reply'] == 'vsr-pa-ct-guard-recovered', 'ct guard: recovery failed'
+        # (d) explicit off removes every generator table and restores ordinary routing.
+        apply_rules(POLICIES['off_interception'] + POLICIES['off'] + POLICIES['off_guard']
+                    + POLICIES['allow_firewall'])
+        ns(NAMES[0], 'ip', 'rule', 'del', 'priority', '100')
+        ns(NAMES[0], 'ip', 'route', 'flush', 'table', '100')
+        process.kill()
+        process.wait(timeout=5)
+        processes.remove(process)
+        request('ct_off', True)
+        apply_rules(POLICIES['default_deny_firewall'])
+        request('ct_off_default_deny', False)
+        assert not any(e['token'] in forbidden_tokens for e in origin), 'delayed blocked token reached origin'
+        assert persistent.poll() is None, 'persistent UDP socket owner exited during experiment'
+        print('PASS: generated TProxy UDP capture + conntrack INPUT guard; packet-mark '
+              'forge dropped; explicit off restored ordinary routing')
+    print('PASS: UDP interception with conntrack-mark INPUT authorization')
+
+
 try:
     for name in NAMES:
         run("ip", "netns", "add", name)
@@ -341,6 +521,9 @@ try:
     ingress = monitor(NAMES[0], "lan0", True, "10.212.1.1")
     origin = monitor(NAMES[2], "eth0", True, "198.18.0.2")
     client = monitor(NAMES[1], "eth0", True, "10.212.1.2")
+    if POLICIES.get('__tproxy_interception_udp__'):
+        interception_ct_probe(ingress, origin)
+        raise SystemExit(0)
     if POLICIES.get('__combined__'):
         combined_probe(ingress, origin)
         raise SystemExit(0)

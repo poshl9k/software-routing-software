@@ -67,9 +67,11 @@ def engine_with():
 
 def test_disabled_interception_is_destroy_only():
     text = generate_tproxy_interception(ConfigurationVersion())
-    assert text == "destroy table inet vs_router_tproxy_interception\n"
-    assert "tproxy" not in text.replace("inet vs_router_tproxy_interception", "")
-    assert "mark" not in text and "counter" not in text and "hook" not in text
+    assert text == ("destroy table inet vs_router_tproxy_ct_reset\n"
+                    "destroy table inet vs_router_tproxy_interception\n"
+                    "destroy table inet vs_router_tproxy_input\n")
+    assert "chain" not in text and "hook" not in text
+    assert "mark" not in text and "counter" not in text
 
 
 def test_hook_is_prerouting_and_runs_after_preauth():
@@ -78,6 +80,16 @@ def test_hook_is_prerouting_and_runs_after_preauth():
     assert "type filter hook prerouting priority -80; policy accept;" in text
     # nft evaluates lower priorities first: preauth -90 before capture -80.
     assert -90 < -80
+
+
+def test_reset_runs_before_capture_and_clears_conntrack_proof():
+    text = generate_tproxy_interception(enabled())
+    assert "type filter hook prerouting priority -85; policy accept;" in text
+    # The reset clears the reserved conntrack proof bit on selected packets
+    # before capture can re-set it; -85 < -80 means it runs first.
+    assert -90 < -85 < -80
+    assert (f"ct mark set ct mark & "
+            f"{marks.MARK_TPROXY_CT_PROOF_CLEAR_MASK:#x}") in text
 
 
 def test_capture_keeps_preauth_exemptions():
@@ -100,8 +112,38 @@ def test_capture_targets_loopback_listeners_with_owned_mark():
     assert f"tproxy ip to 127.0.0.1:{marks.TPROXY_UDP_PORT}" in text
     assert "meta nfproto ipv4 meta l4proto tcp" in text
     assert "meta nfproto ipv4 meta l4proto udp" in text
-    # Only ever the routing mark, never a proof bit.
-    assert f"{marks.MARK_TPROXY_PROOF_VALUE:#x}" not in text
+    # The forgeable packet proof bit is never set on the packet mark; the
+    # authorization token lives in the separate conntrack-mark space instead.
+    assert "meta mark set meta mark" not in text
+    assert f"meta mark set {marks.MARK_TPROXY_PROOF_VALUE:#x}" not in text
+    assert (f"ct mark set ct mark | {marks.MARK_TPROXY_CT_PROOF_VALUE:#x}"
+            in text)
+
+
+def test_input_guard_authorizes_on_conntrack_mark_not_packet_mark():
+    text = generate_tproxy_interception(enabled())
+    guard = text.split("table inet vs_router_tproxy_input {", 1)[1]
+    assert "type filter hook input priority -20; policy accept;" in guard
+    assert (f"ct mark & {marks.MARK_TPROXY_CT_PROOF_VALUE:#x} == 0 "
+            'counter drop comment "tproxy_input_denied"') in guard
+    # The guard is independent: it never authorizes on the packet mark.
+    assert "meta mark" not in guard
+    assert guard.count("drop") == 1
+    assert "ct state" not in guard
+    # No accept verdict: authorization is drop-only, the main firewall accepts.
+    assert "accept" not in guard.replace("policy accept", "")
+
+
+def test_ct_capture_sets_proof_inside_the_same_tproxy_rule():
+    text = generate_tproxy_interception(enabled())
+    for proto in ("tcp", "udp"):
+        line = next(l for l in text.splitlines()
+                    if f"meta l4proto {proto} meta mark set" in l)
+        # Routing mark, then the conntrack proof and the TProxy expression on
+        # one narrow rule per protocol.
+        assert f"meta mark set {marks.MARK_TPROXY_ROUTE_VALUE:#x}" in line
+        assert f"ct mark set ct mark | {marks.MARK_TPROXY_CT_PROOF_VALUE:#x}" in line
+        assert "tproxy ip to 127.0.0.1:" in line and "counter accept" in line
 
 
 def test_capture_output_is_deterministic():
@@ -110,6 +152,10 @@ def test_capture_output_is_deterministic():
     assert first == second
     # Stable ordering of the two protocol rules (TCP then UDP).
     assert first.index("tproxy_tcp") < first.index("tproxy_udp")
+    # Stable table ordering: reset -> capture -> guard.
+    assert (first.index("table inet vs_router_tproxy_ct_reset {")
+            < first.index("table inet vs_router_tproxy_interception {")
+            < first.index("table inet vs_router_tproxy_input {"))
 
 
 def test_invalid_ingress_is_rejected():
@@ -118,12 +164,15 @@ def test_invalid_ingress_is_rejected():
             generate_tproxy_interception(forced(ingress))
 
 
-def test_off_removes_only_its_own_table():
+def test_off_removes_only_its_own_tables():
     text = generate_tproxy_interception(ConfigurationVersion())
-    assert text.count("destroy table") == 1
-    assert "vs_router_tproxy_interception" in text
+    assert text.count("destroy table") == 3
+    for name in ("vs_router_tproxy_ct_reset", "vs_router_tproxy_interception",
+                 "vs_router_tproxy_input"):
+        assert name in text
     assert "vs_router_tproxy_preauth" not in text
     assert "vs_router_tproxy_guard" not in text
+    assert "vs_router_tproxy_dns" not in text
 
 
 # --------------------------------------------------------------------------
@@ -134,8 +183,22 @@ def test_mark_is_registered_tproxy_owner():
     marks.assert_no_collisions(marks.MARK_TPROXY_ROUTE_VALUE, marks.Owner.TPROXY)
     tables = {t.name for t in marks.TABLES}
     hooks = {(h.table, h.chain): h.priority for h in marks.HOOKS}
+    assert "inet vs_router_tproxy_ct_reset" in tables
     assert "inet vs_router_tproxy_interception" in tables
+    assert "inet vs_router_tproxy_input" in tables
+    assert hooks[("inet vs_router_tproxy_ct_reset", "prerouting")] == -85
     assert hooks[("inet vs_router_tproxy_interception", "prerouting")] == -80
+    assert hooks[("inet vs_router_tproxy_input", "input")] == -20
+
+
+def test_owned_tables_cover_every_generated_table():
+    from vs_router.agent import tproxy_apply
+    text = generate_tproxy_interception(enabled())
+    for name in tproxy_apply.owned_tables():
+        # Every non-wired owned table is torn down by cleanup_content.
+        assert f"destroy table {name}\n" in tproxy_apply.cleanup_content()
+    assert "vs_router_tproxy_ct_reset" in text
+    assert "vs_router_tproxy_input" in text
 
 
 def test_registry_matches_generator_source():
@@ -244,6 +307,44 @@ def test_interception_fixture_is_opt_in_and_preserves_baseline():
 def test_interception_fixture_is_tcp_only():
     with pytest.raises(ValueError, match="TCP-only"):
         _generator()["generate_cases"]("udp", interception=True)
+
+
+def test_udp_interception_fixture_is_opt_in_and_udp_only():
+    generate = _generator()["generate_cases"]
+    with pytest.raises(ValueError, match="UDP-only"):
+        generate("tcp", interception_udp=True)
+    outputs = generate("udp", interception_udp=True)
+    assert "allow_interception" in outputs and "off_interception" in outputs
+    assert "ct mark set ct mark | 0x200" in outputs["allow_interception"]
+    assert outputs["off_interception"] == (
+        "destroy table inet vs_router_tproxy_ct_reset\n"
+        "destroy table inet vs_router_tproxy_interception\n"
+        "destroy table inet vs_router_tproxy_input\n")
+
+
+def test_udp_interception_probe_is_opt_in_only():
+    text = (LAB / "tproxy_preauth_probe.py").read_text()
+    assert "__tproxy_interception_udp__" in text
+    assert "def interception_ct_probe" in text
+    # The UDP branch consumes the generated capture text; it never hardcodes a
+    # packet-proof mark of its own.
+    assert "ct mark set ct mark | 0x200" not in text
+
+
+def test_udp_interception_cli_mode_is_exclusive(tmp_path):
+    module = _generator()
+    target = tmp_path / "cases.json"
+    for flags in (["--tproxy-interception-udp", "--tproxy-interception"],
+                  ["--tproxy-interception-udp", "--tcp"]):
+        with pytest.raises(SystemExit) as exc:
+            module["main"]([str(target), *flags])
+        assert exc.value.code == 2
+        assert not target.exists()
+    module["main"]([str(target), "--tproxy-interception-udp"])
+    output = json.loads(target.read_text())
+    assert output["__tproxy_interception_udp__"] is True
+    assert "priority -85" in output["allow_interception"]
+    assert "udp dport" not in output["allow_interception"]  # generator has no per-port rule
 
 
 def test_interception_cli_mode_is_exclusive(tmp_path):

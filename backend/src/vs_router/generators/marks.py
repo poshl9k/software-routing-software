@@ -41,11 +41,14 @@ it changes no generator output, no bundle, no apply/boot path.
 
 Honesty note
 ------------
-No production generator emits ``meta mark`` / ``fwmark`` / ``ip rule`` today
-(verified across ``src/``). The only concrete marks that exist are VM-only lab
-values. The TProxy entries below are therefore *reservations of a still-unproven
-path*, and the product namespace is an explicit reservation with no concrete
-value yet. Nothing here invents a product mark.
+Within the *offline* TProxy generators (not wired to any bundle/apply/boot and
+unreachable while the public gate stays closed) the capture now really emits the
+routing packet mark ``0x100`` and the conntrack proof bit ``0x200``
+(``generate_tproxy_interception``, lab-27/lab-29). The product firewall
+(``generate_nftables``) still emits no ``meta mark``/``fwmark``/``ip rule``. The
+TProxy entries below remain a reservation of a still-unproven path, and the
+product namespace is an explicit reservation with no concrete value yet.
+Nothing here invents a product mark.
 """
 
 from __future__ import annotations
@@ -211,6 +214,10 @@ TABLES: tuple[NftTable, ...] = (
              "generators/nftables.py:310", False),
     NftTable("inet vs_router_tproxy_interception", "offline TProxy capture",
              "generators/nftables.py:generate_tproxy_interception", False),
+    NftTable("inet vs_router_tproxy_ct_reset", "offline TProxy ct-mark reset",
+             "generators/nftables.py:generate_tproxy_interception", False),
+    NftTable("inet vs_router_tproxy_input", "offline TProxy INPUT guard",
+             "generators/nftables.py:generate_tproxy_interception", False),
     NftTable("inet vs_router_tproxy_dns_ingress", "offline DNS ingress guard",
              "generators/nftables.py:202", False),
     NftTable("inet vs_router_tproxy_dns_listener", "offline DNS listener boundary",
@@ -244,6 +251,10 @@ HOOKS: tuple[HookPriority, ...] = (
     HookPriority("inet vs_router_tproxy_preauth", "prerouting", "prerouting", -90,
                  "generators/nftables.py:330"),
     HookPriority("inet vs_router_tproxy_interception", "prerouting", "prerouting", -80,
+                 "generators/nftables.py:generate_tproxy_interception"),
+    HookPriority("inet vs_router_tproxy_ct_reset", "prerouting", "prerouting", -85,
+                 "generators/nftables.py:generate_tproxy_interception"),
+    HookPriority("inet vs_router_tproxy_input", "input", "input", -20,
                  "generators/nftables.py:generate_tproxy_interception"),
     HookPriority("inet vs_router_tproxy_dns_ingress", "prerouting", "prerouting", -110,
                  "generators/nftables.py:218"),

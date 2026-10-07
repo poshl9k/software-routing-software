@@ -17,7 +17,7 @@ from vs_router.generators.singbox import generate_singbox
 
 
 def generate_cases(protocol='udp', *, input_proof=False, mark_collision=False,
-                   ct_proof=False, interception=False):
+                   ct_proof=False, interception=False, interception_udp=False):
     if mark_collision:
         if protocol != 'tcp':
             raise ValueError('TCP-only lab mark collision experiment')
@@ -31,6 +31,8 @@ def generate_cases(protocol='udp', *, input_proof=False, mark_collision=False,
             raise ValueError('conntrack proof mode is standalone (no packet-mark proof)')
     if interception and protocol != 'tcp':
         raise ValueError('TCP-only TProxy interception experiment')
+    if interception_udp and protocol != 'udp':
+        raise ValueError('UDP-only TProxy interception experiment')
     interfaces = [{'name': 'lan0', 'zone': 'lan'}, {'name': 'wan0', 'zone': 'wan'}]
     allow = {'name': 'allow', 'ingress_zone': 'lan', 'dst': 'zone:wan', 'protocol': protocol,
              'destination_ports': '19090', 'action': 'pass', 'order': 10}
@@ -54,7 +56,7 @@ def generate_cases(protocol='udp', *, input_proof=False, mark_collision=False,
             version = version.model_copy(update={'configuration': config})
         outputs[name] = generate_tproxy_preauthorization(version)
         outputs[name + '_guard'] = generate_tproxy_containment(version)
-        if interception:
+        if interception or interception_udp:
             key = 'off_interception' if name == 'off' else name + '_interception'
             outputs[key] = generate_tproxy_interception(version)
     # Real ordinary firewall: local INPUT allow, otherwise default deny.
@@ -96,6 +98,7 @@ def main(argv=None):
     modes.add_argument('--tcp-preauth-combined', action='store_true')
     modes.add_argument('--tcp-ct-proof', action='store_true')
     modes.add_argument('--tproxy-interception', action='store_true')
+    modes.add_argument('--tproxy-interception-udp', action='store_true')
     parser.add_argument('--tcp-mark-collision', action='store_true')
     args = parser.parse_args(argv)
     if args.tcp_mark_collision and not args.tcp:
@@ -106,6 +109,11 @@ def main(argv=None):
         # comes byte-for-byte from generate_tproxy_interception.
         outputs = generate_cases('tcp', interception=True)
         outputs['__tproxy_interception__'] = True
+    elif args.tproxy_interception_udp:
+        # UDP counterpart: real firewall/preauth/containment/sing-box plus the
+        # same generated capture (its UDP rule) for the UDP interception probe.
+        outputs = generate_cases('udp', interception_udp=True)
+        outputs['__tproxy_interception_udp__'] = True
     elif args.tcp_ct_proof:
         # Standalone conntrack-mark INPUT authorization fixture for
         # tproxy_tcp_ct_proof_probe.py; never carries the packet-mark proof mode.
