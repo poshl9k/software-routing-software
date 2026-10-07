@@ -23,5 +23,9 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     clearMocks: true,
+    // The DHCP/DNS editor test renders a large form and takes ~5s; the default
+    // 5s limit tripped under parallel load. Keep a generous ceiling so a slow
+    // machine does not turn a passing test red.
+    testTimeout: 20000,
   },
 });

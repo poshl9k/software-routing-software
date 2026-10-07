@@ -1,5 +1,6 @@
 import { Alert, Button, Checkbox, FormControlLabel, Typography } from "@mui/material";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { queryKeys } from "../query";
@@ -12,7 +13,9 @@ import { Field } from "../components/Field";
 import { FormActions, FormGrid } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField, interfaceLabel } from "../components/Select";
+import { ValueTabs } from "../components/Tabs";
 import { useDraftEditor } from "../hooks/useDraftEditor";
+import { ProxiesEditor, RuleSets } from "./RoutingProxy";
 
 const domainValid = (domain: string) => /^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/.test(domain);
 const ruleValid = (rule: TProxyRule) => nameValid(rule.name) &&
@@ -21,9 +24,9 @@ const ruleValid = (rule: TProxyRule) => nameValid(rule.name) &&
   rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr));
 const timeValid = (time: string) => /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(time);
 
-/** Draft-only TProxy page. Live interception stays blocked by the backend. */
-export default function Routing() {
-  const { configuration, version, user, error: apiError } = useConfiguration();
+/** Draft-only TProxy policy. Live interception stays blocked by the backend. */
+function TProxyEditor() {
+  const { configuration, version, user } = useConfiguration();
   const editor = useDraftEditor<TProxy>();
   const queryClient = useQueryClient();
   // On-demand: only fetched when the operator asks, so `enabled: false`.
@@ -53,11 +56,10 @@ export default function Routing() {
   };
   return (
     <>
-      <PageHeader>Маршрутизация · sing-box TProxy</PageHeader>
       <Alert severity="warning">
         TProxy пока недоступен: перехват и защита при отказе не проверены. Сохранённые правила не влияют на трафик.
       </Alert>
-      <ErrorNotice error={editor.error ?? preview.error ?? apiError} />
+      <ErrorNotice error={editor.error ?? preview.error} />
       <Typography>Состояние: {configuration.tproxy.enabled ? "включён" : "выключен"}</Typography>
       <Button disabled>Включить TProxy</Button>
       {!editor.isEdit || user?.role === "operator" ? (
@@ -138,6 +140,32 @@ export default function Routing() {
             save={() => void save()} />
         </>
       )}
+    </>
+  );
+}
+
+type RoutingTab = "tproxy" | "proxies" | "rulesets";
+
+/** The «Маршрутизация» section: TProxy policy, proxy exits and rule-set sources. */
+export default function Routing() {
+  const { error: apiError } = useConfiguration();
+  const [tab, setTab] = useState<RoutingTab>("tproxy");
+  return (
+    <>
+      <PageHeader>Маршрутизация</PageHeader>
+      <ErrorNotice error={apiError} />
+      <ValueTabs
+        value={tab}
+        change={setTab}
+        tabs={[
+          { value: "tproxy", label: "sing-box TProxy" },
+          { value: "proxies", label: "Прокси-выходы" },
+          { value: "rulesets", label: "Rule-set" },
+        ]}
+      />
+      {tab === "tproxy" && <TProxyEditor />}
+      {tab === "proxies" && <ProxiesEditor />}
+      {tab === "rulesets" && <RuleSets />}
     </>
   );
 }

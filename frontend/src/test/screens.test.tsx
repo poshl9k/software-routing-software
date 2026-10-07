@@ -45,7 +45,7 @@ describe("screens", () => {
     ["/dns", "DNS (Unbound)"],
     ["/tunnels", "Туннели"],
     ["/proxy", "Прокси (Caddy)"],
-    ["/routing", "Маршрутизация · sing-box TProxy"],
+    ["/routing", "Маршрутизация"],
     ["/apply", "Применение изменений"],
     ["/onboarding", "Учётная запись администратора"],
   ])("renders %s", async (path, title) => {

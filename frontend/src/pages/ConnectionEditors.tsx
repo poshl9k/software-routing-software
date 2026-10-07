@@ -193,7 +193,7 @@ function tunnelDescription(tunnel: Tunnel): string | null {
   const name = tunnel.name.trim().slice(0, 64);
   return name || null;
 }
-function SecretField({
+export function SecretField({
   label,
   value,
   change,

@@ -1,0 +1,215 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
+import { useEffect } from "react";
+import { expect, it, vi } from "vitest";
+import Routing from "../pages/Routing";
+import { RouterProvider, useRouterState } from "../state";
+import { emptyConfiguration } from "../fixtures";
+import type { ProxySettings } from "../types";
+
+type Role = "admin" | "operator";
+
+function setup(options?: { fail?: boolean; proxies?: ProxySettings; role?: Role }) {
+  const configuration = {
+    ...emptyConfiguration,
+    proxies: options?.proxies ?? emptyConfiguration.proxies,
+  };
+  const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/api/versions")
+      return Promise.resolve(
+        new Response(JSON.stringify([{ id: 1, status: "draft", configuration }])),
+      );
+    if (path === "/api/auth/me")
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ id: 1, username: options?.role ?? "admin", role: options?.role ?? "admin" }),
+        ),
+      );
+    if (options?.fail)
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            code: "validation.failed",
+            message: "Ошибка проверки конфигурации",
+            details: [],
+          }),
+          { status: 422 },
+        ),
+      );
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: 1,
+          status: "draft",
+          configuration: JSON.parse(String(init?.body)),
+        }),
+      ),
+    );
+  });
+  vi.stubGlobal("fetch", fetch);
+  function Session() {
+    const { loadUser } = useRouterState();
+    useEffect(() => {
+      void loadUser();
+    }, [loadUser]);
+    return null;
+  }
+  render(
+    <MemoryRouter>
+      <RouterProvider>
+        <Session />
+        <Routing />
+      </RouterProvider>
+    </MemoryRouter>,
+  );
+  return fetch;
+}
+
+const openTab = async (user: ReturnType<typeof userEvent.setup>, name: string) =>
+  user.click(screen.getByRole("tab", { name }));
+const saveButton = () => screen.getByRole("button", { name: "Сохранить" });
+const sentProxies = (fetch: ReturnType<typeof setup>) => {
+  const call = fetch.mock.calls.find(
+    ([path, init]) => path === "/api/draft" && (init as RequestInit)?.method === "PUT",
+  );
+  return JSON.parse(String((call![1] as RequestInit).body)).proxies as ProxySettings;
+};
+
+it("saves proxy outbound, subscription and group as a draft with a write-only secret", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+
+  await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
+  await user.type(screen.getByLabelText("Тег выхода"), "ss1");
+  await user.type(screen.getByLabelText("Сервер"), "exit.example.com");
+  await user.type(screen.getByLabelText("Порт"), "8388");
+  await user.type(screen.getByLabelText("Секрет (пароль / UUID)"), "topsecret");
+
+  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.type(screen.getByLabelText("Имя подписки"), "sub1");
+  await user.type(screen.getByLabelText("URL подписки"), "https://sub.example.com/list");
+  await user.selectOptions(screen.getByLabelText("Формат"), "clash");
+
+  await user.click(screen.getByRole("button", { name: "+ Добавить группу" }));
+  await user.type(screen.getByLabelText("Тег группы"), "grp");
+  await user.click(screen.getByRole("checkbox", { name: "ss1" }));
+
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch)).toBeTruthy());
+  const proxies = sentProxies(fetch);
+  expect(proxies.outbounds).toEqual([
+    {
+      tag: "ss1",
+      type: "shadowsocks",
+      server: "exit.example.com",
+      port: 8388,
+      secret: { plaintext: "topsecret" },
+      tls: false,
+      tls_server_name: null,
+      tls_insecure: false,
+      admin_listen: null,
+    },
+  ]);
+  expect(proxies.subscriptions).toEqual([
+    { name: "sub1", url: "https://sub.example.com/list", format: "clash", interval_hours: 24, enabled: false },
+  ]);
+  expect(proxies.groups).toEqual([
+    { tag: "grp", type: "selector", outbounds: ["ss1"], url: null, interval_minutes: null },
+  ]);
+  // The secret is sent as write-only plaintext, never as a redacted marker.
+  expect(JSON.stringify(proxies)).not.toContain("redacted");
+  // Read-only view keeps the exit but never renders the secret.
+  expect((await screen.findAllByText("ss1")).length).toBeGreaterThan(0);
+  expect(screen.queryByText("topsecret")).not.toBeInTheDocument();
+  expect(screen.queryByDisplayValue("topsecret")).not.toBeInTheDocument();
+});
+
+it("blocks saving an outbound without a server/port and a non-https subscription", async () => {
+  setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
+  await user.type(screen.getByLabelText("Тег выхода"), "ss1");
+  expect(saveButton()).toBeDisabled();
+  await user.type(screen.getByLabelText("Сервер"), "exit.example.com");
+  await user.type(screen.getByLabelText("Порт"), "70000");
+  expect(saveButton()).toBeDisabled();
+  await user.clear(screen.getByLabelText("Порт"));
+  await user.type(screen.getByLabelText("Порт"), "8388");
+  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.type(screen.getByLabelText("Имя подписки"), "sub1");
+  await user.type(screen.getByLabelText("URL подписки"), "http://not-secure.example.com");
+  expect(saveButton()).toBeDisabled();
+  await user.clear(screen.getByLabelText("URL подписки"));
+  await user.type(screen.getByLabelText("URL подписки"), "https://secure.example.com/list");
+  expect(saveButton()).toBeEnabled();
+});
+
+it("rejects duplicate outbound tags and a reserved direct tag", async () => {
+  setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  for (const [tag, server, port] of [
+    ["dup", "a.example.com", "8388"],
+    ["dup", "b.example.com", "8389"],
+  ]) {
+    await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
+    await user.type(screen.getAllByLabelText("Тег выхода").at(-1)!, tag);
+    await user.type(screen.getAllByLabelText("Сервер").at(-1)!, server);
+    await user.type(screen.getAllByLabelText("Порт").at(-1)!, port);
+  }
+  // Both exits are otherwise valid, so only the duplicate tag keeps save off.
+  expect(saveButton()).toBeDisabled();
+  await user.clear(screen.getAllByLabelText("Тег выхода")[1]);
+  await user.type(screen.getAllByLabelText("Тег выхода")[1], "direct");
+  expect(saveButton()).toBeDisabled();
+});
+
+it("shows empty-state prompts for every proxy collection and the rule-set list", async () => {
+  setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  expect(screen.getByText("Нет прокси-выходов")).toBeVisible();
+  expect(screen.getByText("Нет подписок")).toBeVisible();
+  expect(screen.getByText("Нет групп")).toBeVisible();
+  await openTab(user, "Rule-set");
+  expect(screen.getByText("Rule-set не подключены")).toBeVisible();
+  expect(screen.getByRole("table")).toBeVisible();
+});
+
+it("surfaces a rejected draft and retains the local outbound for retry", async () => {
+  setup({ fail: true });
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
+  await user.type(screen.getByLabelText("Тег выхода"), "keep");
+  await user.type(screen.getByLabelText("Сервер"), "exit.example.com");
+  await user.type(screen.getByLabelText("Порт"), "8388");
+  await user.click(saveButton());
+  expect(await screen.findByText(/Ошибка проверки конфигурации/)).toBeVisible();
+  expect(screen.getByLabelText("Тег выхода")).toHaveValue("keep");
+  expect(saveButton()).toBeEnabled();
+});
+
+it("keeps proxy exits read-only for an operator", async () => {
+  const fetch = setup({ role: "operator" });
+  const user = userEvent.setup();
+  await openTab(user, "Прокси-выходы");
+  // `loadUser` resolves asynchronously; the toggle flips to disabled once the
+  // operator role is known.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Редактировать" })).toBeDisabled(),
+  );
+  expect(fetch.mock.calls.filter(([, init]) => (init as RequestInit)?.method)).toHaveLength(0);
+});
