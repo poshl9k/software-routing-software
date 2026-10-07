@@ -274,6 +274,14 @@ stage_awg() {
     fi
 }
 
+stage_singbox() {
+    # Delivers the ADR-0012 pinned engine binary to /usr/local/lib/vs-router/
+    # sing-box, where agent/singbox_service.py fail-closed expects it. The step
+    # is idempotent (an already-verified binary is kept, no network) and
+    # hash-anchored: a mismatch leaves nothing installed and fails the stage.
+    bash "$SCRIPT_DIR/install-singbox.sh"
+}
+
 stage_build() {
     if ((SKIP_BUILD)); then
         log 'Build skipped by --skip-build'
@@ -364,6 +372,7 @@ main() {
     run_stage 'networkd' stage_networkd
     run_stage 'caddy' stage_caddy
     run_stage 'awg' stage_awg
+    run_stage 'singbox' stage_singbox
     run_stage 'build' stage_build
     run_stage 'install' stage_install
     run_stage 'summary' stage_summary

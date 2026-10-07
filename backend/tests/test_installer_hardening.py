@@ -252,6 +252,107 @@ def test_shell_syntax():
         subprocess.run(['bash', '-n', str(script)], check=True)
 
 
+def test_install_singbox_pins_match_agent_adapter():
+    """The delivery script's pinned values must equal the adapter's (ADR-0012):
+    a diverging archive/binary hash, version or provenance would install a
+    binary the agent's fail-closed verification rejects."""
+    from vs_router.agent import singbox_service as sb
+    script = (PACKAGING / 'install-singbox.sh').read_text()
+    assert f"SINGBOX_VERSION='{sb.SINGBOX_VERSION}'" in script
+    assert f"SINGBOX_ARCHIVE_SHA256='{sb.SINGBOX_ARCHIVE_SHA256}'" in script
+    assert f"SINGBOX_BINARY_SHA256='{sb.SINGBOX_BINARY_SHA256}'" in script
+    assert f"SINGBOX_PROVENANCE_REVISION='{sb.SINGBOX_PROVENANCE_REVISION}'" in script
+    assert 'https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_TAG}/' in script
+    assert 'sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz' in script
+    assert f"SINGBOX_TAG='v{sb.SINGBOX_VERSION}'" in script
+    # The destination is the fixed absolute path the adapter runs.
+    assert sb.SINGBOX_BINARY in script
+
+
+def test_install_singbox_delivery_is_hash_anchored_and_fail_closed():
+    script = (PACKAGING / 'install-singbox.sh').read_text()
+    # https-only download; integrity is mandatory for archive *and* binary.
+    assert "curl --fail --location --silent --show-error --proto '=https' --tlsv1.2" in script
+    assert script.count('sha256sum -c -') >= 2
+    assert 'grep -qx "sing-box version' in script
+    assert 'Revision: ${SINGBOX_PROVENANCE_REVISION}' in script
+    assert 'contains unsafe paths' in script
+    assert 'install -m 0755 -o root -g root' in script
+    assert 'eval' not in script
+    # Executable-standalone guard so tests can source it without side effects.
+    assert 'if [[ ${BASH_SOURCE[0]} == "$0" ]]' in script
+
+
+def test_bootstrap_delivers_the_pinned_singbox_binary():
+    bootstrap = (PACKAGING / 'bootstrap.sh').read_text()
+    assert "run_stage 'singbox' stage_singbox" in bootstrap
+    assert 'install-singbox.sh' in bootstrap
+
+
+def test_install_singbox_keeps_verified_binary_without_download(tmp_path):
+    """Idempotency: an already-correct pinned binary is kept and the network is
+    never touched (no curl call)."""
+    from vs_router.agent import singbox_service as sb
+    dest = tmp_path / 'sing-box'
+    dest.write_text('#!/bin/sh\n'
+                    f'printf "%s\\n" "sing-box version {sb.SINGBOX_VERSION}"\n'
+                    f'printf "%s\\n" "Revision: {sb.SINGBOX_PROVENANCE_REVISION}"\n')
+    dest.chmod(0o755)
+    code = f'''source "{PACKAGING}/install-singbox.sh"
+sha256sum() {{ echo "{sb.SINGBOX_BINARY_SHA256}  $1"; }}
+curl() {{ echo CURL_CALLED; return 1; }}
+main
+'''
+    result = bash(code, env={**os.environ, 'VS_ROUTER_SINGBOX_DEST': str(dest)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'CURL_CALLED' not in result.stdout + result.stderr
+    assert 'already present' in result.stdout
+
+
+def test_install_singbox_rejects_wrong_archive_hash(tmp_path):
+    """A downloaded archive whose SHA-256 is not the pin fails closed and
+    installs nothing."""
+    dest = tmp_path / 'sing-box'
+    code = f'''source "{PACKAGING}/install-singbox.sh"
+curl() {{ local out=''; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && out=$2; shift; done; printf 'not the pinned archive' > "$out"; return 0; }}
+main
+'''
+    result = bash(code, env={**os.environ, 'VS_ROUTER_SINGBOX_DEST': str(dest)})
+    assert result.returncode != 0
+    assert 'does not match' in result.stdout + result.stderr
+    assert not dest.exists()
+
+
+def test_unbound_apparmor_override_is_installed_and_enabled(tmp_path):
+    """install.sh creates the local override granting /etc/vs-router/applied/**
+    to the confined unbound and reloads the profile. The stock profile already
+    contains the active `#include <local/usr.sbin.unbound>` directive, so the
+    local file must exist for the reload to succeed; the profile text itself is
+    left untouched and the rule is not duplicated on rerun."""
+    source = (PACKAGING / 'install.sh').read_text()
+    block = source[source.index('# Allow the included configuration through Unbound'):
+                   source.index('# Web UI static bundle')]
+    etc = tmp_path / 'etc'
+    (etc / 'apparmor.d/local').mkdir(parents=True)
+    profile = etc / 'apparmor.d/usr.sbin.unbound'
+    original_profile = ('profile usr.sbin.unbound flags=(attach_disconnected) {\n'
+                        '  #include <local/usr.sbin.unbound>\n}\n')
+    profile.write_text(original_profile)
+    block = block.replace('/etc/', str(etc) + '/')
+    code = f'''set -eu
+apparmor_parser() {{ echo "PARSER $*"; }}
+{block}
+'''
+    for _ in range(2):  # rerun must stay idempotent (no duplicate rule)
+        result = bash(code)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'PARSER -r' in result.stdout
+    local_profile = (etc / 'apparmor.d/local/usr.sbin.unbound').read_text()
+    assert local_profile.count('/etc/vs-router/applied/** r,') == 1
+    # The active include directive must not be rewritten into a plain rule.
+    assert profile.read_text() == original_profile
+
+
 def test_web_trusts_https_proxy_headers_only_on_restricted_unix_socket():
     unit = (PACKAGING / 'vs-router-web.service').read_text()
     command = next(line for line in unit.splitlines() if line.startswith('ExecStart='))

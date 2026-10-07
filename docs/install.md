@@ -118,6 +118,10 @@ sudo ./install.sh
 
 Скрипт создаёт пользователей (`vs-router-web`, root-агент отдельно), каталоги `/etc/vs-router/{applied,confirmed}` (группа web — запись, агент читает/пишет), БД с миграциями Alembic, профили AppArmor для kea/unbound, деплоит UI в `/var/lib/vs-router/ui` (если `../frontend/dist` существует), включает `vs-router-bootrestore.service` (восстановление конфигураций при загрузке до старта сети) и делает `daemon-reload`.
 
+Профиль Unbound получает локальный оверрайд `/etc/apparmor.d/local/usr.sbin.unbound` с каталоговым правилом `/etc/vs-router/applied/** r,`, чтобы ограниченный Debian-профиль `usr.sbin.unbound` разрешал сгенерированные конфиги (в т.ч. split-конфиги TProxy DNS-контура, ADR-0014). Заголовочный `#include <local/usr.sbin.unbound>` — активная директива AppArmor, поэтому локальный файл создаётся перед `apparmor_parser -r`.
+
+Отдельный install-time шаг `backend/packaging/bootstrap.sh` (`stage_singbox`, скрипт `install-singbox.sh`) доставляет закреплённый по ADR-0012 бинарник sing-box в `/usr/local/lib/vs-router/sing-box`: скачивание по пиннутому URL, сверка SHA256 архива и ELF, проверка `version`/`Revision`, установка. Шаг идемпотентен и fail-closed; повторный запуск не трогает сеть. Подробности — `docs/lab-35-pinned-binary-and-apparmor.md`.
+
 Предупреждение о версии AmneziaWG (<3.1) появится здесь, если шаг 2 пропущен.
 
 ## 7. Kea ctrl-agent (live-аренды в UI)

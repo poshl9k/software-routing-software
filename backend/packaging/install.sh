@@ -125,11 +125,19 @@ if [ -d /etc/unbound ]; then
     fi
 fi
 # Allow the included configuration through Unbound's optional AppArmor profile.
+# Debian's usr.sbin.unbound confines /usr/sbin/unbound to /etc/unbound/**; the
+# TProxy DNS contour (ADR-0014) reads generated split configs under
+# /etc/vs-router/applied/, so the local override must grant the whole directory,
+# not a single file. The stock profile already includes
+# `#include <local/usr.sbin.unbound>` (an active AppArmor directive), so the
+# local file must exist for the profile to reload at all: create it, add the
+# directory rule once (idempotently), and reload.
 if command -v apparmor_parser >/dev/null 2>&1 && [ -f /etc/apparmor.d/usr.sbin.unbound ]; then
     install -d /etc/apparmor.d/local
     local_profile=/etc/apparmor.d/local/usr.sbin.unbound
-    grep -qsF '/etc/vs-router/applied/unbound.conf r,' "$local_profile" 2>/dev/null || \
-        echo '/etc/vs-router/applied/unbound.conf r,' >> "$local_profile"
+    touch "$local_profile"
+    grep -qsF '/etc/vs-router/applied/** r,' "$local_profile" 2>/dev/null || \
+        echo '/etc/vs-router/applied/** r,' >> "$local_profile"
     apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound
 fi
 # Web UI static bundle: deploy ../frontend/dist (sibling of backend/) when present.

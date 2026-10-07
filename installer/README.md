@@ -69,7 +69,13 @@ SHA-256 wheel hashes for Debian 13 amd64 / CPython 3.13 in
 `backend/requirements-runtime.txt`, checked against `uv.lock` by tests. Bootstrap
 pins Caddy 2.11.4, caddy-l4 v0.1.2, Cloudflare DNS module v0.2.4, xcaddy v0.4.7
 and AmneziaWG v3.1.20260812; it checks AmneziaWG tag commits and fetches
-WireGuard Go at a fixed commit. Caddy and tunnel sources are built with Go
+WireGuard Go at a fixed commit. A dedicated install-time step
+(`install-singbox.sh`, `bootstrap.sh stage_singbox`) delivers the ADR-0012 engine
+binary to `/usr/local/lib/vs-router/sing-box` by pinned URL with archive/ELF
+SHA-256 and provenance checks; it is idempotent and fail-closed. `install.sh`
+installs the Unbound AppArmor local override (`/etc/vs-router/applied/** r,`) so
+the confined Debian profile can read generated configs (ADR-0014). Caddy and
+tunnel sources are built with Go
 1.25.1; Node.js 20.19.2 / npm 9.2.0 are required at build time. Go module
 checksums are verified through Go's checksum database. These pins were selected
 from the successful clean-VM build; they are not signed-artifact attestations.
