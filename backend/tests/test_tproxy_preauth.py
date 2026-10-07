@@ -57,7 +57,7 @@ def test_destination_uses_route_and_all_passes_require_assigned_egress(dst):
     assert output.index('oifname { "eth0", "eth1" } goto transit') < output.index('comment "allow"')
     assert 'iifname { "eth1" } meta nfproto ipv4 iifname { "eth1" }' in output
     if dst == 'zone:wan':
-        assert 'fib daddr . mark oifname { "eth0" } counter return' in output
+        assert 'fib daddr . mark oifname { "eth0" } meta mark set meta mark | 0x400 counter return' in output
         assert '203.0.113' not in output
     assert '\n        oifname ' not in output
     # Kernel NFTA_FIB_F_IIF constrains the result to ingress, not routed egress.

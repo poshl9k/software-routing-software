@@ -120,6 +120,21 @@ MARK_TPROXY_CT_PROOF_MASK = 0x00000200
 MARK_TPROXY_CT_PROOF_VALUE = 0x00000200
 MARK_TPROXY_CT_PROOF_CLEAR_MASK = ~MARK_TPROXY_CT_PROOF_MASK & MARK_MAX
 
+#: Preauthorization *capture gate* (lab-31). A packet mark set by
+#: ``generate_tproxy_preauthorization`` on authorized selected transit and
+#: required by ``generate_tproxy_interception`` capture. Coupling capture to a
+#: live preauth table makes the loss of preauth fail-closed: without the mark the
+#: capture rule returns, the packet stays on the ordinary FORWARD path and the
+#: independent containment (``FORWARD -10``) / default-deny hold it, instead of
+#: being diverted into LOCAL_IN -> proxy with no policy enforcement.
+#:
+#: This is a *packet* mark (routing/capture control), kept deliberately separate
+#: from the conntrack INPUT-authorization space so lab-26/lab-29 semantics are
+#: unchanged. Like every mark it is a single-writer naming contract, not an
+#: unforgeable security bit (ADR-0013).
+MARK_TPROXY_AUTH_MASK = 0x00000400
+MARK_TPROXY_AUTH_VALUE = 0x00000400
+
 
 @dataclass(frozen=True)
 class MarkEntry:
@@ -165,6 +180,22 @@ REGISTRY: tuple[MarkEntry, ...] = (
             "docs/lab-09-tproxy-mark-collision.md"
         ),
         note="FORGEABLE. A competing privileged nft writer can set it; see module warning.",
+    ),
+    MarkEntry(
+        owner=Owner.TPROXY,
+        mask=MARK_TPROXY_AUTH_MASK,
+        value=MARK_TPROXY_AUTH_VALUE,
+        name="tproxy_preauth_capture_gate",
+        source=(
+            "generators/nftables.py:generate_tproxy_preauthorization/"
+            "generate_tproxy_interception; docs/lab-31-tproxy-preauth-independence.md"
+        ),
+        note=(
+            "Set by preauth on authorized selected transit, required by capture: "
+            "losing preauth removes the mark, disables capture and fails closed at "
+            "the independent containment/default-deny. Single-writer contract, not "
+            "an unforgeable bit."
+        ),
     ),
 )
 

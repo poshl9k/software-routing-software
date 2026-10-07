@@ -46,9 +46,10 @@ class _FirewallCompiler:
             parts.append(f"meta l4proto {protocol}")
         return " ".join(p for p in parts if p)
 
-    def rules(self, rules, chain, families=(4, 6), actions=None):
+    def rules(self, rules, chain, families=(4, 6), actions=None, stamps=None):
         if actions is None:
             actions = {"pass": "accept", "block": "drop", "reject": "reject"}
+        stamps = stamps or {}
         for r in sorted(rules, key=lambda r: (r.order, r.name)):
             if not r.enabled or (chain == "forward" and r.dst == "zone:router"):
                 continue
@@ -68,8 +69,12 @@ class _FirewallCompiler:
                     else:
                         clause += f" {r.protocol} dport {r.destination_ports}"
                 action = actions[r.action]
+                # ``stamp`` is a statement inserted after this rule's own match
+                # (including any ``fib`` clause) and before the counter/verdict,
+                # so a match-time FIB lookup never sees ink the rule itself writes.
+                stamp = stamps.get(r.action, "")
                 log = ' log prefix "vs-router "' if r.log else ""
-                yield f'        iifname {names(self.zones[r.ingress_zone])} {clause} counter{log} {action} comment "{r.name}"'
+                yield f'        iifname {names(self.zones[r.ingress_zone])} {clause} {stamp}counter{log} {action} comment "{r.name}"'
 
 
 def _address_sets(aliases, expanded):
@@ -304,9 +309,15 @@ def generate_tproxy_preauthorization(version: ConfigurationVersion) -> str:
     Re-evaluates every packet, unlike ordinary established/related acceptance.
     Only IPv4 TCP/UDP transit is supported. Reject conservatively drops because
     nft reject is not supported at PREROUTING. Unknown routes cannot enter the
-    rule chain. This does not authorize proxy OUTPUT or solve crash/apply/boot
-    lifecycle, policy-route interference, bridge/offload or failure containment.
-    Deliberately absent from bundles, API, apply and boot restoration.
+    rule chain. On every authorized (``pass``) transit rule it also stamps the
+    reserved preauth capture gate mark (:data:`marks.MARK_TPROXY_AUTH_VALUE`,
+    lab-31) that ``generate_tproxy_interception`` requires before capture; the
+    stamp is emitted inside the matched rule after its own ``fib`` clause, so the
+    match-time FIB lookup never sees ink the rule itself writes. This couples
+    capture to a live preauth table (losing it fails closed). This does not
+    authorize proxy OUTPUT or solve crash/apply/boot lifecycle, policy-route
+    interference, bridge/offload or failure containment. Deliberately absent from
+    bundles, API, apply and boot restoration.
     """
     table = "inet vs_router_tproxy_preauth"
     c = version.configuration
@@ -325,6 +336,15 @@ def generate_tproxy_preauthorization(version: ConfigurationVersion) -> str:
     egress = "fib daddr . mark oifname"
     compiler = _FirewallCompiler(c, egress=egress)
     assigned = [i.name for i in c.interfaces if i.zone]
+    # Capture gate (lab-31): authorized selected transit is stamped with the
+    # reserved packet mark so interception capture requires evidence that a live
+    # preauth evaluated and passed this flow. The stamp is emitted inside the
+    # matched rule, after its own ``fib`` clause, so the FIB lookup never sees it.
+    # If this table is lost the mark is absent, capture does not fire and the
+    # flow falls through to the independent containment/default-deny.
+    auth = marks.MARK_TPROXY_AUTH_VALUE
+    marks.assert_no_collisions(auth, marks.Owner.TPROXY)
+    stamp = f"meta mark set meta mark | {auth:#x} "
     lines = [f"destroy table {table}", f"table {table} {{"]
     lines += _address_sets(c.aliases, compiler.expanded)
     lines += ["    chain prerouting {",
@@ -340,7 +360,8 @@ def generate_tproxy_preauthorization(version: ConfigurationVersion) -> str:
     # Positive assigned-egress gate also handles no-route lookups: a failed FIB
     # expression must never skip a negative guard and fall into a broad pass.
     lines.extend(compiler.rules(c.firewall_rules, "forward", families=(4,),
-                                actions={"pass": "return", "block": "drop", "reject": "drop"}))
+                                actions={"pass": "return", "block": "drop", "reject": "drop"},
+                                stamps={"pass": stamp}))
     lines += ["        counter drop", "    }", "}"]
     return "\n".join(lines) + "\n"
 
@@ -360,8 +381,13 @@ def generate_tproxy_interception(version: ConfigurationVersion) -> str:
     (:data:`marks.MARK_TPROXY_CT_PROOF_VALUE`) on every selected packet *before*
     capture can re-set it. Capture keeps the proven exemptions (non-selected
     ingress, non-IPv4/non-TCP/UDP, local FIB destinations, post-DNAT
-    ``ct status dnat``) and, for matched selected IPv4 TCP/UDP, sets the routing
-    packet mark (:data:`marks.MARK_TPROXY_ROUTE_VALUE`, drives the policy route)
+    ``ct status dnat``), then requires the reserved preauth gate mark
+    (:data:`marks.MARK_TPROXY_AUTH_VALUE`): a selected packet without it returns
+    and stays on the ordinary FORWARD path, so losing the preauth table disables
+    capture and fails closed at the independent containment/default-deny instead
+    of diverting a policy-unchecked flow into LOCAL_IN. For matched selected IPv4
+    TCP/UDP it sets the routing packet mark
+    (:data:`marks.MARK_TPROXY_ROUTE_VALUE`, drives the policy route)
     **and** the conntrack-proof bit after the successful ``tproxy`` expression,
     then ``tproxy``-redirects to the loopback sing-box listeners
     (:data:`marks.TPROXY_TCP_PORT` / :data:`marks.TPROXY_UDP_PORT`).
@@ -405,6 +431,8 @@ def generate_tproxy_interception(version: ConfigurationVersion) -> str:
     marks.assert_no_collisions(mark, marks.Owner.TPROXY)
     ct_proof = marks.MARK_TPROXY_CT_PROOF_VALUE
     ct_clear = marks.MARK_TPROXY_CT_PROOF_CLEAR_MASK
+    auth = marks.MARK_TPROXY_AUTH_VALUE
+    marks.assert_no_collisions(auth, marks.Owner.TPROXY)
     ingress = names(sorted(sources))
     marked = f"meta mark set {mark:#x}"
     set_ct = f"ct mark set ct mark | {ct_proof:#x}"
@@ -416,6 +444,12 @@ def generate_tproxy_interception(version: ConfigurationVersion) -> str:
         "        meta nfproto != ipv4 return",
         "        meta l4proto != { tcp, udp } return",
     )
+    # Coupling to preauth (lab-31): capture fires only on transit already stamped
+    # by a live preauthorization. With preauth lost the mark is absent, this
+    # returns and the flow stays on the ordinary FORWARD path where the
+    # independent containment (-10) / default-deny hold it -- fail-closed rather
+    # than a LOCAL_IN -> proxy bypass of the FORWARD policy.
+    gate = f"        meta mark & {auth:#x} == 0 return"
     lines = [f"destroy table {reset_table}", f"table {reset_table} {{",
              "    chain prerouting {",
              "        type filter hook prerouting priority -85; policy accept;",
@@ -426,6 +460,7 @@ def generate_tproxy_interception(version: ConfigurationVersion) -> str:
              "    chain prerouting {",
              "        type filter hook prerouting priority -80; policy accept;",
              *exemptions,
+             gate,
              f'        meta nfproto ipv4 meta l4proto tcp {marked} {set_ct} '
              f'tproxy ip to 127.0.0.1:{marks.TPROXY_TCP_PORT} counter accept comment "tproxy_tcp"',
              f'        meta nfproto ipv4 meta l4proto udp {marked} {set_ct} '

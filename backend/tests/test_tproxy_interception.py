@@ -105,6 +105,25 @@ def test_capture_keeps_preauth_exemptions():
     assert "ct state" not in text
 
 
+def test_capture_requires_the_preauth_gate_mark():
+    text = generate_tproxy_interception(enabled())
+    gate = f"meta mark & {marks.MARK_TPROXY_AUTH_VALUE:#x} == 0 return"
+    capture = text.split("table inet vs_router_tproxy_interception {", 1)[1]
+    capture = capture.split("table inet vs_router_tproxy_input {", 1)[0]
+    # The gate runs after the exemptions and before the tproxy rules.
+    assert gate in capture
+    assert capture.index("meta l4proto != { tcp, udp } return") < capture.index(gate)
+    assert capture.index(gate) < capture.index("tproxy ip to 127.0.0.1:")
+    # The reset and the INPUT guard must NOT carry the gate: the reset still
+    # clears the conntrack proof unconditionally and the guard authorizes on the
+    # conntrack mark only.
+    reset = text.split("table inet vs_router_tproxy_ct_reset {", 1)[1]
+    reset = reset.split("table inet vs_router_tproxy_interception {", 1)[0]
+    guard = text.split("table inet vs_router_tproxy_input {", 1)[1]
+    assert gate not in reset and "meta mark" not in reset
+    assert gate not in guard and "meta mark" not in guard
+
+
 def test_capture_targets_loopback_listeners_with_owned_mark():
     text = generate_tproxy_interception(enabled())
     assert f"meta mark set {marks.MARK_TPROXY_ROUTE_VALUE:#x}" in text
@@ -181,6 +200,7 @@ def test_off_removes_only_its_own_tables():
 
 def test_mark_is_registered_tproxy_owner():
     marks.assert_no_collisions(marks.MARK_TPROXY_ROUTE_VALUE, marks.Owner.TPROXY)
+    marks.assert_no_collisions(marks.MARK_TPROXY_AUTH_VALUE, marks.Owner.TPROXY)
     tables = {t.name for t in marks.TABLES}
     hooks = {(h.table, h.chain): h.priority for h in marks.HOOKS}
     assert "inet vs_router_tproxy_ct_reset" in tables
