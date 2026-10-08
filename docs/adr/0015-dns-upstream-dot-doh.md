@@ -19,8 +19,10 @@ DoH требует внешнего DoH-клиента. Владелец про�
 ## Решение
 
 1. **Модель.** Новый тип `DNSUpstream`:
-   `{ address: str, port: int = 53, mode: Literal["udp","tls","https"] = "udp",
-   tls_name: str | None = None, doh_url: str | None = None }`.
+   `{ address: str = "", port: int = 53, mode: Literal["udp","tls","https"] = "udp",
+   tls_name: str | None = None, doh_server: str | None = None }`.
+   `doh_server` — **встроенное имя** резолвера из списка dnscrypt-proxy
+   (`cloudflare`, `quad9`, …); свой DoH-сервер (`sdns://`-stamp) — отдельная задача.
    `DNS.upstreams` и `DNSForward.upstreams` становятся `tuple[DNSUpstream, ...]`.
    **Обратная совместимость:** строка вида `"1.1.1.1"` коэрцится в
    `DNSUpstream(address=...)` (mode `udp`) до валидации; старые конфиги читаются
@@ -28,15 +30,18 @@ DoH требует внешнего DoH-клиента. Владелец про�
 2. **DoT (`mode=tls`).** Рендерится самим Unbound: `forward-addr: <ip>@<port>#<tls_name>`
    + `forward-tls-upstream: yes` в соответствующем `forward-zone`. Требуется `tls_name`.
 3. **DoH (`mode=https`).** Unbound не умеет: отдельный `dnscrypt-proxy` слушает
-   `127.0.0.1:<doh_port>`, в его конфиге перечислены DoH-серверы (`doh_url`);
-   Unbound форвардит `https`-upstream'ы на этот локальный адрес. `dnscrypt-proxy` —
-   системный пакет (пиннинг снапшотом как у kea/unbound), отдельный systemd-юнит.
-   Требуется `doh_url`.
+   `127.0.0.1:5300`, в его конфиге `server_names` = встроенные имена DoH-серверов;
+   Unbound форвардит `https`-upstream'ы на этот локальный адрес (и получает
+   `do-not-query-localhost: no`). `dnscrypt-proxy` — системный пакет (пиннинг
+   снапшотом как у kea/unbound), отдельный systemd-юнит. Требуется `doh_server`.
 4. **Смешение разрешено:** `udp`/`tls` реализуются Unbound напрямую, `https` — через
    `dnscrypt-proxy`; записи могут сосуществовать в одном списке.
-5. **Валидация:** `address` — IPv4 (как сейчас); `mode=tls` требует `tls_name`;
-   `mode=https` требует `doh_url`; неизвестные/недоступные режимы — явный код.
-6. **UI:** редактор upstream (режим + `tls_name`/`doh_url`) в DNS-странице.
+5. **Валидация:** `udp`/`tls` требуют непустой `address` (IPv4/IPv6), `mode=tls`
+   требует `tls_name`; `mode=https` требует `doh_server` и не должен нести
+   `address`/`tls_name`; коды `dns.upstream_invalid`, `dns.upstream_address_required`,
+   `dns.upstream_tls_name_required`, `dns.upstream_doh_server_required`,
+   `dns.upstream_doh_server_unexpected`.
+6. **UI:** редактор upstream (режим + `tls_name`/`doh_server`) в DNS-странице.
 
 ## Вне объёма
 

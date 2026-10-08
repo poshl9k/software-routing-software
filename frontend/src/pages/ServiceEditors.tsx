@@ -29,21 +29,27 @@ const ipNumber = (v: string) =>
 const poolValid = (p: { start: string; end: string }) =>
   ipv4(p.start) && ipv4(p.end) && ipNumber(p.start) <= ipNumber(p.end);
 const normalize = (v: string[]) => lines(v.join("\n"));
-// DNS upstream text syntax: "ip", "ip@port" (udp on a custom port) or
-// "ip@port#tls-name" (DoT). Text keeps the existing newline editor usable for
-// both plain and DoT servers until a dedicated editor lands.
+// DNS upstream text syntax: "ip", "ip@port" (udp on a custom port),
+// "ip@port#tls-name" (DoT) or "doh:server-name" (DoH via the local resolver).
+// Text keeps the existing newline editor usable until a dedicated editor lands.
 const upstreamText = (u: DNSUpstream) =>
-  u.mode === "tls" ? `${u.address}@${u.port}#${u.tls_name}`
+  u.mode === "https" ? `doh:${u.doh_server}`
+    : u.mode === "tls" ? `${u.address}@${u.port}#${u.tls_name}`
     : u.port === 53 ? u.address : `${u.address}@${u.port}`;
 const parseUpstreams = (value: string): DNSUpstream[] =>
   value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean).map((s) => {
+    if (s.startsWith("doh:"))
+      return { address: "", port: 53, mode: "https", tls_name: null,
+               doh_server: s.slice(4) || null };
     const match = /^([^@#\s]+)(?:@(\d+))?(?:#(.+))?$/.exec(s);
     const name = match?.[3] ?? null;
     return { address: match?.[1] ?? s, port: match?.[2] ? Number(match[2]) : 53,
-             mode: name ? "tls" : "udp", tls_name: name };
+             mode: name ? "tls" : "udp", tls_name: name, doh_server: null };
   });
 const upstreamsValid = (list: DNSUpstream[]) =>
-  list.every((u) => ipValid(u.address) && (u.mode !== "tls" || !!u.tls_name));
+  list.every((u) =>
+    u.mode === "https" ? !!u.doh_server
+      : ipValid(u.address) && (u.mode !== "tls" || !!u.tls_name));
 
 export function DHCPEditor({ children }: { children: ReactNode }) {
   const { configuration: c, version } = useConfiguration();
@@ -456,7 +462,7 @@ export function DNSEditor({ children }: { children: ReactNode }) {
             <FormGrid>
               <Field
                 label="Upstream-серверы (построчно)"
-                hint="IP, ip@порт или ip@порт#tls-name (DoT)"
+                hint="IP, ip@порт, ip@порт#tls-name (DoT) или doh:имя (DoH)"
                 multiline
                 value={dns.upstreams.map(upstreamText).join("\n")}
                 valid={upstreamsValid(dns.upstreams)}

@@ -2,7 +2,8 @@ from pathlib import Path
 import json
 import pytest
 from pydantic import ValidationError
-from vs_router.generators import generate_kea, generate_nftables, generate_unbound
+from vs_router.generators import (generate_kea, generate_nftables, generate_unbound,
+                                  generate_dnscrypt, doh_server_names)
 from vs_router.schema import ConfigurationVersion
 from scenarios import scenario
 
@@ -130,3 +131,43 @@ def test_tls_upstream_requires_tls_name():
     with pytest.raises(ValidationError, match="dns.upstream_tls_name_required"):
         ConfigurationVersion(configuration={"dns": {
             "upstreams": [{"address": "1.1.1.1", "port": 853, "mode": "tls"}]}})
+
+
+# --- DoH upstreams realized by the local dnscrypt-proxy (ADR-0015 D2) -------
+
+def test_https_upstream_forwards_to_local_doh_listener():
+    version = ConfigurationVersion(configuration={"dns": {
+        "upstreams": [{"mode": "https", "doh_server": "cloudflare"}]}})
+    output = generate_unbound(version)
+    assert "forward-addr: 127.0.0.1@5300" in output
+    assert "do-not-query-localhost: no" in output
+    assert "forward-tls-upstream" not in output
+
+
+def test_doh_server_names_sorted_and_deduplicated():
+    version = ConfigurationVersion(configuration={"dns": {
+        "upstreams": [{"mode": "https", "doh_server": "quad9"},
+                      {"mode": "https", "doh_server": "cloudflare"},
+                      {"mode": "https", "doh_server": "quad9"}],
+        "forwards": [{"domain": "corp.example",
+                      "upstreams": [{"mode": "https", "doh_server": "cloudflare"}]}]}})
+    assert doh_server_names(version.configuration.dns) == ("cloudflare", "quad9")
+    config = generate_dnscrypt(version)
+    assert "listen_addresses = ['127.0.0.1:5300']" in config
+    assert 'server_names = ["cloudflare", "quad9"]' in config
+
+
+def test_doh_config_without_https_has_empty_server_list():
+    version = ConfigurationVersion(configuration={"dns": {"upstreams": ["1.1.1.1"]}})
+    assert "server_names = []" in generate_dnscrypt(version)
+
+
+def test_https_upstream_requires_doh_server():
+    with pytest.raises(ValidationError, match="dns.upstream_doh_server_required"):
+        ConfigurationVersion(configuration={"dns": {"upstreams": [{"mode": "https"}]}})
+
+
+def test_doh_server_on_a_plain_upstream_is_rejected():
+    with pytest.raises(ValidationError, match="dns.upstream_doh_server_unexpected"):
+        ConfigurationVersion(configuration={"dns": {
+            "upstreams": [{"address": "1.1.1.1", "doh_server": "cloudflare"}]}})

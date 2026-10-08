@@ -72,8 +72,9 @@ export interface OutboundNAT {
 export interface DNSUpstream {
   address: string;
   port: number;
-  mode: "udp" | "tls";
+  mode: "udp" | "tls" | "https";
   tls_name: string | null;
+  doh_server: string | null;
 }
 export interface DNS {
   interfaces: string[];

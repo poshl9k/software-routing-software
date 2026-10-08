@@ -113,10 +113,13 @@ class DNSRecord(Model):
 
 
 class DNSUpstream(Model):
-    address: str
+    # An ``https`` (DoH) entry carries no forward-addr: it is realized by the
+    # local dnscrypt-proxy (ADR-0015) and identified by a built-in server name.
+    address: str = ""
     port: int = Field(default=53, ge=1, le=65535)
-    mode: Literal["udp", "tls"] = "udp"
+    mode: Literal["udp", "tls", "https"] = "udp"
     tls_name: str | None = None
+    doh_server: str | None = None
 
     @model_validator(mode="before")
     def _coerce(cls, value):
@@ -124,8 +127,15 @@ class DNSUpstream(Model):
 
     @model_validator(mode="after")
     def _check(self):
+        if self.mode in ("udp", "tls") and not self.address:
+            raise ValueError("dns.upstream_address_required")
         if self.mode == "tls" and not self.tls_name:
             raise ValueError("dns.upstream_tls_name_required")
+        if self.mode == "https":
+            if not self.doh_server:
+                raise ValueError("dns.upstream_doh_server_required")
+        elif self.doh_server is not None:
+            raise ValueError("dns.upstream_doh_server_unexpected")
         return self
 
 

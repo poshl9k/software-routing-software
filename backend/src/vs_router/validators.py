@@ -235,6 +235,8 @@ def validate_configuration(c):
     if c.dns.upstreams and any(f.domain == "." for f in c.dns.forwards):
         fail("dns.duplicate_root_forward")
     for upstream in (*c.dns.upstreams, *(u for f in c.dns.forwards for u in f.upstreams)):
+        if upstream.mode == "https":
+            continue  # DoH is realized by the local dnscrypt-proxy, not a forward-addr
         try:
             ip_address(upstream.address)
         except ValueError:

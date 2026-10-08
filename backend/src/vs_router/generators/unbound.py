@@ -1,6 +1,7 @@
 import json
 from ipaddress import ip_interface
 from ..schema import ConfigurationVersion, DNSUpstream
+from .dnscrypt import DOH_LISTEN_ADDR, DOH_LISTEN_PORT
 
 
 def _render_unbound(c, dns, root_forward=None, username: str | None = "unbound") -> str:
@@ -17,9 +18,13 @@ def _render_unbound(c, dns, root_forward=None, username: str | None = "unbound")
         lines.append(f'    username: {json.dumps(username)}')
     lines += ['    interface-automatic: no',
               f'    log-queries: {"yes" if dns.log_queries else "no"}']
-    if root_forward is not None:
+    all_upstreams = (*dns.upstreams, *(u for f in dns.forwards for u in f.upstreams))
+    https_present = any(u.mode == "https" for u in all_upstreams)
+    if root_forward is not None or https_present:
         # Unbound's default refuses loopback upstreams even if checkconf exits 0.
+        # ``https`` (DoH) upstreams are forwarded to the local dnscrypt-proxy.
         lines.append('    do-not-query-localhost: no')
+    if root_forward is not None:
         # No selected unmatched answer may outlive the DNS engine's readiness.
         # This sacrifices the selected instance's cache, including forwards;
         # local-data remains independent of the cache.
@@ -48,6 +53,8 @@ def _render_unbound(c, dns, root_forward=None, username: str | None = "unbound")
         for u in upstreams:
             if u.mode == "tls":
                 lines.append(f"    forward-addr: {u.address}@{u.port}#{u.tls_name}")
+            elif u.mode == "https":
+                lines.append(f"    forward-addr: {DOH_LISTEN_ADDR}@{DOH_LISTEN_PORT}")
             else:
                 port_suffix = "" if u.port == 53 else f"@{u.port}"
                 lines.append(f"    forward-addr: {u.address}{port_suffix}")

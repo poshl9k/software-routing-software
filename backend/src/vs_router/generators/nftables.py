@@ -334,7 +334,8 @@ def generate_tproxy_dns_output_guard(version: ConfigurationVersion, selected_uid
     tproxy_unbound_listener_addresses(version)
     if type(selected_uid) is not int or not 100 <= selected_uid <= 65535:
         raise ValueError("tproxy.dns_output_invalid_uid")
-    upstreams = sorted({u.address for f in version.configuration.dns.forwards for u in f.upstreams})
+    upstreams = sorted({u.address for f in version.configuration.dns.forwards
+                        for u in f.upstreams if u.mode != "https"})
     if any(ip_address(u).version != 4 for u in upstreams):
         raise ValueError("tproxy.dns_output_ipv4_required")
     lines = [f"destroy table {table}", f"table {table} {{",

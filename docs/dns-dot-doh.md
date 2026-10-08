@@ -69,5 +69,11 @@ class DNSUpstream(Model):
   (`forward-addr: ip@853#sni` + `forward-tls-upstream` per-zone), валидатор
   (`dns.upstream_invalid`, `dns.upstream_tls_name_required`), UI-редактор принимает
   текст `ip[@port][#tls-name]`. Проверено: backend 851, frontend 96, tsc/build ok.
-- **D2 — далее:** режим `https` + `dnscrypt-proxy` (packaging, генератор конфига, юнит, агент).
-- **D3:** полноценный UI-редактор upstream (режим/tls_name полями).
+- **D2 — контракт+генераторы сделано:** режим `https` (`doh_server`), Unbound форвардит
+  `https`-upstream'ы на локальный `127.0.0.1:5300` (+ `do-not-query-localhost: no`, без
+  `forward-tls-upstream`), новый `generators/dnscrypt.py` (пакет `dnscrypt-proxy`,
+  `server_names` из встроенных имён, отсортирован и без дублей). Проверено: backend 856,
+  frontend 96, tsc/build ok. **Осталось (D2b):** packaging (пакет через bootstrap-snapshot),
+  systemd-юнит `vs-router-dnscrypt`, активация в agent apply/rollback.
+- **D3:** полноценный UI-редактор upstream (режим/tls_name/doh_server полями) — сейчас
+  правится текстом: `ip`, `ip@port`, `ip@port#tls-name`, `doh:имя`.
