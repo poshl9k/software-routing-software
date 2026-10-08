@@ -54,7 +54,9 @@ Slow-инертность: всё ниже — только черновик/п�
       `_tls_name_required`, `_servers_required`, `_server_duplicate`, `_rule_duplicate`,
       `_rule_matcher_required`, `_rule_server_unavailable`, `_bootstrap_required`. Проверено:
       backend 889, и **реальный `sing-box check` на закреплённом 1.14.2** (тест + независимая
-      проверка). **S6b (UI)** — далее.
+      проверка). **S6b (UI) сделано:** `types.ts` + секция «DNS-политика (sing-box контур)» в
+      «Эксперте» (серверы: тег/тип/сервер/порт/tls_name/path/резолвер/detour; правила: имя/
+      домены/наборы/сервер) + фикстура + тест. Проверено: frontend 101, tsc/build ok.
 - [ ] **S7. Connections / журнал / инспектор** — только когда есть runtime-API
       (gate открыт); сейчас вне объёма.
 - [ ] **S8. Outbounds/подписки: импорт ссылок, массовые операции.**

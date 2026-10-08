@@ -158,11 +158,32 @@ export interface TProxyBypass {
   ports: string[];
   protocol: "any" | "tcp" | "udp";
 }
+export interface TProxyDNSServer {
+  tag: string;
+  type: "udp" | "tls" | "https";
+  server: string;
+  server_port: number | null;
+  tls_name: string | null;
+  path: string | null;
+  domain_resolver: string | null;
+  detour: string | null;
+}
+export interface TProxyDNSRule {
+  name: string;
+  domain_suffix: string[];
+  rule_sets: string[];
+  server: string;
+}
+export interface TProxyDNS {
+  servers: TProxyDNSServer[];
+  rules: TProxyDNSRule[];
+}
 export interface TProxy {
   enabled: boolean;
   ingress_interfaces: string[];
   rules: TProxyRule[];
   bypass: TProxyBypass[];
+  dns: TProxyDNS;
   final: "direct" | "block" | "route";
   final_outbound: string | null;
   update_schedule: TProxyUpdateSchedule;

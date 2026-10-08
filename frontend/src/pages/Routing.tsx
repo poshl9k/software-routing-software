@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { queryKeys } from "../query";
-import type { TProxy, TProxyBypass, TProxyRule } from "../types";
+import type { TProxy, TProxyBypass, TProxyDNSServer, TProxyDNSRule, TProxyRule } from "../types";
 import { addressValid, lines, nameValid, portValid } from "../components/validators";
 import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter } from "../components/EditorShell";
@@ -12,7 +12,7 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { Field } from "../components/Field";
 import { FormActions, FormGrid } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
-import { SelectField, interfaceLabel } from "../components/Select";
+import { Select, SelectField, interfaceLabel } from "../components/Select";
 import { ValueTabs } from "../components/Tabs";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { ProxiesEditor, RuleSets } from "./RoutingProxy";
@@ -42,6 +42,16 @@ const bypassValid = (row: TProxyBypass) =>
   row.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
   row.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
   row.ports.every(portRangeValid);
+const dnsServerValid = (row: TProxyDNSServer, tags: readonly string[]) =>
+  nameValid(row.tag) && row.server.trim().length > 0 &&
+  (row.server_port === null || portValid(row.server_port)) &&
+  (row.type !== "tls" || !!row.tls_name?.trim()) &&
+  (row.domain_resolver === null ||
+    (row.domain_resolver !== row.tag && tags.includes(row.domain_resolver)));
+const dnsRuleValid = (row: TProxyDNSRule, tags: readonly string[], ruleSets: readonly string[]) =>
+  nameValid(row.name) && (row.domain_suffix.length > 0 || row.rule_sets.length > 0) &&
+  row.domain_suffix.every(domainValid) && row.rule_sets.every((name) => ruleSets.includes(name)) &&
+  tags.includes(row.server);
 const timeValid = (time: string) => /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(time);
 const emptyWizardRule = (): TProxyRule => ({
   name: "", domain_suffix: [], ip_cidr: [], source_ip_cidr: [], rule_sets: [],
@@ -97,7 +107,14 @@ function TProxyEditor() {
     ...configuration.proxies.groups.map((g) => g.tag),
   ];
   const ruleSetOptions = configuration.rule_sets.map((s) => s.name);
+  const dnsTags = current.dns.servers.map((server) => server.tag);
   const patch = (value: Partial<TProxy>) => editor.setValue({ ...current, ...value });
+  const updateDNSServer = (index: number, value: Partial<TProxyDNSServer>) =>
+    patch({ dns: { ...current.dns, servers: current.dns.servers.map((row, i) =>
+      i === index ? { ...row, ...value } : row) } });
+  const updateDNSRule = (index: number, value: Partial<TProxyDNSRule>) =>
+    patch({ dns: { ...current.dns, rules: current.dns.rules.map((row, i) =>
+      i === index ? { ...row, ...value } : row) } });
   const updateRule = (index: number, value: Partial<TProxyRule>) =>
     patch({ rules: current.rules.map((r, i) => i === index ? { ...r, ...value } : r) });
   const updateBypass = (index: number, value: Partial<TProxyBypass>) =>
@@ -112,7 +129,11 @@ function TProxyEditor() {
     current.rules.every((r) => ruleValid(r, outboundOptions, ruleSetOptions)) &&
     new Set(current.rules.map((r) => r.name)).size === current.rules.length &&
     current.bypass.every(bypassValid) &&
-    new Set(current.bypass.map((r) => r.name)).size === current.bypass.length;
+    new Set(current.bypass.map((r) => r.name)).size === current.bypass.length &&
+    current.dns.servers.every((row) => dnsServerValid(row, dnsTags)) &&
+    new Set(dnsTags).size === dnsTags.length &&
+    current.dns.rules.every((row) => dnsRuleValid(row, dnsTags, ruleSetOptions)) &&
+    new Set(current.dns.rules.map((row) => row.name)).size === current.dns.rules.length;
   const save = async () => {
     if (user?.role === "operator" || !valid) return;
     clearPreview();
@@ -371,6 +392,81 @@ function TProxyEditor() {
           <Button onClick={() => patch({ bypass: [...current.bypass, {
             name: "", source_ip_cidr: [], ip_cidr: [], ports: [], protocol: "any",
           }] })}>+ Добавить исключение</Button>
+          <Typography variant="h2">DNS-политика (sing-box контур)</Typography>
+          <Typography variant="h2">DNS-серверы</Typography>
+          {current.dns.servers.map((row, index) => <div key={index} className="rule-row">
+            <FormGrid>
+              <Field label="Тег DNS-сервера" value={row.tag}
+                valid={nameValid(row.tag) && dnsTags.indexOf(row.tag) === index}
+                onChange={(tag) => updateDNSServer(index, { tag })} />
+              <SelectField label="Тип DNS-сервера" value={row.type}
+                options={["udp", "tls", "https"]}
+                onChange={(type) => updateDNSServer(index, { type })} />
+              <Field label="Сервер DNS" value={row.server} valid={!!row.server.trim()}
+                onChange={(server) => updateDNSServer(index, { server })} />
+              <Field label="Порт DNS" type="number" value={row.server_port ?? ""}
+                inputProps={{ min: 1, max: 65535 }}
+                valid={row.server_port === null || portValid(row.server_port)}
+                onChange={(value) => updateDNSServer(index, {
+                  server_port: value === "" ? null : Number(value),
+                })} />
+              {(row.type === "tls" || row.type === "https") &&
+                <Field label="TLS-имя DNS" value={row.tls_name ?? ""}
+                  valid={row.type !== "tls" || !!row.tls_name?.trim()}
+                  onChange={(value) => updateDNSServer(index, { tls_name: value || null })} />}
+              {row.type === "https" &&
+                <Field label="Путь DNS" value={row.path ?? ""}
+                  hint="Пусто — /dns-query по умолчанию"
+                  onChange={(value) => updateDNSServer(index, { path: value || null })} />}
+              <Select label="Резолвер DNS" value={row.domain_resolver ?? ""}
+                placeholder={{ label: "Без резолвера" }}
+                options={dnsTags.filter((tag, i) => i !== index && !!tag)
+                  .map((tag) => ({ value: tag, label: tag }))}
+                onChange={(value) => updateDNSServer(index, { domain_resolver: value || null })} />
+              <Field label="Detour DNS" value={row.detour ?? ""}
+                onChange={(value) => updateDNSServer(index, { detour: value || null })} />
+              <FormActions>
+                <DeleteButton label={`Удалить DNS-сервер ${row.tag || index + 1}`}
+                  onClick={() => patch({ dns: { ...current.dns,
+                    servers: current.dns.servers.filter((_, i) => i !== index) } })} />
+              </FormActions>
+            </FormGrid>
+          </div>)}
+          <Button onClick={() => patch({ dns: { ...current.dns, servers: [
+            ...current.dns.servers, { tag: "", type: "udp", server: "", server_port: null,
+              tls_name: null, path: null, domain_resolver: null, detour: null },
+          ] } })}>+ Добавить DNS-сервер</Button>
+          <Typography variant="h2">DNS-правила</Typography>
+          {current.dns.rules.map((row, index) => <div key={index} className="rule-row">
+            <FormGrid>
+              <Field label="Имя DNS-правила" value={row.name}
+                valid={nameValid(row.name) && current.dns.rules.findIndex((r) => r.name === row.name) === index}
+                onChange={(name) => updateDNSRule(index, { name })} />
+              <Field label="Домены DNS-правила" multiline value={row.domain_suffix.join("\n")}
+                valid={row.domain_suffix.every(domainValid) &&
+                  (row.domain_suffix.length > 0 || row.rule_sets.length > 0)}
+                onChange={(text) => updateDNSRule(index, { domain_suffix: lines(text) })} />
+              <SelectField label="DNS-сервер правила" value={row.server} required
+                options={dnsTags.filter(Boolean)}
+                onChange={(server) => updateDNSRule(index, { server })} />
+              <FormActions>
+                <DeleteButton label={`Удалить DNS-правило ${row.name || index + 1}`}
+                  onClick={() => patch({ dns: { ...current.dns,
+                    rules: current.dns.rules.filter((_, i) => i !== index) } })} />
+              </FormActions>
+            </FormGrid>
+            {ruleSetOptions.length > 0 && <>
+              <Typography>Наборы правил DNS</Typography>
+              {ruleSetOptions.map((name) => <FormControlLabel key={name} label={name}
+                control={<Checkbox checked={row.rule_sets.includes(name)}
+                  onChange={(_, checked) => updateDNSRule(index, { rule_sets: checked
+                    ? [...row.rule_sets, name]
+                    : row.rule_sets.filter((selected) => selected !== name) })} />} />)}
+            </>}
+          </div>)}
+          <Button onClick={() => patch({ dns: { ...current.dns, rules: [
+            ...current.dns.rules, { name: "", domain_suffix: [], rule_sets: [], server: "" },
+          ] } })}>+ Добавить DNS-правило</Button>
           <Typography variant="h2">Обновление списков (после запуска TProxy)</Typography>
           <FormGrid>
             <SelectField label="Режим обновления" value={schedule.mode}

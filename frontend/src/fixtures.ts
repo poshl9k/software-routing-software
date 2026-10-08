@@ -26,6 +26,7 @@ export const emptyConfiguration: Configuration = {
     ingress_interfaces: [],
     rules: [],
     bypass: [],
+    dns: { servers: [], rules: [] },
     final: "direct",
     final_outbound: null,
     update_schedule: { mode: "interval", interval_hours: 6, window_start: "00:00", window_end: "05:00" },

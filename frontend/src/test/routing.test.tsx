@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import Routing from "../pages/Routing";
 import { RouterProvider } from "../state";
 import { emptyConfiguration } from "../fixtures";
-import type { TProxyRule } from "../types";
+import type { TProxyDNS, TProxyRule } from "../types";
 
 function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfiguration.proxies) {
   const configuration = {
@@ -201,6 +201,31 @@ it("saves a TProxy bypass exclusion in the draft", async () => {
       name: "corp", source_ip_cidr: [], ip_cidr: ["10.9.0.0/16"],
       ports: [], protocol: "tcp",
     }]);
+  });
+});
+
+it("saves an expert UDP DNS server and its matching DNS rule", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить DNS-сервер" }));
+  await user.type(screen.getByLabelText("Тег DNS-сервера"), "cloudflare");
+  await user.type(screen.getByLabelText("Сервер DNS"), "1.1.1.1");
+  await user.click(screen.getByRole("button", { name: "+ Добавить DNS-правило" }));
+  await user.type(screen.getByLabelText("Имя DNS-правила"), "example_dns");
+  await user.type(screen.getByLabelText("Домены DNS-правила"), "example.org");
+  await user.selectOptions(screen.getByLabelText("DNS-сервер правила"), "cloudflare");
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  const expected: TProxyDNS = {
+    servers: [{ tag: "cloudflare", type: "udp", server: "1.1.1.1", server_port: null,
+      tls_name: null, path: null, domain_resolver: null, detour: null }],
+    rules: [{ name: "example_dns", domain_suffix: ["example.org"], rule_sets: [],
+      server: "cloudflare" }],
+  };
+  await waitFor(() => {
+    const [, init] = fetch.mock.calls.find(
+      ([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+    expect(JSON.parse(String(init.body)).tproxy.dns).toEqual(expected);
   });
 });
 
