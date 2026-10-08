@@ -151,10 +151,18 @@ export interface TProxyRule {
   outbound: string | null;
   order: number;
 }
+export interface TProxyBypass {
+  name: string;
+  source_ip_cidr: string[];
+  ip_cidr: string[];
+  ports: string[];
+  protocol: "any" | "tcp" | "udp";
+}
 export interface TProxy {
   enabled: boolean;
   ingress_interfaces: string[];
   rules: TProxyRule[];
+  bypass: TProxyBypass[];
   final: "direct" | "block" | "route";
   final_outbound: string | null;
   update_schedule: TProxyUpdateSchedule;

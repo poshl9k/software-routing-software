@@ -11,6 +11,7 @@ from pathlib import Path
 
 import json
 import pytest
+from pydantic import ValidationError
 
 from test_agent_apply import FakeFS, FakeExecutor, snapshot
 from vs_router.agent import tproxy_apply
@@ -18,9 +19,28 @@ from vs_router.agent.apply import APPLIED_DIR, FILES, ApplyEngine
 from vs_router.generators import marks
 from vs_router.generators.nftables import (generate_tproxy_interception,
                                            tproxy_policy_route_commands)
+from vs_router.generators.singbox import generate_singbox
 from vs_router.schema import ConfigurationVersion
 
 CAPTURE_FILE = "tproxy-intercept.nft"
+
+BYPASS_INTERFACES = [
+    {"name": "lan0", "zone": "lan", "addresses": ["10.212.1.1/24"]},
+    {"name": "lan1", "zone": "lan", "addresses": ["10.213.1.1/24"]},
+    {"name": "wan0", "zone": "wan", "addresses": ["192.0.2.1/24"]},
+]
+
+
+def bypass_version(rows, ingress=("lan0",)):
+    """Offline enabled snapshot with validated bypass rows (public contract runs)."""
+    version = ConfigurationVersion.model_validate({"configuration": {
+        "interfaces": BYPASS_INTERFACES,
+        "dns": {"interfaces": ["lan0"]},
+        "tproxy": {"ingress_interfaces": list(ingress), "bypass": rows},
+    }})
+    tproxy = version.configuration.tproxy.model_copy(update={"enabled": True})
+    return version.model_copy(update={"configuration": version.configuration.model_copy(
+        update={"tproxy": tproxy})})
 
 
 def base(ingress=("lan0",)):
@@ -397,3 +417,48 @@ def test_probe_accepts_only_the_interception_fixture():
     fixture = _generator()["generate_cases"]("tcp", interception=True)
     fixture["__tproxy_interception__"] = True
     validate(fixture)  # must not raise
+
+
+# --- S3b: bypass / capture exclusions --------------------------------------
+
+def test_bypass_return_precedes_the_tproxy_redirect():
+    text = generate_tproxy_interception(bypass_version(
+        [{"name": "corp", "ip_cidr": ["10.9.0.0/16"]}]))
+    assert 'ip daddr { 10.9.0.0/16 } counter return comment "tproxy_bypass_corp"' in text
+    # Excluded traffic returns before the redirect, so it is never captured.
+    assert text.index("tproxy_bypass_corp") < text.index("tproxy_tcp")
+
+
+def test_bypass_renders_source_ports_and_protocol():
+    text = generate_tproxy_interception(bypass_version([
+        {"name": "lan_dns", "source_ip_cidr": ["10.0.0.0/8"],
+         "ports": ["53", "1000-2000"], "protocol": "udp"}]))
+    assert ('ip saddr { 10.0.0.0/8 } th dport { 53, 1000-2000 } '
+            'meta l4proto udp counter return comment "tproxy_bypass_lan_dns"') in text
+
+
+def test_no_bypass_emits_no_bypass_lines():
+    assert "tproxy_bypass_" not in generate_tproxy_interception(enabled())
+
+
+def test_singbox_preview_bypass_direct_rule_is_first():
+    rules = generate_singbox(bypass_version(
+        [{"name": "corp", "ip_cidr": ["10.9.0.0/16"]}]))["route"]["rules"]
+    assert rules[0] == {"ip_cidr": ["10.9.0.0/16"], "action": "route",
+                        "outbound": "direct"}
+
+
+def test_bypass_validator_codes():
+    def build(tproxy):
+        ConfigurationVersion.model_validate({"configuration": {
+            "interfaces": BYPASS_INTERFACES, "dns": {"interfaces": ["lan0"]},
+            "tproxy": tproxy}})
+    with pytest.raises(ValidationError, match="tproxy.bypass_matcher_required"):
+        build({"bypass": [{"name": "x"}]})
+    with pytest.raises(ValidationError, match="tproxy.bypass_ipv4_required"):
+        build({"bypass": [{"name": "x", "ip_cidr": ["2001:db8::/32"]}]})
+    with pytest.raises(ValidationError, match="tproxy.bypass_source_ipv4_required"):
+        build({"bypass": [{"name": "x", "source_ip_cidr": ["2001:db8::/32"]}]})
+    with pytest.raises(ValidationError, match="tproxy.bypass_name_duplicate"):
+        build({"bypass": [{"name": "x", "ports": ["53"]},
+                          {"name": "x", "ports": ["54"]}]})

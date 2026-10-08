@@ -10,6 +10,11 @@ def names(values):
     return '{ ' + ', '.join(f'"{v}"' for v in values) + ' }'
 
 
+def _nft_set(values):
+    """A nftables anonymous set of numeric/address literals (no quoting)."""
+    return '{ ' + ', '.join(values) + ' }'
+
+
 class _FirewallCompiler:
     """Shared matching, ordering, aliases and logging for both filter paths."""
 
@@ -515,6 +520,23 @@ def generate_tproxy_interception(version: ConfigurationVersion) -> str:
     # independent containment (-10) / default-deny hold it -- fail-closed rather
     # than a LOCAL_IN -> proxy bypass of the FORWARD policy.
     gate = f"        meta mark & {auth:#x} == 0 return"
+    # Bypass (S3b): excluded traffic returns before the tproxy redirect, so it is
+    # never captured and stays on the ordinary FORWARD path. Emitted after the
+    # shared exemptions (which already dropped non-IPv4/non-TCP-UDP) and before
+    # the preauth gate, so a bypass match wins even for a stamped flow.
+    bypass_lines = []
+    for row in c.tproxy.bypass:
+        match = []
+        if row.source_ip_cidr:
+            match.append("ip saddr " + _nft_set(row.source_ip_cidr))
+        if row.ip_cidr:
+            match.append("ip daddr " + _nft_set(row.ip_cidr))
+        if row.ports:
+            match.append("th dport " + _nft_set(row.ports))
+        if row.protocol != "any":
+            match.append(f"meta l4proto {row.protocol}")
+        bypass_lines.append(
+            f'        {" ".join(match)} counter return comment "tproxy_bypass_{row.name}"')
     lines = [f"destroy table {reset_table}", f"table {reset_table} {{",
              "    chain prerouting {",
              "        type filter hook prerouting priority -85; policy accept;",
@@ -525,6 +547,7 @@ def generate_tproxy_interception(version: ConfigurationVersion) -> str:
              "    chain prerouting {",
              "        type filter hook prerouting priority -80; policy accept;",
              *exemptions,
+             *bypass_lines,
              gate,
              f'        meta nfproto ipv4 meta l4proto tcp {marked} {set_ct} '
              f'tproxy ip to 127.0.0.1:{marks.TPROXY_TCP_PORT} counter accept comment "tproxy_tcp"',

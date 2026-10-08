@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { queryKeys } from "../query";
-import type { TProxy, TProxyRule } from "../types";
+import type { TProxy, TProxyBypass, TProxyRule } from "../types";
 import { addressValid, lines, nameValid, portValid } from "../components/validators";
 import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter } from "../components/EditorShell";
@@ -34,6 +34,14 @@ const ruleValid = (rule: TProxyRule, outbounds: readonly string[], ruleSets: rea
   rule.rule_sets.every((name) => ruleSets.includes(name)) &&
   (rule.action !== "route" ||
     (rule.outbound !== null && outbounds.includes(rule.outbound)));
+// A bypass row excludes traffic from capture: at least one of source/dest/ports,
+// IPv4-only addresses, valid ports.
+const bypassValid = (row: TProxyBypass) =>
+  nameValid(row.name) &&
+  (row.source_ip_cidr.length > 0 || row.ip_cidr.length > 0 || row.ports.length > 0) &&
+  row.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
+  row.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
+  row.ports.every(portRangeValid);
 const timeValid = (time: string) => /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(time);
 
 /** Draft-only TProxy policy. Live interception stays blocked by the backend. */
@@ -62,6 +70,8 @@ function TProxyEditor() {
   const patch = (value: Partial<TProxy>) => editor.setValue({ ...current, ...value });
   const updateRule = (index: number, value: Partial<TProxyRule>) =>
     patch({ rules: current.rules.map((r, i) => i === index ? { ...r, ...value } : r) });
+  const updateBypass = (index: number, value: Partial<TProxyBypass>) =>
+    patch({ bypass: current.bypass.map((r, i) => i === index ? { ...r, ...value } : r) });
   const schedule = current.update_schedule;
   const scheduleValid = schedule.mode === "interval"
     ? Number.isInteger(schedule.interval_hours) && schedule.interval_hours >= 1 && schedule.interval_hours <= 168
@@ -70,7 +80,9 @@ function TProxyEditor() {
     (current.final_outbound !== null && outboundOptions.includes(current.final_outbound));
   const valid = scheduleValid && finalValid &&
     current.rules.every((r) => ruleValid(r, outboundOptions, ruleSetOptions)) &&
-    new Set(current.rules.map((r) => r.name)).size === current.rules.length;
+    new Set(current.rules.map((r) => r.name)).size === current.rules.length &&
+    current.bypass.every(bypassValid) &&
+    new Set(current.bypass.map((r) => r.name)).size === current.bypass.length;
   const save = async () => {
     if (user?.role === "operator" || !valid) return;
     clearPreview();
@@ -93,6 +105,7 @@ function TProxyEditor() {
             {rule.action === "route" && rule.outbound ? ` → ${rule.outbound}` : ""}</Typography>)}
           <Typography>Конечное действие: {current.final}
             {current.final === "route" && current.final_outbound ? ` → ${current.final_outbound}` : ""}</Typography>
+          <Typography>Исключения (bypass): {current.bypass.length}</Typography>
           <Button disabled={user?.role !== "admin" || version?.status !== "draft" || preview.isFetching}
             onClick={() => void preview.refetch()}>Предпросмотр сохранённого черновика</Button>
           {preview.data && !editor.isEdit && preview.data.version_id === version?.id && <>
@@ -182,6 +195,31 @@ function TProxyEditor() {
                 onChange={(final_outbound) => patch({ final_outbound })} />
             )}
           </FormGrid>
+          <Typography variant="h2">Исключения из перехвата (bypass)</Typography>
+          {current.bypass.map((row, index) => <div key={index} className="rule-row">
+            <FormGrid>
+              <Field label="Имя исключения" value={row.name} valid={nameValid(row.name)}
+                onChange={(name) => updateBypass(index, { name })} />
+              <Field label="Источник IP (bypass)" multiline value={row.source_ip_cidr.join("\n")}
+                valid={row.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+                onChange={(text) => updateBypass(index, { source_ip_cidr: lines(text) })} />
+              <Field label="Назначение IPv4 (bypass)" multiline value={row.ip_cidr.join("\n")}
+                valid={row.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+                onChange={(text) => updateBypass(index, { ip_cidr: lines(text) })} />
+              <Field label="Порты (bypass)" multiline value={row.ports.join("\n")}
+                valid={row.ports.every(portRangeValid)}
+                onChange={(text) => updateBypass(index, { ports: lines(text) })} />
+              <SelectField label="Протокол (bypass)" value={row.protocol} options={["any", "tcp", "udp"]}
+                onChange={(protocol) => updateBypass(index, { protocol })} />
+              <FormActions>
+                <DeleteButton label={`Удалить исключение ${row.name || index + 1}`}
+                  onClick={() => patch({ bypass: current.bypass.filter((_, i) => i !== index) })} />
+              </FormActions>
+            </FormGrid>
+          </div>)}
+          <Button onClick={() => patch({ bypass: [...current.bypass, {
+            name: "", source_ip_cidr: [], ip_cidr: [], ports: [], protocol: "any",
+          }] })}>+ Добавить исключение</Button>
           <Typography variant="h2">Обновление списков (после запуска TProxy)</Typography>
           <FormGrid>
             <SelectField label="Режим обновления" value={schedule.mode}

@@ -29,7 +29,13 @@ Slow-инертность: всё ниже — только черновик/п�
       тег `block` зарезервирован. Генератор: `block`→block-outbound, `route`→тег,
       `direct` — legacy (прямой выход/авто-группа). UI: «Конечное действие» + «Выход по
       умолчанию». Backend +6, frontend +1. Проверено: backend 846, frontend 96, tsc/build ok.
-- [ ] **S3b. Bypass/исключения.** Список исключений (порты/подсети/устройства) в `TProxy`.
+- [x] **S3b. Bypass/исключения.** ~~Список исключений (порты/подсети/устройства) в `TProxy`.~~
+      **СДЕЛАНО:** `TProxyBypass {name, source_ip_cidr, ip_cidr, ports, protocol}` + `TProxy.bypass`.
+      Валидатор: `tproxy.bypass_matcher_required`/`_ipv4_required`/`_source_ipv4_required`/`_name_duplicate`.
+      Генератор nftables: `return` в capture-цепочке (priority −80, после exemptions, до `gate`
+      и `tproxy`-redirect) — исключённый трафик не перехватывается. sing-box: правило
+      `route → direct` первым. UI: секция «Исключения из перехвата (bypass)». Проверено:
+      backend 874, frontend 98, tsc/build ok. Семантика в `CONTEXT.md` (термин «Исключение TProxy»).
 - [ ] **S4. Simple/Expert режимы.** Счётчики-статусы сверху, сводка
       «источник → движок → назначения», экспертные секции.
 - [ ] **S5. Визард первичной настройки** (сервисы → выход → устройства → превью).

@@ -292,13 +292,47 @@ class TProxyRule(Model):
         return self
 
 
+class TProxyBypass(Model):
+    name: Name
+    source_ip_cidr: tuple[str, ...] = ()
+    ip_cidr: tuple[str, ...] = ()
+    ports: tuple[str, ...] = ()
+    protocol: Literal["any", "tcp", "udp"] = "any"
+
+    @model_validator(mode="after")
+    def check_matchers(self):
+        from ipaddress import ip_network
+        from vs_router.validators import port_range
+        if not any((self.source_ip_cidr, self.ip_cidr, self.ports)):
+            raise ValueError("tproxy.bypass_matcher_required")
+        for cidr in self.ip_cidr:
+            if ip_network(cidr).version != 4:
+                raise ValueError("tproxy.bypass_ipv4_required")
+        for cidr in self.source_ip_cidr:
+            if ip_network(cidr).version != 4:
+                raise ValueError("tproxy.bypass_source_ipv4_required")
+        for port in self.ports:
+            port_range(port)
+        return self
+
+
 class TProxy(Model):
     enabled: bool = False
     ingress_interfaces: tuple[InterfaceName, ...] = ()
     rules: tuple[TProxyRule, ...] = ()
+    bypass: tuple[TProxyBypass, ...] = ()
     final: Literal["direct", "block", "route"] = "direct"
     final_outbound: Name | None = None
     update_schedule: TProxyUpdateSchedule = Field(default_factory=TProxyUpdateSchedule)
+
+    @model_validator(mode="after")
+    def check_bypass_names(self):
+        if not self.bypass:
+            return self
+        names = [row.name for row in self.bypass]
+        if len(names) != len(set(names)):
+            raise ValueError("tproxy.bypass_name_duplicate")
+        return self
 
 
 class ProxyOutbound(Model):

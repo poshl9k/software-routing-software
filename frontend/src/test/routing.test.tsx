@@ -167,3 +167,22 @@ it("saves the policy final action and its outbound", async () => {
     expect(tproxy.final_outbound).toBe("proxy_a");
   });
 });
+
+it("saves a TProxy bypass exclusion in the draft", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить исключение" }));
+  await user.type(screen.getByLabelText("Имя исключения"), "corp");
+  await user.type(screen.getByLabelText("Назначение IPv4 (bypass)"), "10.9.0.0/16");
+  await user.selectOptions(screen.getByLabelText("Протокол (bypass)"), "tcp");
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => {
+    const [, init] = fetch.mock.calls.find(
+      ([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+    expect(JSON.parse(String(init.body)).tproxy.bypass).toEqual([{
+      name: "corp", source_ip_cidr: [], ip_cidr: ["10.9.0.0/16"],
+      ports: [], protocol: "tcp",
+    }]);
+  });
+});

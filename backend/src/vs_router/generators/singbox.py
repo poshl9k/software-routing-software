@@ -103,8 +103,32 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
     configuration = version.configuration
     proxies = configuration.proxies
 
-    rules = ([{"action": "sniff"}] if any(r.domain_suffix for r in configuration.tproxy.rules)
-             else [])
+    # Bypass (S3b): excluded traffic routed straight out. Emitted before every
+    # other rule so a bypass row wins in the preview and matches the nftables
+    # capture exclusion.
+    bypass_rules = []
+    for row in configuration.tproxy.bypass:
+        matchers = []
+        if row.source_ip_cidr:
+            matchers.append({"source_ip_cidr": list(row.source_ip_cidr)})
+        if row.ip_cidr:
+            matchers.append({"ip_cidr": list(row.ip_cidr)})
+        singles = [int(port) for port in row.ports if "-" not in port]
+        if singles:
+            matchers.append({"port": singles})
+        ranges = [port.replace("-", ":") for port in row.ports if "-" in port]
+        if ranges:
+            matchers.append({"port_range": ranges})
+        if row.protocol != "any":
+            matchers.append({"network": [row.protocol]})
+        match = (matchers[0] if len(matchers) == 1 else
+                 {"type": "logical", "mode": "or", "rules": matchers})
+        match.update({"action": "route", "outbound": IMPLICIT_DIRECT_TAG})
+        bypass_rules.append(match)
+
+    rules = list(bypass_rules)
+    if any(r.domain_suffix for r in configuration.tproxy.rules):
+        rules.append({"action": "sniff"})
     for rule in sorted(configuration.tproxy.rules, key=lambda r: r.order):
         matchers = []
         if rule.domain_suffix:

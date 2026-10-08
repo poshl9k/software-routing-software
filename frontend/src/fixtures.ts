@@ -25,6 +25,7 @@ export const emptyConfiguration: Configuration = {
     enabled: false,
     ingress_interfaces: [],
     rules: [],
+    bypass: [],
     final: "direct",
     final_outbound: null,
     update_schedule: { mode: "interval", interval_hours: 6, window_start: "00:00", window_end: "05:00" },
