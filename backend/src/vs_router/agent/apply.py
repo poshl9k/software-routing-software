@@ -9,7 +9,7 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Protocol
 
-from ..generators import generate_kea, generate_nftables, generate_unbound, generate_networkd, serialize_networkd
+from ..generators import generate_kea, generate_nftables, generate_unbound, generate_networkd, serialize_networkd, generate_dnscrypt
 import json as _json
 from ..generators.wireguard import generate_wg_bundle, serialize_wireguard
 from ..generators.caddy import generate_caddy_bundle, serialize_caddy
@@ -26,6 +26,9 @@ JOURNAL_PATH = Path('/etc/vs-router/marker.json')
 FILES = {'nftables': 'nftables.conf', 'unbound': 'unbound.conf', 'kea': 'kea.json',
          'networkd': 'networkd.conf', 'wireguard': 'wireguard.conf', 'caddy': 'caddy.conf',
          'ddns': 'ddns.conf', 'ssh': 'ssh.json'}
+#: Additive only: written/validated solely for a version with an https upstream.
+DOH_FILES = {'dnscrypt': 'dnscrypt.toml'}
+DOH_VALIDATORS = {'dnscrypt': ['dnscrypt-proxy', '-check', '-config']}
 VALIDATORS = {'nftables': ['nft', '-c', '-f'], 'unbound': ['unbound-checkconf'],
               'kea': ['kea-dhcp4', '-t'], 'networkd': ['true'], 'wireguard': ['true'], 'caddy': ['true'], 'ddns': ['true'], 'ssh': ['true']}
 
@@ -123,6 +126,39 @@ def _tproxy_branch_from_snapshot(snapshot):
     """
     try:
         return _tproxy_branch(ConfigurationVersion.model_validate(snapshot))
+    except (ValueError, TypeError):
+        return {}, {}
+
+
+def _doh_required(version):
+    """True iff any DNS upstream (``dns.upstreams`` or
+    ``dns.forwards[*].upstreams``) declares ``mode == "https"``."""
+    dns = version.configuration.dns
+    for u in (*dns.upstreams, *(u for f in dns.forwards for u in f.upstreams)):
+        if u.mode == "https":
+            return True
+    return False
+
+
+def _doh_branch(version):
+    """Additive DoH file/validator maps for a version with an https upstream.
+
+    Returns ``({}, {})`` for every configuration reachable through the public
+    contract (no https upstream), so the ordinary apply path is unchanged.
+    """
+    if not _doh_required(version):
+        return {}, {}
+    return dict(DOH_FILES), dict(DOH_VALIDATORS)
+
+
+def _doh_branch_from_snapshot(snapshot):
+    """Best-effort variant of :func:`_doh_branch` for a stored snapshot dict.
+
+    Old snapshots and any snapshot the schema cannot re-validate fall back to
+    the empty branch rather than raising mid-rollback.
+    """
+    try:
+        return _doh_branch(ConfigurationVersion.model_validate(snapshot))
     except (ValueError, TypeError):
         return {}, {}
 
@@ -267,6 +303,30 @@ class ApplyEngine:
                 (tproxy_apply.SINGBOX_PROCESS_STEP,
                  SingboxService(self.executor, self.fs))]
 
+    def _doh_readiness_steps(self):
+        """Typed, gated readiness actions for the DoH client (dnscrypt-proxy).
+
+        Empty for every configuration without an https upstream, so the
+        ordinary apply path runs no extra command. Built from the fixed
+        adapter; no caller data reaches argv. The dnscrypt-proxy must be
+        *ready* before the unbound phase that forwards https upstreams to it.
+        """
+        from .dnscrypt_service import DnscryptService
+        return [("dnscrypt_process", DnscryptService(self.executor, self.fs))]
+
+    def _readiness_steps(self, version, doh_required):
+        """Compose the readiness steps for the current apply.
+
+        The DoH step runs first (before ``unbound``) when the version declares
+        at least one https upstream; the TProxy readiness steps run when the
+        TProxy branch is active (gated off in practice). Both may coexist.
+        """
+        steps = []
+        if doh_required:
+            steps.extend(self._doh_readiness_steps())
+        steps.extend(self._tproxy_readiness_steps(version))
+        return steps
+
     def _teardown_tproxy_steps(self):
         """Stop the engine and the two resolvers, remove the owned policy route.
 
@@ -319,6 +379,7 @@ class ApplyEngine:
         else:
             version = ConfigurationVersion.model_validate(version_snapshot)
         tproxy_files, tproxy_validators = _tproxy_branch(version)
+        doh_files, doh_validators = _doh_branch(version)
         try:
             backup = json.loads(self.fs.read(CONFIRMED_DIR / 'snapshot.json'))
         except FileNotFoundError:
@@ -357,9 +418,12 @@ class ApplyEngine:
         # marker of every current configuration is unchanged.
         if tproxy_files:
             marker['tproxy'] = tproxy_apply.describe(version)
-        apply_files = {**FILES, **tproxy_files}
+        if doh_files:
+            marker['doh'] = True
+        apply_files = {**FILES, **tproxy_files, **doh_files}
         apply_validators = _merged_validators(
-            self.validators if validators is None else validators, tproxy_validators)
+            _merged_validators(self.validators if validators is None else validators, tproxy_validators),
+            doh_validators)
         try:
             contents = {name: gen(version) for name, gen in (
                 ('nftables', lambda v: generate_nftables(v, management)), ('unbound', generate_unbound), ('kea', generate_kea))}
@@ -389,9 +453,12 @@ class ApplyEngine:
             # Phase order: guards, then engine/readiness; no capture artifact is
             # generated while the gate is closed (see agent/tproxy_apply.py).
             contents.update(tproxy_apply.build_artifacts(version))
+            if doh_files:
+                contents['dnscrypt'] = generate_dnscrypt(version)
             self._install(contents, marker, apply_validators, files=apply_files,
-                          steps=self._tproxy_readiness_steps(version),
-                          steps_before='tproxy_interception')
+                          steps=self._readiness_steps(version, doh_files),
+                          steps_before=('tproxy_interception' if tproxy_files else
+                                        'unbound' if doh_files else None))
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
             if self.panel_probe is not None and not self.panel_probe():
@@ -440,6 +507,15 @@ class ApplyEngine:
                     self._teardown_tproxy_artifacts()
                 except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError):
                     pass  # Report the primary failure; teardown is best-effort.
+            if mutated and backup is None and any(
+                    name in marker['phases'] for name in doh_files):
+                # No confirmed target to roll back to, but a DoH unit was already
+                # enabled: best-effort tear-down so a failed first apply does not
+                # leave the dnscrypt-proxy service enabled.
+                try:
+                    self._teardown_doh_steps()
+                except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError):
+                    pass  # Report the primary failure; teardown is best-effort.
             return ApplyResult(version.id, 'failed', marker['phases'], marker['error'])
 
     def confirm_version(self, version_id):
@@ -453,7 +529,11 @@ class ApplyEngine:
         # carries the additive TProxy file map, recorded under the marker's
         # ``tproxy`` key; a FILES-only backup would silently drop the guard /
         # engine / capture artifacts and make this confirmed state inconsistent.
+        # Also include DoH files when present in the marker.
+        doh_files_in_marker = marker.get('doh', False)
         files = ({**FILES, **tproxy_apply.TPROXY_FILES} if 'tproxy' in marker else None)
+        if doh_files_in_marker:
+            files = {**FILES, **DOH_FILES} if files is None else {**files, **DOH_FILES}
         self._backup(version_id, files=files)
         self.fs.remove(MARKER_PATH)
         self.fs.remove(JOURNAL_PATH)
@@ -489,6 +569,26 @@ class ApplyEngine:
                 pass
         self._teardown_tproxy_steps()
 
+    def _doh_artifacts_applied(self):
+        """True if the current marker shows any DoH artifact went live."""
+        current = self.status()
+        if not isinstance(current, dict):
+            return False
+        phases = current.get('phases') or {}
+        return 'dnscrypt' in phases
+
+    def _teardown_doh_steps(self):
+        """Stop the dnscrypt-proxy unit (best-effort).
+
+        Compensation for an interrupted or rolled-back DoH apply: a failure here
+        never masks the primary result.
+        """
+        from .dnscrypt_service import DnscryptService
+        try:
+            DnscryptService(self.executor, self.fs).stop()
+        except (OSError, subprocess.SubprocessError, ValueError, ApplyError):
+            pass
+
     def rollback(self, reason):
         try:
             backup = json.loads(self.fs.read(CONFIRMED_DIR / 'snapshot.json'))
@@ -499,9 +599,12 @@ class ApplyEngine:
         # artifacts, the rollback must explicitly destroy every owned table
         # (installing the old product nftables alone does not touch them).
         tproxy_applied = self._tproxy_artifacts_applied()
+        doh_applied = self._doh_artifacts_applied()
         tproxy_files, tproxy_validators = _tproxy_branch_from_snapshot(backup['version_snapshot'])
-        rollback_files = {**FILES, **tproxy_files}
-        rollback_validators = _merged_validators(self.validators, tproxy_validators)
+        doh_files, doh_validators = _doh_branch_from_snapshot(backup['version_snapshot'])
+        rollback_files = {**FILES, **tproxy_files, **doh_files}
+        rollback_validators = _merged_validators(
+            _merged_validators(self.validators, tproxy_validators), doh_validators)
         contents = dict(backup['files'])
         if not tproxy_files and tproxy_applied:
             contents['tproxy_cleanup'] = tproxy_apply.cleanup_content()
@@ -526,6 +629,10 @@ class ApplyEngine:
             # guard with destroy-only text so a reboot cannot re-raise it, and
             # stop the engine / remove the owned policy route.
             self._teardown_tproxy_artifacts()
+        if not doh_files and doh_applied:
+            # The confirmed target is not a DoH state: stop the dnscrypt-proxy
+            # unit so a reboot cannot re-raise its DoH client.
+            self._teardown_doh_steps()
         self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(backup['version_snapshot']))
         marker['deadline'] = None
         marker['status'] = 'rolled_back'

@@ -177,7 +177,11 @@ stage_apt_deps() {
     apt_with_release install -y dbus python3 python3-pip python3-venv python3-setuptools python3-wheel git build-essential golang-go \
         kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor wireguard-tools traceroute \
         socat curl nodejs npm debian-keyring debian-archive-keyring \
-        openssh-server fail2ban python3-systemd
+        openssh-server fail2ban python3-systemd dnscrypt-proxy
+    # Mask the packaged units so our own unit (vs-router-dnscrypt.service) is the
+    # only one that may listen on loopback:53/5300. The Debian package ships
+    # dnscrypt-proxy.socket on 127.0.0.1:53 which would conflict with Unbound.
+    systemctl mask --now dnscrypt-proxy.service dnscrypt-proxy.socket || fail "mask dnscrypt-proxy units"
     local node_version npm_version go_version
     node_version=$(node --version)
     npm_version=$(npm --version)
