@@ -202,12 +202,18 @@ it("saves DHCP reservations inside/outside the pool and DNS records/forwards thr
     screen.getByRole("button", { name: "+ Добавить переадресацию" }),
   );
   await user.type(screen.getByLabelText("Домен переадресации"), "corp.test");
-  await user.type(
-    screen.getByLabelText("Upstreams домена (построчно)"),
-    "10.0.0.53",
+  await user.click(
+    screen.getAllByRole("button", { name: "+ Добавить прокси-сервер" })[0],
   );
   await user.type(
-    screen.getByLabelText("Upstream-серверы (построчно)"),
+    screen.getAllByLabelText("Адрес прокси-сервера")[0],
+    "10.0.0.53",
+  );
+  await user.click(
+    screen.getAllByRole("button", { name: "+ Добавить прокси-сервер" })[1],
+  );
+  await user.type(
+    screen.getAllByLabelText("Адрес прокси-сервера")[1],
     "1.1.1.1",
   );
   await user.click(screen.getByRole("button", { name: "+ Добавить привязку" }));
@@ -246,4 +252,43 @@ it("renders an API save error and retains local edits for retry", async () => {
   );
   expect(screen.getByLabelText("Имя правила")).toHaveValue("keep_me");
   expect(saveButton()).toBeEnabled();
+});
+
+it("shows DoT tls_name and DoH doh_server fields and requires them", async () => {
+  const fetch = mockApi(emptyConfiguration);
+  const user = userEvent.setup();
+  await open(<DNS />);
+  await user.click(screen.getAllByRole("button", { name: "+ Добавить прокси-сервер" })[0]);
+  await user.click(screen.getAllByRole("button", { name: "+ Добавить прокси-сервер" })[1]);
+  const tlsLabel = "Имя TLS (DoT)";
+  const dohLabel = "Сервер DoH (dnscrypt-proxy)";
+  // First row: switch to DoT
+  await user.selectOptions(
+    screen.getAllByLabelText("Режим прокси-сервера")[0],
+    "tls",
+  );
+  expect(screen.queryAllByLabelText(tlsLabel).length).toBe(1);
+  await user.type(screen.getAllByLabelText(tlsLabel)[0], "dot.example.com");
+  await user.type(screen.getAllByLabelText("Адрес прокси-сервера")[0], "1.1.1.1");
+  // Second row: switch to DoH
+  await user.selectOptions(
+    screen.getAllByLabelText("Режим прокси-сервера")[1],
+    "https",
+  );
+  expect(screen.queryAllByLabelText(dohLabel).length).toBe(1);
+  expect(screen.queryAllByLabelText(tlsLabel).length).toBe(1);
+  await user.type(screen.getAllByLabelText(dohLabel)[0], "doh.example.com");
+  await user.click(saveButton());
+  await waitFor(() =>
+    expect(
+      fetch.mock.calls.filter(([path]) => path === "/api/draft"),
+    ).toHaveLength(1),
+  );
+  const saved = JSON.parse(
+    fetch.mock.calls.find(([path]) => path === "/api/draft")![1].body,
+  );
+  expect(saved.dns.upstreams).toEqual([
+    { address: "1.1.1.1", port: 53, mode: "tls", tls_name: "dot.example.com", doh_server: null },
+    { address: "", port: 53, mode: "https", tls_name: null, doh_server: "doh.example.com" },
+  ]);
 });

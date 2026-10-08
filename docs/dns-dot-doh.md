@@ -73,7 +73,14 @@ class DNSUpstream(Model):
   `https`-upstream'ы на локальный `127.0.0.1:5300` (+ `do-not-query-localhost: no`, без
   `forward-tls-upstream`), новый `generators/dnscrypt.py` (пакет `dnscrypt-proxy`,
   `server_names` из встроенных имён, отсортирован и без дублей). Проверено: backend 856,
-  frontend 96, tsc/build ok. **Осталось (D2b):** packaging (пакет через bootstrap-snapshot),
-  systemd-юнит `vs-router-dnscrypt`, активация в agent apply/rollback.
-- **D3:** полноценный UI-редактор upstream (режим/tls_name/doh_server полями) — сейчас
-  правится текстом: `ip`, `ip@port`, `ip@port#tls-name`, `doh:имя`.
+  frontend 96, tsc/build ok.
+- **D2b — сделано:** `dnscrypt-proxy` в bootstrap (пакет пиннится снапшотом) + mask
+  дистрибутивных юнитов (`dnscrypt-proxy.socket` занял бы loopback:53); `agent/dnscrypt_service.py`
+  (verify → config-check → enable → ready, без capabilities); аддитивная DoH-ветка в
+  `apply.py` (`dnscrypt.toml`, readiness-step до фазы `unbound`, teardown при откате).
+  Конфигурации без https-upstream'ов байт-в-байт как раньше. Проверено: backend 869.
+  **Осталось:** живой прогон на VM (`dnscrypt-proxy -check`, `systemctl`, DoH-резолв).
+- **D3 — сделано:** структурный редактор upstream (режим UDP/DoT/DoH + адрес/порт/
+  tls_name/doh_server, поля по режиму, валидация как на бэкенде), общий компонент
+  `UpstreamRows` для корневого и per-domain списков вместо текстового поля. Проверено:
+  frontend 97, tsc/build ok.

@@ -10,7 +10,7 @@ import { EditorShell } from "../components/EditorShell";
 import { Field } from "../components/Field";
 import { FormGrid } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
-import { SelectField, InterfaceSelect } from "../components/Select";
+import { Select, SelectField, InterfaceSelect } from "../components/Select";
 import { Toggle } from "../components/Toggle";
 import {
   ipValid,
@@ -29,23 +29,110 @@ const ipNumber = (v: string) =>
 const poolValid = (p: { start: string; end: string }) =>
   ipv4(p.start) && ipv4(p.end) && ipNumber(p.start) <= ipNumber(p.end);
 const normalize = (v: string[]) => lines(v.join("\n"));
-// DNS upstream text syntax: "ip", "ip@port" (udp on a custom port),
-// "ip@port#tls-name" (DoT) or "doh:server-name" (DoH via the local resolver).
-// Text keeps the existing newline editor usable until a dedicated editor lands.
-const upstreamText = (u: DNSUpstream) =>
-  u.mode === "https" ? `doh:${u.doh_server}`
-    : u.mode === "tls" ? `${u.address}@${u.port}#${u.tls_name}`
-    : u.port === 53 ? u.address : `${u.address}@${u.port}`;
-const parseUpstreams = (value: string): DNSUpstream[] =>
-  value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean).map((s) => {
-    if (s.startsWith("doh:"))
-      return { address: "", port: 53, mode: "https", tls_name: null,
-               doh_server: s.slice(4) || null };
-    const match = /^([^@#\s]+)(?:@(\d+))?(?:#(.+))?$/.exec(s);
-    const name = match?.[3] ?? null;
-    return { address: match?.[1] ?? s, port: match?.[2] ? Number(match[2]) : 53,
-             mode: name ? "tls" : "udp", tls_name: name, doh_server: null };
-  });
+const upstreamModes = [
+  { value: "udp", label: "UDP" },
+  { value: "tls", label: "DoT" },
+  { value: "https", label: "DoH" },
+] as const satisfies readonly { value: "udp" | "tls" | "https"; label: string }[];
+
+const normalizeUpstreamOnModeChange = (
+  u: DNSUpstream,
+  mode: "udp" | "tls" | "https",
+): DNSUpstream => {
+  switch (mode) {
+    case "https":
+      return { ...u, mode, address: "", port: 53, tls_name: null, doh_server: u.doh_server ?? "" };
+    case "tls":
+      return { ...u, mode, address: u.address, port: u.port, tls_name: u.tls_name ?? "", doh_server: null };
+    default:
+      return { ...u, mode, address: u.address, port: u.port, tls_name: null, doh_server: null };
+  }
+};
+
+const newUpstreamRow = (mode: "udp" | "tls" | "https"): DNSUpstream => ({
+  address: "",
+  port: 53,
+  mode,
+  tls_name: null,
+  doh_server: null,
+});
+
+/** One structured DNS upstream row list, shared by the root and per-domain lists. */
+function UpstreamRows({
+  upstreams,
+  onChange,
+}: {
+  upstreams: DNSUpstream[];
+  onChange: (upstreams: DNSUpstream[]) => void;
+}) {
+  return (
+    <div>
+      {upstreams.map((u, uIndex) => {
+        const updateUp = (v: Partial<DNSUpstream>) =>
+          onChange(upstreams.map((row, i) => (i === uIndex ? { ...row, ...v } : row)));
+        return (
+          <Card
+            key={uIndex}
+            title={u.mode === "udp" ? "UDP" : u.mode === "tls" ? "DoT" : "DoH"}
+            action={
+              <DeleteButton
+                label={`Удалить upstream ${uIndex + 1}`}
+                onClick={() => onChange(upstreams.filter((_, i) => i !== uIndex))}
+              />
+            }
+          >
+            <FormGrid>
+              <Select
+                ariaLabel="Режим прокси-сервера"
+                value={u.mode}
+                options={upstreamModes}
+                onChange={(mode) =>
+                  updateUp(normalizeUpstreamOnModeChange(u, mode as "udp" | "tls" | "https"))
+                }
+              />
+              {(u.mode === "udp" || u.mode === "tls") && (
+                <>
+                  <Field
+                    ariaLabel="Адрес прокси-сервера"
+                    value={u.address}
+                    valid={ipValid(u.address)}
+                    onChange={(address) => updateUp({ address })}
+                  />
+                  <Field
+                    ariaLabel="Порт прокси-сервера"
+                    type="number"
+                    value={String(u.port)}
+                    onChange={(port) => updateUp({ port: Number(port) || 53 })}
+                  />
+                  {u.mode === "tls" && (
+                    <Field
+                      ariaLabel="Имя TLS (DoT)"
+                      value={u.tls_name ?? ""}
+                      valid={!!u.tls_name}
+                      onChange={(tls_name) => updateUp({ tls_name: tls_name || null })}
+                    />
+                  )}
+                </>
+              )}
+              {u.mode === "https" && (
+                <Field
+                  ariaLabel="Сервер DoH (dnscrypt-proxy)"
+                  value={u.doh_server ?? ""}
+                  valid={!!u.doh_server}
+                  onChange={(doh_server) => updateUp({ doh_server: doh_server || null })}
+                />
+              )}
+            </FormGrid>
+          </Card>
+        );
+      })}
+      <Button onClick={() => onChange([...upstreams, newUpstreamRow("udp")])}>
+        + Добавить прокси-сервер
+      </Button>
+    </div>
+  );
+}
+
 const upstreamsValid = (list: DNSUpstream[]) =>
   list.every((u) =>
     u.mode === "https" ? !!u.doh_server
@@ -427,12 +514,9 @@ export function DNSEditor({ children }: { children: ReactNode }) {
                     valid={f.domain === "." || domainValid(f.domain)}
                     onChange={(domain) => forward({ domain })}
                   />,
-                  <Field
-                    ariaLabel="Upstreams домена (построчно)"
-                    multiline
-                    value={f.upstreams.map(upstreamText).join("\n")}
-                    valid={f.upstreams.length > 0 && upstreamsValid(f.upstreams)}
-                    onChange={(v) => forward({ upstreams: parseUpstreams(v) })}
+                  <UpstreamRows
+                    upstreams={f.upstreams}
+                    onChange={(upstreams) => forward({ upstreams })}
                   />,
                   <DeleteButton
                     label={`Удалить переадресацию ${index + 1}`}
@@ -460,13 +544,9 @@ export function DNSEditor({ children }: { children: ReactNode }) {
           </Card>
           <Card title="Режим и привязка">
             <FormGrid>
-              <Field
-                label="Upstream-серверы (построчно)"
-                hint="IP, ip@порт, ip@порт#tls-name (DoT) или doh:имя (DoH)"
-                multiline
-                value={dns.upstreams.map(upstreamText).join("\n")}
-                valid={upstreamsValid(dns.upstreams)}
-                onChange={(v) => update({ upstreams: parseUpstreams(v) })}
+              <UpstreamRows
+                upstreams={dns.upstreams}
+                onChange={(upstreams) => update({ upstreams })}
               />
               <Toggle
                 label="Рекурсия"
