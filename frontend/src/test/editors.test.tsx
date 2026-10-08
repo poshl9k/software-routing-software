@@ -226,8 +226,9 @@ it("saves DHCP reservations inside/outside the pool and DNS records/forwards thr
     records: [
       { name: "nas.home.lan", type: "A", ttl: 300, value: "192.168.1.20" },
     ],
-    forwards: [{ domain: "corp.test", upstreams: ["10.0.0.53"] }],
-    upstreams: ["1.1.1.1"],
+    forwards: [{ domain: "corp.test", upstreams: [
+      { address: "10.0.0.53", port: 53, mode: "udp", tls_name: null }] }],
+    upstreams: [{ address: "1.1.1.1", port: 53, mode: "udp", tls_name: null }],
     log_queries: true,
   });
   expect(saved.dhcp_subnets).toEqual(dhcp.dhcp_subnets);

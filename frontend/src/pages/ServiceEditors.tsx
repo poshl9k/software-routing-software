@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Button } from "@mui/material";
-import type { DHCPSubnet, DNS as DNSConfig } from "../types";
+import type { DHCPSubnet, DNS as DNSConfig, DNSUpstream } from "../types";
 import { useConfiguration } from "../state";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
@@ -29,6 +29,21 @@ const ipNumber = (v: string) =>
 const poolValid = (p: { start: string; end: string }) =>
   ipv4(p.start) && ipv4(p.end) && ipNumber(p.start) <= ipNumber(p.end);
 const normalize = (v: string[]) => lines(v.join("\n"));
+// DNS upstream text syntax: "ip", "ip@port" (udp on a custom port) or
+// "ip@port#tls-name" (DoT). Text keeps the existing newline editor usable for
+// both plain and DoT servers until a dedicated editor lands.
+const upstreamText = (u: DNSUpstream) =>
+  u.mode === "tls" ? `${u.address}@${u.port}#${u.tls_name}`
+    : u.port === 53 ? u.address : `${u.address}@${u.port}`;
+const parseUpstreams = (value: string): DNSUpstream[] =>
+  value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean).map((s) => {
+    const match = /^([^@#\s]+)(?:@(\d+))?(?:#(.+))?$/.exec(s);
+    const name = match?.[3] ?? null;
+    return { address: match?.[1] ?? s, port: match?.[2] ? Number(match[2]) : 53,
+             mode: name ? "tls" : "udp", tls_name: name };
+  });
+const upstreamsValid = (list: DNSUpstream[]) =>
+  list.every((u) => ipValid(u.address) && (u.mode !== "tls" || !!u.tls_name));
 
 export function DHCPEditor({ children }: { children: ReactNode }) {
   const { configuration: c, version } = useConfiguration();
@@ -295,24 +310,13 @@ export function DNSEditor({ children }: { children: ReactNode }) {
     dns.forwards.every(
       (f) =>
         (f.domain === "." || domainValid(f.domain)) &&
-        normalize(f.upstreams).length > 0 &&
-        listValid(f.upstreams, ipValid),
+        f.upstreams.length > 0 &&
+        upstreamsValid(f.upstreams),
     ) &&
-    listValid(dns.upstreams, ipValid) &&
+    upstreamsValid(dns.upstreams) &&
     dns.interfaces.every((i) => interfaces.includes(i)) &&
     new Set(dns.interfaces).size === dns.interfaces.length;
-  const save = () =>
-    editor.save((value) => ({
-      ...c,
-      dns: {
-        ...value,
-        upstreams: normalize(value.upstreams),
-        forwards: value.forwards.map((f) => ({
-          ...f,
-          upstreams: normalize(f.upstreams),
-        })),
-      },
-    }));
+  const save = () => editor.save((value) => ({ ...c, dns: value }));
   return (
     <EditorShell
       isEdit={isEditMode}
@@ -420,12 +424,9 @@ export function DNSEditor({ children }: { children: ReactNode }) {
                   <Field
                     ariaLabel="Upstreams домена (построчно)"
                     multiline
-                    value={f.upstreams.join("\n")}
-                    valid={
-                      normalize(f.upstreams).length > 0 &&
-                      listValid(f.upstreams, ipValid)
-                    }
-                    onChange={(v) => forward({ upstreams: v.split("\n") })}
+                    value={f.upstreams.map(upstreamText).join("\n")}
+                    valid={f.upstreams.length > 0 && upstreamsValid(f.upstreams)}
+                    onChange={(v) => forward({ upstreams: parseUpstreams(v) })}
                   />,
                   <DeleteButton
                     label={`Удалить переадресацию ${index + 1}`}
@@ -455,10 +456,11 @@ export function DNSEditor({ children }: { children: ReactNode }) {
             <FormGrid>
               <Field
                 label="Upstream-серверы (построчно)"
+                hint="IP, ip@порт или ip@порт#tls-name (DoT)"
                 multiline
-                value={dns.upstreams.join("\n")}
-                valid={listValid(dns.upstreams, ipValid)}
-                onChange={(v) => update({ upstreams: v.split("\n") })}
+                value={dns.upstreams.map(upstreamText).join("\n")}
+                valid={upstreamsValid(dns.upstreams)}
+                onChange={(v) => update({ upstreams: parseUpstreams(v) })}
               />
               <Toggle
                 label="Рекурсия"

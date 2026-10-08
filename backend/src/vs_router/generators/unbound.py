@@ -1,6 +1,6 @@
 import json
 from ipaddress import ip_interface
-from ..schema import ConfigurationVersion
+from ..schema import ConfigurationVersion, DNSUpstream
 
 
 def _render_unbound(c, dns, root_forward=None, username: str | None = "unbound") -> str:
@@ -33,7 +33,7 @@ def _render_unbound(c, dns, root_forward=None, username: str | None = "unbound")
         lines.append(f"    local-data: {json.dumps(f'{r.name} {r.ttl} IN {r.type} {r.value}')}")
     forwards = [(f.domain, f.upstreams) for f in dns.forwards]
     if root_forward is not None:
-        forwards.append((".", (root_forward,)))
+        forwards.append((".", (DNSUpstream(address=root_forward),)))
     if not dns.recursive and not any(d == "." for d, _ in forwards):
         if dns.upstreams:
             forwards.append((".", dns.upstreams))
@@ -42,7 +42,15 @@ def _render_unbound(c, dns, root_forward=None, username: str | None = "unbound")
             lines += [f"    local-zone: {json.dumps(domain)} transparent" for domain, _ in forwards]
     for domain, upstreams in forwards:
         lines += ["forward-zone:", f"    name: {json.dumps(domain)}"]
-        lines += [f"    forward-addr: {u}" for u in upstreams]
+        has_tls = any(u.mode == "tls" for u in upstreams)
+        if has_tls:
+            lines.append("    forward-tls-upstream: yes")
+        for u in upstreams:
+            if u.mode == "tls":
+                lines.append(f"    forward-addr: {u.address}@{u.port}#{u.tls_name}")
+            else:
+                port_suffix = "" if u.port == 53 else f"@{u.port}"
+                lines.append(f"    forward-addr: {u.address}{port_suffix}")
     return "\n".join(lines) + "\n"
 
 

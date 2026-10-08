@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import pytest
+from pydantic import ValidationError
 from vs_router.generators import generate_kea, generate_nftables, generate_unbound
 from vs_router.schema import ConfigurationVersion
 from scenarios import scenario
@@ -83,3 +84,49 @@ def test_router_destination_only_in_input():
     output = generate_nftables(ConfigurationVersion.model_validate(data))
     assert 'comment "lan_allow"' in output.split('chain forward')[0]
     assert 'comment "lan_allow"' not in output.split('chain forward')[1]
+
+
+# --- DNS upstreams: bare-string compatibility and DoT (ADR-0015 D1) ---------
+
+def test_legacy_string_upstreams_render_plain_forward_addr():
+    version = ConfigurationVersion(configuration={"dns": {
+        "forwards": [{"domain": "corp.example", "upstreams": ["192.0.2.53"]}],
+        "upstreams": ["198.51.100.53", {"address": "203.0.113.53", "port": 5353}],
+    }})
+    output = generate_unbound(version)
+    assert 'forward-addr: 192.0.2.53' in output
+    assert 'forward-addr: 198.51.100.53' in output
+    assert 'forward-addr: 203.0.113.53@5353' in output
+    assert 'forward-tls-upstream' not in output
+
+
+def test_invalid_upstream_address_is_rejected():
+    with pytest.raises(ValidationError, match="dns.upstream_invalid"):
+        ConfigurationVersion(configuration={"dns": {"upstreams": ["not-an-ip"]}})
+
+
+def test_tls_upstream_renders_dot_and_sets_flag_once_per_zone():
+    version = ConfigurationVersion(configuration={"dns": {
+        "forwards": [{"domain": "corp.example", "upstreams": [
+            {"address": "1.1.1.1", "port": 853, "mode": "tls", "tls_name": "cloudflare-dns.com"},
+            {"address": "9.9.9.9", "port": 853, "mode": "tls", "tls_name": "dns.quad9.net"}]}]}})
+    output = generate_unbound(version)
+    assert 'forward-addr: 1.1.1.1@853#cloudflare-dns.com' in output
+    assert 'forward-addr: 9.9.9.9@853#dns.quad9.net' in output
+    assert output.count('forward-tls-upstream: yes') == 1
+
+
+def test_udp_zone_has_no_tls_flag_next_to_a_tls_zone():
+    version = ConfigurationVersion(configuration={"dns": {
+        "upstreams": [{"address": "1.1.1.1", "mode": "tls", "tls_name": "cloudflare-dns.com"}],
+        "forwards": [{"domain": "corp.example", "upstreams": ["192.0.2.53"]}]}})
+    output = generate_unbound(version)
+    corp = output.split('name: "corp.example"')[1].split("forward-zone:")[0]
+    assert "forward-tls-upstream" not in corp
+    assert 'forward-addr: 192.0.2.53' in corp
+
+
+def test_tls_upstream_requires_tls_name():
+    with pytest.raises(ValidationError, match="dns.upstream_tls_name_required"):
+        ConfigurationVersion(configuration={"dns": {
+            "upstreams": [{"address": "1.1.1.1", "port": 853, "mode": "tls"}]}})

@@ -235,7 +235,10 @@ def validate_configuration(c):
     if c.dns.upstreams and any(f.domain == "." for f in c.dns.forwards):
         fail("dns.duplicate_root_forward")
     for upstream in (*c.dns.upstreams, *(u for f in c.dns.forwards for u in f.upstreams)):
-        ip_address(upstream)
+        try:
+            ip_address(upstream.address)
+        except ValueError:
+            fail("dns.upstream_invalid")
     for r in c.dns.records:
         if any(ord(ch) < 32 for ch in r.value):
             fail("dns.invalid_record")

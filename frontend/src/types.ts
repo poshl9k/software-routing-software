@@ -69,6 +69,12 @@ export interface OutboundNAT {
   do_not_nat: boolean;
   order: number;
 }
+export interface DNSUpstream {
+  address: string;
+  port: number;
+  mode: "udp" | "tls";
+  tls_name: string | null;
+}
 export interface DNS {
   interfaces: string[];
   access_control: string[];
@@ -78,8 +84,8 @@ export interface DNS {
     value: string;
     ttl: number;
   }[];
-  forwards: { domain: string; upstreams: string[] }[];
-  upstreams: string[];
+  forwards: { domain: string; upstreams: DNSUpstream[] }[];
+  upstreams: DNSUpstream[];
   recursive: boolean;
   log_queries: boolean;
 }

@@ -73,7 +73,7 @@ export default function Dashboard() {
                 .map((i) => [
                   <b>{i.name}</b>,
                   i.addresses.join(", "),
-                  c.dns.upstreams.join(", "),
+                  c.dns.upstreams.map((u) => u.address).join(", "),
                   "—",
                 ])}
             />

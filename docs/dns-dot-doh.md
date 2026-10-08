@@ -62,3 +62,12 @@ class DNSUpstream(Model):
 ## Вне объёма
 Зашифрованный DNS клиентов (DoH/DoT *от* клиентов к роутеру) — это серверный DoH,
 не приоритет.
+
+## Статус
+- **D1 — сделано:** схема `DNSUpstream {address, port, mode: udp|tls, tls_name}` +
+  обратная совместимость (голый IP-строкой), DoT в генераторе Unbound
+  (`forward-addr: ip@853#sni` + `forward-tls-upstream` per-zone), валидатор
+  (`dns.upstream_invalid`, `dns.upstream_tls_name_required`), UI-редактор принимает
+  текст `ip[@port][#tls-name]`. Проверено: backend 851, frontend 96, tsc/build ok.
+- **D2 — далее:** режим `https` + `dnscrypt-proxy` (packaging, генератор конфига, юнит, агент).
+- **D3:** полноценный UI-редактор upstream (режим/tls_name полями).

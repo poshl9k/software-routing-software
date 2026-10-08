@@ -112,9 +112,26 @@ class DNSRecord(Model):
     ttl: int = Field(default=300, ge=0)
 
 
+class DNSUpstream(Model):
+    address: str
+    port: int = Field(default=53, ge=1, le=65535)
+    mode: Literal["udp", "tls"] = "udp"
+    tls_name: str | None = None
+
+    @model_validator(mode="before")
+    def _coerce(cls, value):
+        return {"address": value} if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.mode == "tls" and not self.tls_name:
+            raise ValueError("dns.upstream_tls_name_required")
+        return self
+
+
 class DNSForward(Model):
     domain: str = Field(pattern=r"^(?:\.|[a-zA-Z0-9_.-]+)$")
-    upstreams: tuple[str, ...] = Field(min_length=1)
+    upstreams: tuple[DNSUpstream, ...] = Field(min_length=1)
 
 
 class DNS(Model):
@@ -122,7 +139,7 @@ class DNS(Model):
     access_control: tuple[str, ...] = ()
     records: tuple[DNSRecord, ...] = ()
     forwards: tuple[DNSForward, ...] = ()
-    upstreams: tuple[str, ...] = ()
+    upstreams: tuple[DNSUpstream, ...] = ()
     recursive: bool = False
     log_queries: bool = False
 

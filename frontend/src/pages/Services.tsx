@@ -131,7 +131,7 @@ function DNSReadOnly() {
                 heads={["Домен", "Upstream"]}
                 rows={dns.forwards.map((f) => [
                   f.domain,
-                  f.upstreams.join(", "),
+                  f.upstreams.map((u) => u.address).join(", "),
                 ])}
               />
               <p className="sub">
