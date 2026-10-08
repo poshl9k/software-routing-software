@@ -136,6 +136,10 @@ export interface TProxyRule {
   name: string;
   domain_suffix: string[];
   ip_cidr: string[];
+  source_ip_cidr: string[];
+  rule_sets: string[];
+  protocol: "any" | "tcp" | "udp";
+  ports: string[];
   action: "direct" | "block" | "route";
   outbound: string | null;
   order: number;

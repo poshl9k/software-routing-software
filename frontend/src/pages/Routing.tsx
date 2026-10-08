@@ -5,7 +5,7 @@ import { useConfiguration } from "../state";
 import { api } from "../api";
 import { queryKeys } from "../query";
 import type { TProxy, TProxyRule } from "../types";
-import { addressValid, lines, nameValid } from "../components/validators";
+import { addressValid, lines, nameValid, portValid } from "../components/validators";
 import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter } from "../components/EditorShell";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -18,10 +18,20 @@ import { useDraftEditor } from "../hooks/useDraftEditor";
 import { ProxiesEditor, RuleSets } from "./RoutingProxy";
 
 const domainValid = (domain: string) => /^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/.test(domain);
-const ruleValid = (rule: TProxyRule, outbounds: readonly string[]) => nameValid(rule.name) &&
-  (rule.domain_suffix.length > 0 || rule.ip_cidr.length > 0) &&
+const portRangeValid = (value: string) => {
+  const match = /^(\d+)(?:-(\d+))?$/.exec(value);
+  return !!match && portValid(Number(match[1])) &&
+    (!match[2] || (portValid(Number(match[2])) && Number(match[2]) >= Number(match[1])));
+};
+const ruleValid = (rule: TProxyRule, outbounds: readonly string[], ruleSets: readonly string[]) =>
+  nameValid(rule.name) &&
+  (rule.domain_suffix.length > 0 || rule.ip_cidr.length > 0 ||
+    rule.source_ip_cidr.length > 0 || rule.rule_sets.length > 0 || rule.ports.length > 0) &&
   rule.domain_suffix.every(domainValid) &&
   rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
+  rule.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
+  rule.ports.every(portRangeValid) &&
+  rule.rule_sets.every((name) => ruleSets.includes(name)) &&
   (rule.action !== "route" ||
     (rule.outbound !== null && outbounds.includes(rule.outbound)));
 const timeValid = (time: string) => /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(time);
@@ -48,6 +58,7 @@ function TProxyEditor() {
     ...configuration.proxies.outbounds.map((o) => o.tag),
     ...configuration.proxies.groups.map((g) => g.tag),
   ];
+  const ruleSetOptions = configuration.rule_sets.map((s) => s.name);
   const patch = (value: Partial<TProxy>) => editor.setValue({ ...current, ...value });
   const updateRule = (index: number, value: Partial<TProxyRule>) =>
     patch({ rules: current.rules.map((r, i) => i === index ? { ...r, ...value } : r) });
@@ -55,7 +66,7 @@ function TProxyEditor() {
   const scheduleValid = schedule.mode === "interval"
     ? Number.isInteger(schedule.interval_hours) && schedule.interval_hours >= 1 && schedule.interval_hours <= 168
     : timeValid(schedule.window_start) && timeValid(schedule.window_end) && schedule.window_start < schedule.window_end;
-  const valid = scheduleValid && current.rules.every((r) => ruleValid(r, outboundOptions)) &&
+  const valid = scheduleValid && current.rules.every((r) => ruleValid(r, outboundOptions, ruleSetOptions)) &&
     new Set(current.rules.map((r) => r.name)).size === current.rules.length;
   const save = async () => {
     if (user?.role === "operator" || !valid) return;
@@ -106,6 +117,14 @@ function TProxyEditor() {
               <Field label="IPv4-сети (по строкам)" multiline value={rule.ip_cidr.join("\n")}
                 valid={rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
                 onChange={(text) => updateRule(index, { ip_cidr: lines(text) })} />
+              <Field label="Источник IP (по строкам)" multiline value={rule.source_ip_cidr.join("\n")}
+                valid={rule.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+                onChange={(text) => updateRule(index, { source_ip_cidr: lines(text) })} />
+              <Field label="Порты (по строкам)" multiline value={rule.ports.join("\n")}
+                valid={rule.ports.every(portRangeValid)}
+                onChange={(text) => updateRule(index, { ports: lines(text) })} />
+              <SelectField label="Протокол" value={rule.protocol} options={["any", "tcp", "udp"]}
+                onChange={(protocol) => updateRule(index, { protocol })} />
               <SelectField label="Действие" value={rule.action} options={["direct", "block", "route"]}
                 onChange={(action) => updateRule(index, {
                   action,
@@ -128,9 +147,20 @@ function TProxyEditor() {
                 />
               </FormActions>
             </FormGrid>
+            {ruleSetOptions.length > 0 && (
+              <>
+                <Typography>Наборы правил</Typography>
+                {ruleSetOptions.map((name) => <FormControlLabel key={name} label={name}
+                  control={<Checkbox checked={rule.rule_sets.includes(name)}
+                    onChange={(_, checked) => updateRule(index, { rule_sets: checked
+                      ? [...rule.rule_sets, name]
+                      : rule.rule_sets.filter((n) => n !== name) })} />} />)}
+              </>
+            )}
           </div>)}
           <Button onClick={() => patch({ rules: [...current.rules, {
-            name: "", domain_suffix: [], ip_cidr: [], action: "direct", outbound: null,
+            name: "", domain_suffix: [], ip_cidr: [], source_ip_cidr: [], rule_sets: [],
+            protocol: "any", ports: [], action: "direct", outbound: null,
             order: current.rules.length,
           }] })}>+ Добавить правило</Button>
           <Typography variant="h2">Обновление списков (после запуска TProxy)</Typography>

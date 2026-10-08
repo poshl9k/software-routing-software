@@ -110,6 +110,18 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
             matchers.append({"domain_suffix": list(rule.domain_suffix)})
         if rule.ip_cidr:
             matchers.append({"ip_cidr": list(rule.ip_cidr)})
+        if rule.source_ip_cidr:
+            matchers.append({"source_ip_cidr": list(rule.source_ip_cidr)})
+        if rule.rule_sets:
+            matchers.append({"rule_set": list(rule.rule_sets)})
+        singles = [int(port) for port in rule.ports if "-" not in port]
+        if singles:
+            matchers.append({"port": singles})
+        ranges = [port.replace("-", ":") for port in rule.ports if "-" in port]
+        if ranges:
+            matchers.append({"port_range": ranges})
+        if rule.protocol != "any":
+            matchers.append({"network": [rule.protocol]})
         match = (matchers[0] if len(matchers) == 1 else
                  {"type": "logical", "mode": "or", "rules": matchers})
         if rule.action == "block":

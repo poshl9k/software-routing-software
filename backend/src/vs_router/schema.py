@@ -228,6 +228,10 @@ class TProxyRule(Model):
     name: Name
     domain_suffix: tuple[str, ...] = ()
     ip_cidr: tuple[str, ...] = ()
+    source_ip_cidr: tuple[str, ...] = ()
+    rule_sets: tuple[Name, ...] = ()
+    protocol: Literal["any", "tcp", "udp"] = "any"
+    ports: tuple[str, ...] = ()
     # Destination of matched traffic (CONTEXT.md «Выход TProxy»): straight out
     # (direct), blocked, or routed to a named outbound (a proxy outbound/group
     # tag). ``outbound`` is only meaningful — and required — for ``route``.
@@ -239,7 +243,9 @@ class TProxyRule(Model):
     def check_matchers(self):
         from ipaddress import ip_network
         import re
-        if not self.domain_suffix and not self.ip_cidr:
+        from vs_router.validators import port_range
+        if not any((self.domain_suffix, self.ip_cidr, self.source_ip_cidr,
+                    self.rule_sets, self.ports)):
             raise ValueError("tproxy.rule_matcher_required")
         if any(not re.fullmatch(r"(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+", domain)
                for domain in self.domain_suffix):
@@ -247,6 +253,11 @@ class TProxyRule(Model):
         for cidr in self.ip_cidr:
             if ip_network(cidr).version != 4:
                 raise ValueError("tproxy.ipv4_required")
+        for cidr in self.source_ip_cidr:
+            if ip_network(cidr).version != 4:
+                raise ValueError("tproxy.source_ipv4_required")
+        for port in self.ports:
+            port_range(port)
         if self.action == "route" and self.outbound is None:
             raise ValueError("tproxy.outbound_required")
         if self.action != "route" and self.outbound is not None:

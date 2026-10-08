@@ -96,6 +96,9 @@ def validate_configuration(c):
                      if c.proxies.enabled else set())
     if any(r.action == "route" and r.outbound not in outbound_tags for r in c.tproxy.rules):
         fail("tproxy.outbound_unavailable")
+    rule_set_names = {s.name for s in c.rule_sets}
+    if any(name not in rule_set_names for rule in c.tproxy.rules for name in rule.rule_sets):
+        fail("tproxy.ruleset_unavailable")
     zones = {i.zone for i in c.interfaces if i.zone}
     members = {m for i in c.interfaces for m in i.members}
     # A parent link that carries an assigned VLAN is a trunk: it must not also run

@@ -29,10 +29,12 @@ def outbound(tag, type="vless", **overrides):
     return row
 
 
-def version(proxies=None, tproxy=None):
+def version(proxies=None, tproxy=None, *, rule_sets=None):
     configuration = {"proxies": proxies} if proxies is not None else {}
     if tproxy is not None:
         configuration["tproxy"] = tproxy
+    if rule_sets is not None:
+        configuration["rule_sets"] = rule_sets
     return ConfigurationVersion.model_validate({"configuration": configuration})
 
 
@@ -243,3 +245,55 @@ def test_tproxy_outbound_on_a_non_route_action_is_rejected():
     with pytest.raises(ValidationError, match="tproxy.outbound_unexpected"):
         version(enabled_proxies(), {"rules": [{"name": "r", "ip_cidr": ["10.0.0.0/8"],
                                                "action": "block", "outbound": "proxy_a"}]})
+
+
+def test_tproxy_rule_set_matcher():
+    source = {"name": "geo", "format": "text-domain", "url": "https://example.org/geo.txt"}
+    generated = generate_singbox(version(tproxy={"rules": [{"name": "r", "rule_sets": ["geo"]}]},
+                                        rule_sets=[source]))
+    assert generated["route"]["rules"] == [
+        {"rule_set": ["geo"], "action": "route", "outbound": "direct"}]
+
+
+def test_tproxy_source_port_and_protocol_matchers():
+    generated = generate_singbox(version(tproxy={"rules": [{
+        "name": "r", "source_ip_cidr": ["192.0.2.0/24"], "ports": ["443"],
+        "protocol": "tcp",
+    }]}))
+    assert generated["route"]["rules"] == [{
+        "type": "logical", "mode": "or", "rules": [
+            {"source_ip_cidr": ["192.0.2.0/24"]}, {"port": [443]}, {"network": ["tcp"]},
+        ], "action": "route", "outbound": "direct",
+    }]
+
+
+def test_tproxy_port_range_matcher():
+    generated = generate_singbox(version(tproxy={"rules": [{"name": "r", "ports": ["80-90"]}]}))
+    assert generated["route"]["rules"] == [
+        {"port_range": ["80:90"], "action": "route", "outbound": "direct"}]
+
+
+def test_tproxy_multiple_matchers_keep_declared_matcher_order():
+    source = {"name": "geo", "format": "text-domain", "url": "https://example.org/geo.txt"}
+    generated = generate_singbox(version(tproxy={"rules": [{
+        "name": "r", "domain_suffix": ["example.org"], "ip_cidr": ["203.0.113.0/24"],
+        "source_ip_cidr": ["192.0.2.0/24"], "rule_sets": ["geo"],
+        "ports": ["443", "80-90"], "protocol": "udp", "action": "block",
+    }]}, rule_sets=[source]))
+    assert generated["route"]["rules"][-1] == {
+        "type": "logical", "mode": "or", "rules": [
+            {"domain_suffix": ["example.org"]}, {"ip_cidr": ["203.0.113.0/24"]},
+            {"source_ip_cidr": ["192.0.2.0/24"]}, {"rule_set": ["geo"]},
+            {"port": [443]}, {"port_range": ["80:90"]}, {"network": ["udp"]},
+        ], "action": "reject",
+    }
+
+
+def test_tproxy_rule_set_must_be_declared():
+    with pytest.raises(ValidationError, match="tproxy.ruleset_unavailable"):
+        version(tproxy={"rules": [{"name": "r", "rule_sets": ["missing"]}]})
+
+
+def test_tproxy_source_cidr_requires_ipv4():
+    with pytest.raises(ValidationError, match="tproxy.source_ipv4_required"):
+        version(tproxy={"rules": [{"name": "r", "source_ip_cidr": ["2001:db8::/32"]}]})

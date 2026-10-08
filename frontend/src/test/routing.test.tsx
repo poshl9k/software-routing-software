@@ -44,8 +44,9 @@ it("saves disabled TProxy ingress and ordered block rule in draft", async () => 
     expect(sent.tproxy.enabled).toBe(false);
     expect(sent.tproxy.ingress_interfaces).toEqual(["lan0"]);
     expect(sent.tproxy.rules).toEqual([{
-      name: "blocked_site", domain_suffix: ["example.org"], ip_cidr: [], action: "block",
-      outbound: null, order: 0,
+      name: "blocked_site", domain_suffix: ["example.org"], ip_cidr: [],
+      source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [],
+      action: "block", outbound: null, order: 0,
     }]);
   });
   expect(await screen.findByText(/blocked_site · block/)).toBeVisible();
@@ -83,8 +84,10 @@ it("saves daily update window as an alternative to six-hour interval", async () 
 
 it("shows configured first-match order and updates it on move", async () => {
   const fetch = setup(false, [
-    { name: "later", domain_suffix: ["later.test"], ip_cidr: [], action: "block", outbound: null, order: 20 },
-    { name: "first", domain_suffix: ["first.test"], ip_cidr: [], action: "direct", outbound: null, order: 10 },
+    { name: "later", domain_suffix: ["later.test"], ip_cidr: [], source_ip_cidr: [],
+      rule_sets: [], protocol: "any", ports: [], action: "block", outbound: null, order: 20 },
+    { name: "first", domain_suffix: ["first.test"], ip_cidr: [], source_ip_cidr: [],
+      rule_sets: [], protocol: "any", ports: [], action: "direct", outbound: null, order: 10 },
   ]);
   const user = userEvent.setup();
   await screen.findByText(/first · direct/);
@@ -122,7 +125,8 @@ it("routes a rule to a chosen outbound on save", async () => {
   await waitFor(() => {
     const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
     expect(JSON.parse(String(init.body)).tproxy.rules).toEqual([
-      { name: "via_proxy", domain_suffix: ["example.com"], ip_cidr: [],
+      { name: "via_proxy", domain_suffix: ["example.com"], ip_cidr: [], source_ip_cidr: [],
+        rule_sets: [], protocol: "any", ports: [],
         action: "route", outbound: "proxy_a", order: 0 },
     ]);
   });

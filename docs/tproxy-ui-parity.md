@@ -18,8 +18,12 @@ Slow-инертность: всё ниже — только черновик/п�
       `route→route <outbound>`. UI: селектор действия + условный селектор выхода с
       очисткой `outbound` при смене действия. Тесты: backend +4, frontend +2.
       Проверено: backend 834 passed, frontend 95 passed, tsc/build ok.
-- [ ] **S2. Матчеры правила.** Ссылки на `rule_set` (+ пресеты сервисов), source-IP
-      и порт. Валидатор ссылок на объявленные `rule_sets`.
+- [x] **S2. Матчеры правила.** Добавлены `source_ip_cidr`, `rule_sets` (ссылки на
+      объявленные `rule_sets`), `protocol` (any|tcp|udp), `ports` (порт или диапазон).
+      Валидатор: `tproxy.ruleset_unavailable`, `tproxy.source_ipv4_required`; минимум
+      один матчер (`tproxy.rule_matcher_required`). Генератор: OR-матчеры
+      (`source_ip_cidr`/`rule_set`/`port`/`port_range`/`network`). UI: поля источника,
+      портов, протокола и чекбоксы наборов. Backend +6, frontend 95 passed.
 - [ ] **S3. Конечное действие политики + bypass.** `final` = direct|block|outbound;
       исключения (порты/подсети/устройства) как отдельный список.
 - [ ] **S4. Simple/Expert режимы.** Счётчики-статусы сверху, сводка
@@ -46,5 +50,6 @@ cloudflared / sing-box DNS). Варианты: (а) DoT — в Unbound, DoH — 
 
 ## Журнал
 - S1 — сделано (см. выше).
-- DoH/DoT — записано как обязательный пункт общей DNS-конфигурации (решение по
-  компоненту не принято).
+- S2 — сделано (см. выше).
+- DoH/DoT — записано как обязательный пункт общей DNS-конфигурации (дизайн-док
+  `docs/dns-dot-doh.md`; решение по компоненту не принято).
