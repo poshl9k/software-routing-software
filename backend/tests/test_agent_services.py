@@ -26,18 +26,19 @@ def test_nft_transaction():
         NftApply(executor)(APPLIED_DIR / 'nftables.conf')
 
 
-@pytest.mark.parametrize('failure', [None, 'check', 'reload', 'hup'])
-def test_unbound_full_check_and_fallback(failure):
+@pytest.mark.parametrize('failure', [None, 'check', 'restart'])
+def test_unbound_full_check_and_restart(failure):
+    # Unbound reload cannot change listening interfaces, so an applied config is
+    # activated with a full restart; unbound-checkconf gates it.
     fs, executor = FakeFS(), FakeExecutor()
     def run(argv, timeout):
         executor.calls.append((argv, timeout))
         failed = ((failure == 'check' and argv[0] == 'unbound-checkconf')
-                  or (failure in ('reload', 'hup') and argv[:2] == ['systemctl', 'reload'])
-                  or (failure == 'hup' and argv[:2] == ['systemctl', 'kill']))
+                  or (failure == 'restart' and argv[:2] == ['systemctl', 'restart']))
         return SimpleNamespace(returncode=int(failed))
     executor.run = run
     adapter = UnboundReloader(executor, fs)
-    if failure in ('check', 'hup'):
+    if failure in ('check', 'restart'):
         with pytest.raises(ApplyError):
             adapter(APPLIED_DIR / 'unbound.conf')
     else:
@@ -46,8 +47,10 @@ def test_unbound_full_check_and_fallback(failure):
     assert executor.calls[1][0] == ['unbound-checkconf', '/etc/unbound/unbound.conf']
     if failure == 'check':
         assert len(executor.calls) == 2
-    if failure in ('reload', 'hup'):
-        assert executor.calls[-1][0] == ['systemctl', 'kill', '--kill-whom=main', '-s', 'HUP', 'unbound']
+    if failure == 'restart':
+        assert executor.calls[-1][0] == ['systemctl', 'restart', 'unbound']
+    if failure is None:
+        assert (['systemctl', 'restart', 'unbound'], 15) in executor.calls
 
 
 @pytest.mark.parametrize('start_succeeds', [True, False])
@@ -135,7 +138,7 @@ def test_live_adapters_apply_and_rollback():
     assert len(payloads) == 3
     assert payloads[-1] == originals['kea']
     assert sum(argv[:2] == ['nft', '-f'] for argv, _ in executor.calls) == 3
-    assert sum(argv == ['systemctl', 'reload', 'unbound'] for argv, _ in executor.calls) == 3
+    assert sum(argv == ['systemctl', 'restart', 'unbound'] for argv, _ in executor.calls) == 3
 
 
 def test_callable_failure_retries_confirmed_and_marks_failed_rollback():

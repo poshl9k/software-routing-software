@@ -141,14 +141,22 @@ def test_failed_startup_never_reports_readiness(tmp_path):
     assert (tmp_path / 'var/lib/vs-router-bootstrap/management.json').exists()
 
 
-def test_panel_exists_without_sites_and_rejects_wildcard():
+def test_panel_exists_without_sites_and_rejects_unusable_bindings():
     config = generate_caddy_json(version(), STATE)
     panel = config['apps']['http']['servers']['management']
     assert panel['listen'] == ['192.168.10.1:443']
     assert panel['routes'][0]['handle'][0]['upstreams'][0]['dial'].startswith('unix//')
     site = {'name': 'app', 'hostname': 'app.example.com', 'upstream': '127.0.0.1:9000', 'certificate_mode': 'passthrough'}
-    with pytest.raises(ValueError, match='site_binding_conflict'):
+    # A dynamic (addressless) WAN gives a site no anchor: an actionable code,
+    # not the opaque management conflict.
+    with pytest.raises(ValueError, match='caddy.wan_address_unavailable'):
         generate_caddy_json(version(sites=[site]), STATE)
+    # A site explicitly binding the management IP shadows it → conflict.
+    conflict = version(sites=[dict(site, wan_address=STATE.ip)], interfaces=[
+        {'name': 'eth0', 'zone': 'wan', 'addresses': [STATE.address]},
+        {'name': 'eth1', 'zone': 'lan', 'addresses': [STATE.address]}])
+    with pytest.raises(ValueError, match='site_binding_conflict'):
+        generate_caddy_json(conflict, STATE)
     site['wan_address'] = '203.0.113.2'
     site['certificate_mode'] = 'http01'
     configured = version(sites=[site], interfaces=[
@@ -165,6 +173,9 @@ def test_panel_exists_without_sites_and_rejects_wildcard():
     ({'port_forwards': [{'name': 'hijack', 'interface': 'eth0', 'protocol': 'tcp',
                          'external_port': 443, 'target': '192.168.10.2', 'target_port': 443}]},
      'management.port_reserved'),
+    ({'sites': [{'name': 's', 'hostname': 'a.example.com', 'upstream': '127.0.0.1:9000',
+                 'certificate_mode': 'passthrough'}]},
+     'caddy.wan_address_unavailable'),
 ])
 def test_guard_rejects_before_mutations(changes, code):
     """The specific guard code is surfaced, not one opaque code."""
@@ -180,6 +191,7 @@ def test_guard_code_keeps_a_generic_fallback():
     from vs_router.agent.apply import guard_code
     assert guard_code(ValueError('management.endpoint_required')) == 'management.endpoint_required'
     assert guard_code(ValueError('management.site_binding_conflict')) == 'management.site_binding_conflict'
+    assert guard_code(ValueError('caddy.wan_address_unavailable')) == 'caddy.wan_address_unavailable'
     assert guard_code(ValueError('boom, not a code')) == 'management.access_invalid'
 
 

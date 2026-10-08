@@ -175,7 +175,7 @@ stage_apt_deps() {
     # future operator-managed security updates after bootstrap completes.
     apt_with_release update
     apt_with_release install -y dbus python3 python3-pip python3-venv python3-setuptools python3-wheel git build-essential golang-go \
-        kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor wireguard-tools \
+        kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor wireguard-tools traceroute \
         socat curl nodejs npm debian-keyring debian-archive-keyring \
         openssh-server fail2ban python3-systemd
     local node_version npm_version go_version

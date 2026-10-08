@@ -86,8 +86,15 @@ def validate_site_bindings(version, state):
     sites = version.configuration.sites
     default = next((str(ip_interface(i.addresses[0]).ip)
                     for i in version.configuration.interfaces if i.zone == 'wan' and i.addresses),
-                   next((s.wan_address for s in sorted(sites, key=lambda s: s.name)
-                         if s.wan_address), ''))
+                   '')
     for site in sites:
-        if (site.wan_address or default) in ('', '0.0.0.0', '::', state.ip):
+        bound = site.wan_address or default
+        if bound in ('0.0.0.0', '::', ''):
+            # No concrete bind address. An explicit wildcard would shadow the
+            # management endpoint and is a conflict; a dynamic (DHCP) WAN simply
+            # has no address to anchor the site listener, which is a distinct,
+            # actionable condition rather than a hidden management conflict.
+            raise ValueError('management.site_binding_conflict' if site.wan_address
+                             else 'caddy.wan_address_unavailable')
+        if bound == state.ip:
             raise ValueError('management.site_binding_conflict')

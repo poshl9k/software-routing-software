@@ -255,6 +255,24 @@ async def test_diag_ping_parse_and_input_validation(api):
     assert response.status_code == 503
 
 
+def test_diag_missing_binary_reports_unavailable(monkeypatch):
+    """A trimmed image has no traceroute/ping: report diag.unavailable, not a
+    generic agent.internal_error from an unhandled FileNotFoundError."""
+    from vs_router.agent.apply import ApplyError
+    from vs_router.agent.daemon import make_handlers
+    handlers = make_handlers(None, None)
+
+    def missing(*args, **kwargs):
+        raise FileNotFoundError('binary')
+
+    monkeypatch.setattr('vs_router.agent.daemon.subprocess.run', missing)
+    for call in (lambda: handlers['diag_traceroute']('127.0.0.1'),
+                 lambda: handlers['diag_ping']('127.0.0.1', 1)):
+        with pytest.raises(ApplyError) as exc:
+            call()
+        assert exc.value.code == 'diag.unavailable'
+
+
 async def test_leases_unreachable_ctrl_agent(api, monkeypatch):
     client = await _confirm_sample(api)
     monkeypatch.setenv('VS_ROUTER_KEA_CTRL_URL', 'http://127.0.0.1:1/')

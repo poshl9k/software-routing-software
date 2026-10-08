@@ -33,14 +33,16 @@ class UnboundReloader:
 
     def __call__(self, path):
         self.fs.write(self.include_path, f'include: "{path}"\n')
-        # HUP rereads configuration after Unbound has dropped privileges.
+        # HUP rereads configuration after Unbound has dropped privileges, but it
+        # cannot change listening interfaces/ports: those options are only honored
+        # on a full restart. Restart whenever the include changes so the applied
+        # config actually takes effect (a reload silently kept the old listeners).
         checked(self.executor, ['chmod', '0644', str(path), str(self.include_path)])
         checked(self.executor, ['unbound-checkconf', str(self.config_path)])
         if self.executor.run(['systemctl', 'is-active', '--quiet', 'unbound'], 15).returncode:
             checked(self.executor, ['systemctl', 'start', 'unbound'])
             return
-        if self.executor.run(['systemctl', 'reload', 'unbound'], 15).returncode:
-            checked(self.executor, ['systemctl', 'kill', '--kill-whom=main', '-s', 'HUP', 'unbound'])
+        checked(self.executor, ['systemctl', 'restart', 'unbound'])
 
 
 class KeaReloader:

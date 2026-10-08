@@ -233,6 +233,10 @@ def make_handlers(engine, database, updater=None):
                                  check=False).stdout
         except subprocess.TimeoutExpired:
             raise ApplyError('diag.timeout') from None
+        except FileNotFoundError:
+            # The binary is absent (trimmed image): report a clear code instead
+            # of letting the generic handler turn it into agent.internal_error.
+            raise ApplyError('diag.unavailable') from None
         from ..api.diag import parse_ping
         try:
             return parse_ping(out)
@@ -247,6 +251,10 @@ def make_handlers(engine, database, updater=None):
                                  timeout=20, check=False).stdout
         except subprocess.TimeoutExpired:
             raise ApplyError('diag.timeout') from None
+        except FileNotFoundError:
+            # traceroute is not part of the base image on every install; report
+            # a clear code instead of a generic agent.internal_error.
+            raise ApplyError('diag.unavailable') from None
         return out.splitlines()
 
     def nft_counters():
