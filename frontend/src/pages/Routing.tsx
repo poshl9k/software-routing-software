@@ -57,9 +57,34 @@ function TProxyEditor() {
   });
   const clearPreview = () =>
     queryClient.removeQueries({ queryKey: queryKeys.tproxyPreview(version?.id ?? null) });
+  // View mode toggle: "Простой" (compact overview) / "Эксперт" (full editor).
+  // Browse defaults to Простой; pressing «Редактировать» opens in Эксперт (the
+  // full field editor) so the expert workflow is one click away, and the operator
+  // may still switch back to Простой to save a draft without the expert fields.
+  const [view, setView] = useState<"simple" | "expert">("simple");
   const current: TProxy = editor.value ?? { ...configuration.tproxy,
     rules: [...configuration.tproxy.rules].sort((a, b) => a.order - b.order) };
   const sources = configuration.interfaces.filter((i) => i.zone && i.zone !== "wan");
+  // Counters and summary for the "Простой" (compact) view.
+  const sourcesCount = current.ingress_interfaces.length;
+  const rulesCount = current.rules.length;
+  const bypassCount = current.bypass.length;
+  const finalAction = current.final;
+  const countersRow = `Источники: ${sourcesCount} · ` +
+                     `Правила: ${rulesCount} · ` +
+                     `Исключения: ${bypassCount} · ` +
+                     `Конечное действие: ${finalAction}`;
+  // One-line flow summary: «источники → sing-box → назначения · финал: {final}»
+  const sourcesJoined = current.ingress_interfaces.join(", ") || "не выбраны";
+  const destinations: string[] = [];
+  for (const rule of current.rules) {
+    const dest = rule.action === "route" && rule.outbound ? rule.outbound : rule.action;
+    if (dest !== current.final && !destinations.includes(dest)) {
+      destinations.push(dest);
+    }
+  }
+  destinations.push(current.final); // always ends with the final action, no duplicate
+  const summaryLine = `${sourcesJoined} → sing-box → ${destinations.join(", ")} · финал: ${current.final}`;
   // Outbounds a rule may route to: declared proxy outbounds and groups. They
   // are only rendered by the generator while the proxies section is enabled.
   const outboundOptions = [
@@ -96,10 +121,21 @@ function TProxyEditor() {
       <ErrorNotice error={editor.error ?? preview.error} />
       <Typography>Состояние: {configuration.tproxy.enabled ? "включён" : "выключен"}</Typography>
       <Button disabled>Включить TProxy</Button>
+      {/* View-mode toggle: Simple (compact overview) / Expert (full editor). */}
+      <ValueTabs
+        value={view}
+        change={setView}
+        tabs={[{ value: "simple", label: "Простой" }, { value: "expert", label: "Эксперт" }]}
+      />
       {!editor.isEdit || user?.role === "operator" ? (
         <>
+          {/* Простой view: counters + summary above the existing browse content. */}
+          {view === "simple" && <>
+            <Typography>{countersRow}</Typography>
+            <Typography>{summaryLine}</Typography>
+          </>}
           <Button disabled={!version || user?.role === "operator"}
-            onClick={() => { clearPreview(); editor.begin(current); }}>Редактировать</Button>
+            onClick={() => { clearPreview(); setView("expert"); editor.begin(current); }}>Редактировать</Button>
           <Typography>Источники: {current.ingress_interfaces.join(", ") || "не выбраны"}</Typography>
           {current.rules.map((rule) => <Typography key={rule.name}>{rule.name} · {rule.action}
             {rule.action === "route" && rule.outbound ? ` → ${rule.outbound}` : ""}</Typography>)}
@@ -113,8 +149,17 @@ function TProxyEditor() {
             <pre aria-label="Конфигурация sing-box">{JSON.stringify(preview.data.singbox, null, 2)}</pre>
           </>}
         </>
+      ) : view === "simple" ? (
+        <>
+          {/* Простой view in edit: counters + summary + EditorFooter */}
+          <Typography>{countersRow}</Typography>
+          <Typography>{summaryLine}</Typography>
+          <EditorFooter saving={editor.saving} valid={valid} cancel={editor.cancel}
+            save={() => void save()} />
+        </>
       ) : (
         <>
+          {/* Expert view in edit: the full editor (today's behavior) */}
           <Typography variant="h2">Источники трафика</Typography>
           {sources.map((source) => <FormControlLabel
             key={source.name}

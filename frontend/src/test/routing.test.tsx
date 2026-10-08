@@ -168,6 +168,23 @@ it("saves the policy final action and its outbound", async () => {
   });
 });
 
+it("shows the Simple overview and reveals expert fields on toggle", async () => {
+  setup();
+  const user = userEvent.setup();
+  // Browse defaults to Простой: counters + flow summary.
+  expect(screen.getByText(/Источники: 0/)).toBeVisible();
+  expect(screen.getByText(/→ sing-box →/)).toBeVisible();
+  // Editing opens in Эксперт with the full field editor.
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  expect(await screen.findByText("Источники трафика")).toBeVisible();
+  // Switching to Простой while editing keeps the compact overview + footer only.
+  await user.click(screen.getByRole("tab", { name: "Простой" }));
+  await waitFor(() =>
+    expect(screen.queryByText("Источники трафика")).not.toBeInTheDocument());
+  expect(screen.getByText(/→ sing-box →/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeVisible();
+});
+
 it("saves a TProxy bypass exclusion in the draft", async () => {
   const fetch = setup();
   const user = userEvent.setup();
