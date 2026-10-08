@@ -120,6 +120,11 @@ allowed imports there are `Alert`, `Button`, `Checkbox`, `Dialog*`,
   cache.
 - **Never fabricate data.** No demo fallback, no `LAB_MODE`, no plausible-looking
   sample rows presented as real. Empty state = prompt setup.
+- **No unauthenticated panel render.** Without a session the only reachable
+  screen is `/login` (and `/onboarding` for first run); every panel route sits
+  behind the `Protected` guard and redirects to `/login`. There is no read-only
+  or demo shell for a visitor without a session — the shell must never mount
+  before the session check resolves.
 - Keep `schema.py`, `types.ts`, API payloads and migrations in sync when a field
   is added.
 

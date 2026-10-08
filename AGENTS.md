@@ -89,9 +89,12 @@ packaging scripts, ISO installs or live network/service changes as routine tests
   UI is currently Russian; i18n remains a documented design/implementation gap.
   Before any frontend change read `docs/ui-rules.md` — the canonical UI rule set
   (one primitive per job, one place per action, `label` XOR `aria-label`, tokens
-  from `theme.ts`, and a pre-flight checklist).
+  from `theme.ts`, and a pre-flight checklist). For any UI work, always load and
+  apply the `all-design-stack` skill first.
 - Never restore fabricated production fallback data, LAB_MODE or insecure cookie
   toggles. Empty configuration must prompt setup; sample fixtures are test-only.
+  An unauthenticated visitor reaches only `/login` (`/onboarding` for first run):
+  no read-only or demo panel shell is rendered without a session.
 - Inspect `git status` before edits; preserve unrelated changes, including the
   existing CONTEXT/plan and ADR 0002–0005 work. Avoid incidental lockfile churn.
   Report actual checks and limitations, distinguishing source review, unit tests

@@ -18,9 +18,11 @@ function mockApi() {
           JSON.stringify(
             path === "/api/versions"
               ? versions
-              : path === "/api/host/interfaces" || path.startsWith("/api/diff")
-                ? []
-                : {},
+              : path === "/api/auth/me"
+                ? { id: 1, username: "admin", role: "admin" }
+                : path === "/api/host/interfaces" || path.startsWith("/api/diff")
+                  ? []
+                  : {},
           ),
         ),
       ),
@@ -57,6 +59,28 @@ describe("screens", () => {
     await waitFor(() =>
       expect(screen.queryByRole("progressbar")).not.toBeInTheDocument(),
     );
+  });
+  it("sends an unauthenticated visitor to the login page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((path: string) =>
+        Promise.resolve(
+          path === "/api/auth/me"
+            ? new Response("{}", { status: 401 })
+            : new Response(JSON.stringify([])),
+        ),
+      ),
+    );
+    render(
+      <MemoryRouter initialEntries={["/network"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Вход в vs-router", level: 1 }),
+    ).toBeVisible();
+    // The panel shell must not render without a session.
+    expect(screen.queryByText("VS-ROUTER")).not.toBeInTheDocument();
   });
   it("keeps routing draft read-only for an operator", async () => {
     const fetch = mockApi();
@@ -201,7 +225,22 @@ describe("screens", () => {
     expect(screen.getByRole("button", { name: "Включить TProxy" })).toBeDisabled();
   });
   it("does not mistake a draft for a pending agent marker", async () => {
-    mockApi();
+    const fetch = mockApi();
+    // The agent marker is unreadable (503): the draft must not be shown as pending.
+    fetch.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === "/api/versions"
+          ? new Response(JSON.stringify(versions))
+          : path === "/api/auth/me"
+            ? new Response(JSON.stringify({ id: 1, username: "admin", role: "admin" }))
+            : path === "/api/apply/status"
+              ? new Response(
+                  JSON.stringify({ code: "agent.unavailable", message: "agent.unavailable", details: [] }),
+                  { status: 503 },
+                )
+              : new Response(JSON.stringify({})),
+      ),
+    );
     open("/");
     expect(await screen.findByText("Черновик v2")).toBeVisible();
     expect(
@@ -344,16 +383,16 @@ describe("screens", () => {
     expect(fetch.mock.calls.some(([path]) => path === "/api/confirm")).toBe(false);
   });
   it("unconfigured server shows a setup prompt with no fabricated data", async () => {
+    // Authenticated session, but no configuration versions exist yet.
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            code: "auth.required",
-            message: "auth.required",
-            details: [],
-          }),
-          { status: 401 },
+      vi.fn((path: string) =>
+        Promise.resolve(
+          path === "/api/auth/me"
+            ? new Response(JSON.stringify({ id: 1, username: "admin", role: "admin" }))
+            : path === "/api/versions"
+              ? new Response(JSON.stringify([]))
+              : new Response(JSON.stringify({})),
         ),
       ),
     );

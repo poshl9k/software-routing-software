@@ -62,6 +62,7 @@ interface RouterState {
   notice: string | null;
   setNotice: (value: string | null) => void;
   user: User | null;
+  authChecked: boolean;
   loadUser: () => Promise<void>;
   signOut: () => Promise<void>;
   uncertain: boolean;
@@ -85,6 +86,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const [applyError, setApplyError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [draftDirty, setDraftDirty] = useState(false);
@@ -153,6 +155,10 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       setUser(fmtUser(await api.me()));
     } catch {
       clearSession();
+    } finally {
+      // Resolve the auth gate even on failure: an unauthenticated visitor must
+      // reach the login page, not an empty read-only shell.
+      setAuthChecked(true);
     }
   }, [clearSession]);
   const signOut = useCallback(async () => {
@@ -174,6 +180,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
         notice,
         setNotice,
         user,
+        authChecked,
         loadUser,
         signOut,
         uncertain,

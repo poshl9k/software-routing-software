@@ -11,7 +11,10 @@ import Maintenance from "../pages/Maintenance";
 import App from "../App";
 
 function setup(configuration=sampleConfiguration, extras: (path:string,init?:RequestInit)=>Response|Promise<Response> = ()=>new Response("{}")) {
-  const fetch=vi.fn(async(path:string,init?:RequestInit)=>path==="/api/versions"?new Response(JSON.stringify([{id:1,status:"draft",configuration}])):extras(path,init));
+  const fetch=vi.fn(async(path:string,init?:RequestInit)=>
+    path==="/api/auth/me"?new Response(JSON.stringify({id:1,username:"admin",role:"admin"}))
+    :path==="/api/versions"?new Response(JSON.stringify([{id:1,status:"draft",configuration}]))
+    :extras(path,init));
   vi.stubGlobal("fetch",fetch); return fetch;
 }
 function mount(node:React.ReactNode){render(<MemoryRouter><RouterProvider>{node}</RouterProvider></MemoryRouter>);}

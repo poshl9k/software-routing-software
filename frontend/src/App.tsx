@@ -12,6 +12,7 @@ import {
 } from "@mui/material";
 import {
   Link,
+  Navigate,
   NavLink,
   Outlet,
   Route,
@@ -147,16 +148,12 @@ function Layout() {
     version,
     refresh,
     user,
-    loadUser,
     signOut,
     notice,
     setNotice,
     applyError,
     setApplyError,
   } = useConfiguration();
-  useEffect(() => {
-    void loadUser();
-  }, [loadUser]);
   const title =
     navigation.find((n) => n.to === pathname + search)?.label ??
     navigation.find((n) => n.to === pathname)?.label;
@@ -256,6 +253,20 @@ function Layout() {
     </div>
   );
 }
+/**
+ * Auth gate. Until the session check resolves nothing is shown; without a
+ * session the visitor is sent to the login page. There is no read-only or demo
+ * fallback shell — an unauthenticated user must never see panel content.
+ */
+function Protected() {
+  const { authChecked, user, loadUser } = useRouterState();
+  useEffect(() => {
+    void loadUser();
+  }, [loadUser]);
+  if (!authChecked) return <LinearProgress aria-label="Проверка сессии" />;
+  if (!user) return <Navigate to="/login" replace />;
+  return <Layout />;
+}
 export default function App() {
   return (
     <ThemeProvider theme={theme}>
@@ -265,7 +276,7 @@ export default function App() {
         <Routes>
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/login" element={<Login />} />
-          <Route element={<Layout />}>
+          <Route element={<Protected />}>
             <Route index element={<Dashboard />} />
             <Route path="network" element={<Network />} />
             <Route path="dhcp" element={<DHCP />} />
