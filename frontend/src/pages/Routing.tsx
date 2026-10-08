@@ -66,7 +66,10 @@ function TProxyEditor() {
   const scheduleValid = schedule.mode === "interval"
     ? Number.isInteger(schedule.interval_hours) && schedule.interval_hours >= 1 && schedule.interval_hours <= 168
     : timeValid(schedule.window_start) && timeValid(schedule.window_end) && schedule.window_start < schedule.window_end;
-  const valid = scheduleValid && current.rules.every((r) => ruleValid(r, outboundOptions, ruleSetOptions)) &&
+  const finalValid = current.final !== "route" ||
+    (current.final_outbound !== null && outboundOptions.includes(current.final_outbound));
+  const valid = scheduleValid && finalValid &&
+    current.rules.every((r) => ruleValid(r, outboundOptions, ruleSetOptions)) &&
     new Set(current.rules.map((r) => r.name)).size === current.rules.length;
   const save = async () => {
     if (user?.role === "operator" || !valid) return;
@@ -88,6 +91,8 @@ function TProxyEditor() {
           <Typography>Источники: {current.ingress_interfaces.join(", ") || "не выбраны"}</Typography>
           {current.rules.map((rule) => <Typography key={rule.name}>{rule.name} · {rule.action}
             {rule.action === "route" && rule.outbound ? ` → ${rule.outbound}` : ""}</Typography>)}
+          <Typography>Конечное действие: {current.final}
+            {current.final === "route" && current.final_outbound ? ` → ${current.final_outbound}` : ""}</Typography>
           <Button disabled={user?.role !== "admin" || version?.status !== "draft" || preview.isFetching}
             onClick={() => void preview.refetch()}>Предпросмотр сохранённого черновика</Button>
           {preview.data && !editor.isEdit && preview.data.version_id === version?.id && <>
@@ -163,6 +168,20 @@ function TProxyEditor() {
             protocol: "any", ports: [], action: "direct", outbound: null,
             order: current.rules.length,
           }] })}>+ Добавить правило</Button>
+          <Typography variant="h2">Конечное действие</Typography>
+          <FormGrid>
+            <SelectField label="Для несовпавшего трафика" value={current.final}
+              options={["direct", "block", "route"]}
+              onChange={(final) => patch({
+                final,
+                final_outbound: final === "route" ? current.final_outbound : null,
+              })} />
+            {current.final === "route" && (
+              <SelectField label="Выход по умолчанию" value={current.final_outbound ?? ""}
+                options={outboundOptions}
+                onChange={(final_outbound) => patch({ final_outbound })} />
+            )}
+          </FormGrid>
           <Typography variant="h2">Обновление списков (после запуска TProxy)</Typography>
           <FormGrid>
             <SelectField label="Режим обновления" value={schedule.mode}

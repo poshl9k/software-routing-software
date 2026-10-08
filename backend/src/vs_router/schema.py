@@ -269,7 +269,8 @@ class TProxy(Model):
     enabled: bool = False
     ingress_interfaces: tuple[InterfaceName, ...] = ()
     rules: tuple[TProxyRule, ...] = ()
-    final: Literal["direct"] = "direct"
+    final: Literal["direct", "block", "route"] = "direct"
+    final_outbound: Name | None = None
     update_schedule: TProxyUpdateSchedule = Field(default_factory=TProxyUpdateSchedule)
 
 

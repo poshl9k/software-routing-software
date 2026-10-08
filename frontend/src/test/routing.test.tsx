@@ -152,3 +152,18 @@ it("clears the outbound when a routing rule stops routing", async () => {
     expect(rule.outbound).toBeNull();
   });
 });
+
+it("saves the policy final action and its outbound", async () => {
+  const fetch = setup(false, [], proxiesWithOutbound);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.selectOptions(screen.getByLabelText("Для несовпавшего трафика"), "route");
+  await user.selectOptions(await screen.findByLabelText("Выход по умолчанию"), "proxy_a");
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => {
+    const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+    const tproxy = JSON.parse(String(init.body)).tproxy;
+    expect(tproxy.final).toBe("route");
+    expect(tproxy.final_outbound).toBe("proxy_a");
+  });
+});

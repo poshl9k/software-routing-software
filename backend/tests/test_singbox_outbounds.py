@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from vs_router.generators.singbox import (
     IMPLICIT_DIRECT_TAG,
+    IMPLICIT_BLOCK_TAG,
     PLACEHOLDER_PASSWORD,
     PLACEHOLDER_UUID,
     generate_singbox,
@@ -297,3 +298,43 @@ def test_tproxy_rule_set_must_be_declared():
 def test_tproxy_source_cidr_requires_ipv4():
     with pytest.raises(ValidationError, match="tproxy.source_ipv4_required"):
         version(tproxy={"rules": [{"name": "r", "source_ip_cidr": ["2001:db8::/32"]}]})
+
+
+# --------------------------------------------------------------------------
+# TProxy final action (slice S3)
+# --------------------------------------------------------------------------
+
+def test_final_block_renders_block_outbound_and_route():
+    generated = generate_singbox(version(enabled_proxies(), tproxy={"final": "block"}))
+    by_tag = {o["tag"]: o for o in generated["outbounds"]}
+    assert by_tag[IMPLICIT_BLOCK_TAG] == {"type": "block", "tag": IMPLICIT_BLOCK_TAG}
+    assert generated["route"]["final"] == IMPLICIT_BLOCK_TAG
+
+
+def test_final_route_uses_named_outbound():
+    generated = generate_singbox(version(enabled_proxies(),
+                                         tproxy={"final": "route", "final_outbound": "proxy_a"}))
+    assert generated["route"]["final"] == "proxy_a"
+
+
+def test_final_route_requires_outbound():
+    with pytest.raises(ValidationError, match="tproxy.final_outbound_required"):
+        version(enabled_proxies(), tproxy={"final": "route"})
+
+
+def test_final_route_unknown_outbound_rejected():
+    with pytest.raises(ValidationError, match="tproxy.final_outbound_unavailable"):
+        version(enabled_proxies(), tproxy={"final": "route", "final_outbound": "ghost"})
+
+
+def test_final_outbound_unexpected_when_not_route():
+    with pytest.raises(ValidationError, match="tproxy.final_outbound_unexpected"):
+        version(enabled_proxies(), tproxy={"final": "direct", "final_outbound": "proxy_a"})
+
+
+def test_reserved_block_tag_rejected():
+    with pytest.raises(ValidationError, match="proxy.tag_reserved"):
+        version({"enabled": True, "outbounds": [outbound("block", type="block")]})
+    with pytest.raises(ValidationError, match="proxy.tag_reserved"):
+        version({"enabled": True, "groups": [{"tag": "block", "type": "selector", "outbounds": ["p"]}],
+                 "outbounds": [outbound("p")]})

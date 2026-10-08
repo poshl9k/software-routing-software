@@ -24,8 +24,12 @@ Slow-инертность: всё ниже — только черновик/п�
       один матчер (`tproxy.rule_matcher_required`). Генератор: OR-матчеры
       (`source_ip_cidr`/`rule_set`/`port`/`port_range`/`network`). UI: поля источника,
       портов, протокола и чекбоксы наборов. Backend +6, frontend 95 passed.
-- [ ] **S3. Конечное действие политики + bypass.** `final` = direct|block|outbound;
-      исключения (порты/подсети/устройства) как отдельный список.
+- [x] **S3. Конечное действие политики.** `TProxy.final: direct|block|route` +
+      `final_outbound`. Валидатор: `tproxy.final_outbound_required`/`_unavailable`/`_unexpected`;
+      тег `block` зарезервирован. Генератор: `block`→block-outbound, `route`→тег,
+      `direct` — legacy (прямой выход/авто-группа). UI: «Конечное действие» + «Выход по
+      умолчанию». Backend +6, frontend +1. Проверено: backend 846, frontend 96, tsc/build ok.
+- [ ] **S3b. Bypass/исключения.** Список исключений (порты/подсети/устройства) в `TProxy`.
 - [ ] **S4. Simple/Expert режимы.** Счётчики-статусы сверху, сводка
       «источник → движок → назначения», экспертные секции.
 - [ ] **S5. Визард первичной настройки** (сервисы → выход → устройства → превью).
@@ -51,5 +55,5 @@ cloudflared / sing-box DNS). Варианты: (а) DoT — в Unbound, DoH — 
 ## Журнал
 - S1 — сделано (см. выше).
 - S2 — сделано (см. выше).
-- DoH/DoT — записано как обязательный пункт общей DNS-конфигурации (дизайн-док
-  `docs/dns-dot-doh.md`; решение по компоненту не принято).
+- S3 — сделано (конечное действие; bypass вынесен в S3b).
+- DoH/DoT — дизайн-док `docs/dns-dot-doh.md`; компонент DoH-клиента выбран: `dnscrypt-proxy`.

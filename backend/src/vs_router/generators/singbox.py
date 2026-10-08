@@ -24,6 +24,7 @@ PLACEHOLDER_SHADOWSOCKS_METHOD = "chacha20-ietf-poly1305"
 
 # Tags owned by the generator itself; a contract object may not shadow them.
 IMPLICIT_DIRECT_TAG = "direct"
+IMPLICIT_BLOCK_TAG = "block"
 
 
 def _tls_block(outbound):
@@ -137,7 +138,19 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
     if proxies.enabled:
         outbounds.extend(_render_outbound(o) for o in sorted(proxies.outbounds, key=lambda o: o.tag))
         outbounds.extend(_render_group(g) for g in sorted(proxies.groups, key=lambda g: g.tag))
-        final = _default_outbound_tag(proxies.groups)
+    # TProxy final action overrides the default outbound selection
+    tproxy = configuration.tproxy
+    if tproxy.final == "block":
+        if not any(o.get("tag") == IMPLICIT_BLOCK_TAG and o.get("type") == "block" for o in outbounds):
+            outbounds.append({"type": "block", "tag": IMPLICIT_BLOCK_TAG})
+            outbounds.sort(key=lambda o: o["tag"])
+        final = IMPLICIT_BLOCK_TAG
+    elif tproxy.final == "route":
+        final = tproxy.final_outbound or IMPLICIT_DIRECT_TAG
+    else:
+        # legacy direct behaviour
+        if proxies.enabled:
+            final = _default_outbound_tag(proxies.groups)
 
     return {
         "inbounds": [

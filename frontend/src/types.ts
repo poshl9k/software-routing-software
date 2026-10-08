@@ -148,7 +148,8 @@ export interface TProxy {
   enabled: boolean;
   ingress_interfaces: string[];
   rules: TProxyRule[];
-  final: "direct";
+  final: "direct" | "block" | "route";
+  final_outbound: string | null;
   update_schedule: TProxyUpdateSchedule;
 }
 export interface ProxyOutbound {
