@@ -208,3 +208,38 @@ def test_tproxy_rules_unchanged_by_proxy_section():
     assert with_proxies["route"]["rules"] == base["route"]["rules"]
     assert with_proxies["inbounds"] == base["inbounds"]
     assert with_proxies["outbounds"][0] == {"type": "direct", "tag": IMPLICIT_DIRECT_TAG}
+
+
+# --------------------------------------------------------------------------
+# TProxy rule destination ("route" to a named outbound)
+# --------------------------------------------------------------------------
+
+def test_tproxy_route_rule_targets_outbound():
+    tproxy = {"rules": [{"name": "via_proxy", "ip_cidr": ["203.0.113.0/24"],
+                         "action": "route", "outbound": "proxy_a", "order": 0}]}
+    generated = generate_singbox(version(enabled_proxies(), tproxy))
+    assert generated["route"]["rules"][-1] == {
+        "ip_cidr": ["203.0.113.0/24"], "action": "route", "outbound": "proxy_a"}
+
+
+def test_tproxy_route_requires_an_existing_rendered_outbound():
+    # Unknown tag.
+    with pytest.raises(ValidationError, match="tproxy.outbound_unavailable"):
+        version(enabled_proxies(), {"rules": [{"name": "r", "ip_cidr": ["10.0.0.0/8"],
+                                               "action": "route", "outbound": "ghost"}]})
+    # Declared proxy outbounds are not rendered while the section is disabled.
+    with pytest.raises(ValidationError, match="tproxy.outbound_unavailable"):
+        version(None, {"rules": [{"name": "r", "ip_cidr": ["10.0.0.0/8"],
+                                  "action": "route", "outbound": "proxy_a"}]})
+
+
+def test_tproxy_route_without_outbound_is_rejected():
+    with pytest.raises(ValidationError, match="tproxy.outbound_required"):
+        version(enabled_proxies(), {"rules": [{"name": "r", "ip_cidr": ["10.0.0.0/8"],
+                                               "action": "route"}]})
+
+
+def test_tproxy_outbound_on_a_non_route_action_is_rejected():
+    with pytest.raises(ValidationError, match="tproxy.outbound_unexpected"):
+        version(enabled_proxies(), {"rules": [{"name": "r", "ip_cidr": ["10.0.0.0/8"],
+                                               "action": "block", "outbound": "proxy_a"}]})

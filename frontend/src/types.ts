@@ -136,7 +136,8 @@ export interface TProxyRule {
   name: string;
   domain_suffix: string[];
   ip_cidr: string[];
-  action: "direct" | "block";
+  action: "direct" | "block" | "route";
+  outbound: string | null;
   order: number;
 }
 export interface TProxy {

@@ -7,11 +7,12 @@ import { RouterProvider } from "../state";
 import { emptyConfiguration } from "../fixtures";
 import type { TProxyRule } from "../types";
 
-function setup(fail = false, rules: TProxyRule[] = []) {
+function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfiguration.proxies) {
   const configuration = {
     ...emptyConfiguration,
     interfaces: [{ name: "lan0", zone: "lan" as const, kind: "physical" as const }],
     tproxy: { ...emptyConfiguration.tproxy, rules },
+    proxies,
   };
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) =>
     Promise.resolve(new Response(JSON.stringify(
@@ -43,7 +44,8 @@ it("saves disabled TProxy ingress and ordered block rule in draft", async () => 
     expect(sent.tproxy.enabled).toBe(false);
     expect(sent.tproxy.ingress_interfaces).toEqual(["lan0"]);
     expect(sent.tproxy.rules).toEqual([{
-      name: "blocked_site", domain_suffix: ["example.org"], ip_cidr: [], action: "block", order: 0,
+      name: "blocked_site", domain_suffix: ["example.org"], ip_cidr: [], action: "block",
+      outbound: null, order: 0,
     }]);
   });
   expect(await screen.findByText(/blocked_site · block/)).toBeVisible();
@@ -81,8 +83,8 @@ it("saves daily update window as an alternative to six-hour interval", async () 
 
 it("shows configured first-match order and updates it on move", async () => {
   const fetch = setup(false, [
-    { name: "later", domain_suffix: ["later.test"], ip_cidr: [], action: "block", order: 20 },
-    { name: "first", domain_suffix: ["first.test"], ip_cidr: [], action: "direct", order: 10 },
+    { name: "later", domain_suffix: ["later.test"], ip_cidr: [], action: "block", outbound: null, order: 20 },
+    { name: "first", domain_suffix: ["first.test"], ip_cidr: [], action: "direct", outbound: null, order: 10 },
   ]);
   const user = userEvent.setup();
   await screen.findByText(/first · direct/);
@@ -96,5 +98,53 @@ it("shows configured first-match order and updates it on move", async () => {
     const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
     expect(JSON.parse(String(init.body)).tproxy.rules.map((r: TProxyRule) => [r.name, r.order]))
       .toEqual([["later", 0], ["first", 1]]);
+  });
+});
+
+const proxyOutbound = {
+  tag: "proxy_a", type: "vless" as const, server: "203.0.113.10", port: 443,
+  secret: null, tls: false, tls_server_name: null, tls_insecure: false, admin_listen: null,
+};
+const proxiesWithOutbound = {
+  enabled: false, outbounds: [proxyOutbound], subscriptions: [], groups: [],
+};
+
+it("routes a rule to a chosen outbound on save", async () => {
+  const fetch = setup(false, [], proxiesWithOutbound);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
+  await user.type(screen.getByLabelText("Имя правила"), "via_proxy");
+  await user.type(screen.getByLabelText("Домены (по строкам)"), "example.com");
+  await user.selectOptions(screen.getByLabelText("Действие"), "route");
+  await user.selectOptions(await screen.findByLabelText("Выход"), "proxy_a");
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => {
+    const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+    expect(JSON.parse(String(init.body)).tproxy.rules).toEqual([
+      { name: "via_proxy", domain_suffix: ["example.com"], ip_cidr: [],
+        action: "route", outbound: "proxy_a", order: 0 },
+    ]);
+  });
+  expect(await screen.findByText(/via_proxy · route → proxy_a/)).toBeVisible();
+});
+
+it("clears the outbound when a routing rule stops routing", async () => {
+  const fetch = setup(false, [], proxiesWithOutbound);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
+  await user.type(screen.getByLabelText("Имя правила"), "sw");
+  await user.type(screen.getByLabelText("Домены (по строкам)"), "example.com");
+  await user.selectOptions(screen.getByLabelText("Действие"), "route");
+  await user.selectOptions(await screen.findByLabelText("Выход"), "proxy_a");
+  await user.selectOptions(screen.getByLabelText("Действие"), "block");
+  expect(screen.queryByLabelText("Выход")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => {
+    const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+    const rule = JSON.parse(String(init.body)).tproxy.rules[0];
+    expect(rule.action).toBe("block");
+    expect(rule.outbound).toBeNull();
   });
 });

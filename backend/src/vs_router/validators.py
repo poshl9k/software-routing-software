@@ -89,6 +89,13 @@ def validate_configuration(c):
     # No sing-box process, packet interception or crash guard is installed yet.
     if c.tproxy.enabled:
         fail("tproxy.not_available")
+    # A routing rule may only target an outbound that the generator actually
+    # renders: a declared proxy outbound/group tag, and only while the proxies
+    # section is enabled (otherwise it is not emitted).
+    outbound_tags = ({o.tag for o in c.proxies.outbounds} | {g.tag for g in c.proxies.groups}
+                     if c.proxies.enabled else set())
+    if any(r.action == "route" and r.outbound not in outbound_tags for r in c.tproxy.rules):
+        fail("tproxy.outbound_unavailable")
     zones = {i.zone for i in c.interfaces if i.zone}
     members = {m for i in c.interfaces for m in i.members}
     # A parent link that carries an assigned VLAN is a trunk: it must not also run

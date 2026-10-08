@@ -112,8 +112,12 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
             matchers.append({"ip_cidr": list(rule.ip_cidr)})
         match = (matchers[0] if len(matchers) == 1 else
                  {"type": "logical", "mode": "or", "rules": matchers})
-        match.update({"action": "reject"} if rule.action == "block" else
-                     {"action": "route", "outbound": "direct"})
+        if rule.action == "block":
+            match["action"] = "reject"
+        elif rule.action == "route":
+            match.update({"action": "route", "outbound": rule.outbound})
+        else:
+            match.update({"action": "route", "outbound": IMPLICIT_DIRECT_TAG})
         rules.append(match)
 
     outbounds = [{"type": "direct", "tag": IMPLICIT_DIRECT_TAG}]

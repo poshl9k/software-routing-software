@@ -18,10 +18,12 @@ import { useDraftEditor } from "../hooks/useDraftEditor";
 import { ProxiesEditor, RuleSets } from "./RoutingProxy";
 
 const domainValid = (domain: string) => /^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/.test(domain);
-const ruleValid = (rule: TProxyRule) => nameValid(rule.name) &&
+const ruleValid = (rule: TProxyRule, outbounds: readonly string[]) => nameValid(rule.name) &&
   (rule.domain_suffix.length > 0 || rule.ip_cidr.length > 0) &&
   rule.domain_suffix.every(domainValid) &&
-  rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr));
+  rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
+  (rule.action !== "route" ||
+    (rule.outbound !== null && outbounds.includes(rule.outbound)));
 const timeValid = (time: string) => /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(time);
 
 /** Draft-only TProxy policy. Live interception stays blocked by the backend. */
@@ -40,6 +42,12 @@ function TProxyEditor() {
   const current: TProxy = editor.value ?? { ...configuration.tproxy,
     rules: [...configuration.tproxy.rules].sort((a, b) => a.order - b.order) };
   const sources = configuration.interfaces.filter((i) => i.zone && i.zone !== "wan");
+  // Outbounds a rule may route to: declared proxy outbounds and groups. They
+  // are only rendered by the generator while the proxies section is enabled.
+  const outboundOptions = [
+    ...configuration.proxies.outbounds.map((o) => o.tag),
+    ...configuration.proxies.groups.map((g) => g.tag),
+  ];
   const patch = (value: Partial<TProxy>) => editor.setValue({ ...current, ...value });
   const updateRule = (index: number, value: Partial<TProxyRule>) =>
     patch({ rules: current.rules.map((r, i) => i === index ? { ...r, ...value } : r) });
@@ -47,7 +55,7 @@ function TProxyEditor() {
   const scheduleValid = schedule.mode === "interval"
     ? Number.isInteger(schedule.interval_hours) && schedule.interval_hours >= 1 && schedule.interval_hours <= 168
     : timeValid(schedule.window_start) && timeValid(schedule.window_end) && schedule.window_start < schedule.window_end;
-  const valid = scheduleValid && current.rules.every(ruleValid) &&
+  const valid = scheduleValid && current.rules.every((r) => ruleValid(r, outboundOptions)) &&
     new Set(current.rules.map((r) => r.name)).size === current.rules.length;
   const save = async () => {
     if (user?.role === "operator" || !valid) return;
@@ -67,7 +75,8 @@ function TProxyEditor() {
           <Button disabled={!version || user?.role === "operator"}
             onClick={() => { clearPreview(); editor.begin(current); }}>Редактировать</Button>
           <Typography>Источники: {current.ingress_interfaces.join(", ") || "не выбраны"}</Typography>
-          {current.rules.map((rule) => <Typography key={rule.name}>{rule.name} · {rule.action}</Typography>)}
+          {current.rules.map((rule) => <Typography key={rule.name}>{rule.name} · {rule.action}
+            {rule.action === "route" && rule.outbound ? ` → ${rule.outbound}` : ""}</Typography>)}
           <Button disabled={user?.role !== "admin" || version?.status !== "draft" || preview.isFetching}
             onClick={() => void preview.refetch()}>Предпросмотр сохранённого черновика</Button>
           {preview.data && !editor.isEdit && preview.data.version_id === version?.id && <>
@@ -97,8 +106,15 @@ function TProxyEditor() {
               <Field label="IPv4-сети (по строкам)" multiline value={rule.ip_cidr.join("\n")}
                 valid={rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
                 onChange={(text) => updateRule(index, { ip_cidr: lines(text) })} />
-              <SelectField label="Действие" value={rule.action} options={["direct", "block"]}
-                onChange={(action) => updateRule(index, { action })} />
+              <SelectField label="Действие" value={rule.action} options={["direct", "block", "route"]}
+                onChange={(action) => updateRule(index, {
+                  action,
+                  outbound: action === "route" ? rule.outbound : null,
+                })} />
+              {rule.action === "route" && (
+                <SelectField label="Выход" value={rule.outbound ?? ""} options={outboundOptions}
+                  onChange={(outbound) => updateRule(index, { outbound })} />
+              )}
               <FormActions>
                 <Button disabled={index === 0} onClick={() => {
                   const rules = [...current.rules];
@@ -114,7 +130,8 @@ function TProxyEditor() {
             </FormGrid>
           </div>)}
           <Button onClick={() => patch({ rules: [...current.rules, {
-            name: "", domain_suffix: [], ip_cidr: [], action: "direct", order: current.rules.length,
+            name: "", domain_suffix: [], ip_cidr: [], action: "direct", outbound: null,
+            order: current.rules.length,
           }] })}>+ Добавить правило</Button>
           <Typography variant="h2">Обновление списков (после запуска TProxy)</Typography>
           <FormGrid>

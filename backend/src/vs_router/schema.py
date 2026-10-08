@@ -228,7 +228,11 @@ class TProxyRule(Model):
     name: Name
     domain_suffix: tuple[str, ...] = ()
     ip_cidr: tuple[str, ...] = ()
-    action: Literal["direct", "block"]
+    # Destination of matched traffic (CONTEXT.md «Выход TProxy»): straight out
+    # (direct), blocked, or routed to a named outbound (a proxy outbound/group
+    # tag). ``outbound`` is only meaningful — and required — for ``route``.
+    action: Literal["direct", "block", "route"] = "direct"
+    outbound: Name | None = None
     order: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
@@ -243,6 +247,10 @@ class TProxyRule(Model):
         for cidr in self.ip_cidr:
             if ip_network(cidr).version != 4:
                 raise ValueError("tproxy.ipv4_required")
+        if self.action == "route" and self.outbound is None:
+            raise ValueError("tproxy.outbound_required")
+        if self.action != "route" and self.outbound is not None:
+            raise ValueError("tproxy.outbound_unexpected")
         return self
 
 
