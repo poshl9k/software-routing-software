@@ -6,7 +6,7 @@ import { expect, it, vi } from "vitest";
 import Routing from "../pages/Routing";
 import { RouterProvider, useRouterState } from "../state";
 import { emptyConfiguration } from "../fixtures";
-import type { ProxySettings, RuleSetStatus } from "../types";
+import type { ProxyOutbound, ProxySettings, RuleSetStatus } from "../types";
 
 type Role = "admin" | "operator";
 
@@ -147,6 +147,72 @@ it("saves proxy outbound, subscription and group as a draft with a write-only se
   expect((await screen.findAllByText("ss1")).length).toBeGreaterThan(0);
   expect(screen.queryByText("topsecret")).not.toBeInTheDocument();
   expect(screen.queryByDisplayValue("topsecret")).not.toBeInTheDocument();
+});
+
+it("imports pasted links into the saved draft and clears the input", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  const input = screen.getByLabelText("Ссылки для импорта (по одной в строке)");
+  await user.type(input, "vless://uuid-one@exit.example.com:443?security=tls#alpha{enter}trojan://pass-two@other.example.com:443#beta");
+  await user.click(screen.getByRole("button", { name: "Импортировать" }));
+  expect(input).toHaveValue("");
+  expect(screen.getByText("Импортировано выходов: 2")).toBeVisible();
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch).outbounds).toHaveLength(2));
+  expect(sentProxies(fetch).outbounds).toMatchObject([
+    { tag: "alpha", type: "vless", server: "exit.example.com", port: 443, tls: true, secret: { plaintext: "uuid-one" } },
+    { tag: "beta", type: "trojan", server: "other.example.com", port: 443, secret: { plaintext: "pass-two" } },
+  ]);
+});
+
+it("removes selected outbounds from the saved draft", async () => {
+  const base: ProxyOutbound = {
+    tag: "first", type: "shadowsocks", server: "exit.example.com", port: 8388,
+    secret: { redacted: true }, method: "aes-256-gcm", tls: false,
+    tls_server_name: null, tls_insecure: false, admin_listen: null,
+  };
+  const fetch = setup({ proxies: {
+    ...emptyConfiguration.proxies,
+    outbounds: [base, { ...base, tag: "second" }, { ...base, tag: "third" }],
+  } });
+  const user = userEvent.setup();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("checkbox", { name: "Выбрать выход first" }));
+  await user.click(screen.getByRole("checkbox", { name: "Выбрать выход third" }));
+  await user.click(screen.getByRole("button", { name: "Удалить выбранные" }));
+  expect(screen.getByRole("button", { name: "Удалить выбранные" })).toBeDisabled();
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch).outbounds).toHaveLength(1));
+  expect(sentProxies(fetch).outbounds[0].tag).toBe("second");
+  vi.restoreAllMocks();
+});
+
+it("duplicates selected outbounds with unique backend-valid tags", async () => {
+  const base: ProxyOutbound = {
+    tag: "first", type: "shadowsocks", server: "exit.example.com", port: 8388,
+    secret: { redacted: true }, method: "aes-256-gcm", tls: false,
+    tls_server_name: null, tls_insecure: false, admin_listen: null,
+  };
+  const fetch = setup({ proxies: {
+    ...emptyConfiguration.proxies,
+    outbounds: [base, { ...base, tag: "first_copy" }],
+  } });
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("checkbox", { name: "Выбрать выход first" }));
+  await user.click(screen.getByRole("button", { name: "Дублировать выбранные" }));
+  expect(saveButton()).toBeEnabled();
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch).outbounds).toHaveLength(3));
+  expect(sentProxies(fetch).outbounds[2]).toMatchObject({ tag: "first_copy2", method: "aes-256-gcm" });
 });
 
 it("blocks saving an outbound without a server/port and a non-https subscription", async () => {

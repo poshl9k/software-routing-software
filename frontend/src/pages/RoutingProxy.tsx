@@ -25,6 +25,7 @@ import { SelectField } from "../components/Select";
 import { Toggle } from "../components/Toggle";
 import { hostValid, nameValid, portValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
+import { parseShareLinks } from "../shareLinks";
 import { SecretField } from "./ConnectionEditors";
 
 const OUTBOUND_TYPES: ProxyOutbound["type"][] = [
@@ -170,9 +171,78 @@ export function ProxiesEditor() {
   const { configuration, version, user } = useConfiguration();
   const editor = useDraftEditor<ProxySettings>();
   const readonly = user?.role === "operator";
+  const [importText, setImportText] = useState("");
+  const [importError, setImportError] = useState<Error | null>(null);
+  const [importCount, setImportCount] = useState(0);
+  const [selected, setSelected] = useState<number[]>([]);
   const current: ProxySettings = editor.value ?? configuration.proxies;
   const patch = (value: Partial<ProxySettings>) =>
     editor.setValue({ ...current, ...value });
+
+  const importLinks = () => {
+    const parsed = parseShareLinks(importText);
+    const occupied = new Set([
+      RESERVED_TAG,
+      ...current.outbounds.map((o) => o.tag),
+      ...current.groups.map((g) => g.tag),
+    ]);
+    const outbounds: ProxyOutbound[] = [];
+    const errors: string[] = [];
+    for (const item of parsed) {
+      if (item.error || !item.outbound) {
+        errors.push(item.error ?? "Некорректная ссылка");
+        continue;
+      }
+      const outbound = item.outbound;
+      // The parser already returns a contract-valid Name; only a collision with an
+      // existing outbound/group tag needs a suffix here.
+      const base = outbound.tag;
+      let tag = base;
+      for (let n = 1; occupied.has(tag);) {
+        const suffix = `_${++n}`;
+        tag = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+      }
+      if (!nameValid(tag) || !outboundValid({ ...outbound, tag })) {
+        errors.push("Некорректный тег или адрес выхода");
+        continue;
+      }
+      occupied.add(tag);
+      outbounds.push({ ...outbound, tag });
+    }
+    if (outbounds.length) {
+      patch({ outbounds: [...current.outbounds, ...outbounds] });
+      setImportText("");
+    }
+    setImportCount(outbounds.length);
+    setImportError(errors.length ? new Error(`Не импортировано: ${errors.length}. ${errors[0]}`) : null);
+  };
+
+  const removeSelected = () => {
+    if (!selected.length || !window.confirm(`Удалить выбранные выходы (${selected.length})?`)) return;
+    patch({ outbounds: current.outbounds.filter((_, index) => !selected.includes(index)) });
+    setSelected([]);
+  };
+  const duplicateSelected = () => {
+    if (!selected.length) return;
+    const occupied = new Set([
+      RESERVED_TAG,
+      ...current.outbounds.map((o) => o.tag),
+      ...current.groups.map((g) => g.tag),
+    ]);
+    const copies = current.outbounds.filter((_, index) => selected.includes(index)).map((o) => {
+      let n = 1;
+      let suffix = "_copy";
+      let tag = `${o.tag.slice(0, 31 - suffix.length)}${suffix}`;
+      while (occupied.has(tag)) {
+        suffix = `_copy${++n}`;
+        tag = `${o.tag.slice(0, 31 - suffix.length)}${suffix}`;
+      }
+      occupied.add(tag);
+      return { ...o, tag };
+    });
+    patch({ outbounds: [...current.outbounds, ...copies] });
+    setSelected([]);
+  };
 
   const allTags = [
     ...current.outbounds.map((o) => o.tag),
@@ -190,13 +260,18 @@ export function ProxiesEditor() {
     current.subscriptions.every(subscriptionValid) &&
     current.groups.every((g) => groupValid(g, allTags));
 
-  const begin = () =>
+  const begin = () => {
+    setSelected([]);
+    setImportText("");
+    setImportError(null);
+    setImportCount(0);
     editor.begin({
       enabled: configuration.proxies.enabled,
       outbounds: [...configuration.proxies.outbounds],
       subscriptions: [...configuration.proxies.subscriptions],
       groups: [...configuration.proxies.groups],
     });
+  };
   const save = async () => {
     if (readonly || !valid) return;
     await editor.save((value) => ({ ...configuration, proxies: value }));
@@ -222,6 +297,25 @@ export function ProxiesEditor() {
       ) : (
         <>
           <Card title="Прокси-выходы">
+            <FormGrid>
+              <FormWide>
+                <FormControlLabel
+                  label="Выбрать все выходы"
+                  control={
+                    <Checkbox
+                      aria-label="Выбрать все выходы"
+                      checked={current.outbounds.length > 0 && selected.length === current.outbounds.length}
+                      indeterminate={selected.length > 0 && selected.length < current.outbounds.length}
+                      onChange={(_, checked) => setSelected(checked ? current.outbounds.map((_, i) => i) : [])}
+                    />
+                  }
+                />
+              </FormWide>
+              <FormActions>
+                <Button disabled={!selected.length} onClick={removeSelected}>Удалить выбранные</Button>
+                <Button disabled={!selected.length} onClick={duplicateSelected}>Дублировать выбранные</Button>
+              </FormActions>
+            </FormGrid>
             {current.outbounds.map((o, index) => {
               const update = (v: Partial<ProxyOutbound>) =>
                 patch({
@@ -232,6 +326,13 @@ export function ProxiesEditor() {
               return (
                 <div key={index} className="rule-row">
                   <FormGrid>
+                    <FormWide>
+                      <Checkbox
+                        inputProps={{ "aria-label": `Выбрать выход ${o.tag}` }}
+                        checked={selected.includes(index)}
+                        onChange={(_, checked) => setSelected(checked ? [...selected, index] : selected.filter((i) => i !== index))}
+                      />
+                    </FormWide>
                     <Field
                       label="Тег выхода"
                       value={o.tag}
@@ -272,6 +373,13 @@ export function ProxiesEditor() {
                           value={o.secret}
                           change={(secret) => update({ secret })}
                         />
+                        {o.type === "shadowsocks" && (
+                          <Field
+                            label="Метод шифрования"
+                            value={o.method ?? ""}
+                            onChange={(method) => update({ method: method || null })}
+                          />
+                        )}
                         <Toggle
                           label="TLS"
                           value={o.tls}
@@ -315,13 +423,14 @@ export function ProxiesEditor() {
                     <FormActions>
                       <DeleteButton
                         label={`Удалить выход ${o.tag || index + 1}`}
-                        onClick={() =>
+                        onClick={() => {
                           patch({
                             outbounds: current.outbounds.filter(
                               (_, i) => i !== index,
                             ),
-                          })
-                        }
+                          });
+                          setSelected(selected.filter((i) => i !== index).map((i) => i > index ? i - 1 : i));
+                        }}
                       />
                     </FormActions>
                   </FormGrid>
@@ -353,6 +462,26 @@ export function ProxiesEditor() {
                 + Добавить выход
               </Button>
             </FormActions>
+          </Card>
+
+          <Card title="Импорт ссылок">
+            <FormGrid>
+              <FormWide>
+                <Field
+                  label="Ссылки для импорта (по одной в строке)"
+                  multiline
+                  value={importText}
+                  onChange={setImportText}
+                />
+              </FormWide>
+              <FormActions>
+                <Button disabled={!importText.trim()} onClick={importLinks}>Импортировать</Button>
+              </FormActions>
+              <FormWide>
+                <ErrorNotice error={importError} />
+                {importCount > 0 && <InfoNote>Импортировано выходов: {importCount}</InfoNote>}
+              </FormWide>
+            </FormGrid>
           </Card>
 
           <Card title="Подписки">
