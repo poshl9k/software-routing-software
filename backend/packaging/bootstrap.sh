@@ -142,6 +142,19 @@ stage_networkd() {
     # Never stop networking here: ifdown would flush the live address. Disable
     # only after networkd has a lease and routing/DNS checks have passed.
     systemctl disable networking.service
+    # udev's 80-ifupdown.rules runs ifup for any `auto`/`allow-hotplug` interface
+    # on link-up even with networking.service disabled, so the installer's stanza
+    # would add a SECOND DHCP address beside networkd on every boot (observed on a
+    # clean install: the uplink kept .197 from networkd and .198 from dhcpcd).
+    # Strip the auto/hotplug hooks for the migrated uplink; keep the `iface`
+    # stanza itself so the migration precondition above still holds on a rerun.
+    if awk -v i="$iface" '$1 ~ /^(auto|allow-hotplug)$/ && $2 == i {found=1} END {exit !found}' /etc/network/interfaces; then
+        cp -a /etc/network/interfaces /etc/network/interfaces.vs-router-backup
+        awk -v i="$iface" '!($1 ~ /^(auto|allow-hotplug)$/ && $2 == i)' \
+            /etc/network/interfaces > /etc/network/interfaces.new
+        chmod 0644 /etc/network/interfaces.new
+        mv /etc/network/interfaces.new /etc/network/interfaces
+    fi
     touch /var/lib/vs-router-bootstrap/networkd-migrated
 }
 
