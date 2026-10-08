@@ -338,3 +338,146 @@ def test_reserved_block_tag_rejected():
     with pytest.raises(ValidationError, match="proxy.tag_reserved"):
         version({"enabled": True, "groups": [{"tag": "block", "type": "selector", "outbounds": ["p"]}],
                  "outbounds": [outbound("p")]})
+
+
+# Offline DNS policy preview; the public TProxy availability gate stays closed.
+def dns_preview(dns):
+    draft = version(tproxy={"dns": dns})
+    enabled_tproxy = draft.configuration.tproxy.model_copy(update={"enabled": True})
+    offline = draft.model_copy(update={
+        "configuration": draft.configuration.model_copy(update={"tproxy": enabled_tproxy})
+    })
+    return generate_singbox(offline)
+
+def test_dns_servers_and_rule_render_in_declared_order():
+    rendered = dns_preview({
+        "servers": [
+            {"tag": "primary", "server": "1.1.1.1", "detour": "direct"},
+            {"tag": "secondary", "type": "tls", "server": "9.9.9.9",
+             "server_port": 853, "tls_name": "dns.example"},
+            {"tag": "doh", "type": "https", "server": "dns.example",
+             "domain_resolver": "primary"},
+        ],
+        "rules": [{"name": "internal", "domain_suffix": ["example.org"],
+                   "server": "secondary"}],
+    })
+    assert rendered["dns"] == {
+        "servers": [
+            {"tag": "primary", "type": "udp", "server": "1.1.1.1", "detour": "direct"},
+            {"tag": "secondary", "type": "tls", "server": "9.9.9.9",
+             "server_port": 853, "tls": {"server_name": "dns.example"}},
+            {"tag": "doh", "type": "https", "server": "dns.example",
+             "path": "/dns-query", "domain_resolver": "primary", "tls": {}},
+        ],
+        "rules": [{"domain_suffix": ["example.org"], "server": "secondary"}],
+        "final": "primary",
+    }
+    assert rendered["route"]["default_domain_resolver"] == {"server": "primary"}
+    legacy = generate_singbox(version())
+    assert rendered["inbounds"] == legacy["inbounds"]
+    assert rendered["outbounds"] == legacy["outbounds"]
+    assert {k: v for k, v in rendered["route"].items() if k != "default_domain_resolver"} == legacy["route"]
+
+
+def test_dns_https_tls_name_and_custom_path():
+    rendered = dns_preview({"servers": [
+        {"tag": "bootstrap", "server": "1.1.1.1"},
+        {"tag": "secure", "type": "https", "server": "dns.example", "path": "/custom",
+         "tls_name": "dns.alt", "domain_resolver": "bootstrap"},
+    ]})
+    assert rendered["dns"]["servers"][1] == {
+        "tag": "secure", "type": "https", "server": "dns.example", "path": "/custom",
+        "domain_resolver": "bootstrap", "tls": {"server_name": "dns.alt"},
+    }
+
+def test_dns_route_default_domain_resolver_first_ip_literal():
+    rendered = dns_preview({"servers": [
+        {"tag": "hostname", "server": "dns.example"},
+        {"tag": "ip6", "server": "2001:db8::1"},
+        {"tag": "ip4", "server": "1.1.1.1"},
+    ]})
+    assert rendered["route"]["default_domain_resolver"] == {"server": "ip6"}
+
+
+def test_dns_logical_or_rule_and_rules_order():
+    rendered = dns_preview({
+        "servers": [{"tag": "resolver", "server": "1.1.1.1"}],
+        "rules": [
+            {"name": "combined", "domain_suffix": ["example.org"],
+             "rule_sets": ["list_a"], "server": "resolver"},
+            {"name": "sets", "rule_sets": ["list_b"], "server": "resolver"},
+        ],
+    })
+    assert rendered["dns"]["rules"] == [
+        {"type": "logical", "mode": "or", "rules": [
+            {"domain_suffix": ["example.org"]}, {"rule_set": ["list_a"]},
+        ], "server": "resolver"},
+        {"rule_set": ["list_b"], "server": "resolver"},
+    ]
+
+
+def test_dns_no_default_domain_resolver_when_no_dns():
+    assert "dns" not in dns_preview({})
+    assert "default_domain_resolver" not in dns_preview({})["route"]
+    assert "dns" not in generate_singbox(version())
+    assert "default_domain_resolver" not in generate_singbox(version())["route"]
+    assert dns_preview({"servers": [{"tag": "only", "server": "1.1.1.1"}]})["dns"] == {
+        "servers": [{"tag": "only", "type": "udp", "server": "1.1.1.1"}], "final": "only",
+    }
+
+def test_dns_hostname_only_fails_bootstrap_required():
+    with pytest.raises(ValidationError, match="tproxy.dns_bootstrap_required"):
+        version(tproxy={"dns": {"servers": [{"tag": "h", "type": "udp", "server": "dns.google"}]}})
+
+@pytest.mark.parametrize(("dns", "error"), [
+    ({"servers": [{"tag": "bad", "server": ""}]},
+     "tproxy.dns_server_required"),
+    ({"servers": [{"tag": "ok", "type": "tls", "server": "1.1.1.1"}]},
+     "tproxy.dns_tls_name_required"),
+    ({"servers": [{"tag": "ok", "type": "udp", "server": "example.com"}]},
+     "tproxy.dns_bootstrap_required"),
+    ({"servers": [{"tag": "ok", "type": "udp", "server": "1.1.1.1"}],
+      "rules": [{"name": "empty", "server": "ok"}]},
+     "tproxy.dns_rule_matcher_required"),
+    ({"rules": [{"name": "r", "domain_suffix": ["example.org"], "server": "missing"}]},
+     "tproxy.dns_servers_required"),
+    ({"servers": [{"tag": "same", "type": "udp", "server": "1.1.1.1"},
+                  {"tag": "same", "type": "tls", "server": "9.9.9.9", "tls_name": "x"}]},
+     "tproxy.dns_server_duplicate"),
+    ({"servers": [{"tag": "ok", "type": "udp", "server": "1.1.1.1"}],
+      "rules": [{"name": "same", "domain_suffix": ["a.test"], "server": "ok"},
+                {"name": "same", "rule_sets": ["list_a"], "server": "ok"}]},
+     "tproxy.dns_rule_duplicate"),
+    ({"servers": [{"tag": "ok", "type": "udp", "server": "1.1.1.1"}],
+      "rules": [{"name": "r", "domain_suffix": ["a.test"], "server": "missing"}]},
+     "tproxy.dns_rule_server_unavailable"),
+])
+def test_dns_validator_codes(dns, error):
+    with pytest.raises(ValidationError, match=error):
+        version(tproxy={"dns": dns})
+
+SB = "/home/poshl9k/.hermes/cache/scratch/vm-lab/sb-extract/sing-box-1.14.2-linux-amd64/sing-box"
+
+
+def test_dns_policy_passes_singbox_check(tmp_path):
+    import subprocess
+    from pathlib import Path
+
+    sb = Path(SB)
+    if not sb.exists():
+        pytest.skip("pinned sing-box not available")
+    preview = dns_preview({
+        "servers": [
+            {"tag": "primary", "server": "1.1.1.1", "detour": "direct"},
+            {"tag": "secure", "type": "tls", "server": "9.9.9.9",
+             "server_port": 853, "tls_name": "cloudflare-dns.com"},
+            {"tag": "doh", "type": "https", "server": "dns.example",
+             "domain_resolver": "primary"},
+        ],
+        "rules": [{"name": "internal", "domain_suffix": ["example.org"],
+                   "server": "secure"}],
+    })
+    config = tmp_path / "c.json"
+    config.write_text(json.dumps(preview))
+    check = subprocess.run([str(sb), "check", "-c", str(config)], capture_output=True, text=True)
+    assert check.returncode == 0, check.stderr

@@ -46,8 +46,15 @@ Slow-инертность: всё ниже — только черновик/п�
       источники и сохраняет черновик (`enabled: false`); локальный текстовый предпросмотр
       (API предпросмотра отражает сохранённый черновик и мастером не вызывается). Проверено:
       frontend 100, tsc/build ok. Делегировано Codex на `gpt-6-sol`.
-- [ ] **S6. DNS-политика** (апстримы UDP/TLS/HTTPS, DNS-правила) — поверх
-      `dns`/ADR-0014, без перехвата DNS роутера.
+- [~] **S6. DNS-политика** (апстримы UDP/TLS/HTTPS, DNS-правила) — поверх `dns`/ADR-0014, без
+      перехвата DNS роутера. **S6a (бэкенд) сделано:** `TProxyDNSServer {tag, type udp|tls|https,
+      server, server_port, tls_name, path, domain_resolver, detour}` + `TProxyDNSRule` +
+      `TProxyDNS`; генератор рендерит `dns`-блок sing-box **нового формата** (1.14: `type`/`server`,
+      не legacy `address`) + `route.default_domain_resolver`. Коды: `tproxy.dns_server_required`,
+      `_tls_name_required`, `_servers_required`, `_server_duplicate`, `_rule_duplicate`,
+      `_rule_matcher_required`, `_rule_server_unavailable`, `_bootstrap_required`. Проверено:
+      backend 889, и **реальный `sing-box check` на закреплённом 1.14.2** (тест + независимая
+      проверка). **S6b (UI)** — далее.
 - [ ] **S7. Connections / журнал / инспектор** — только когда есть runtime-API
       (gate открыт); сейчас вне объёма.
 - [ ] **S8. Outbounds/подписки: импорт ссылок, массовые операции.**

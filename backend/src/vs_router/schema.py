@@ -1,5 +1,6 @@
 """Versioned JSON contract. References use names, aliases use an explicit @ prefix."""
 from datetime import datetime
+from ipaddress import ip_address
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -316,11 +317,75 @@ class TProxyBypass(Model):
         return self
 
 
+class TProxyDNSServer(Model):
+    tag: Name
+    type: Literal["udp", "tls", "https"] = "udp"
+    server: str
+    server_port: int | None = Field(default=None, ge=1, le=65535)
+    tls_name: str | None = None
+    path: str | None = None
+    domain_resolver: Name | None = None
+    detour: str | None = None
+
+    @model_validator(mode="after")
+    def check_address(self):
+        if not self.server:
+            raise ValueError("tproxy.dns_server_required")
+        if self.type == "tls" and not self.tls_name:
+            raise ValueError("tproxy.dns_tls_name_required")
+        return self
+
+
+class TProxyDNSRule(Model):
+    name: Name
+    domain_suffix: tuple[str, ...] = ()
+    rule_sets: tuple[Name, ...] = ()
+    server: Name
+
+    @model_validator(mode="after")
+    def check_matchers(self):
+        if not (self.domain_suffix or self.rule_sets):
+            raise ValueError("tproxy.dns_rule_matcher_required")
+        return self
+
+
+class TProxyDNS(Model):
+    servers: tuple[TProxyDNSServer, ...] = ()
+    rules: tuple[TProxyDNSRule, ...] = ()
+
+    @model_validator(mode="after")
+    def check_refs(self):
+        if not self.servers and self.rules:
+            raise ValueError("tproxy.dns_servers_required")
+        tags = [s.tag for s in self.servers]
+        if len(tags) != len(set(tags)):
+            raise ValueError("tproxy.dns_server_duplicate")
+        names = [r.name for r in self.rules]
+        if len(names) != len(set(names)):
+            raise ValueError("tproxy.dns_rule_duplicate")
+        for rule in self.rules:
+            if rule.server not in tags:
+                raise ValueError("tproxy.dns_rule_server_unavailable")
+        has_hostname = False
+        has_ip = False
+        for server in self.servers:
+            try:
+                ip_address(server.server)
+            except ValueError:
+                has_hostname = True
+            else:
+                has_ip = True
+        if has_hostname and not has_ip:
+            raise ValueError("tproxy.dns_bootstrap_required")
+        return self
+
+
 class TProxy(Model):
     enabled: bool = False
     ingress_interfaces: tuple[InterfaceName, ...] = ()
     rules: tuple[TProxyRule, ...] = ()
     bypass: tuple[TProxyBypass, ...] = ()
+    dns: TProxyDNS = Field(default_factory=TProxyDNS)
     final: Literal["direct", "block", "route"] = "direct"
     final_outbound: Name | None = None
     update_schedule: TProxyUpdateSchedule = Field(default_factory=TProxyUpdateSchedule)

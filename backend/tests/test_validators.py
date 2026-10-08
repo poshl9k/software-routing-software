@@ -67,6 +67,7 @@ def test_legacy_configuration_has_disabled_tproxy_and_roundtrips():
         "ingress_interfaces": [],
         "rules": [],
         "bypass": [],
+        "dns": {"servers": [], "rules": []},
         "final": "direct",
         "final_outbound": None,
         "update_schedule": {"mode": "interval", "interval_hours": 6, "window_start": "00:00", "window_end": "05:00"},

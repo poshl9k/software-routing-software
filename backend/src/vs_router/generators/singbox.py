@@ -12,6 +12,8 @@ Secret-bearing sing-box fields therefore carry a fixed, non-secret placeholder.
 Real secret injection belongs to a future apply path (not implemented) and must
 go through ``secrets.decrypt_secret``; nothing in this module reads a key.
 """
+from ipaddress import ip_address
+
 from vs_router.schema import ConfigurationVersion
 
 # Fixed, non-secret stand-ins so a preview is structurally valid for
@@ -176,7 +178,7 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
         if proxies.enabled:
             final = _default_outbound_tag(proxies.groups)
 
-    return {
+    result = {
         "inbounds": [
             {"type": "tproxy", "tag": "tproxy-udp", "listen": "127.0.0.1", "listen_port": 51271,
              "network": "udp"},
@@ -186,3 +188,48 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
         "outbounds": outbounds,
         "route": {"rules": rules, "final": final, "auto_detect_interface": True},
     }
+    dns_policy = tproxy.dns
+    if dns_policy.servers:
+        dns_servers = []
+        bootstrap_tag = None
+        for server in dns_policy.servers:
+            rendered: dict[str, object] = {"tag": server.tag, "type": server.type, "server": server.server}
+            if server.server_port is not None:
+                rendered["server_port"] = server.server_port
+            if server.type == "https":
+                rendered["path"] = server.path or "/dns-query"
+            elif server.path:
+                rendered["path"] = server.path
+            if server.domain_resolver is not None:
+                rendered["domain_resolver"] = server.domain_resolver
+            if server.detour is not None:
+                rendered["detour"] = server.detour
+            if server.type in ("tls", "https"):
+                rendered["tls"] = {"server_name": server.tls_name} if server.tls_name else {}
+            try:
+                ip_address(server.server)
+            except ValueError:
+                pass
+            else:
+                if bootstrap_tag is None:
+                    bootstrap_tag = server.tag
+            dns_servers.append(rendered)
+        result["route"]["default_domain_resolver"] = {
+            "server": bootstrap_tag or dns_policy.servers[0].tag
+        }
+        dns = {"servers": dns_servers}
+        if dns_policy.rules:
+            dns_rules = []
+            for rule in dns_policy.rules:
+                matchers = []
+                if rule.domain_suffix:
+                    matchers.append({"domain_suffix": list(rule.domain_suffix)})
+                if rule.rule_sets:
+                    matchers.append({"rule_set": list(rule.rule_sets)})
+                match = (matchers[0] if len(matchers) == 1 else
+                         {"type": "logical", "mode": "or", "rules": matchers})
+                dns_rules.append({**match, "server": rule.server})
+            dns["rules"] = dns_rules
+        dns["final"] = dns_policy.servers[0].tag
+        result["dns"] = dns
+    return result
