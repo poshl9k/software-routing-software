@@ -43,17 +43,21 @@ Slow-инертность: всё ниже — только черновик/п�
 FakeIP/policy-TUN, перехват OUTPUT роутера, полный IPv6 TProxy, произвольное
 исполнение конфигурации/команд.
 
-## Общая конфигурация — DoH/DoT (обязательный пункт, вне TProxy-слайса)
-Нужна поддержка DoH и DoT как upstream DNS в общей конфигурации (не только в
-DNS-политике sing-box). Нюанс, требующий решения: **Unbound нативно умеет DoT**
-(`forward-tls-upstream: yes` + `forward-addr: <ip>@853#<sni>`), но **DoH как
-клиент Unbound не умеет** — нужен отдельный компонент (dnscrypt-proxy /
-cloudflared / sing-box DNS). Варианты: (а) DoT — в Unbound, DoH — через отдельный
-резолвер/компонент; (б) и DoT, и DoH — через один DoH-capable резолвер; (в) DoH
-отложить до DNS-политики sing-box (S6). Требует фиксации в ADR перед реализацией.
+## Общая конфигурация — DoH/DoT (обязательный пункт) — СДЕЛАНО
+Реализовано по **ADR-0015** (`docs/adr/0015-dns-upstream-dot-doh.md`),
+журнал в `docs/dns-dot-doh.md`:
+- **D1** — `DNSUpstream {address, port, mode udp|tls, tls_name}`, DoT нативный в Unbound.
+- **D2** — `mode: https` + `doh_server`; Unbound форвардит на локальный `127.0.0.1:5300`,
+  генератор `generators/dnscrypt.py`.
+- **D2b** — пакет `dnscrypt-proxy` (snapshot) + mask дистрибутивных юнитов,
+  `agent/dnscrypt_service.py`, аддитивная DoH-ветка в `apply.py`.
+- **D3** — структурный UI-редактор upstream. Коммиты `150ff5d`, `6c3737d`, `3975444`, `beb4960`.
+- Осталось: живой VM-прогон (требует авторизации).
+**S6** переиспользует `DNSUpstream` (общий тип) для DNS-политики sing-box.
 
 ## Журнал
 - S1 — сделано (см. выше).
 - S2 — сделано (см. выше).
 - S3 — сделано (конечное действие; bypass вынесен в S3b).
-- DoH/DoT — дизайн-док `docs/dns-dot-doh.md`; компонент DoH-клиента выбран: `dnscrypt-proxy`.
+- DoH/DoT — **сделано** через ADR-0015 (D1–D3), см. раздел выше.
+- S3b/S4/S5/S6/S8 — в очереди; S7 вне объёма до открытия gate.
