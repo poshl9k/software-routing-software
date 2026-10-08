@@ -202,6 +202,7 @@ export interface ProxyOutbound {
   server: string | null;
   port: number | null;
   secret: Secret | null;
+  method: string | null;
   tls: boolean;
   tls_server_name: string | null;
   tls_insecure: boolean;

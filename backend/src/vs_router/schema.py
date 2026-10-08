@@ -410,6 +410,9 @@ class ProxyOutbound(Model):
     server: str | None = None
     port: Port | None = None
     secret: EncryptedSecret | None = None
+    # Shadowsocks cipher name; the contract previously had no field for it, so
+    # the generator substituted a placeholder. Imported links can carry it.
+    method: str | None = None
     tls: bool = False
     tls_server_name: str | None = None
     tls_insecure: bool = False

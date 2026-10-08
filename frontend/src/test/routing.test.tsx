@@ -106,7 +106,7 @@ it("shows configured first-match order and updates it on move", async () => {
 
 const proxyOutbound = {
   tag: "proxy_a", type: "vless" as const, server: "203.0.113.10", port: 443,
-  secret: null, tls: false, tls_server_name: null, tls_insecure: false, admin_listen: null,
+  secret: null, method: null, tls: false, tls_server_name: null, tls_insecure: false, admin_listen: null,
 };
 const proxiesWithOutbound = {
   enabled: false, outbounds: [proxyOutbound], subscriptions: [], groups: [],

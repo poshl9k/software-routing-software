@@ -128,6 +128,7 @@ it("saves proxy outbound, subscription and group as a draft with a write-only se
       server: "exit.example.com",
       port: 8388,
       secret: { plaintext: "topsecret" },
+      method: null,
       tls: false,
       tls_server_name: null,
       tls_insecure: false,

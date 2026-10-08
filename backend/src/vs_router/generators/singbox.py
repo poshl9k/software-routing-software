@@ -51,7 +51,7 @@ def _render_outbound(outbound):
     rendered["server"] = outbound.server
     rendered["server_port"] = outbound.port
     if outbound.type == "shadowsocks":
-        rendered["method"] = PLACEHOLDER_SHADOWSOCKS_METHOD
+        rendered["method"] = outbound.method or PLACEHOLDER_SHADOWSOCKS_METHOD
         rendered["password"] = PLACEHOLDER_PASSWORD
     elif outbound.type == "vmess":
         rendered["uuid"] = PLACEHOLDER_UUID

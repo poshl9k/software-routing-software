@@ -340,6 +340,7 @@ export function ProxiesEditor() {
                         server: "",
                         port: null,
                         secret: null,
+                        method: null,
                         tls: false,
                         tls_server_name: null,
                         tls_insecure: false,

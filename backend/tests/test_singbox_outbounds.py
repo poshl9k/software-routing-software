@@ -14,6 +14,7 @@ from vs_router.generators.singbox import (
     IMPLICIT_DIRECT_TAG,
     IMPLICIT_BLOCK_TAG,
     PLACEHOLDER_PASSWORD,
+    PLACEHOLDER_SHADOWSOCKS_METHOD,
     PLACEHOLDER_UUID,
     generate_singbox,
 )
@@ -455,6 +456,17 @@ def test_dns_hostname_only_fails_bootstrap_required():
 def test_dns_validator_codes(dns, error):
     with pytest.raises(ValidationError, match=error):
         version(tproxy={"dns": dns})
+
+
+def test_shadowsocks_method_rendered_when_set_else_placeholder():
+    export = generate_singbox(version({"enabled": True, "outbounds": [
+        outbound("ss1", "shadowsocks", method="aes-256-gcm",
+                 secret={"encrypted": True, "ciphertext": CIPHERTEXT}),
+        outbound("ss2", "shadowsocks", secret={"encrypted": True, "ciphertext": CIPHERTEXT}),
+    ]}))
+    by_tag = {o["tag"]: o for o in export["outbounds"]}
+    assert by_tag["ss1"]["method"] == "aes-256-gcm"
+    assert by_tag["ss2"]["method"] == PLACEHOLDER_SHADOWSOCKS_METHOD
 
 SB = "/home/poshl9k/.hermes/cache/scratch/vm-lab/sb-extract/sing-box-1.14.2-linux-amd64/sing-box"
 
