@@ -203,3 +203,40 @@ it("saves a TProxy bypass exclusion in the draft", async () => {
     }]);
   });
 });
+
+it("walks the wizard through 4 steps and saves a draft rule with disabled state checks", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Редактировать" });
+  await user.click(screen.getByRole("tab", { name: "Мастер" }));
+  // Step 0 — sources: check disabled without source
+  expect(screen.getByRole("button", { name: "Далее" })).toBeDisabled();
+  await user.click(screen.getByRole("checkbox", { name: "lan0" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  // Step 1 — matchers: check disabled without matcher
+  expect(screen.getByRole("button", { name: "Далее" })).toBeDisabled();
+  await user.type(screen.getByLabelText("Имя правила (мастер)"), "blocked_site");
+  await user.type(screen.getByLabelText("Домены (мастер)"), "example.org");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  // Step 2 — action
+  await user.selectOptions(screen.getByLabelText("Действие (мастер)"), "block");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  // Step 3 — local draft summary; no preview API call before save.
+  expect(screen.getByText("Правило: blocked_site")).toBeVisible();
+  expect(screen.getByText("Назначение: block")).toBeVisible();
+  expect(screen.getByText(/Полный предпросмотр sing-box доступен после сохранения черновика/)).toBeVisible();
+  expect(fetch.mock.calls.some(([path]) => String(path).includes("preview"))).toBe(false);
+  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await waitFor(() => {
+    const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+    const sent = JSON.parse(String(init.body));
+    expect(sent.tproxy.enabled).toBe(false);
+    expect(sent.tproxy.ingress_interfaces).toEqual(["lan0"]);
+    expect(sent.tproxy.rules).toEqual([{
+      name: "blocked_site", domain_suffix: ["example.org"], ip_cidr: [],
+      source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [],
+      action: "block", outbound: null, order: 0,
+    }]);
+  });
+  expect(await screen.findByText(/blocked_site · block/)).toBeVisible();
+});

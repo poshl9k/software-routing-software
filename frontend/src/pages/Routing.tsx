@@ -1,6 +1,6 @@
 import { Alert, Button, Checkbox, FormControlLabel, Typography } from "@mui/material";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { queryKeys } from "../query";
@@ -43,6 +43,10 @@ const bypassValid = (row: TProxyBypass) =>
   row.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
   row.ports.every(portRangeValid);
 const timeValid = (time: string) => /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(time);
+const emptyWizardRule = (): TProxyRule => ({
+  name: "", domain_suffix: [], ip_cidr: [], source_ip_cidr: [], rule_sets: [],
+  protocol: "any", ports: [], action: "direct", outbound: null, order: 0,
+});
 
 /** Draft-only TProxy policy. Live interception stays blocked by the backend. */
 function TProxyEditor() {
@@ -57,11 +61,12 @@ function TProxyEditor() {
   });
   const clearPreview = () =>
     queryClient.removeQueries({ queryKey: queryKeys.tproxyPreview(version?.id ?? null) });
-  // View mode toggle: "Простой" (compact overview) / "Эксперт" (full editor).
-  // Browse defaults to Простой; pressing «Редактировать» opens in Эксперт (the
-  // full field editor) so the expert workflow is one click away, and the operator
-  // may still switch back to Простой to save a draft without the expert fields.
-  const [view, setView] = useState<"simple" | "expert">("simple");
+  // Browse starts in the compact view; editing still opens the full editor.
+  const [view, setView] = useState<"simple" | "wizard" | "expert">("simple");
+  const [step, setStep] = useState(0);
+  const [wizardSources, setWizardSources] = useState<string[]>([]);
+  const [wizardRule, setWizardRule] = useState<TProxyRule>(emptyWizardRule);
+  const [wizardSubmitted, setWizardSubmitted] = useState(false);
   const current: TProxy = editor.value ?? { ...configuration.tproxy,
     rules: [...configuration.tproxy.rules].sort((a, b) => a.order - b.order) };
   const sources = configuration.interfaces.filter((i) => i.zone && i.zone !== "wan");
@@ -113,6 +118,32 @@ function TProxyEditor() {
     clearPreview();
     await editor.save((tproxy) => ({ ...configuration, tproxy: { ...tproxy, enabled: false } }));
   };
+  const wizardRuleValid = ruleValid(wizardRule, outboundOptions, ruleSetOptions);
+  const wizardCanSave = !!version && user?.role !== "operator" && editor.isEdit &&
+    !editor.saving && wizardSources.length > 0 && wizardRuleValid && valid &&
+    !current.rules.some((rule) => rule.name === wizardRule.name);
+  const updateWizardRule = (change: Partial<TProxyRule>) =>
+    setWizardRule((rule) => ({ ...rule, ...change }));
+  const saveWizard = async () => {
+    if (!wizardCanSave) return;
+    clearPreview();
+    // Entering the wizard tab already began the draft editor, so `editor.save`
+    // has a working copy to commit (a no-op save would otherwise fail silently).
+    setWizardSubmitted(true);
+    await editor.save((tproxy) => ({ ...configuration, tproxy: {
+      ...tproxy, enabled: false, ingress_interfaces: wizardSources,
+      rules: [...tproxy.rules, { ...wizardRule, order: tproxy.rules.length }],
+    } }));
+  };
+  useEffect(() => {
+    if (wizardSubmitted && !editor.isEdit && !editor.saving) {
+      setStep(0);
+      setWizardSources([]);
+      setWizardRule(emptyWizardRule());
+      setWizardSubmitted(false);
+      setView("simple");
+    }
+  }, [wizardSubmitted, editor.isEdit, editor.saving]);
   return (
     <>
       <Alert severity="warning">
@@ -121,13 +152,88 @@ function TProxyEditor() {
       <ErrorNotice error={editor.error ?? preview.error} />
       <Typography>Состояние: {configuration.tproxy.enabled ? "включён" : "выключен"}</Typography>
       <Button disabled>Включить TProxy</Button>
-      {/* View-mode toggle: Simple (compact overview) / Expert (full editor). */}
       <ValueTabs
         value={view}
-        change={setView}
-        tabs={[{ value: "simple", label: "Простой" }, { value: "expert", label: "Эксперт" }]}
+        change={(next) => {
+          setView(next);
+          if (next === "wizard" && !editor.isEdit && version && user?.role !== "operator") {
+            editor.begin(current);
+          }
+        }}
+        tabs={[{ value: "simple", label: "Простой" },
+          { value: "wizard", label: "Мастер" }, { value: "expert", label: "Эксперт" }]}
       />
-      {!editor.isEdit || user?.role === "operator" ? (
+      {view === "wizard" ? (
+        <>
+          <Typography variant="h2">{["Источники", "Признаки", "Выход", "Предпросмотр"][step]}</Typography>
+          {step === 0 && <>
+            {sources.map((source) => <FormControlLabel key={source.name}
+              label={interfaceLabel(source.name, configuration.interfaces)}
+              control={<Checkbox checked={wizardSources.includes(source.name)}
+                onChange={(_, checked) => setWizardSources((selected) => checked
+                  ? [...selected, source.name]
+                  : selected.filter((name) => name !== source.name))} />} />)}
+            {sources.length === 0 && <Typography>Нет доступных источников трафика.</Typography>}
+          </>}
+          {step === 1 && <>
+            <FormGrid>
+              <Field label="Имя правила (мастер)" value={wizardRule.name} valid={nameValid(wizardRule.name)}
+                onChange={(name) => updateWizardRule({ name })} />
+              <Field label="Домены (мастер)" multiline value={wizardRule.domain_suffix.join("\n")}
+                valid={wizardRule.domain_suffix.every(domainValid)}
+                onChange={(text) => updateWizardRule({ domain_suffix: lines(text) })} />
+              <Field label="Назначение IPv4 (мастер)" multiline value={wizardRule.ip_cidr.join("\n")}
+                valid={wizardRule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+                onChange={(text) => updateWizardRule({ ip_cidr: lines(text) })} />
+              <Field label="Порты (мастер)" multiline value={wizardRule.ports.join("\n")}
+                valid={wizardRule.ports.every(portRangeValid)}
+                onChange={(text) => updateWizardRule({ ports: lines(text) })} />
+              <SelectField label="Протокол (мастер)" value={wizardRule.protocol}
+                options={["any", "tcp", "udp"]}
+                onChange={(protocol) => updateWizardRule({ protocol })} />
+            </FormGrid>
+            {ruleSetOptions.length > 0 && <>
+              <Typography>Наборы правил</Typography>
+              {ruleSetOptions.map((name) => <FormControlLabel key={name} label={name}
+                control={<Checkbox checked={wizardRule.rule_sets.includes(name)}
+                  onChange={(_, checked) => updateWizardRule({ rule_sets: checked
+                    ? [...wizardRule.rule_sets, name]
+                    : wizardRule.rule_sets.filter((selected) => selected !== name) })} />} />)}
+            </>}
+          </>}
+          {step === 2 && <FormGrid>
+            <SelectField label="Действие (мастер)" value={wizardRule.action}
+              options={["direct", "block", "route"]}
+              onChange={(action) => updateWizardRule({ action,
+                outbound: action === "route" ? wizardRule.outbound : null })} />
+            {wizardRule.action === "route" && <SelectField label="Выход (мастер)"
+              value={wizardRule.outbound ?? ""} required options={outboundOptions}
+              onChange={(outbound) => updateWizardRule({ outbound })} />}
+          </FormGrid>}
+          {step === 3 && <>
+            <Typography>Источники: {wizardSources.join(", ")}</Typography>
+            <Typography>Правило: {wizardRule.name}</Typography>
+            <Typography>Домены: {wizardRule.domain_suffix.join(", ") || "нет"}</Typography>
+            <Typography>Наборы правил: {wizardRule.rule_sets.join(", ") || "нет"}</Typography>
+            <Typography>Назначения IPv4: {wizardRule.ip_cidr.join(", ") || "нет"}</Typography>
+            <Typography>Порты: {wizardRule.ports.join(", ") || "нет"}</Typography>
+            <Typography>Назначение: {wizardRule.action === "route" ? wizardRule.outbound : wizardRule.action}</Typography>
+            <Typography>Полный предпросмотр sing-box доступен после сохранения черновика.</Typography>
+          </>}
+          <FormActions>
+            {step > 0 && <Button onClick={() => setStep((previous) => previous - 1)}>Назад</Button>}
+            {step < 3 ? <Button disabled={step === 0 ? wizardSources.length === 0 :
+              step === 1 ? !nameValid(wizardRule.name) ||
+                ![...wizardRule.domain_suffix, ...wizardRule.ip_cidr,
+                  ...wizardRule.rule_sets, ...wizardRule.ports].length ||
+                !wizardRule.domain_suffix.every(domainValid) ||
+                !wizardRule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) ||
+                !wizardRule.ports.every(portRangeValid) : !wizardRuleValid}
+              onClick={() => setStep((previous) => previous + 1)}>Далее</Button>
+              : <Button disabled={!wizardCanSave} onClick={() => void saveWizard()}>Сохранить черновик</Button>}
+          </FormActions>
+        </>
+      ) : !editor.isEdit || user?.role === "operator" ? (
         <>
           {/* Простой view: counters + summary above the existing browse content. */}
           {view === "simple" && <>
