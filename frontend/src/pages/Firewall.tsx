@@ -34,6 +34,14 @@ type Editable = Pick<
   | "outbound_nat_mode"
   | "aliases"
 >;
+const ruleActions: { value: FirewallRule["action"]; label: string }[] = [
+  { value: "pass", label: "Разрешить" },
+  { value: "block", label: "Запретить" },
+  { value: "reject", label: "Отклонить с ответом" },
+];
+const ruleActionLabel = (action: FirewallRule["action"]) =>
+  ruleActions.find((option) => option.value === action)?.label ?? action;
+
 const protocols: { value: FirewallRule["protocol"]; label: string }[] = [
   { value: "any", label: "any" },
   { value: "tcp", label: "tcp" },
@@ -183,6 +191,9 @@ export default function Firewall() {
       <EditorFieldset disabled={editor.saving}>
         {zone && (
           <Card title={`Правила зоны ${tab}`}>
+            <InfoNote>
+              Правила проверяются сверху вниз; первое совпадение решает. Затем запретить всё остальное.
+            </InfoNote>
             {tab === "wan" && openTunnels.length > 0 && (
               <InfoNote>
                 Сгенерированные правила туннелей (не редактируются здесь):{" "}
@@ -255,11 +266,13 @@ export default function Firewall() {
                         hint="any, IP/CIDR, @алиас, zone:lan"
                         onChange={(dst) => updateRule(r.index, { dst })}
                       />,
-                      <SelectField
+                      <Select
                         ariaLabel="Действие"
                         value={r.action}
-                        options={["pass", "block", "reject"]}
-                        onChange={(action) => updateRule(r.index, { action })}
+                        options={ruleActions}
+                        onChange={(action) =>
+                          updateRule(r.index, { action: action as FirewallRule["action"] })
+                        }
                       />,
                       <Toggle
                         label="Включено"
@@ -297,7 +310,7 @@ export default function Firewall() {
                       r.src,
                       r.dst,
                       <Badge tone={r.action === "pass" ? "green" : "red"}>
-                        {r.action}
+                        {ruleActionLabel(r.action)}
                       </Badge>,
                       r.enabled ? "да" : "нет",
                       r.log ? "●" : "—",
@@ -332,10 +345,6 @@ export default function Firewall() {
                 + Добавить правило
               </Button>
             )}
-            <p className="sub">
-              First match wins. В конце набора — неявный default deny. Pass
-              разрешает, block блокирует, reject отклоняет с ответом.
-            </p>
             <Badge>
               Anti-lockout: доступ к панели с lan —{" "}
               {c.anti_lockout ? "вкл" : "выкл"}

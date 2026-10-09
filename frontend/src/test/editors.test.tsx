@@ -251,9 +251,7 @@ it("renders an API save error and retains local edits for retry", async () => {
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "keep_me");
   await user.click(saveButton());
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Ошибка проверки конфигурации",
-  );
+  expect(await screen.findByText(/Ошибка проверки конфигурации/)).toBeVisible();
   expect(screen.getByLabelText("Имя правила")).toHaveValue("keep_me");
   expect(saveButton()).toBeEnabled();
 });

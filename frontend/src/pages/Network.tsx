@@ -1,5 +1,5 @@
 import { Button } from "@mui/material";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { useQuery } from "@tanstack/react-query";
@@ -12,7 +12,6 @@ import { DeleteButton } from "../components/DeleteButton";
 import { ValueTabs } from "../components/Tabs";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 import { Field } from "../components/Field";
 import { Select, type SelectOption } from "../components/Select";
@@ -47,8 +46,8 @@ export default function Network() {
 
   const hostInterfaces = useQuery({ queryKey: queryKeys.hostInterfaces(), queryFn: api.hostInterfaces });
   const hostError = hostInterfaces.error;
-  const physicalNics = (hostInterfaces.data ?? []).filter((i) => i.kind === "physical");
-  const allRealNics = hostInterfaces.data ?? [];
+  const allRealNics = Array.isArray(hostInterfaces.data) ? hostInterfaces.data : [];
+  const physicalNics = allRealNics.filter((i) => i.kind === "physical");
 
   const rows: Editable[] = editor.value ?? c.interfaces.map((i) => ({ ...i, key: i.name }));
   const isEditMode = editor.isEdit;
@@ -100,7 +99,14 @@ export default function Network() {
   };
 
   const addRow = () => editor.setValue([...rows, emptyInterface(`new-${Date.now()}`)]);
-  const removeRow = (key: string) => editor.setValue(rows.filter((i) => i.key !== key));
+  const removeRow = (i: Editable) => {
+    if (!window.confirm(`Удалить интерфейс ${i.name || "без имени"} (зона: ${i.zone ?? "без зоны"})?`)) return;
+    try {
+      editor.setValue(rows.filter((row) => row.key !== i.key));
+    } catch (error) {
+      editor.setError(error);
+    }
+  };
 
   const save = async () => {
     await editor.save((value) => ({
@@ -337,7 +343,7 @@ export default function Network() {
                       ),
                       <DeleteButton
                         label={`Удалить интерфейс ${i.name}`}
-                        onClick={() => removeRow(i.key)}
+                        onClick={() => removeRow(i)}
                       />,
                     ])
                   : c.interfaces.map((i) => [
@@ -452,21 +458,17 @@ export default function Network() {
 
       {knownTab === "routes" && (
         <Card title="Статические маршруты">
-          <InfoNote>Маршруты отсутствуют в текущей модели API.</InfoNote>
-          <DataTable
-            heads={["Сеть назначения", "Шлюз", "Интерфейс", "Метрика"]}
-            rows={[]}
-          />
+          <EmptyState>Статические маршруты пока нельзя настроить в панели</EmptyState>
         </Card>
       )}
 
       {knownTab === "diagnostics" && (
-        <Card title="Диагностика (последние запуски)">
-          <InfoNote>История диагностики пока не сохраняется. Запустите ping или traceroute на странице «Обслуживание».</InfoNote>
-          <DataTable
-            heads={["Время", "Тип", "Интерфейс", "Цель", "Результат"]}
-            rows={[]}
-          />
+        <Card title="Диагностика">
+          <EmptyState
+            action={<Button component={Link} to="/maintenance">Перейти в «Обслуживание»</Button>}
+          >
+            Диагностика доступна в разделе «Обслуживание». История запусков пока не сохраняется.
+          </EmptyState>
         </Card>
       )}
     </>
