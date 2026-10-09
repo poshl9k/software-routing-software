@@ -94,6 +94,48 @@ async function open(
 const fill = (label: string, value: string) =>
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 const save = () => screen.getByRole("button", { name: "Сохранить" });
+it("imports a client .conf into the current draft without key generation", async () => {
+  const fetch = await open(<Tunnels />, emptyConfiguration);
+  const privateKey = `${"A".repeat(43)}=`;
+  const publicKey = `${"B".repeat(43)}=`;
+  await userEvent.click(screen.getByRole("button", { name: "Импорт .conf" }));
+  await userEvent.click(screen.getByRole("button", { name: "Импортировать" }));
+  expect(screen.getByText("Вставьте содержимое .conf")).toBeVisible();
+  fireEvent.change(screen.getByLabelText("Содержимое .conf"), {
+    target: { value: `[Interface]\nPrivateKey = ${privateKey}\n[Peer]\nPublicKey = ${publicKey}\nEndpoint = vpn.example.org:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25` },
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Импортировать" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(screen.getByLabelText("Имя туннеля")).toHaveValue("tunnel1");
+  expect(screen.getByLabelText("Интерфейс")).toHaveValue("tun0");
+  expect(fetch.mock.calls.filter(([path]) => path === "/api/keygen/tunnel")).toHaveLength(0);
+  await userEvent.click(save());
+  await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(true));
+  const body = JSON.parse(fetch.mock.calls.find(([path]) => path === "/api/draft")![1]!.body as string);
+  expect(body.tunnels[0]).toMatchObject({
+    name: "tunnel1", interface: "tun0", role: "client", protocol: "wg",
+    private_key: { plaintext: privateKey }, server_public_key: publicKey,
+    endpoint: "vpn.example.org:51820", allowed_ips: ["0.0.0.0/0", "::/0"],
+    peers: [], listen_port: null,
+  });
+});
+it("imports from read mode and opens the editor without changing the server first", async () => {
+  const privateKey = `${"A".repeat(43)}=`;
+  const publicKey = `${"B".repeat(43)}=`;
+  const fetch = vi.fn(async (path: string) => {
+    if (path === "/api/versions") return new Response(JSON.stringify([
+      { id: 1, status: "confirmed", configuration: emptyConfiguration },
+    ]));
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<RouterProvider><Tunnels /></RouterProvider>);
+  await userEvent.click(await screen.findByRole("button", { name: "Импорт .conf" }));
+  fill("Содержимое .conf", `[Interface]\nPrivateKey = ${privateKey}\n[Peer]\nPublicKey = ${publicKey}\nEndpoint = vpn.example.org:51820\nAllowedIPs = 10.0.0.0/8`);
+  await userEvent.click(screen.getByRole("button", { name: "Импортировать" }));
+  expect(await screen.findByLabelText("Имя туннеля")).toHaveValue("tunnel1");
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
 it("renders AWG server, locks role, preserves secrets and hides obfuscation for WG", async () => {
   const fetch = await open(<Tunnels />, {
     ...emptyConfiguration,

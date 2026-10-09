@@ -32,6 +32,7 @@ import {
 } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { api } from "../api";
+import { parseWireGuardConf } from "../tunnelConf";
 
 const ipsValid = (v: string[]) =>
   v.filter((s) => s.trim()).every((s) => addressValid(s.trim()));
@@ -239,6 +240,7 @@ function Collection<T extends Row>({
   clean = (v) => v,
   rowActions,
   configPatch,
+  importRow,
 }: {
   kind: "tunnels" | "sites" | "ddns";
   title: string;
@@ -253,11 +255,15 @@ function Collection<T extends Row>({
   /** Extra configuration derived from the edited rows (e.g. auto-created
    * tunnel interfaces). Merged into the whole-configuration save. */
   configPatch?: (rows: T[]) => Partial<Configuration>;
+  importRow?: (text: string, rows: T[]) => { row?: T; error?: string };
 }) {
   const { configuration: c, version, noConfiguration } = useConfiguration();
   const editor = useDraftEditor<EditableRow<T>[]>();
   const [next, setNext] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importError, setImportError] = useState<string | null>(null);
   const creatingRef = useRef(false);
   const editEpoch = useRef(0);
   const currentEditing = useRef<EditableRow<T>[] | null>(null);
@@ -305,24 +311,57 @@ function Collection<T extends Row>({
       setCreating(false);
     }
   };
+  const closeImport = () => {
+    setImportOpen(false);
+    setImportText("");
+    setImportError(null);
+  };
+  const submitImport = () => {
+    if (!importText.trim()) {
+      setImportError("Вставьте содержимое .conf");
+      return;
+    }
+    const rows = currentEditing.current ?? collection.map((row, id) => ({ id, created: false, row }));
+    const result = importRow?.(importText, rows.map(({ row }) => row));
+    if (!result?.row) {
+      setImportError(result?.error ?? "Не удалось импортировать .conf");
+      return;
+    }
+    const id = rows.reduce((max, item) => Math.max(max, item.id + 1), 0);
+    if (!isEdit) {
+      editEpoch.current += 1;
+      editor.begin([...rows, { id, created: true, row: result.row }]);
+    } else {
+      editor.setValue([...rows, { id, created: true, row: result.row }]);
+    }
+    setNext(id + 1);
+    closeImport();
+  };
   return (
     <>
       <ErrorNotice error={editor.error} />
       <Card
         title={title}
         action={
-          !isEdit && (
-            <Button
-              disabled={!version}
-              onClick={() => {
-                editEpoch.current += 1;
-                editor.begin(collection.map((row, id) => ({ id, created: false, row })));
-                setNext(collection.length);
-              }}
-            >
-              Редактировать
-            </Button>
-          )
+          <div className="toolbar-actions">
+            {importRow && (
+              <Button disabled={!version} onClick={() => setImportOpen(true)}>
+                Импорт .conf
+              </Button>
+            )}
+            {!isEdit && (
+              <Button
+                disabled={!version}
+                onClick={() => {
+                  editEpoch.current += 1;
+                  editor.begin(collection.map((row, id) => ({ id, created: false, row })));
+                  setNext(collection.length);
+                }}
+              >
+                Редактировать
+              </Button>
+            )}
+          </div>
         }
       >
         <EditorShell
@@ -404,6 +443,24 @@ function Collection<T extends Row>({
           }
         />
       </Card>
+      {importRow && (
+        <Dialog open={importOpen} onClose={closeImport} fullWidth maxWidth="sm" aria-labelledby="tunnel-conf-import-title">
+          <DialogTitle id="tunnel-conf-import-title">Импорт .conf</DialogTitle>
+          <DialogContent>
+            <FormGrid>
+              <FormWide>
+                <Field label="Содержимое .conf" multiline value={importText}
+                  onChange={(text) => { setImportText(text); setImportError(null); }} />
+              </FormWide>
+            </FormGrid>
+            <ErrorNotice error={importError ? new Error(importError) : null} />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeImport}>Отмена</Button>
+            <Button onClick={submitImport}>Импортировать</Button>
+          </DialogActions>
+        </Dialog>
+      )}
     </>
   );
 }
@@ -466,6 +523,20 @@ export function Tunnels() {
         })}
         empty={emptyTunnel}
         create={createTunnel}
+        importRow={(text, rows) => {
+          const result = parseWireGuardConf(text);
+          if (result.error) return { error: result.error };
+          const taken = new Set(rows.map((row) => row.name));
+          let index = 1;
+          while (taken.has(`tunnel${index}`)) index += 1;
+          return {
+            row: {
+              ...emptyTunnel(rows),
+              ...result.tunnel,
+              name: `tunnel${index}`,
+            },
+          };
+        }}
         valid={(t) =>
           nameValid(t.name) &&
           ifaceNameValid(t.interface) &&

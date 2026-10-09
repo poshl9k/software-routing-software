@@ -405,6 +405,13 @@ pre {
   gap: 8px;
   margin-bottom: 12px;
 }
+.card-head .toolbar-actions {
+  margin-left: auto;
+  margin-bottom: 0;
+}
+.card-head .toolbar-actions .MuiButton-root {
+  margin-left: 0;
+}
 
 /* Table editors: controls fill their column so rows stay aligned. */
 .MuiTableCell-root .MuiFormControl-root {
