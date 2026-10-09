@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
@@ -37,15 +37,13 @@ it("clears a previously entered static address when the interface is switched to
   vi.stubGlobal("fetch", fetch);
   const user = userEvent.setup();
   render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
-  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
-
-  const row = screen.getByDisplayValue("192.168.10.5/24").closest("tr")!;
-  // Physical row comboboxes: name, type, zone, mode.
-  const mode = within(row).getAllByRole("combobox")[3];
+  await user.click(await screen.findByRole("button", { name: "Без названия" }));
+  await user.click(screen.getByRole("tab", { name: "IP" }));
+  const mode = screen.getByLabelText("Режим адресации");
   await user.selectOptions(mode, "DHCP");
 
   // The address field is emptied and locked while in DHCP mode.
-  const address = within(row).getByPlaceholderText("адрес по DHCP");
+  const address = screen.getByPlaceholderText("адрес по DHCP");
   expect(address).toBeDisabled();
   expect(address).toHaveValue("");
 
