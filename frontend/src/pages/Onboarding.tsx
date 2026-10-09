@@ -10,6 +10,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { emptyConfiguration } from "../fixtures";
 import { ErrorNotice } from "../components/ErrorNotice";
+import { WizardProgress } from "../components/WizardProgress";
+import { InfoNote } from "../components/InfoNote";
 import { Field } from "../components/Field";
 import { Select } from "../components/Select";
 import { useQuery } from "@tanstack/react-query";
@@ -94,18 +96,7 @@ export default function Onboarding() {
         <span className="logo-mark" />
         VS-ROUTER
       </div>
-      <div className="steps" aria-label={`Шаг ${step + 1} из 4`}>
-        {[0, 1, 2, 3].map((i) => (
-          <span
-            key={i}
-            className={i < step ? "done" : i === step ? "now" : ""}
-          />
-        ))}
-      </div>
-      <p className="sub">
-        Шаг {step + 1} из 4 ·{" "}
-        {["Учётка", "Сеть", "Безопасная настройка", "Готово"][step]}
-      </p>
+      <WizardProgress current={step} steps={["Администратор", "LAN и адрес", "Проверка и безопасность", "Черновик готов"]} />
       <ErrorNotice error={error} />
       <form onSubmit={next}>
         {step === 0 && (
@@ -252,8 +243,11 @@ export default function Onboarding() {
               Учётная запись создана, вход выполнен, базовая сеть LAN сохранена.
               Конфигурация ещё не применена.
             </Alert>
+            <InfoNote severity="warning">
+              Первое применение без автоотката. Держите доступ к локальной консоли; проверьте LAN, адрес и HTTPS на порту 443 перед применением.
+            </InfoNote>
             <Button component={Link} to="/apply" variant="contained">
-              Перейти к применению
+              Проверить и применить
             </Button>
           </>
         )}
