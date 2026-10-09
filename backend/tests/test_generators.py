@@ -19,6 +19,30 @@ def test_golden(name, generator, extension):
     assert version.model_dump_json() == before
 
 
+def test_firewall_tcp_udp_ports():
+    version = ConfigurationVersion.model_validate({"configuration": {
+        "interfaces": [{"name": "eth0", "zone": "lan"}],
+        "firewall_rules": [{"name": "both", "ingress_zone": "lan", "protocol": "tcp_udp",
+                            "destination_ports": "443", "action": "pass"}],
+    }})
+    lines = [line for line in generate_nftables(version).splitlines() if 'comment "both"' in line]
+    assert len(lines) == 4
+    assert all("meta l4proto { tcp, udp } th dport 443" in line for line in lines)
+    assert all("tcp_udp dport" not in line for line in lines)
+
+
+def test_firewall_tcp_port_stays_single_protocol():
+    version = ConfigurationVersion.model_validate({"configuration": {
+        "interfaces": [{"name": "eth0", "zone": "lan"}],
+        "firewall_rules": [{"name": "tcp_only", "ingress_zone": "lan", "protocol": "tcp",
+                            "destination_ports": "443", "action": "pass"}],
+    }})
+    lines = [line for line in generate_nftables(version).splitlines() if 'comment "tcp_only"' in line]
+    assert len(lines) == 4
+    assert all("meta l4proto tcp tcp dport 443" in line for line in lines)
+    assert all("meta l4proto { tcp, udp }" not in line for line in lines)
+
+
 def test_nft_security_and_order():
     output = generate_nftables(scenario("edge"))
     forward = output.split("chain forward {")[1].split("chain prerouting")[0]

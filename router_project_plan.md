@@ -165,7 +165,7 @@
 ## Ближайшие действия (актуальный TODO)
 
 ### Текущий цикл (2026-10-09): закрыть специфицированный бэклог firewall + туннели → VM
-- [ ] 1. Firewall: протокол TCP/UDP (п.20) — `FirewallRule.protocol` += `tcp_udp` → `meta l4proto { tcp, udp }`.
+- [x] 1. Firewall: протокол TCP/UDP (п.20) — `FirewallRule.protocol` += `tcp_udp` → `meta l4proto { tcp, udp }`. Проверено: backend 894, frontend 128, и **`nft -c -f` на VM (rc=0)**.
 - [ ] 2. Туннели: автогенерация ключей и параметров обфускации (п.23).
 - [ ] 3. Туннели: импорт клиентского `.conf` (п.24).
 - [ ] 4. VM-прогон: туннели WG/AWG, e2e firewall-правило (п.21), счётчики правил в UI (п.4).

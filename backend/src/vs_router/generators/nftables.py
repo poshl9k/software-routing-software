@@ -47,7 +47,9 @@ class _FirewallCompiler:
                  self.selector(src, "saddr", family), self.selector(dst, "daddr", family)]
         if None in parts:
             return None
-        if protocol != "any":
+        if protocol == "tcp_udp":
+            parts.append("meta l4proto { tcp, udp }")
+        elif protocol != "any":
             parts.append(f"meta l4proto {protocol}")
         return " ".join(p for p in parts if p)
 
@@ -65,7 +67,9 @@ class _FirewallCompiler:
                 if clause is None:
                     continue
                 if r.destination_ports:
-                    if r.destination_ports.startswith("@"):
+                    if r.protocol == "tcp_udp":
+                        clause += f" th dport {r.destination_ports}"
+                    elif r.destination_ports.startswith("@"):
                         ports = [v.split("/", 1)[1] for v in self.expanded[r.destination_ports[1:]]
                                  if v.startswith(r.protocol + "/")]
                         if not ports:

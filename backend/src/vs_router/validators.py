@@ -164,7 +164,11 @@ def validate_configuration(c):
             fail("rule.router_source")
         if r.destination_ports:
             selector(r.destination_ports, "port")
-            if r.protocol not in ("tcp", "udp"):
+            if r.protocol not in ("tcp", "udp", "tcp_udp"):
+                fail("rule.port_protocol")
+            # Port aliases contain protocol-specific entries. Treating their union
+            # as a shared TCP/UDP port set would silently open extra traffic.
+            if r.protocol == "tcp_udp" and r.destination_ports.startswith("@"):
                 fail("rule.port_protocol")
     for group in (c.firewall_rules, c.port_forwards, c.outbound_nat, c.tunnels, c.sites):
         if len({x.name for x in group}) != len(group):

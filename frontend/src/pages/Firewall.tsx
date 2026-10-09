@@ -34,12 +34,13 @@ type Editable = Pick<
   | "outbound_nat_mode"
   | "aliases"
 >;
-const protocols: FirewallRule["protocol"][] = [
-  "any",
-  "tcp",
-  "udp",
-  "icmp",
-  "ipv6-icmp",
+const protocols: { value: FirewallRule["protocol"]; label: string }[] = [
+  { value: "any", label: "any" },
+  { value: "tcp", label: "tcp" },
+  { value: "udp", label: "udp" },
+  { value: "tcp_udp", label: "TCP/UDP" },
+  { value: "icmp", label: "icmp" },
+  { value: "ipv6-icmp", label: "ipv6-icmp" },
 ];
 const uniqueName = (name: string, rows: { name: string }[]) =>
   nameValid(name) && rows.filter((r) => r.name === name).length === 1;
@@ -230,12 +231,14 @@ export default function Firewall() {
                         hint="Латиница, цифры, _; до 31 символа; уникальное имя"
                         onChange={(name) => updateRule(r.index, { name })}
                       />,
-                      <SelectField
+                      <Select
                         ariaLabel="Протокол"
                         value={r.protocol}
                         options={protocols}
                         onChange={(protocol) =>
-                          updateRule(r.index, { protocol })
+                          updateRule(r.index, {
+                            protocol: protocol as FirewallRule["protocol"],
+                          })
                         }
                       />,
                       <Field

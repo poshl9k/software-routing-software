@@ -39,7 +39,7 @@ export interface DHCPSubnet {
 export interface FirewallRule {
   name: string;
   ingress_zone: string;
-  protocol: "any" | "tcp" | "udp" | "icmp" | "ipv6-icmp";
+  protocol: "any" | "tcp" | "udp" | "tcp_udp" | "icmp" | "ipv6-icmp";
   src: string;
   dst: string;
   destination_ports: string | null;

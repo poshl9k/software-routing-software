@@ -73,7 +73,7 @@ class Counters(Model):
 class FirewallRule(Model):
     name: Name
     ingress_zone: Name
-    protocol: Literal["any", "tcp", "udp", "icmp", "ipv6-icmp"] = "any"
+    protocol: Literal["any", "tcp", "udp", "tcp_udp", "icmp", "ipv6-icmp"] = "any"
     src: str = "any"
     dst: str = "any"
     destination_ports: str | None = None

@@ -5,6 +5,26 @@ from vs_router.validators import port_range
 from scenarios import scenario
 
 
+def test_firewall_tcp_udp_port_validation():
+    config = Configuration.model_validate({
+        "interfaces": [{"name": "eth0", "zone": "lan"}],
+        "firewall_rules": [{"name": "both", "ingress_zone": "lan", "protocol": "tcp_udp",
+                            "destination_ports": "443", "action": "pass"}],
+    })
+    assert config.firewall_rules[0].protocol == "tcp_udp"
+    assert config.firewall_rules[0].destination_ports == "443"
+
+
+def test_firewall_tcp_udp_rejects_protocol_specific_port_alias():
+    with pytest.raises(ValueError, match="rule.port_protocol"):
+        Configuration.model_validate({
+            "interfaces": [{"name": "eth0", "zone": "lan"}],
+            "aliases": [{"name": "services", "type": "port", "elements": ["tcp/443", "udp/53"]}],
+            "firewall_rules": [{"name": "both", "ingress_zone": "lan", "protocol": "tcp_udp",
+                                "destination_ports": "@services", "action": "pass"}],
+        })
+
+
 @pytest.mark.parametrize("ports", ["0", "65536", "80-1", "-1", "tcp/80", "1-2-3", "80; accept"])
 def test_invalid_ports(ports):
     with pytest.raises(ValueError, match="port.invalid"):

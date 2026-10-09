@@ -104,6 +104,9 @@ it("creates a full draft with a new firewall rule and displays the saved version
   await open(<Firewall />);
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "allow_web");
+  await user.selectOptions(screen.getByLabelText("Протокол"), "tcp_udp");
+  expect(screen.getByRole("option", { name: "TCP/UDP" })).toHaveAttribute("value", "tcp_udp");
+  expect(screen.getByLabelText("Протокол")).toHaveValue("tcp_udp");
   await user.selectOptions(screen.getByLabelText("Действие"), "pass");
   await user.click(saveButton());
   await screen.findByText("allow_web");
@@ -114,6 +117,7 @@ it("creates a full draft with a new firewall rule and displays the saved version
     firewall_rules: [
       expect.objectContaining({
         name: "allow_web",
+        protocol: "tcp_udp",
         action: "pass",
         ingress_zone: "wan",
         order: 0,
