@@ -27,6 +27,11 @@ const server: Tunnel = {
   obfuscation: { Jc: 4, S1: 0, S2: 0, H1: 1, H2: 2, H3: 3, H4: 4 },
     open_port: true,
 };
+const generated = {
+  private_key: "generated-private-key",
+  public_key: "generated-public-key",
+  obfuscation: { Jc: 4, Jmin: 35, Jmax: 90, S1: 12, S2: 95, H1: 11, H2: 12, H3: 13, H4: 14 },
+};
 const wan: Configuration = {
   ...emptyConfiguration,
   interfaces: [
@@ -47,8 +52,20 @@ async function open(
   page: React.ReactNode,
   config = emptyConfiguration,
   fail = false,
+  keygen: (protocol: "wg" | "awg") => Promise<Response> = async (protocol) =>
+    new Response(JSON.stringify(protocol === "awg" ? generated : {
+      private_key: generated.private_key,
+      public_key: generated.public_key,
+    })),
 ) {
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === "/api/keygen/tunnel") {
+      expect(init?.method).toBe("POST");
+      expect(init?.credentials).toBe("include");
+      const { protocol } = JSON.parse(String(init?.body));
+      expect(["wg", "awg"]).toContain(protocol);
+      return keygen(protocol);
+    }
     if (path === "/api/versions")
       return new Response(
         JSON.stringify([{ id: 1, status: "confirmed", configuration: config }]),
@@ -117,6 +134,8 @@ it("creates a complete draft with a client and write-only new secret", async () 
   await userEvent.click(
     screen.getByRole("button", { name: "+ Добавить туннель" }),
   );
+  await waitFor(() => expect(screen.getByLabelText("Приватный ключ")).toHaveValue(generated.private_key));
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(1);
   fill("Имя туннеля", "bad-name");
   expect(save()).toBeDisabled();
   fill("Имя туннеля", "client");
@@ -143,6 +162,49 @@ it("creates a complete draft with a client and write-only new secret", async () 
       }),
     ],
   });
+  await waitFor(() => expect(screen.queryByLabelText("Приватный ключ")).not.toBeInTheDocument());
+  expect(screen.queryByText("new-key")).not.toBeInTheDocument();
+  expect(screen.queryByText(generated.public_key)).not.toBeInTheDocument();
+});
+it("generates AWG obfuscation on protocol switch and saves only the private key", async () => {
+  const fetch = await open(<Tunnels />);
+  await userEvent.click(screen.getByRole("button", { name: "+ Добавить туннель" }));
+  await waitFor(() => expect(screen.getByLabelText("Приватный ключ")).toHaveValue(generated.private_key));
+  fill("Имя туннеля", "vpn");
+  fill("Протокол", "awg");
+  await waitFor(() => expect(screen.getByLabelText("Jc")).toHaveValue(generated.obfuscation.Jc));
+  expect(screen.getByLabelText("Jmin")).toHaveValue(generated.obfuscation.Jmin);
+  expect(screen.getByLabelText("H4")).toHaveValue(generated.obfuscation.H4);
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel").map(([, init]) =>
+    JSON.parse(String(init?.body)),
+  )).toEqual([{ protocol: "wg" }, { protocol: "awg" }]);
+  await userEvent.click(save());
+  const body = JSON.parse(fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string);
+  expect(body.tunnels[0].private_key).toEqual({ plaintext: generated.private_key });
+  expect(body.tunnels[0].obfuscation).toEqual(generated.obfuscation);
+  expect(JSON.stringify(body)).not.toContain(generated.public_key);
+  expect(screen.queryByText(generated.private_key)).not.toBeInTheDocument();
+  expect(screen.queryByText(generated.public_key)).not.toBeInTheDocument();
+});
+it("keeps the editor empty and shows an error when tunnel keygen fails", async () => {
+  const fetch = await open(<Tunnels />, emptyConfiguration, false, async () =>
+    new Response(JSON.stringify({ code: "keygen.failed", message: "Генерация не удалась" }), { status: 500 }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "+ Добавить туннель" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Генерация не удалась");
+  expect(screen.queryByLabelText("Имя туннеля")).not.toBeInTheDocument();
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/draft")).toHaveLength(0);
+});
+it("disables adding another tunnel while keygen is pending", async () => {
+  let resolveKeygen!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => { resolveKeygen = resolve; });
+  const fetch = await open(<Tunnels />, emptyConfiguration, false, async () => pending);
+  await userEvent.click(screen.getByRole("button", { name: "+ Добавить туннель" }));
+  expect(screen.getByRole("button", { name: "+ Добавить туннель" })).toBeDisabled();
+  expect(screen.queryByLabelText("Имя туннеля")).not.toBeInTheDocument();
+  resolveKeygen(new Response(JSON.stringify(generated)));
+  await waitFor(() => expect(screen.getByLabelText("Приватный ключ")).toHaveValue(generated.private_key));
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(1);
 });
 it("saves a passthrough site without certificate secrets", async () => {
   const fetch = await open(<Sites />, wan);
@@ -203,13 +265,15 @@ it("auto-creates a LAN-zone interface for a new tunnel", async () => {
   );
   // The tunnel device name is generated; the operator does not pick a NIC.
   expect(screen.getByLabelText("Интерфейс")).toHaveValue("tun0");
+  await waitFor(() => expect(screen.getByLabelText("Приватный ключ")).toHaveValue(generated.private_key));
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(1);
   fill("Имя туннеля", "vpn");
-  fill("Приватный ключ", "key");
   await userEvent.click(save());
   const body = JSON.parse(
     fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
   );
   expect(body.tunnels[0].interface).toBe("tun0");
+  expect(body.tunnels[0].private_key).toEqual({ plaintext: generated.private_key });
   expect(body.interfaces).toContainEqual(
     expect.objectContaining({
       name: "tun0",

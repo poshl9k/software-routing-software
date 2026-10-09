@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Button, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
 import type {
@@ -232,6 +232,7 @@ function Collection<T extends Row>({
   title,
   addLabel,
   empty,
+  create,
   valid,
   form,
   summary,
@@ -243,9 +244,10 @@ function Collection<T extends Row>({
   title: string;
   addLabel: string;
   empty: (rows: T[]) => T;
+  create?: (rows: T[]) => Promise<T>;
   valid: (v: T) => boolean;
   clean?: (v: T) => T;
-  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean) => ReactNode;
+  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean, setError: (error: unknown) => void) => ReactNode;
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
   /** Extra configuration derived from the edited rows (e.g. auto-created
@@ -255,8 +257,13 @@ function Collection<T extends Row>({
   const { configuration: c, version, noConfiguration } = useConfiguration();
   const editor = useDraftEditor<EditableRow<T>[]>();
   const [next, setNext] = useState(0);
+  const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false);
+  const editEpoch = useRef(0);
+  const currentEditing = useRef<EditableRow<T>[] | null>(null);
   const collection = c[kind] as T[];
   const editing = editor.value;
+  currentEditing.current = editing;
   const isEdit = editor.isEdit;
   const allValid =
     !!editing &&
@@ -274,6 +281,30 @@ function Collection<T extends Row>({
         ...(configPatch ? configPatch(rows) : {}),
       };
     });
+  const add = async () => {
+    if (!editing || creatingRef.current) return;
+    if (!create) {
+      editor.setValue([...editing, { id: next, created: true, row: empty(editing.map((v) => v.row)) }]);
+      setNext(next + 1);
+      return;
+    }
+    creatingRef.current = true;
+    setCreating(true);
+    const epoch = editEpoch.current;
+    try {
+      const row = await create(editing.map((v) => v.row));
+      const latest = currentEditing.current;
+      if (epoch === editEpoch.current && latest) {
+        editor.setValue([...latest, { id: next, created: true, row }]);
+        setNext(next + 1);
+      }
+    } catch (error) {
+      if (epoch === editEpoch.current) editor.setError(error);
+    } finally {
+      creatingRef.current = false;
+      setCreating(false);
+    }
+  };
   return (
     <>
       <ErrorNotice error={editor.error} />
@@ -284,6 +315,7 @@ function Collection<T extends Row>({
             <Button
               disabled={!version}
               onClick={() => {
+                editEpoch.current += 1;
                 editor.begin(collection.map((row, id) => ({ id, created: false, row })));
                 setNext(collection.length);
               }}
@@ -296,8 +328,11 @@ function Collection<T extends Row>({
         <EditorShell
           isEdit={isEdit}
           saving={editor.saving}
-          valid={!!allValid && !!version}
-          onCancel={editor.cancel}
+          valid={!!allValid && !!version && !creating}
+          onCancel={() => {
+            editEpoch.current += 1;
+            editor.cancel();
+          }}
           onSave={() => void save()}
           view={
             <DataTable
@@ -336,29 +371,25 @@ function Collection<T extends Row>({
                   >
                     {form(
                       row,
-                      (patch) =>
-                        editor.setValue(
-                          editing.map((v) =>
-                            v.id === id
-                              ? { ...v, row: { ...v.row, ...patch } }
-                              : v,
-                          ),
-                        ),
+                      (patch) => {
+                        const latest = currentEditing.current;
+                        if (!latest?.some((v) => v.id === id)) return;
+                        const updated = latest.map((v) =>
+                          v.id === id
+                            ? { ...v, row: { ...v.row, ...patch } }
+                            : v,
+                        );
+                        currentEditing.current = updated;
+                        editor.setValue(updated);
+                      },
                       created,
                       noConfiguration,
+                      editor.setError,
                     )}
                   </Card>
                 ))}
                 <FormActions>
-                  <Button
-                    onClick={() => {
-                      editor.setValue([
-                        ...editing,
-                        { id: next, created: true, row: empty(editing.map((v) => v.row)) },
-                      ]);
-                      setNext(next + 1);
-                    }}
-                  >
+                  <Button disabled={creating} onClick={() => void add()}>
                     {addLabel}
                   </Button>
                 </FormActions>
@@ -380,6 +411,35 @@ export function Tunnels() {
   const { configuration: c } = useConfiguration();
   const [qr,setQr]=useState<{peer:string;url:string}|null>(null); const [qrError,setQrError]=useState<unknown>(null);
   const showQr=async(tunnel:string,peer:string)=>{setQrError(null);try{const blob=await api.peerQr(tunnel,peer);setQr({peer,url:URL.createObjectURL(blob)});}catch(e){setQrError(e);}};
+  const emptyTunnel = (rows: Tunnel[]): Tunnel => ({
+    name: "",
+    interface: nextTunnelInterface([
+      ...c.interfaces.map((i) => i.name),
+      ...rows.map((t) => t.interface),
+    ]),
+    role: "server",
+    protocol: "wg",
+    private_key: { plaintext: "" },
+    listen_port: 51820,
+    peers: [],
+    endpoint: null,
+    server_public_key: null,
+    allowed_ips: [],
+    keepalive: 25,
+    obfuscation: {},
+    open_port: true,
+  });
+  const createTunnel = async (rows: Tunnel[]): Promise<Tunnel> => {
+    const row = emptyTunnel(rows);
+    if (row.private_key && "plaintext" in row.private_key && row.private_key.plaintext) return row;
+    const keys = await api.keygenTunnel(row.protocol);
+    if (!keys.private_key?.trim()) throw new Error("Сервер не вернул приватный ключ туннеля");
+    return {
+      ...row,
+      private_key: { plaintext: keys.private_key },
+      ...(keys.obfuscation ? { obfuscation: keys.obfuscation } : {}),
+    };
+  };
   return (
     <>
       {qrError && !qr && <ErrorNotice error={qrError} />}
@@ -404,24 +464,8 @@ export function Tunnels() {
           interfaces: reconcileTunnelInterfaces(c, rows),
           tunnels: materializeTunnels(c, rows),
         })}
-        empty={(rows) => ({
-          name: "",
-          interface: nextTunnelInterface([
-            ...c.interfaces.map((i) => i.name),
-            ...rows.map((t) => t.interface),
-          ]),
-          role: "server",
-          protocol: "wg",
-          private_key: { plaintext: "" },
-          listen_port: 51820,
-          peers: [],
-          endpoint: null,
-          server_public_key: null,
-          allowed_ips: [],
-          keepalive: 25,
-          obfuscation: {},
-          open_port: true,
-        })}
+        empty={emptyTunnel}
+        create={createTunnel}
         valid={(t) =>
           nameValid(t.name) &&
           ifaceNameValid(t.interface) &&
@@ -458,7 +502,7 @@ export function Tunnels() {
           t.protocol,
           "—",
         ]}
-        form={(t, patch, created, disabled) => (
+        form={(t, patch, created, disabled, setError) => (
           <FormGrid>
             {created ? (
               <Field
@@ -532,7 +576,19 @@ export function Tunnels() {
               label="Протокол"
               value={t.protocol}
               options={["wg", "awg"]}
-              onChange={(protocol) => patch({ protocol })}
+              onChange={(protocol) => {
+                patch({ protocol });
+                if (protocol === "awg" && awgRequired.some((key) => !Number.isInteger(t.obfuscation[key]))) {
+                  void api.keygenTunnel("awg")
+                    .then((keys) => {
+                      if (awgRequired.some((key) => !Number.isInteger(keys.obfuscation?.[key]))) {
+                        throw new Error("Сервер не вернул параметры обфускации AWG");
+                      }
+                      patch({ obfuscation: { ...keys.obfuscation, ...t.obfuscation } });
+                    })
+                    .catch(setError);
+                }
+              }}
             />
             <div>
               <SecretField
