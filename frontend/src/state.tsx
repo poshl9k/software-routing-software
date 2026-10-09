@@ -307,7 +307,7 @@ export function useApplyCommands(
     const target =
       draftId === undefined || draftId === ""
         ? draft
-        : drafts.find((v) => v.id === draftId) ?? draft;
+        : drafts.find((v) => v.id === draftId);
     try {
       let result: ApplyResult;
       if (kind === "apply") {

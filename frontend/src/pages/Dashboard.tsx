@@ -4,18 +4,21 @@ import { useConfiguration, statusLabels } from "../state";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
+import { EmptyState } from "../components/EmptyState";
 import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 
-export function Events() {
+export function Events({ standalone = true }: { standalone?: boolean }) {
   return (
-    <Card title="Последние события">
-      <InfoNote>Журнал событий пока не подключён к API.</InfoNote>
-      <DataTable
-        heads={["Время", "Событие", "Сообщение"]}
-        rows={[]}
-      />
-    </Card>
+    <>
+      {standalone && <PageHeader>Журнал событий</PageHeader>}
+      <Card title="Последние события">
+        <InfoNote>Просмотр событий пока не подключён к API.</InfoNote>
+        <EmptyState title="Журнал пока недоступен">
+          События появятся после подключения журнала к панели.
+        </EmptyState>
+      </Card>
+    </>
   );
 }
 export default function Dashboard() {
@@ -60,7 +63,7 @@ export default function Dashboard() {
           </div>
         </div>
         <Button component={Link} to="/apply" variant="contained">
-          Настроить
+          Проверить черновик
         </Button>
       </div>
       <div className="dash-grid">
@@ -143,7 +146,7 @@ export default function Dashboard() {
               ])}
             />
           </Card>
-          <Events />
+          <Events standalone={false} />
         </div>
       </div>
     </>

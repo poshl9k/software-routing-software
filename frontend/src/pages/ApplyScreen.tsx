@@ -196,7 +196,7 @@ export default function ApplyScreen() {
         </p>
       </Card>
       <Card
-        title={`Изменения (${confirmed ? `v${confirmed.id}${fmtDateTime(confirmed.created_at) ? ` от ${fmtDateTime(confirmed.created_at)}` : ""}` : "нет стабильной версии"} → ${draft ? `v${draft.id}${fmtDateTime(draft.created_at) ? ` от ${fmtDateTime(draft.created_at)}` : ""}` : "нет черновика"})`}
+        title={`Изменения (${confirmed ? `v${confirmed.id}${fmtDateTime(confirmed.created_at) ? ` от ${fmtDateTime(confirmed.created_at)}` : ""}` : "нет стабильной версии"} → ${shownDraft ? `v${shownDraft.id}${fmtDateTime(shownDraft.created_at) ? ` от ${fmtDateTime(shownDraft.created_at)}` : ""}` : "нет черновика"})`}
       >
         <ErrorNotice error={diffQuery.error} />
         {diffQuery.data ? (
@@ -222,10 +222,14 @@ export default function ApplyScreen() {
             user?.role !== "admin" ||
             !!active ||
             uncertain ||
-            !draft ||
+            !shownDraft ||
+            (confirmed && (diffQuery.isPending || diffQuery.isError || diffQuery.isFetching)) ||
             !timeoutValid
           }
-          onClick={() => void command("apply")}
+          onClick={() => {
+            if (shownDraft && (!confirmed || (diffQuery.isSuccess && !diffQuery.isFetching)))
+              void command("apply", shownDraft.id);
+          }}
         >
           {busy ? "Выполняется…" : "Применить"}
         </Button>
