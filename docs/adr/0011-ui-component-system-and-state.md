@@ -76,3 +76,15 @@ with local loading/error state and no cache.
   MUI chunk that once tripped the 500 kB warning is now split by `manualChunks`
   into react / mui / query vendor chunks (app ~317 kB, mui ~303 kB, react ~51 kB,
   query ~33 kB).
+
+## Foundation stream record — 2026-10-10
+
+Add `PageSection`, `StatTile`, `InlineStatus`, `StatusHero`,
+`ApplyStatusRail`, `ServiceStatusHeader`, `WizardProgress`, `LoadingSkeleton`,
+`ExpertDisclosure` and `ConfirmDialog` as one shared primitive per job. Keep
+`PageHeader` as the page's single `h1`; sections use subordinate headings.
+Unknown status remains unknown, never healthy by default. The apply rail only
+renders caller-provided status and time values, invents no timestamps, and its
+countdown announces phase changes rather than each tick. Expert disclosure is
+keyboard accessible. New risk actions use the MUI confirmation dialog instead
+of `window.confirm`.
