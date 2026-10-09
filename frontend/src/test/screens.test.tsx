@@ -242,10 +242,8 @@ describe("screens", () => {
       ),
     );
     open("/");
-    expect(await screen.findByText("Черновик v2")).toBeVisible();
-    expect(
-      screen.getByText(/статус агента не прочитан/),
-    ).toBeVisible();
+    expect(await screen.findByText(/черновик v2 \(не применён\)/)).toBeVisible();
+    expect(screen.getByText(/Состояние агента здесь не показано/)).toBeVisible();
   });
   it("restores pending apply from the agent marker after opening the page", async () => {
     const fetch = mockApi();
@@ -376,7 +374,7 @@ describe("screens", () => {
     const user = userEvent.setup();
     open("/");
     await screen.findByRole("button", { name: /Подтвердить ·/ });
-    await user.click(screen.getByRole("link", { name: "Применение" }));
+    await user.click(screen.getByRole("link", { name: "Проверить изменения" }));
     expect(await screen.findByText(/Результат команды неизвестен/)).toBeVisible();
     expect(screen.getByRole("button", { name: /Подтвердить ·/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Подтвердить изменения" })).toBeDisabled();

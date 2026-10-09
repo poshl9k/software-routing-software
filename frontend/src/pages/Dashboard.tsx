@@ -1,7 +1,7 @@
-import { Button } from "@mui/material";
-import { Link } from "react-router-dom";
 import { useConfiguration, statusLabels } from "../state";
 import { Badge } from "../components/Badge";
+import { StatusHero } from "../components/StatusHero";
+import { StatTile } from "../components/StatTile";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
@@ -24,51 +24,25 @@ export function Events({ standalone = true }: { standalone?: boolean }) {
 export default function Dashboard() {
   const { configuration: c, versions, applyState } = useConfiguration();
   const draft = versions.find((v) => v.status === "draft");
+  const confirmed = versions.find((v) => v.status === "confirmed");
   return (
     <>
       <PageHeader>Обзор сети</PageHeader>
-      <div className="status-strip">
-        <div className="status-pill">
-          <div>
-            <b>Интернет</b>
-            <div className="sub">статус недоступен</div>
-          </div>
-        </div>
-        <div className="status-pill">
-          <div>
-            <b>WAN</b>
-            <div className="sub">скорость неизвестна</div>
-          </div>
-        </div>
-        <div className="status-pill">
-          <div>
-            <b>Система</b>
-            <div className="sub">телеметрия недоступна</div>
-          </div>
-        </div>
-        <div className="status-pill">
-          <div>
-            <Badge tone="amber">
-              {applyState
-                ? statusLabels[applyState.result.status]
-                : draft
-                  ? `Черновик v${draft.id}`
-                  : "Маркер недоступен"}
-            </Badge>
-            <div className="sub">
-              {applyState
-                ? "Последний ответ команды в этой вкладке"
-                : "статус агента не прочитан"}
-            </div>
-          </div>
-        </div>
-        <Button component={Link} to="/apply" variant="contained">
-          Проверить черновик
-        </Button>
+      <StatusHero title="Интернет · состояние соединения" tone="unknown" primary={null}
+        facts={[{ label: "Источник", value: "Телеметрия не подключена" }, { label: "WAN и адрес сейчас", value: "Нет данных" }]} />
+      <div className="dash-grid">
+        <StatTile label="Скорость WAN" value={null} hint="Нет данных от агента" />
+        <StatTile label="Время работы" value={null} hint="Нет телеметрии" />
       </div>
+      <InfoNote>
+        Конфигурация: {draft ? `черновик v${draft.id} (не применён)` : "черновика нет"};{" "}
+        {confirmed ? `подтверждена v${confirmed.id}` : "подтверждённой версии нет"}.
+        Настроенные параметры ниже не означают, что они действуют сейчас.
+        {applyState ? ` Последний ответ команды в этой вкладке: ${statusLabels[applyState.result.status]}.` : " Состояние агента здесь не показано."}
+      </InfoNote>
       <div className="dash-grid">
         <div>
-          <Card title="WAN / Интернет" to="/network">
+          <Card title="Конфигурация WAN / Интернет" to="/network">
             <DataTable
               heads={["Интерфейс", "IP-адрес", "DNS", "Трафик"]}
               rows={c.interfaces
