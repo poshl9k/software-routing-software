@@ -32,6 +32,10 @@ export const tokens = {
   errorSoft: "rgba(242,86,86,0.14)",
   purple: "#a78bfa",
   purpleSoft: "rgba(167,139,250,0.14)",
+  badgeBlue: "#9b9bff",
+  badgeBlueSoft: "rgba(113,112,255,0.14)",
+  badgeGreen: "#4ade80",
+  badgeRed: "#f87171",
 
   // Borders — always semi-transparent white
   border: "rgba(255,255,255,0.08)",
@@ -39,6 +43,8 @@ export const tokens = {
   borderStrong: "rgba(255,255,255,0.12)",
 
   tableHeader: "#141516",
+  shadow: "rgba(0, 0, 0, 0.4) 0px 2px 4px",
+  transparent: "transparent",
 };
 
 /**
@@ -60,6 +66,10 @@ export const globalStyles = {
     "--vs-accent-hover": tokens.accentHover,
     "--vs-accent-soft": "rgba(113,112,255,0.10)",
     "--vs-success": tokens.success,
+    "--vs-badge-blue": tokens.badgeBlue,
+    "--vs-badge-blue-soft": tokens.badgeBlueSoft,
+    "--vs-badge-green": tokens.badgeGreen,
+    "--vs-badge-red": tokens.badgeRed,
     "--vs-warning": tokens.warning,
     "--vs-warning-soft": "rgba(242,201,76,0.10)",
     "--vs-warning-border": "rgba(242,201,76,0.25)",
@@ -72,6 +82,8 @@ export const globalStyles = {
     "--vs-track": "rgba(255,255,255,0.08)",
     "--vs-scrollbar": "rgba(255,255,255,0.14)",
     "--vs-scrollbar-hover": "rgba(255,255,255,0.24)",
+    "--vs-shadow": tokens.shadow,
+    "--vs-transparent": tokens.transparent,
   },
 } as const;
 

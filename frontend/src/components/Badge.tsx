@@ -5,10 +5,10 @@ import { tokens } from "../theme";
 export type Tone = "blue" | "green" | "amber" | "red" | "purple";
 
 const tones: Record<Tone, { fg: string; bg: string }> = {
-  blue: { fg: "#9b9bff", bg: "rgba(113,112,255,0.14)" },
-  green: { fg: "#4ade80", bg: tokens.successSoft },
+  blue: { fg: tokens.badgeBlue, bg: tokens.badgeBlueSoft },
+  green: { fg: tokens.badgeGreen, bg: tokens.successSoft },
   amber: { fg: tokens.warning, bg: tokens.warningSoft },
-  red: { fg: "#f87171", bg: tokens.errorSoft },
+  red: { fg: tokens.badgeRed, bg: tokens.errorSoft },
   purple: { fg: tokens.purple, bg: tokens.purpleSoft },
 };
 
