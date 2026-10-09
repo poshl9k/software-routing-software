@@ -97,26 +97,20 @@ function ApplyTopButton() {
       </Tooltip>
     );
   if (!draft) return null;
-  const applyDisabled = checking || uncertain || busy || !timeoutValid;
   const when = fmtDateTime(draft.created_at);
   return (
     <Tooltip
       title={
-        applyDisabled
+        !timeoutValid
           ? "Окно подтверждения должно быть 60–600 секунд; параметры — на странице «Применение»"
           : !confirmed
             ? "Первое применение без автоотката. Нужен доступ к локальной консоли; сохраните выбранный LAN и HTTPS на порту 443."
-            : `Применить черновик v${draft.id}${when ? ` от ${when}` : ""} с сохранёнными параметрами; diff и параметры — на странице «Применение»`
+            : `Проверьте черновик v${draft.id}${when ? ` от ${when}` : ""}; diff и параметры — на странице «Применение»`
       }
     >
       <span>
-        <Button
-          variant="contained"
-          color="primary"
-          disabled={applyDisabled}
-          onClick={() => void command("apply")}
-        >
-          Применить
+        <Button variant="contained" color="primary" component={Link} to="/apply">
+          Проверить изменения
         </Button>
       </span>
     </Tooltip>
@@ -245,7 +239,7 @@ function Layout() {
         />
         {noConfiguration && (
           <InfoNote>
-            Нет сохранённой конфигурации — выполните первичную настройку (раздел «Первый запуск») или проверьте доступность панели.
+            Нет сохранённой конфигурации — <Link to="/onboarding">начните первичную настройку</Link> или проверьте доступность панели.
           </InfoNote>
         )}
         <Outlet />

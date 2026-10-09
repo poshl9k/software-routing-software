@@ -366,16 +366,16 @@ describe("screens", () => {
     fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions" ? versions :
       path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
-      path === "/api/apply" ? { version_id: 2, status: "pending", phases: {} } :
       path === "/api/apply/status" && ++statusReads > 1 ? {
         code: "agent.unavailable", message: "Агент недоступен", details: [],
-      } : path === "/api/apply/status" ? null : [],
+      } : path === "/api/apply/status" ? {
+        version_id: 2, status: "pending", applied_at: Date.now() / 1000,
+        deadline: Date.now() / 1000 + 180, phases: {},
+      } : [],
     ), { status: path === "/api/apply/status" && statusReads > 1 ? 503 : 200 })));
     const user = userEvent.setup();
     open("/");
-    const button = await screen.findByRole("button", { name: "Применить" });
-    await waitFor(() => expect(button).toBeEnabled());
-    await user.click(button);
+    await screen.findByRole("button", { name: /Подтвердить ·/ });
     await user.click(screen.getByRole("link", { name: "Применение" }));
     expect(await screen.findByText(/Результат команды неизвестен/)).toBeVisible();
     expect(screen.getByRole("button", { name: /Подтвердить ·/ })).toBeDisabled();
@@ -390,7 +390,7 @@ describe("screens", () => {
         Promise.resolve(
           path === "/api/auth/me"
             ? new Response(JSON.stringify({ id: 1, username: "admin", role: "admin" }))
-            : path === "/api/versions"
+            : path === "/api/versions" || path === "/api/host/interfaces"
               ? new Response(JSON.stringify([]))
               : new Response(JSON.stringify({})),
         ),
@@ -398,8 +398,8 @@ describe("screens", () => {
     );
     open("/network");
     expect(
-      await screen.findByText(/Нет сохранённой конфигурации — выполните первичную настройку/),
-    ).toBeVisible();
+      await screen.findByRole("link", { name: "начните первичную настройку" }),
+    ).toHaveAttribute("href", "/onboarding");
     expect(screen.queryByText("без зоны (fail-closed)")).not.toBeInTheDocument();
     expect(screen.queryByText("eth0")).not.toBeInTheDocument();
     expect(screen.queryByText(/демонстрационные данные из макетов/)).not.toBeInTheDocument();
@@ -581,50 +581,17 @@ describe("screens", () => {
       ),
     ).toMatchObject({ deadline: 100000, approximate: false });
   });
-  it("applies the draft from the topbar button without leaving the page", async () => {
+  it("opens the review before applying from the topbar", async () => {
     const fetch = mockApi();
-    fetch.mockImplementation((path: string) =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify(
-            path === "/api/versions"
-              ? versions
-              : path === "/api/auth/me"
-                ? { id: 1, username: "admin", role: "admin" }
-              : path === "/api/apply/status"
-                ? fetch.mock.calls.some(([called]) => called === "/api/apply") ? {
-                    version_id: 2, status: "pending", applied_at: Date.now() / 1000,
-                    deadline: Date.now() / 1000 + 180, phases: {},
-                  } : null
-              : path === "/api/host/interfaces" || path.startsWith("/api/diff")
-                ? []
-                : path === "/api/apply"
-                  ? {
-                      version_id: 2,
-                      status: "pending",
-                      phases: { nftables: "applied" },
-                    }
-                  : { version_id: 2, status: "confirmed" },
-          ),
-        ),
-      ),
-    );
-    const user = userEvent.setup();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/versions" ? versions :
+      path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+      path === "/api/apply/status" ? null :
+      path.startsWith("/api/diff") ? [] : {},
+    ))));
     open("/");
-    const button = await screen.findByRole("button", {
-      name: "Применить",
-    });
-    await waitFor(() => expect(button).toBeEnabled());
-    await user.click(button);
-    expect(
-      await screen.findByRole("button", { name: /Подтвердить/ }),
-    ).toBeVisible();
-    expect(
-      screen.getAllByRole("button", { name: /Подтвердить/ }).length,
-    ).toBeGreaterThan(0);
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/apply",
-      expect.objectContaining({ method: "POST" }),
-    );
+    await userEvent.click(await screen.findByRole("link", { name: "Проверить изменения" }));
+    expect(await screen.findByRole("heading", { name: "Применение изменений" })).toBeVisible();
+    expect(fetch.mock.calls.some(([path]) => path === "/api/apply")).toBe(false);
   });
 });
