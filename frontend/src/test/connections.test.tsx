@@ -108,6 +108,8 @@ it("imports a client .conf into the current draft without key generation", async
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(screen.getByLabelText("Имя туннеля")).toHaveValue("tunnel1");
   expect(screen.getByLabelText("Интерфейс")).toHaveValue("tun0");
+  expect(screen.getByLabelText("Keepalive, с")).toHaveValue(25);
+  expect(screen.getByText("AllowedIPs ≠ маршрут")).toBeVisible();
   expect(fetch.mock.calls.filter(([path]) => path === "/api/keygen/tunnel")).toHaveLength(0);
   await userEvent.click(save());
   await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(true));
@@ -228,6 +230,31 @@ it("generates AWG obfuscation on protocol switch and saves only the private key"
   expect(screen.queryByText(generated.private_key)).not.toBeInTheDocument();
   expect(screen.queryByText(generated.public_key)).not.toBeInTheDocument();
 });
+it("aligns tunnel action cells for servers and clients", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([
+    { id: 1, status: "confirmed", configuration: {
+      ...emptyConfiguration,
+      tunnels: [server, { ...server, name: "client", role: "client", peers: [] }],
+    } },
+  ]))));
+  render(<RouterProvider><Tunnels /></RouterProvider>);
+  const table = await screen.findByRole("table");
+  await waitFor(() => expect(table.querySelectorAll("tbody tr")).toHaveLength(2));
+  expect(Array.from(table.querySelectorAll("thead th"), (cell) => cell.textContent)).toEqual([
+    "Имя", "Роль", "Протокол", "Действия",
+  ]);
+  for (const row of table.querySelectorAll("tbody tr")) {
+    expect(row.querySelectorAll("td")).toHaveLength(4);
+  }
+  expect(screen.getByRole("button", { name: "phone" })).toBeVisible();
+});
+it("shows editor error when explicit key generation fails", async () => {
+  await open(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, false, async () =>
+    new Response(JSON.stringify({ code: "keygen.failed", message: "Генерация не удалась" }), { status: 500 }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Сгенерировать ключи" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Генерация не удалась");
+});
 it("keeps the editor empty and shows an error when tunnel keygen fails", async () => {
   const fetch = await open(<Tunnels />, emptyConfiguration, false, async () =>
     new Response(JSON.stringify({ code: "keygen.failed", message: "Генерация не удалась" }), { status: 500 }),
@@ -257,6 +284,10 @@ it("saves a passthrough site without certificate secrets", async () => {
   fill("Hostname сайта", "home.example.org");
   fill("Upstream", "10.0.0.2:443");
   fill("Режим сертификата", "manual");
+  expect(Array.from((screen.getByLabelText("Режим сертификата") as HTMLSelectElement).options, (option) => [option.value, option.textContent])).toEqual([
+    ["http01", "Авто (HTTP-01)"], ["dns01", "Авто (DNS-01)"],
+    ["manual", "Ручной"], ["passthrough", "TLS passthrough (SNI)"],
+  ]);
   expect(save()).toBeDisabled();
   fill("Режим сертификата", "passthrough");
   expect(screen.queryByLabelText("Сертификат")).not.toBeInTheDocument();

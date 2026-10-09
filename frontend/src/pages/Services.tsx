@@ -51,7 +51,6 @@ function DHCPReadOnly() {
               "Интерфейс",
               "Пул",
               "Шлюз / DNS",
-              "Аренд",
               "Резерваций",
             ]}
             rows={c.dhcp_subnets.map((s) => [
@@ -59,7 +58,6 @@ function DHCPReadOnly() {
               s.interface,
               s.pools.map((p) => `${p.start}–${p.end}`).join(", "),
               `${s.routers.join(", ")} / ${s.dns_servers.join(", ")}`,
-              "—",
               s.reservations.length,
             ])}
           />
@@ -68,14 +66,13 @@ function DHCPReadOnly() {
       {tab !== 2 && (
         <Card title="Резервации">
           <DataTable
-            heads={["Имя", "Идентификатор", "IP-адрес", "Подсеть", "Конфликт"]}
+            heads={["Имя", "Идентификатор", "IP-адрес", "Подсеть"]}
             rows={c.dhcp_subnets.flatMap((s) =>
               s.reservations.map((r) => [
                 r.hostname,
                 r.hw_address,
                 r.ip_address,
                 s.subnet,
-                "—",
               ]),
             )}
           />
@@ -88,7 +85,7 @@ function DHCPReadOnly() {
       {tab===2&&<Card title="Текущие аренды" action={<Button onClick={()=>void leases.refetch()} disabled={leases.isFetching}>Обновить</Button>}>
         <div className="footer-actions"><Field label="Поиск: MAC, IP, hostname" value={query} onChange={setQuery} fullWidth={false}/><Button onClick={()=>setTerm(query.trim())} disabled={leases.isFetching}>Найти</Button></div>
         {leaseError instanceof ApiError && (leaseError.status===502||leaseError.status===503) ? <Badge tone="amber">Kea ctrl-agent недоступен</Badge> : <ErrorNotice error={leaseError}/>}
-        <DataTable heads={["IP-адрес","MAC","Hostname","Подсеть","Истекает"]} rows={(leases.data??[]).map(l=>[l.ip,l.mac,l.hostname??"—",l.subnet,l.expires_in])} empty={<EmptyState>{leases.isLoading?"Загрузка аренд…":"Аренды не загружены"}</EmptyState>}/>
+        <DataTable heads={["IP-адрес","MAC","Hostname","Подсеть","Истекает"]} rows={(leases.data??[]).map(l=>[l.ip,l.mac,l.hostname??"—",l.subnet,l.expires_in])} empty={<EmptyState>{leases.isLoading?"Загрузка аренд…":leaseError?"Не удалось получить аренды":"Нет аренд"}</EmptyState>}/>
       </Card>}
     </>
   );
@@ -170,8 +167,7 @@ function DNSReadOnly() {
       </div>
       {tab === 2 && (
         <Card title="Журнал запросов">
-          <InfoNote>Чтение журнала DNS пока недоступно.</InfoNote>
-          <DataTable heads={["Время", "Клиент", "Запрос", "Ответ"]} rows={[]} />
+          <InfoNote>Просмотр пока недоступен.</InfoNote>
         </Card>
       )}
     </>
@@ -196,11 +192,7 @@ export function Proxy() {
       </div>
       {tab === 2 && (
         <Card title="Последние запросы к сайтам">
-          <InfoNote>Журнал запросов Caddy пока не подключён.</InfoNote>
-          <DataTable
-            heads={["Время", "Сайт", "Метод", "Путь", "Код", "Задержка"]}
-            rows={[]}
-          />
+          <InfoNote>Просмотр пока недоступен.</InfoNote>
         </Card>
       )}
     </>
