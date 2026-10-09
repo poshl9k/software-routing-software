@@ -1,4 +1,5 @@
 import { Button } from "@mui/material";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useConfiguration } from "../state";
 import { api } from "../api";
@@ -9,13 +10,18 @@ import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { EditorFooter } from "../components/EditorShell";
+import { FormActions, FormGrid, FormWide } from "../components/Form";
+import { InfoNote } from "../components/InfoNote";
+import { InlineStatus } from "../components/InlineStatus";
 import { ValueTabs } from "../components/Tabs";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageHeader } from "../components/PageHeader";
 import { Field } from "../components/Field";
 import { Select, type SelectOption } from "../components/Select";
-import { ifaceNameValid } from "../components/validators";
+import { addressValid, ifaceNameValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 
 type Editable = Interface & { key: string };
@@ -38,6 +44,9 @@ const emptyInterface = (key: string): Editable => ({
 export default function Network() {
   const { configuration: c, version, draftDirty } = useConfiguration();
   const editor = useDraftEditor<Editable[]>();
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState("general");
+  const [deleteKey, setDeleteKey] = useState<string | null>(null);
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "interfaces";
   const knownTab = ["interfaces", "wan", "routes", "diagnostics"].includes(tab)
@@ -51,6 +60,14 @@ export default function Network() {
 
   const rows: Editable[] = editor.value ?? c.interfaces.map((i) => ({ ...i, key: i.name }));
   const isEditMode = editor.isEdit;
+  const selected = rows.find((i) => i.key === selectedKey) ?? null;
+  useEffect(() => { if (!editor.isEdit && selectedKey) setSelectedKey(null); }, [editor.isEdit, selectedKey]);
+  const open = (key: string) => {
+    if (!editor.isEdit) editor.begin(rows);
+    setSelectedKey(key);
+    setDetailTab("general");
+  };
+  const cancel = () => { editor.cancel(); setSelectedKey(null); };
 
   const candidates = (i: Editable, host: HostInterface[]) =>
     [...new Set([
@@ -72,7 +89,6 @@ export default function Network() {
   const hostAddresses = useQuery({
     queryKey: queryKeys.hostAddresses(),
     queryFn: api.hostAddresses,
-    enabled: !isEditMode,
   });
   const liveAddresses = hostAddresses.data ?? {};
 
@@ -93,16 +109,28 @@ export default function Network() {
     const next = [...rows];
     if (parent && !next.some((i) => i.name === parent))
       next.push({ ...emptyInterface(`host-${parent}`), name: parent });
-    next.push({ ...emptyInterface(`new-${Date.now()}`), name: `${prefix}${id}`,
+    const key = `new-${Date.now()}`;
+    next.push({ ...emptyInterface(key), name: `${prefix}${id}`,
       type, parent, vlan_id: type === "vlan" ? 1 : null });
-    editor.setValue(next);
+    if (editor.isEdit) editor.setValue(next);
+    else editor.begin(next);
+    setSelectedKey(key);
+    setDetailTab("general");
   };
 
-  const addRow = () => editor.setValue([...rows, emptyInterface(`new-${Date.now()}`)]);
+  const addRow = () => {
+    const key = `new-${Date.now()}`;
+    const next = [...rows, emptyInterface(key)];
+    if (editor.isEdit) editor.setValue(next);
+    else editor.begin(next);
+    setSelectedKey(key);
+    setDetailTab("general");
+  };
   const removeRow = (i: Editable) => {
-    if (!window.confirm(`Удалить интерфейс ${i.name || "без имени"} (зона: ${i.zone ?? "без зоны"})?`)) return;
     try {
       editor.setValue(rows.filter((row) => row.key !== i.key));
+      if (selectedKey === i.key) setSelectedKey(rows.find((row) => row.key !== i.key)?.key ?? i.key);
+      setDeleteKey(null);
     } catch (error) {
       editor.setError(error);
     }
@@ -128,7 +156,13 @@ export default function Network() {
   };
 
   const validName = (i: Editable) => ifaceNameValid(i.name.trim());
-  const allValid = rows.every(validName);
+  const names = rows.map((i) => i.name.trim());
+  const staticAddresses = rows.flatMap((i) => i.addressing === "static" ? i.addresses.map((a) => a.trim().toLowerCase()) : []);
+  const allValid = new Set(names).size === names.length &&
+    new Set(staticAddresses).size === staticAddresses.length &&
+    rows.every((i) => validName(i) &&
+      (i.addressing === "dhcp" || i.addresses.every((a) => a.includes("/") && addressValid(a.trim()))) &&
+      (i.type !== "vlan" || (i.vlan_id !== null && Number.isInteger(i.vlan_id) && i.vlan_id >= 1 && i.vlan_id <= 4094)));
 
   const nameOptions = (i: Editable): SelectOption[] => {
     const options: SelectOption[] = [];
@@ -157,270 +191,56 @@ export default function Network() {
         ]}
       />
 
-      {knownTab === "interfaces" && (
-        <>
-          <ErrorNotice error={editor.error} />
-          <ErrorNotice error={hostError} />
-          <Card
-            title="Интерфейсы и зоны"
-            action={
-              isEditMode ? undefined : (
-                <Button size="small" onClick={() => editor.begin(rows)}>
-                  Редактировать
-                </Button>
-              )
-            }
-          >
-            {!isEditMode && (
-              <p className="sub">
-                {version?.status === "draft"
-                  ? `Черновик v${version.id} — нажмите «Редактировать», чтобы изменить.`
-                  : "Применённая конфигурация. Изменения потребуют создания черновика."}
-              </p>
-            )}
-            <DataTable
-              heads={
-                isEditMode
-                  ? ["Интерфейс", "Описание", "Тип", "Зона", "Режим", "Адреса (через запятую)", "VLAN ID", "Родитель / члены", ""]
-                  : ["Интерфейс", "Описание", "Тип", "Зона", "Адресация", "IP-адрес", "Состояние", "Назначение"]
-              }
-              rows={
-                isEditMode
-                  ? rows.map((i) => [
-                      <Select
-                        ariaLabel={`Интерфейс ${i.key}`}
-                        value={i.name}
-                        sx={{ minWidth: 170 }}
-                        error={i.name.length > 0 && !validName(i)}
-                        helperText={
-                          i.name.length > 0 && !validName(i)
-                            ? "латиница/цифры/._- до 15 симв."
-                            : undefined
-                        }
-                        placeholder={{ label: "— выберите интерфейс —" }}
-                        options={nameOptions(i)}
-                        onChange={(name) => setField(i.key, { name })}
-                      />,
-                      <Field
-                        value={i.description ?? ""}
-                        ariaLabel={`Описание интерфейса ${i.key}`}
-                        placeholder="напр. «оптика провайдера»"
-                        maxLength={64}
-                        onChange={(v) =>
-                          setField(i.key, { description: v || null })
-                        }
-                      />,
-                      <Select
-                        ariaLabel={`Тип ${i.key}`}
-                        value={i.type}
-                        options={[
-                          { value: "physical", label: "physical" },
-                          { value: "bridge", label: "bridge" },
-                          { value: "vlan", label: "vlan" },
-                        ]}
-                        onChange={(v) =>
-                          setField(i.key, { type: v as Interface["type"] })
-                        }
-                      />,
-                      <Select
-                        ariaLabel={`Зона ${i.key}`}
-                        value={i.zone ?? ""}
-                        placeholder={{ label: "— (fail-closed)" }}
-                        options={ZONES.map((z) => ({ value: z, label: z }))}
-                        onChange={(v) => setField(i.key, { zone: v || null })}
-                      />,
-                      <Select
-                        ariaLabel={`Режим ${i.key}`}
-                        value={i.addressing}
-                        options={[
-                          { value: "static", label: "static" },
-                          { value: "dhcp", label: "DHCP" },
-                        ]}
-                        onChange={(v) =>
-                          setField(
-                            i.key,
-                            v === "dhcp"
-                              ? { addressing: "dhcp", addresses: [] }
-                              : { addressing: "static" },
-                          )
-                        }
-                      />,
-                      <Field
-                        value={i.addressing === "dhcp" ? "" : i.addresses.join(", ")}
-                        ariaLabel={`Адреса ${i.key}`}
-                        disabled={i.addressing === "dhcp"}
-                        placeholder={i.addressing === "dhcp" ? "адрес по DHCP" : "192.168.10.1/24, 192.168.10.20/32"}
-                        onChange={(v) =>
-                          setField(i.key, {
-                            addresses: v.split(",").map((a) => a.trim()),
-                          })
-                        }
-                      />,
-                      i.type === "vlan" ? (
-                        <Field
-                          type="number"
-                          ariaLabel={`VLAN ID ${i.key}`}
-                          value={i.vlan_id ?? ""}
-                          onChange={(v) =>
-                            setField(i.key, { vlan_id: Number(v) || null })
-                          }
-                        />
-                      ) : (
-                        "—"
-                      ),
-                      i.type === "vlan" ? (
-                        <Select
-                          ariaLabel={`Родитель ${i.key}`}
-                          value={i.parent ?? ""}
-                          placeholder={{ label: "— выберите —" }}
-                          options={candidates(i, physicalNics)
-                            .filter((name) => name === i.parent || !usedByOtherRows(i).has(name))
-                            .map((name) => ({ value: name, label: optLabel(name) }))}
-                          onChange={(v) => setField(i.key, { parent: v || null })}
-                        />
-                      ) : (
-                        "—"
-                      ),
-                      i.type === "bridge" ? (
-                        <div className="members-edit">
-                          {i.members.map((m, index) => {
-                            const member = rows.find(
-                              (p) => p.key !== i.key && p.name === m,
-                            );
-                            return (
-                              <div key={m + index} className="members-row">
-                                <Select
-                                  ariaLabel={`Участник ${i.key} ${index}`}
-                                  value={m}
-                                  error={!m || !member || !member.zone}
-                                  placeholder={{ label: "— выберите —" }}
-                                  options={candidates(i, allRealNics)
-                                    .filter((name) => i.members.includes(name) || (!i.members.includes(name) && !usedByOtherRows(i).has(name)))
-                                    .map((name) => ({
-                                      value: name,
-                                      label: `${optLabel(name)}${rows.find((p) => p.name === name)?.zone ? "" : " (без зоны!)"}`,
-                                    }))}
-                                  onChange={(v) =>
-                                    setField(i.key, {
-                                      members: i.members.map((row, r) =>
-                                        r === index ? v : row,
-                                      ),
-                                    })
-                                  }
-                                />
-                                <DeleteButton
-                                  label={`Удалить участника ${m}`}
-                                  onClick={() =>
-                                    setField(i.key, {
-                                      members: i.members.filter(
-                                        (_, r) => r !== index,
-                                      ),
-                                    })
-                                  }
-                                />
-                              </div>
-                            );
-                          })}
-                          {candidates(i, allRealNics).some((name) => !i.members.includes(name) && !usedByOtherRows(i).has(name)) && (
-                            <Button
-                              size="small"
-                              onClick={() => {
-                                const free = candidates(i, allRealNics).find(
-                                  (name) => !i.members.includes(name) && !usedByOtherRows(i).has(name),
-                                );
-                                if (free)
-                                  setField(i.key, {
-                                    members: [...i.members, free],
-                                  });
-                              }}
-                            >
-                              + участник
-                            </Button>
-                          )}
-                        </div>
-                      ) : (
-                        "—"
-                      ),
-                      <DeleteButton
-                        label={`Удалить интерфейс ${i.name}`}
-                        onClick={() => removeRow(i)}
-                      />,
-                    ])
-                  : c.interfaces.map((i) => [
-                      <b>{i.name}</b>,
-                      i.description ? (
-                        <span className="sub">{i.description}</span>
-                      ) : (
-                        <span className="sub">—</span>
-                      ),
-                      {
-                        physical: "Физический",
-                        bridge: "Мост",
-                        vlan: `VLAN (${i.parent}.${i.vlan_id})`,
-                      }[i.type],
-                      <Badge
-                        tone={
-                          i.zone === "wan"
-                            ? "red"
-                            : i.zone === "iot"
-                              ? "purple"
-                              : i.zone === "guest"
-                                ? "amber"
-                                : "blue"
-                        }
-                      >
-                        {i.zone ?? "без зоны (fail-closed)"}
-                      </Badge>,
-                      i.addressing === "dhcp" ? "DHCP" : "Статический",
-                      i.addressing === "dhcp"
-                        ? ((liveAddresses[i.name] ?? []).join(", ") || "ожидание…")
-                        : i.addresses.join(", "),
-                      i.addressing === "dhcp"
-                        ? ((liveAddresses[i.name] ?? []).length ? "адрес получен" : "нет адреса")
-                        : "—",
-                      i.type === "vlan"
-                        ? `на ${i.parent ?? "—"}`
-                        : i.zone
-                          ? i.members.join(", ")
-                          : "Транзит запрещён",
-                    ])
-              }
-            />
-            {isEditMode && (
-              <div className="footer-actions">
-                <Button size="small" onClick={addRow}>
-                  + Добавить интерфейс
-                </Button>
-                {physicalNics.map((p) => (
-                  <Button key={p.name} size="small" onClick={() => addVirtual("vlan", p.name)}>
-                    + VLAN на {p.name}
-                  </Button>
-                ))}
-                <Button size="small" onClick={() => addVirtual("bridge")}>
-                  + Мост
-                </Button>
-                <span className="spacer" />
-                <Button size="small" onClick={editor.cancel}>
-                  Отмена
-                </Button>
-                <Button
-                  size="small"
-                  variant="contained"
-                  disabled={editor.saving || !allValid}
-                  onClick={() => void save()}
-                >
-                  {editor.saving ? "Сохранение…" : "Сохранить"}
-                </Button>
-              </div>
-            )}
-          </Card>
-          {draftDirty && version?.status === "draft" && (
-            <p className="sub">
-              Черновик изменён и ожидает применения (экран «Применение»).
-            </p>
-          )}
-        </>
-      )}
+      {knownTab === "interfaces" && <>
+        <ErrorNotice error={editor.error} /><ErrorNotice error={hostError} />
+        <Card title="Интерфейсы и зоны" action={rows.length > 0 ? <FormActions><Button onClick={addRow}>Добавить интерфейс</Button>{physicalNics.map((p) => <Button key={p.name} onClick={() => addVirtual("vlan", p.name)}>+ VLAN на {p.name}</Button>)}<Button onClick={() => addVirtual("bridge")}>+ Мост</Button></FormActions> : undefined}>
+          {!rows.length && <EmptyState action={<Button onClick={addRow}>Добавить интерфейс</Button>}>Нет назначенных интерфейсов</EmptyState>}
+          {!!rows.length && <DataTable heads={["Название", "Системное имя", "Роль", "IP", "Черновик", "Состояние"]}
+            rows={rows.map((i) => {
+              const host = allRealNics.find((h) => h.name === i.name);
+              const live = liveAddresses[i.name] ?? [];
+              return [
+                <Button onClick={() => open(i.key)}>{i.description?.trim() || "Без названия"}</Button>,
+                i.name || "Не выбрано",
+                <Badge tone={!i.zone ? "amber" : i.zone === "wan" ? "red" : "blue"}>{i.zone === "wan" ? "Интернет (WAN)" : i.zone === "lan" ? "Домашняя сеть (LAN)" : i.zone ? i.zone.toUpperCase() : "Не назначен"}</Badge>,
+                i.addressing === "dhcp" ? <InlineStatus tone={hostAddresses.isPending || hostAddresses.isError ? "unknown" : live.length ? "green" : "amber"} text={hostAddresses.isPending ? "DHCP: загрузка" : hostAddresses.isError ? "DHCP: данные недоступны" : live.length ? `DHCP: ${live.join(", ")}` : "DHCP: адрес не получен"} /> : i.addresses.join(", ") || "Адрес не задан",
+                <Badge tone={version?.status === "draft" || isEditMode ? "amber" : version ? "blue" : "amber"}>{version?.status === "draft" || isEditMode ? "Черновик" : version ? "Применено" : "Статус неизвестен"}</Badge>,
+                hostInterfaces.isPending ? <InlineStatus tone="unknown" text="Состояние хоста: загрузка" /> : hostInterfaces.isError || !host ? <InlineStatus tone="unknown" text="Состояние хоста недоступно" /> : host.kind !== "physical" ? <InlineStatus tone="unknown" text={`Состояние ${host.operstate}; данные о кабеле недоступны`} /> : <InlineStatus tone={host.operstate === "UP" ? "green" : host.operstate === "DOWN" ? "red" : "unknown"} text={`Кабель: ${host.operstate === "UP" ? "подключён" : host.operstate === "DOWN" ? "отключён" : host.operstate}`} />,
+              ];
+            })} />}
+        </Card>
+        {(selected || isEditMode && selectedKey) && <Card title={`Интерфейс: ${selected?.description?.trim() || selected?.name || "удалён"}`} action={selected && <DeleteButton label={`Удалить интерфейс ${selected.name || "без имени"}`} onClick={() => setDeleteKey(selected.key)} />}>
+          {selected && <ValueTabs value={detailTab} change={setDetailTab} tabs={[
+            {value:"general",label:"Общие"},{value:"ip",label:"IP"},{value:"connection",label:"Подключение"},{value:"advanced",label:"Дополнительно"}
+          ]} />}
+          {selected && detailTab === "general" && <FormGrid>
+            <Field label="Дружественное имя" value={selected.description ?? ""} placeholder="напр. «оптика провайдера»" maxLength={64} onChange={(v) => setField(selected.key,{description:v || null})} />
+            <Select label="Системное имя" value={selected.name} error={!!selected.name && !validName(selected)} placeholder={{label:"— выберите интерфейс —"}} options={nameOptions(selected)} onChange={(name) => setField(selected.key,{name})} />
+            <Field label="Описание" value={selected.description ?? ""} readOnly hint="Хранится как дружественное имя интерфейса." />
+            <Select label="Тип" value={selected.type} options={[{value:"physical",label:"Физический"},{value:"bridge",label:"Мост"},{value:"vlan",label:"VLAN"}]} onChange={(v) => setField(selected.key,{type:v as Interface["type"]})} />
+            <Select label="Роль / зона" value={selected.zone ?? ""} placeholder={{label:"Не назначен — транзит запрещён"}} options={ZONES.map((z) => ({value:z,label:z === "wan" ? "Интернет (WAN)" : z === "lan" ? "Домашняя сеть (LAN)" : z.toUpperCase()}))} onChange={(v) => setField(selected.key,{zone:v || null})} />
+            <Field label="MAC хоста" value={allRealNics.find((h) => h.name === selected.name)?.mac ?? "Данные недоступны"} readOnly />
+            <FormWide><InfoNote>Без зоны транзит запрещён. Изменения вступят в силу только после применения черновика.</InfoNote></FormWide>
+          </FormGrid>}
+          {selected && detailTab === "ip" && <FormGrid>
+            <Select label="Режим адресации" value={selected.addressing} options={[{value:"static",label:"Статический IP"},{value:"dhcp",label:"DHCP"}]} onChange={(v) => setField(selected.key,v === "dhcp" ? {addressing:"dhcp",addresses:[]} : {addressing:"static"})} />
+            <Field label="Основной адрес (CIDR)" value={selected.addressing === "dhcp" ? "" : selected.addresses[0] ?? ""} disabled={selected.addressing === "dhcp"} placeholder={selected.addressing === "dhcp" ? "адрес по DHCP" : "192.168.10.1/24"} valid={selected.addressing === "dhcp" || !selected.addresses.length || (selected.addresses[0].includes("/") && addressValid(selected.addresses[0]) && staticAddresses.filter((a) => a === selected.addresses[0].trim().toLowerCase()).length === 1)} hint="/24 = маска 255.255.255.0. Первый WAN-адрес основной для исходящего трафика." onChange={(v) => setField(selected.key,{addresses:[v,...selected.addresses.slice(1)]})} />
+            {selected.addressing === "static" && <FormWide>{selected.addresses.slice(1).map((address,index) => <FormActions key={index}><Field ariaLabel={`Дополнительный адрес ${index + 1} (CIDR)`} value={address} valid={address.includes("/") && addressValid(address) && staticAddresses.filter((a) => a === address.trim().toLowerCase()).length === 1} hint="Укажите уникальный IP/CIDR" onChange={(v) => setField(selected.key,{addresses:selected.addresses.map((a,n) => n === index + 1 ? v : a)})} /><DeleteButton label={`Удалить дополнительный адрес ${index + 1}`} onClick={() => setField(selected.key,{addresses:selected.addresses.filter((_,n) => n !== index + 1)})} /></FormActions>)}<Button onClick={() => setField(selected.key,{addresses:[...(selected.addresses.length ? selected.addresses : [""]),""]})}>Добавить адрес</Button></FormWide>}
+            <FormWide><InfoNote>{selected.addressing === "dhcp" ? hostAddresses.isPending ? "Полученный адрес: загрузка…" : hostAddresses.isError ? "Полученный адрес: состояние недоступно" : `Полученный адрес: ${(liveAddresses[selected.name] ?? []).join(", ") || "адрес не получен"}` : "Статические адреса показаны из конфигурации."}</InfoNote></FormWide>
+          </FormGrid>}
+          {selected && detailTab === "connection" && <FormGrid>
+            {selected.type === "vlan" && <><Select label="Родительский интерфейс" value={selected.parent ?? ""} placeholder={{label:"— выберите —"}} options={candidates(selected,physicalNics).filter((name) => name === selected.parent || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{parent:v || null})} /><Field label="VLAN ID" type="number" value={selected.vlan_id ?? ""} onChange={(v) => setField(selected.key,{vlan_id:Number(v) || null})} /></>}
+            {selected.type === "bridge" && <FormWide>{selected.members.map((m,index) => <FormActions key={`${m}-${index}`}><Select ariaLabel={`Участник ${selected.key} ${index}`} value={m} error={!m || !rows.some((r) => r.key !== selected.key && r.name === m && r.zone)} placeholder={{label:"— выберите —"}} options={candidates(selected,allRealNics).filter((name) => selected.members.includes(name) || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{members:selected.members.map((row,r) => r === index ? v : row)})} /><DeleteButton label={`Удалить участника ${m}`} onClick={() => setField(selected.key,{members:selected.members.filter((_,r) => r !== index)})} /></FormActions>)}
+              {candidates(selected,allRealNics).some((name) => !selected.members.includes(name) && !usedByOtherRows(selected).has(name)) && <Button onClick={() => {const free=candidates(selected,allRealNics).find((name) => !selected.members.includes(name) && !usedByOtherRows(selected).has(name));if(free)setField(selected.key,{members:[...selected.members,free]});}}>+ участник</Button>}
+            </FormWide>}
+            {selected.type === "physical" && <FormWide><InfoNote>Физический порт выбран на вкладке «Общие».</InfoNote></FormWide>}
+          </FormGrid>}
+          {selected && detailTab === "advanced" && <FormGrid><Field label="Родитель" value={selected.parent ?? "—"} readOnly /><Field label="Участники" value={selected.members.join(", ") || "—"} readOnly /><Field label="VLAN ID" value={selected.vlan_id ?? "—"} readOnly /><Field label="Состояние хоста" value={hostInterfaces.isPending ? "Загрузка…" : hostInterfaces.isError ? "Состояние недоступно" : allRealNics.find((h) => h.name === selected.name)?.operstate ?? "Данные недоступны"} readOnly /><FormWide><InfoNote>Первичный LAN и адрес панели не определяются по этой конфигурации. Проверьте доступ перед применением.</InfoNote></FormWide></FormGrid>}
+          <EditorFooter saving={editor.saving} valid={allValid} cancel={cancel} save={() => void save()} />
+        </Card>}
+        {draftDirty && version?.status === "draft" && <p className="sub">Черновик изменён и ожидает применения (экран «Применение»).</p>}
+        <ConfirmDialog open={deleteKey !== null} title="Удалить интерфейс?" body={`Интерфейс ${rows.find((i) => i.key === deleteKey)?.name || "без имени"} будет удалён из черновика. Проверьте зависимости и доступ к панели перед применением.`} confirmLabel="Удалить" cancelLabel="Отмена" danger onConfirm={() => {const target=rows.find((i) => i.key === deleteKey);if(target)removeRow(target);}} onCancel={() => setDeleteKey(null)} />
+      </>}
 
       {knownTab === "wan" && (
         <>

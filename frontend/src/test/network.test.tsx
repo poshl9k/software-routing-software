@@ -21,21 +21,23 @@ it("selects OS links, creates a VLAN and saves bridge members with draft referen
   vi.stubGlobal("fetch", fetch);
   const user = userEvent.setup();
   render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
-  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
-  await user.click(await screen.findByRole("button", { name: "+ VLAN на eth0" }));
-  const vlanRow = screen.getByDisplayValue("vlan1 (в черновике)").closest("tr")!;
-  const parent = within(vlanRow).getAllByRole("combobox")[4];
+  await user.click(await screen.findByRole("button", { name: "Добавить интерфейс" }));
+  await user.selectOptions(screen.getByLabelText("Системное имя"), "eth0");
+  await user.click(screen.getByRole("button", { name: "+ VLAN на eth0" }));
+  await user.click(screen.getByRole("tab", { name: "Подключение" }));
+  const parent = screen.getByLabelText("Родительский интерфейс");
   expect(within(parent).getByRole("option", { name: "eth1" })).toBeVisible();
   expect(within(parent).queryByRole("option", { name: "bond0" })).toBeNull();
   await user.selectOptions(parent, "eth1");
+  await user.click(screen.getByRole("tab", { name: "Общие" }));
   await user.type(
-    within(vlanRow).getByPlaceholderText("напр. «оптика провайдера»"),
+    screen.getByPlaceholderText("напр. «оптика провайдера»"),
     "гостевая сеть",
   );
   await user.click(screen.getByRole("button", { name: "+ Мост" }));
+  await user.click(screen.getByRole("tab", { name: "Подключение" }));
   await user.click(screen.getByRole("button", { name: "+ участник" }));
-  const bridgeRow = screen.getByDisplayValue("br1 (в черновике)").closest("tr")!;
-  const member = within(bridgeRow).getAllByRole("combobox")[4];
+  const member = screen.getByLabelText(/Участник new-/);
   await user.selectOptions(member, "bond0");
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
