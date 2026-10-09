@@ -34,6 +34,16 @@ action, no duplicated labels, no ad-hoc styling.
 | «нет данных» / hint / error | `EmptyState` / `InfoNote` / `ErrorNotice` | ad-hoc paragraphs |
 | Icon | `Icon name={IconName}` | emoji or unicode glyphs (`✔`, `→`, `✕`) |
 | Page title / tabs | `PageHeader`; `PageTabs` (index-driven) or `ValueTabs` (route/state key) | raw `<h1>` / MUI `Tabs` |
+| Section heading and content | `PageSection` | ad-hoc section heading and wrapper |
+| Compact metric | `StatTile` | a custom metric card |
+| Inline state or feedback | `InlineStatus` | status conveyed by colour alone |
+| Prominent page state | `StatusHero` | a bespoke status banner |
+| Apply lifecycle summary | `ApplyStatusRail` | a second apply-status reader or calculated history |
+| Service heading and state | `ServiceStatusHeader` | separate, inconsistent service status chrome |
+| Wizard step progress | `WizardProgress` | hand-built step indicators |
+| Loading placeholder | `LoadingSkeleton` | fabricated data while loading |
+| Optional expert controls | `ExpertDisclosure` | an inaccessible custom disclosure |
+| Risk action confirmation | `ConfirmDialog` | new `window.confirm` calls |
 | Form layout | `FormGrid` (`FormWide`, `FormActions`) | flex divs, per-field widths |
 | Remove an item | `DeleteButton` | a red text button "Удалить" |
 | Editor draft lifecycle | `useDraftEditor` + `EditorShell`/`EditorFooter` | another local `editing/saving/error` copy |
@@ -83,8 +93,9 @@ allowed imports there are `Alert`, `Button`, `Checkbox`, `Dialog*`,
   `Card action` or `.toolbar-actions`. Per-row → the row's own control.
 - Text buttons for one-off actions; icon buttons (`DeleteButton`) for repeated
   row operations.
-- Destructive actions need a confirmation and a surfaced error
-  (`ErrorNotice`); follow the existing `window.confirm` pattern.
+- Destructive and other risk actions need a confirmation and a surfaced error
+  (`ErrorNotice`). New risk actions use the MUI `ConfirmDialog` primitive instead
+  of `window.confirm`; existing calls may be migrated when those flows change.
 - Never place two controls for the same logical action with different wording.
 
 ## 5. Accessibility
@@ -101,6 +112,12 @@ allowed imports there are `Alert`, `Button`, `Checkbox`, `Dialog*`,
   disabled fields drop out of the tab order and read as "unavailable".
 - Keep MUI's keyboard/focus behaviour; do not add `tabIndex=-1` or remove focus
   outlines.
+- `ExpertDisclosure` must open and close from the keyboard, expose its expanded
+  state, and keep hidden controls out of the tab order.
+- `PageHeader` owns the page's single `h1`; `PageSection` and other headings
+  use lower levels in order.
+- A countdown in `ApplyStatusRail` announces phase changes with `aria-live`,
+  not every second of the countdown.
 
 ## 6. Styling and tokens
 
@@ -120,6 +137,10 @@ allowed imports there are `Alert`, `Button`, `Checkbox`, `Dialog*`,
   cache.
 - **Never fabricate data.** No demo fallback, no `LAB_MODE`, no plausible-looking
   sample rows presented as real. Empty state = prompt setup.
+- Status must be honest: unknown or unread state is not healthy. Status
+  primitives must show the supplied state without inferring success from missing
+  data. `ApplyStatusRail` is prop-only: its caller supplies status and any time
+  values; the rail never invents timestamps or fetches status itself.
 - **No unauthenticated panel render.** Without a session the only reachable
   screen is `/login` (and `/onboarding` for first run); every panel route sits
   behind the `Protected` guard and redirects to `/login`. There is no read-only

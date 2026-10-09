@@ -21,6 +21,18 @@ except where a change was explicitly agreed (TODO-API copy, `demo` rename).
 - [x] `ErrorNotice.tsx`, `EditorShell.tsx` (+ `EditorFooter`, `EditorFieldset`)
 - [x] `hooks/useDraftEditor.ts` — one draft lifecycle for all 7 editors
 
+## Foundation stream — page structure and status
+- [x] `PageSection` — section heading and content beneath the single `PageHeader` h1
+- [x] `StatTile` — compact metric with an explicit value or unknown state
+- [x] `InlineStatus` — inline state or feedback with text, not colour alone
+- [x] `StatusHero` — prominent page state, including unknown without implying healthy
+- [x] `ApplyStatusRail` — prop-only apply lifecycle display; caller owns status and timestamps; countdown `aria-live` changes only with phase
+- [x] `ServiceStatusHeader` — shared service heading and honest state
+- [x] `WizardProgress` — accessible wizard step progress
+- [x] `LoadingSkeleton` — loading placeholder without fabricated data
+- [x] `ExpertDisclosure` — keyboard-accessible optional controls with expanded state
+- [x] `ConfirmDialog` — MUI confirmation for new destructive or other risk actions
+
 ## Pages migrated to the shared library
 - [x] `Network.tsx` — `.form-grid` fix not here (Routing), raw selects replaced
 - [x] `Firewall.tsx` — raw selects replaced, `Collection`-style footer unified

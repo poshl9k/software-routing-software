@@ -36,6 +36,8 @@ export const tokens = {
   badgeBlueSoft: "rgba(113,112,255,0.14)",
   badgeGreen: "#4ade80",
   badgeRed: "#f87171",
+  statusUnknown: "#8a8f98",
+  statusUnknownSoft: "rgba(138,143,152,0.12)",
 
   // Borders — always semi-transparent white
   border: "rgba(255,255,255,0.08)",
@@ -70,6 +72,8 @@ export const globalStyles = {
     "--vs-badge-blue-soft": tokens.badgeBlueSoft,
     "--vs-badge-green": tokens.badgeGreen,
     "--vs-badge-red": tokens.badgeRed,
+    "--vs-status-unknown": tokens.statusUnknown,
+    "--vs-status-unknown-soft": tokens.statusUnknownSoft,
     "--vs-warning": tokens.warning,
     "--vs-warning-soft": "rgba(242,201,76,0.10)",
     "--vs-warning-border": "rgba(242,201,76,0.25)",
