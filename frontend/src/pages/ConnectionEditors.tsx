@@ -39,6 +39,12 @@ const ipsValid = (v: string[]) =>
 const split = (v: string) => v.split(",");
 const awgRequired = ["Jc", "S1", "S2", "H1", "H2", "H3", "H4"];
 const awgFields = ["Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"];
+const certificateModeLabels: Record<CaddySite["certificate_mode"], string> = {
+  http01: "Авто (HTTP-01)",
+  dns01: "Авто (DNS-01)",
+  manual: "Ручной",
+  passthrough: "TLS passthrough (SNI)",
+};
 
 /** First free tunnel device name (tun0, tun1, …), never colliding with a
  * declared interface or a physical host NIC name. */
@@ -377,16 +383,15 @@ function Collection<T extends Row>({
             <DataTable
               heads={
                 kind === "tunnels"
-                  ? ["Имя", "Роль", "Протокол", "Статус", "QR"]
+                  ? ["Имя", "Роль", "Протокол", "Действия"]
                   : kind === "sites"
                     ? ["Имя", "Hostname", "Upstream", "Сертификат", "Статус"]
                     : ["Имя", "Провайдер", "Hostname", "Статус"]
               }
               rows={collection.map((row) => {
                 const cells = summary(row);
-                if (rowActions && !noConfiguration) {
-                  const actions = rowActions(row);
-                  if (actions) cells.push(actions);
+                if (rowActions) {
+                  cells.push(noConfiguration ? null : rowActions(row));
                 }
                 return cells;
               })}
@@ -571,7 +576,6 @@ export function Tunnels() {
           t.name,
           <Badge>{t.role === "server" ? "сервер" : "клиент"}</Badge>,
           t.protocol,
-          "—",
         ]}
         form={(t, patch, created, disabled, setError) => (
           <FormGrid>
@@ -673,7 +677,7 @@ export function Tunnels() {
                     private_key: { plaintext: keys.private_key },
                     ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}),
                   }))
-                  .catch((e) => { setQrError(e); })}>Сгенерировать ключи</Button>
+                  .catch(setError)}>Сгенерировать ключи</Button>
               </FormActions>
             </div>
             {t.private_key && !("plaintext" in t.private_key) && (
@@ -751,7 +755,7 @@ export function Tunnels() {
                             value={p.allowed_ips.join(",")}
                             valid={ipsValid(p.allowed_ips)}
                             placeholder="10.66.66.2/32"
-                            hint="Пусто — адрес выдастся автоматически (.2, .3, … в подсети туннеля)"
+                            hint="AllowedIPs ≠ маршрут. Пусто — адрес выдастся автоматически (.2, .3, … в подсети туннеля)"
                             onChange={(v) => update({ allowed_ips: split(v) })}
                           />
                           <SecretField label="Preshared key" value={p.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />
@@ -760,8 +764,8 @@ export function Tunnels() {
                           </FormWide>
                           <FormWide>
                             <FormActions>
-                              <Button disabled={disabled} onClick={() => void api.keygenPeerKeypair().then((pair) => update({ public_key: pair.public_key, private_key: { plaintext: pair.private_key } })).catch((e) => setQrError(e))}>Сгенерировать ключи пира</Button>
-                              <Button disabled={disabled} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } })).catch((e) => setQrError(e))}>Сгенерировать PSK</Button>
+                              <Button disabled={disabled} onClick={() => void api.keygenPeerKeypair().then((pair) => update({ public_key: pair.public_key, private_key: { plaintext: pair.private_key } })).catch(setError)}>Сгенерировать ключи пира</Button>
+                              <Button disabled={disabled} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } })).catch(setError)}>Сгенерировать PSK</Button>
                               <Button onClick={()=>void showQr(t.name,p.name)}>QR-код</Button>
                               <Button disabled>Экспорт пира</Button>
                             </FormActions>
@@ -788,7 +792,7 @@ export function Tunnels() {
                               },
                             ],
                           }))
-                        .catch((e) => setQrError(e))
+                        .catch(setError)
                     }
                   >
                     + Добавить пира
@@ -813,10 +817,11 @@ export function Tunnels() {
                   label="AllowedIPs"
                   value={t.allowed_ips.join(",")}
                   valid={ipsValid(t.allowed_ips)}
+                  hint="AllowedIPs ≠ маршрут"
                   onChange={(v) => patch({ allowed_ips: split(v) })}
                 />
                 <Field
-                  label="Keepalive"
+                  label="Keepalive, с"
                   type="number"
                   value={t.keepalive}
                   valid={
@@ -862,9 +867,7 @@ export function Tunnels() {
         <DialogTitle>QR-код пира {qr?.peer}</DialogTitle><DialogContent>{qrError?<ErrorNotice error={qrError}/>:qr&&<img src={qr.url} alt={`QR-код пира ${qr.peer}`} style={{maxWidth:"100%"}}/>}</DialogContent>
         <DialogActions>{qr&&<Button component="a" href={qr.url} download={`${qr.peer}.png`}>Скачать PNG</Button>}<Button onClick={()=>{if(qr)URL.revokeObjectURL(qr.url);setQr(null);}}>Закрыть</Button></DialogActions>
       </Dialog>
-      <p className="sub">
-        AllowedIPs ≠ маршрут. Роль после создания не меняется.
-      </p>
+      <p className="sub">Роль после создания не меняется.</p>
     </>
   );
 }
@@ -902,8 +905,8 @@ export function Sites() {
         s.name,
         s.hostname,
         s.upstream,
-        s.certificate_mode,
-        s.certificate_mode === "passthrough" ? "TLS не завершается" : "—",
+        certificateModeLabels[s.certificate_mode],
+        s.certificate_mode === "passthrough" ? "TLS не завершается" : "Статус недоступен",
       ]}
       form={(s, patch, created) => (
         <FormGrid>
@@ -934,11 +937,11 @@ export function Sites() {
             valid={!!s.upstream.trim()}
             onChange={(upstream) => patch({ upstream })}
           />
-          <SelectField
+          <Select
             label="Режим сертификата"
             value={s.certificate_mode}
-            options={["http01", "dns01", "manual", "passthrough"]}
-            onChange={(certificate_mode) => patch({ certificate_mode })}
+            options={Object.entries(certificateModeLabels).map(([value, label]) => ({ value, label }))}
+            onChange={(certificate_mode) => patch({ certificate_mode: certificate_mode as CaddySite["certificate_mode"] })}
           />
           <Select
             label="WAN-адрес"
@@ -1023,7 +1026,7 @@ export function DDNS() {
             ? !!d.zone?.trim()
             : !!d.server?.trim() && !!d.key_name?.trim())
         }
-        summary={(d) => [d.name, d.provider, d.hostname, "—"]}
+        summary={(d) => [d.name, d.provider, d.hostname, "Статус недоступен"]}
         form={(d, patch, created) => (
           <FormGrid>
             {created ? (
