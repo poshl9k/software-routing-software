@@ -16,6 +16,7 @@ import { Field } from "../components/Field";
 import { Select, SelectField, InterfaceSelect } from "../components/Select";
 import { Toggle } from "../components/Toggle";
 import { EditorFooter, EditorFieldset } from "../components/EditorShell";
+import { FormGrid } from "../components/Form";
 import {
   nameValid,
   endpointValid,
@@ -41,6 +42,8 @@ const ruleActions: { value: FirewallRule["action"]; label: string }[] = [
 ];
 const ruleActionLabel = (action: FirewallRule["action"]) =>
   ruleActions.find((option) => option.value === action)?.label ?? action;
+const endpointLabel = (value: string) =>
+  value === "any" ? "Любой" : value === "zone:lan" ? "Домашняя сеть" : value === "zone:router" ? "Роутер" : value;
 
 const protocols: { value: FirewallRule["protocol"]; label: string }[] = [
   { value: "any", label: "any" },
@@ -73,6 +76,7 @@ export default function Firewall() {
   const previewAliases=async(data:string)=>{editor.setError(null);try{let body:{aliases:Alias[]}|{data:string}={data};try{const parsed=JSON.parse(data);const imported=Array.isArray(parsed)?parsed:parsed?.aliases;if(Array.isArray(imported))body={aliases:imported as Alias[]};}catch{/* TXT/CSV input */}setPreview(await api.previewAliases(body));}catch(e){editor.setError(e);}};
   const importAliases=async()=>{if(!preview)return;editor.setError(null);try{await api.importAliases(preview.aliases,importMode);const aliases=importMode==="replace"?preview.aliases:[...c.aliases,...preview.aliases.filter(a=>!c.aliases.some(x=>x.name===a.name))];await saveDraft({...c,aliases});editor.setValue(editor.value?{...editor.value,aliases}:null);setPreview(null);}catch(e){editor.setError(e);}};
   const [tab, setTab] = useState("wan");
+  const [composerIndex, setComposerIndex] = useState<number | null>(null);
   // Server tunnels that open their listen port on the WAN (generated rules).
   const openTunnels = c.tunnels.filter(
     (t) => t.role === "server" && t.open_port && t.listen_port,
@@ -108,14 +112,6 @@ export default function Firewall() {
         ...ordered.map((r, order) => ({ ...r, order })),
       ],
     });
-  const reorder = (index: number, delta: number) => {
-    const ordered = rules.map(({ index: _index, ...r }) => r);
-    [ordered[index], ordered[index + delta]] = [
-      ordered[index + delta],
-      ordered[index],
-    ];
-    setZoneRules(ordered);
-  };
   const allValid =
     rows.firewall_rules.every(
       (r) =>
@@ -202,156 +198,56 @@ export default function Firewall() {
                   .join("; ")}
               </InfoNote>
             )}
-            <DataTable
-              heads={[
-                "Порядок",
-                "Имя",
-                "Протокол",
-                "Источник",
-                "Назначение",
-                "Действие",
-                "Включено",
-                "Лог",
-                "Порт",
-                "",
-              ]}
-              rows={rules.map((r, position) =>
-                isEditMode
-                  ? [
-                      <>
-                        <span>{r.order}</span>
-                        <Button
-                          aria-label={`Вверх ${r.name}`}
-                          disabled={position === 0}
-                          onClick={() => reorder(position, -1)}
-                        >
-                          ↑
-                        </Button>
-                        <Button
-                          aria-label={`Вниз ${r.name}`}
-                          disabled={position === rules.length - 1}
-                          onClick={() => reorder(position, 1)}
-                        >
-                          ↓
-                        </Button>
-                      </>,
-                      <Field
-                        ariaLabel="Имя правила"
-                        value={r.name}
-                        valid={uniqueName(r.name, rows.firewall_rules)}
-                        hint="Латиница, цифры, _; до 31 символа; уникальное имя"
-                        onChange={(name) => updateRule(r.index, { name })}
-                      />,
-                      <Select
-                        ariaLabel="Протокол"
-                        value={r.protocol}
-                        options={protocols}
-                        onChange={(protocol) =>
-                          updateRule(r.index, {
-                            protocol: protocol as FirewallRule["protocol"],
-                          })
-                        }
-                      />,
-                      <Field
-                        ariaLabel="Источник"
-                        value={r.src}
-                        valid={endpointValid(r.src)}
-                        hint="any, IP/CIDR, @алиас, zone:lan"
-                        onChange={(src) => updateRule(r.index, { src })}
-                      />,
-                      <Field
-                        ariaLabel="Назначение"
-                        value={r.dst}
-                        valid={endpointValid(r.dst)}
-                        hint="any, IP/CIDR, @алиас, zone:lan"
-                        onChange={(dst) => updateRule(r.index, { dst })}
-                      />,
-                      <Select
-                        ariaLabel="Действие"
-                        value={r.action}
-                        options={ruleActions}
-                        onChange={(action) =>
-                          updateRule(r.index, { action: action as FirewallRule["action"] })
-                        }
-                      />,
-                      <Toggle
-                        label="Включено"
-                        value={r.enabled}
-                        onChange={(enabled) => updateRule(r.index, { enabled })}
-                      />,
-                      <Toggle
-                        label="Лог"
-                        value={r.log}
-                        onChange={(log) => updateRule(r.index, { log })}
-                      />,
-                      <Field
-                        ariaLabel="Порт / @алиас"
-                        value={r.destination_ports ?? ""}
-                        onChange={(destination_ports) =>
-                          updateRule(r.index, {
-                            destination_ports: destination_ports || null,
-                          })
-                        }
-                      />,
-                      remove(
-                        () =>
-                          setZoneRules(
-                            rules
-                              .filter((rule) => rule.index !== r.index)
-                              .map(({ index: _index, ...rule }) => rule),
-                          ),
-                        `Удалить правило ${r.name || `#${r.index + 1}`}`,
-                      ),
-                    ]
-                  : [
-                      r.order,
-                      r.name,
-                      r.protocol,
-                      r.src,
-                      r.dst,
-                      <Badge tone={r.action === "pass" ? "green" : "red"}>
-                        {ruleActionLabel(r.action)}
-                      </Badge>,
-                      r.enabled ? "да" : "нет",
-                      r.log ? "●" : "—",
-                      r.destination_ports,
-                      "—",
-                    ],
-              )}
-            />
-            {isEditMode && (
-              <Button
-                onClick={() =>
-                  patch({
-                    firewall_rules: [
-                      ...rows.firewall_rules,
-                      {
-                        name: "",
-                        ingress_zone: tab,
-                        protocol: "any",
-                        src: "any",
-                        dst: "any",
-                        destination_ports: null,
-                        action: "block",
-                        order: Math.max(-1, ...rules.map((r) => r.order)) + 1,
-                        enabled: true,
-                        log: false,
-                        counters: { states: 0, packets: 0, bytes: 0 },
-                      },
-                    ],
-                  })
-                }
-              >
-                + Добавить правило
-              </Button>
-            )}
+            <DataTable heads={["Правило по порядку", "Состояние", "Действия"]} rows={[
+              ...rules.map((r, position) => [
+                `${position + 1}. ${ruleActionLabel(r.action)} · ${endpointLabel(r.src)} → ${endpointLabel(r.dst)} · ${r.protocol.toUpperCase()}${r.destination_ports ? `/${r.destination_ports}` : ""} · ${r.name || "Без имени"}`,
+                r.enabled ? (r.log ? "Включено · журнал" : "Включено") : "Выключено",
+                isEditMode ? <Button onClick={() => setComposerIndex(r.index)}>Изменить</Button> : "",
+              ]),
+              ["По умолчанию: запретить", "После всех правил", ""],
+            ]} />
+            {isEditMode && <Button onClick={() => {
+              const next = rows.firewall_rules.length;
+              patch({ firewall_rules: [...rows.firewall_rules, { name: "", ingress_zone: tab,
+                protocol: "any", src: "any", dst: "any", destination_ports: null,
+                action: "block", order: Math.max(-1, ...rules.map(r => r.order)) + 1,
+                enabled: false, log: false, counters: { states: 0, packets: 0, bytes: 0 },
+              }] }); setComposerIndex(next);
+            }}>Добавить правило</Button>}
+            {isEditMode && composerIndex !== null && rows.firewall_rules[composerIndex]?.ingress_zone === tab && (() => {
+              const r = rows.firewall_rules[composerIndex];
+              const position = rules.findIndex(item => item.index === composerIndex);
+              return <Card title={r.name || "Новое правило"}>
+                <InfoNote>Правила выше проверяются раньше. Новое правило выключено до включения вручную.</InfoNote>
+                <FormGrid>
+                  <Field label="Имя" value={r.name} valid={uniqueName(r.name, rows.firewall_rules)} onChange={name => updateRule(composerIndex, { name })} />
+                  <Field label="Откуда" value={r.src} valid={endpointValid(r.src)} hint="any, IP/CIDR, @алиас, zone:lan" onChange={src => updateRule(composerIndex, { src })} />
+                  <Field label="Куда" value={r.dst} valid={endpointValid(r.dst)} hint="any, IP/CIDR, @алиас, zone:lan" onChange={dst => updateRule(composerIndex, { dst })} />
+                  <Select label="Протокол" value={r.protocol} options={protocols} onChange={protocol => updateRule(composerIndex, { protocol: protocol as FirewallRule["protocol"] })} />
+                  <Field label="Порт / @алиас" value={r.destination_ports ?? ""} onChange={destination_ports => updateRule(composerIndex, { destination_ports: destination_ports || null })} />
+                  <Select label="Действие" value={r.action} options={ruleActions} onChange={action => updateRule(composerIndex, { action: action as FirewallRule["action"] })} />
+                  <Select label="Позиция" value={String(position)} options={rules.map((_, i) => ({ value: String(i), label: `${i + 1}` }))} onChange={value => {
+                    const ordered = rules.map(({ index: _index, ...rule }) => rule);
+                    const [moving] = ordered.splice(position, 1);
+                    ordered.splice(Number(value), 0, moving);
+                    setZoneRules(ordered); setComposerIndex(null);
+                  }} />
+                  <Toggle label="Включено" value={r.enabled} onChange={enabled => updateRule(composerIndex, { enabled })} />
+                  <Toggle label="Записывать совпадения" value={r.log} onChange={log => updateRule(composerIndex, { log })} />
+                </FormGrid>
+                {remove(() => {
+                  setZoneRules(rules.filter(item => item.index !== composerIndex).map(({ index: _index, ...rule }) => rule));
+                  setComposerIndex(null);
+                }, `Удалить правило ${r.name || `#${composerIndex + 1}`}`)}
+              </Card>;
+            })()}
             <Badge>
               Anti-lockout: доступ к панели с lan —{" "}
               {c.anti_lockout ? "вкл" : "выкл"}
             </Badge>
           </Card>
         )}
-        {(zone || tab === "Port Forward") && (
+        {tab === "Port Forward" && (
           <Card title="Port Forward">
             <DataTable
               heads={[
@@ -478,7 +374,7 @@ export default function Firewall() {
             </p>
           </Card>
         )}
-        {(zone || tab === "Outbound NAT") && (
+        {tab === "Outbound NAT" && (
           <Card title="Outbound NAT">
             {isEditMode ? (
               <SelectField
@@ -610,7 +506,7 @@ export default function Firewall() {
             </p>
           </Card>
         )}
-        {(zone || tab === "Псевдонимы") && (
+        {tab === "Псевдонимы" && (
           <Card title="Псевдонимы (алиасы)">
             <div className="footer-actions"><Select label="Формат экспорта" value={exportFormat} options={[{value:"json",label:"JSON"},{value:"txt",label:"TXT"},{value:"csv",label:"CSV"}]} onChange={v=>setExportFormat(v as "json"|"txt"|"csv")}/><Button onClick={()=>void downloadAliases()}>Экспорт</Button></div>
             <div className="footer-actions"><Button component="label">Выбрать файл<input hidden type="file" accept=".json,.txt,.csv,text/plain,application/json" onChange={e=>{const file=e.target.files?.[0];if(file)void file.text().then(text=>{setImportText(text);void previewAliases(text);});}}/></Button><Field label="Данные для импорта (TXT/CSV)" multiline value={importText} onChange={setImportText}/><Button onClick={()=>void previewAliases(importText)}>Предпросмотр</Button></div>
