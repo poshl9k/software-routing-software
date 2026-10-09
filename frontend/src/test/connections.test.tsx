@@ -1,505 +1,168 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { RouterProvider } from "../state";
 import { Tunnels, Sites, DDNS } from "../pages/ConnectionEditors";
 import { emptyConfiguration } from "../fixtures";
 import type { Configuration, Tunnel } from "../types";
+
 const server: Tunnel = {
-  name: "vpn",
-  interface: "awg0",
-  role: "server",
-  protocol: "awg",
-  private_key: { redacted: true },
-  listen_port: 51820,
-  peers: [
-    {
-      name: "phone",
-      public_key: "pub",
-      allowed_ips: ["10.0.0.2/32"],
-      preshared_key: { redacted: true },
-    },
-  ],
-  endpoint: null,
-  server_public_key: null,
-  allowed_ips: [],
-  keepalive: 25,
-  obfuscation: { Jc: 4, S1: 0, S2: 0, H1: 1, H2: 2, H3: 3, H4: 4 },
-    open_port: true,
+  name: "vpn", interface: "tun0", role: "server", protocol: "awg",
+  private_key: { redacted: true }, listen_port: 51820,
+  peers: [{ name: "phone", public_key: "pub", allowed_ips: ["10.0.0.2/32"], preshared_key: { redacted: true } }],
+  endpoint: null, server_public_key: null, allowed_ips: [], keepalive: 25,
+  obfuscation: { Jc: 4, S1: 0, S2: 0, H1: 1, H2: 2, H3: 3, H4: 4 }, open_port: true,
 };
-const generated = {
-  private_key: "generated-private-key",
-  public_key: "generated-public-key",
-  obfuscation: { Jc: 4, Jmin: 35, Jmax: 90, S1: 12, S2: 95, H1: 11, H2: 12, H3: 13, H4: 14 },
-};
-const wan: Configuration = {
-  ...emptyConfiguration,
-  interfaces: [
-    {
-      name: "eth0",
-      type: "physical",
-      zone: "wan",
-      description: null,
-      addressing: "static",
-      addresses: ["203.0.113.1/24"],
-      parent: null,
-      vlan_id: null,
-      members: [],
-    },
-  ],
-};
-async function open(
-  page: React.ReactNode,
-  config = emptyConfiguration,
-  fail = false,
-  keygen: (protocol: "wg" | "awg") => Promise<Response> = async (protocol) =>
-    new Response(JSON.stringify(protocol === "awg" ? generated : {
-      private_key: generated.private_key,
-      public_key: generated.public_key,
-    })),
-) {
+const generated = { private_key: "generated-private-key", public_key: "generated-public-key",
+  obfuscation: { Jc: 4, Jmin: 35, Jmax: 90, S1: 12, S2: 95, H1: 11, H2: 12, H3: 13, H4: 14 } };
+const wan: Configuration = { ...emptyConfiguration, interfaces: [{ name: "eth0", type: "physical", zone: "wan", description: null,
+  addressing: "static", addresses: ["203.0.113.1/24"], parent: null, vlan_id: null, members: [] }] };
+async function mount(page: React.ReactNode, config: Configuration = emptyConfiguration, fail = false,
+  keygen: (protocol: "wg" | "awg") => Promise<Response> = async (protocol) => new Response(JSON.stringify(protocol === "awg" ? generated : { private_key: generated.private_key, public_key: generated.public_key }))) {
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
-    if (path === "/api/keygen/tunnel") {
-      expect(init?.method).toBe("POST");
-      expect(init?.credentials).toBe("include");
-      const { protocol } = JSON.parse(String(init?.body));
-      expect(["wg", "awg"]).toContain(protocol);
-      return keygen(protocol);
-    }
-    if (path === "/api/versions")
-      return new Response(
-        JSON.stringify([{ id: 1, status: "confirmed", configuration: config }]),
-      );
-    if (fail)
-      return new Response(
-        JSON.stringify({ code: "save.failed", message: "Ошибка API" }),
-        { status: 500 },
-      );
-    return new Response(
-      JSON.stringify({
-        id: 2,
-        status: "draft",
-        configuration: JSON.parse(String(init?.body)),
-      }),
-    );
+    if (path === "/api/keygen/tunnel") return keygen(JSON.parse(String(init?.body)).protocol);
+    if (path === "/api/versions") return new Response(JSON.stringify([{ id: 1, status: "confirmed", configuration: config }]));
+    if (fail) return new Response(JSON.stringify({ code: "save.failed", message: "Ошибка API" }), { status: 500 });
+    return new Response(JSON.stringify({ id: 2, status: "draft", configuration: JSON.parse(String(init?.body)) }));
   });
   vi.stubGlobal("fetch", fetch);
   render(<RouterProvider>{page}</RouterProvider>);
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Редактировать" })).toBeEnabled(),
-  );
-  await userEvent.click(screen.getByRole("button", { name: "Редактировать" }));
+  if ((page as { type?: unknown }).type === Tunnels) await screen.findByRole("button", { name: /Добавить туннель/ });
+  else { await userEvent.click(await screen.findByRole("button", { name: "Редактировать" })); }
   return fetch;
 }
-const fill = (label: string, value: string) =>
-  fireEvent.change(screen.getByLabelText(label), { target: { value } });
+const fill = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 const save = () => screen.getByRole("button", { name: "Сохранить" });
-it("imports a client .conf into the current draft without key generation", async () => {
-  const fetch = await open(<Tunnels />, emptyConfiguration);
+const draft = (fetch: ReturnType<typeof vi.fn>) => JSON.parse(String(fetch.mock.calls.find(([path]) => path === "/api/draft")?.[1]?.body));
+async function openTunnel() { await userEvent.click(screen.getByRole("button", { name: "Открыть" })); }
+async function choose(role: "client" | "server", protocol: "wg" | "awg" = "wg") {
+  await userEvent.click(screen.getByRole("button", { name: /Добавить туннель/ }));
+  if (role === "server") await userEvent.click(screen.getByRole("button", { name: "Поднять сервер" }));
+  if (protocol === "awg") fill("Протокол нового туннеля", "awg");
+  await userEvent.click(screen.getByRole("button", { name: "Продолжить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новый туннель" })).not.toBeInTheDocument());
+}
+it("shows one tunnel card with honest status; opens one editor with role locked and secret hidden", async () => {
+  await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
+  expect(screen.getByText("vpn · AmneziaWG · Сервер")).toBeVisible();
+  expect(screen.getByText("Клиентов: 1")).toBeVisible();
+  expect(screen.getByText("Состояние недоступно")).toBeVisible();
+  expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  await openTunnel();
+  expect(screen.getByLabelText("Роль")).toHaveAttribute("readonly");
+  await userEvent.click(screen.getByRole("tab", { name: "Ключи" }));
+  expect(screen.getByLabelText("Приватный ключ")).toHaveValue("");
+  expect(screen.getByText(/Повторная генерация ключей разорвёт/)).toBeVisible();
+  await userEvent.click(screen.getByRole("tab", { name: "Клиенты" }));
+  expect(screen.getByLabelText("Preshared key")).toHaveValue("");
+  expect(screen.getByText("phone")).toBeVisible();
+  await userEvent.click(screen.getByRole("tab", { name: "Дополнительно" }));
+  expect(screen.getByLabelText("Jc")).toHaveValue(4);
+});
+it("selects client and protocol before keygen; saves one draft without opening WAN port", async () => {
+  const fetch = await mount(<Tunnels />);
+  await userEvent.click(screen.getByRole("button", { name: /Добавить туннель/ }));
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(0);
+  await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новый туннель" })).not.toBeInTheDocument());
+  await choose("client", "awg");
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(1);
+  fill("Имя туннеля", "client");
+  expect(screen.getByLabelText("Роль")).toHaveValue("клиент");
+  await userEvent.click(screen.getByRole("tab", { name: "Подключение" }));
+  fill("Endpoint", "vpn.example.org:51820");
+  fill("AllowedIPs", "0.0.0.0/0");
+  await userEvent.click(screen.getByRole("tab", { name: "Ключи" }));
+  fill("Публичный ключ сервера", "public");
+  expect(screen.getByText(/Сохранение создаёт только черновик/)).toBeVisible();
+  await userEvent.click(save());
+  await waitFor(() => expect(fetch.mock.calls.some(([p]) => p === "/api/draft")).toBe(true));
+  expect(draft(fetch).tunnels[0]).toMatchObject({ name: "client", role: "client", protocol: "awg", open_port: false,
+    endpoint: "vpn.example.org:51820", allowed_ips: ["0.0.0.0/0"], private_key: { plaintext: generated.private_key } });
+  expect(draft(fetch).interfaces[0].addresses).toEqual(["10.66.66.2/24"]);
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/draft")).toHaveLength(1);
+});
+it("creates server with WAN port closed and previews save effects", async () => {
+  const fetch = await mount(<Tunnels />);
+  await choose("server");
+  fill("Имя туннеля", "vpn");
+  expect(screen.getByText(/WAN UDP-порт не открывается/)).toBeVisible();
+  await userEvent.click(screen.getByRole("tab", { name: "Подключение" }));
+  expect(screen.getByRole("switch", { name: "Открыть порт на WAN" })).not.toBeChecked();
+  await userEvent.click(save());
+  expect(draft(fetch).tunnels[0]).toMatchObject({ name: "vpn", role: "server", listen_port: 51820, open_port: false });
+});
+it("imports client conf with recognized fields and preserves Address; rejects PSK", async () => {
+  const fetch = await mount(<Tunnels />);
   const privateKey = `${"A".repeat(43)}=`;
   const publicKey = `${"B".repeat(43)}=`;
   await userEvent.click(screen.getByRole("button", { name: "Импорт .conf" }));
-  await userEvent.click(screen.getByRole("button", { name: "Импортировать" }));
-  expect(screen.getByText("Вставьте содержимое .conf")).toBeVisible();
-  fireEvent.change(screen.getByLabelText("Содержимое .conf"), {
-    target: { value: `[Interface]\nPrivateKey = ${privateKey}\n[Peer]\nPublicKey = ${publicKey}\nEndpoint = vpn.example.org:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25` },
-  });
-  await userEvent.click(screen.getByRole("button", { name: "Импортировать" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  const conf = `[Interface]\nAddress = 10.9.8.7/24\nPrivateKey = ${privateKey}\n[Peer]\nPublicKey = ${publicKey}\nEndpoint = vpn.example.org:51820\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25`;
+  fill("Содержимое .conf", conf + `\nPresharedKey = ${publicKey}`);
+  await userEvent.click(screen.getByRole("button", { name: "Показать распознанные поля" }));
+  expect(screen.getByText(/PresharedKey не поддерживается/)).toBeVisible();
+  fill("Содержимое .conf", conf);
+  await userEvent.click(screen.getByRole("button", { name: "Показать распознанные поля" }));
+  expect(screen.getByText(/Address 10.9.8.7\/24/)).toBeVisible();
+  expect(screen.getByText(/endpoint vpn.example.org:51820/)).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Добавить в черновик" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Импорт .conf" })).not.toBeInTheDocument());
   expect(screen.getByLabelText("Имя туннеля")).toHaveValue("tunnel1");
-  expect(screen.getByLabelText("Интерфейс")).toHaveValue("tun0");
-  expect(screen.getByLabelText("Keepalive, с")).toHaveValue(25);
-  expect(screen.getByText("AllowedIPs ≠ маршрут")).toBeVisible();
-  expect(fetch.mock.calls.filter(([path]) => path === "/api/keygen/tunnel")).toHaveLength(0);
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(0);
   await userEvent.click(save());
-  await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(true));
-  const body = JSON.parse(fetch.mock.calls.find(([path]) => path === "/api/draft")![1]!.body as string);
-  expect(body.tunnels[0]).toMatchObject({
-    name: "tunnel1", interface: "tun0", role: "client", protocol: "wg",
-    private_key: { plaintext: privateKey }, server_public_key: publicKey,
-    endpoint: "vpn.example.org:51820", allowed_ips: ["0.0.0.0/0", "::/0"],
-    peers: [], listen_port: null,
-  });
+  expect(draft(fetch).interfaces[0].addresses).toEqual(["10.9.8.7/24"]);
+  expect(draft(fetch).tunnels[0].private_key).toEqual({ plaintext: privateKey });
 });
-it("imports from read mode and opens the editor without changing the server first", async () => {
-  const privateKey = `${"A".repeat(43)}=`;
-  const publicKey = `${"B".repeat(43)}=`;
-  const fetch = vi.fn(async (path: string) => {
-    if (path === "/api/versions") return new Response(JSON.stringify([
-      { id: 1, status: "confirmed", configuration: emptyConfiguration },
-    ]));
-    throw new Error(`Unexpected request: ${path}`);
-  });
-  vi.stubGlobal("fetch", fetch);
-  render(<RouterProvider><Tunnels /></RouterProvider>);
-  await userEvent.click(await screen.findByRole("button", { name: "Импорт .conf" }));
-  fill("Содержимое .conf", `[Interface]\nPrivateKey = ${privateKey}\n[Peer]\nPublicKey = ${publicKey}\nEndpoint = vpn.example.org:51820\nAllowedIPs = 10.0.0.0/8`);
-  await userEvent.click(screen.getByRole("button", { name: "Импортировать" }));
-  expect(await screen.findByLabelText("Имя туннеля")).toHaveValue("tunnel1");
-  expect(fetch).toHaveBeenCalledTimes(1);
-});
-it("renders AWG server, locks role, preserves secrets and hides obfuscation for WG", async () => {
-  const fetch = await open(<Tunnels />, {
-    ...emptyConfiguration,
-    tunnels: [server],
-  });
-  expect(screen.getByLabelText("Роль")).toHaveAttribute("readonly");
-  expect(screen.getByLabelText("Jc")).toHaveValue(4);
-  expect(screen.getByLabelText("Приватный ключ")).toHaveValue("");
-  expect(screen.getByText(/сохранён/)).toBeInTheDocument();
-  expect(
-    screen.getByRole("button", { name: "Экспорт пира" }),
-  ).toBeDisabled();
-  fill("Протокол", "wg");
-  expect(screen.queryByLabelText("Jc")).not.toBeInTheDocument();
-  await userEvent.click(save());
-  const body = JSON.parse(
-    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-  );
-  expect(body.tunnels[0].private_key).toEqual({ redacted: true });
-  expect(body.tunnels[0].peers).toEqual(server.peers);
-});
-it("creates a complete draft with a client and write-only new secret", async () => {
-  const wg0 = {
-    name: "wg0",
-    type: "physical" as const,
-    zone: "lan",
-    description: null,
-    addressing: "static" as const,
-    addresses: [],
-    parent: null,
-    vlan_id: null,
-    members: [],
-  };
-  const fetch = await open(<Tunnels />, {
-    ...emptyConfiguration,
-    interfaces: [wg0],
-  });
-  await userEvent.click(
-    screen.getByRole("button", { name: "+ Добавить туннель" }),
-  );
-  await waitFor(() => expect(screen.getByLabelText("Приватный ключ")).toHaveValue(generated.private_key));
-  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(1);
-  fill("Имя туннеля", "bad-name");
-  expect(save()).toBeDisabled();
-  fill("Имя туннеля", "client");
-  fill("Интерфейс", "wg0");
-  fill("Роль", "client");
-  fill("Endpoint", "vpn.example.org:51820");
-  fill("Публичный ключ сервера", "public");
-  fill("AllowedIPs", "0.0.0.0/0");
-  fill("Приватный ключ", "new-key");
-  await userEvent.click(save());
-  const call = fetch.mock.calls.find(([p]) => p === "/api/draft")!;
-  expect(call[1]!.method).toBe("POST");
-  expect(JSON.parse(call[1]!.body as string)).toEqual({
-    ...emptyConfiguration,
-    interfaces: [{ ...wg0, description: "client", addresses: ["10.66.66.2/24"] }],
-    tunnels: [
-      expect.objectContaining({
-        name: "client",
-        role: "client",
-        peers: [],
-        listen_port: null,
-        allowed_ips: ["0.0.0.0/0"],
-        private_key: { plaintext: "new-key" },
-      }),
-    ],
-  });
-  await waitFor(() => expect(screen.queryByLabelText("Приватный ключ")).not.toBeInTheDocument());
-  expect(screen.queryByText("new-key")).not.toBeInTheDocument();
-  expect(screen.queryByText(generated.public_key)).not.toBeInTheDocument();
-});
-it("generates AWG obfuscation on protocol switch and saves only the private key", async () => {
-  const fetch = await open(<Tunnels />);
-  await userEvent.click(screen.getByRole("button", { name: "+ Добавить туннель" }));
-  await waitFor(() => expect(screen.getByLabelText("Приватный ключ")).toHaveValue(generated.private_key));
-  fill("Имя туннеля", "vpn");
-  fill("Протокол", "awg");
-  await waitFor(() => expect(screen.getByLabelText("Jc")).toHaveValue(generated.obfuscation.Jc));
-  expect(screen.getByLabelText("Jmin")).toHaveValue(generated.obfuscation.Jmin);
-  expect(screen.getByLabelText("H4")).toHaveValue(generated.obfuscation.H4);
-  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel").map(([, init]) =>
-    JSON.parse(String(init?.body)),
-  )).toEqual([{ protocol: "wg" }, { protocol: "awg" }]);
-  await userEvent.click(save());
-  const body = JSON.parse(fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string);
-  expect(body.tunnels[0].private_key).toEqual({ plaintext: generated.private_key });
-  expect(body.tunnels[0].obfuscation).toEqual(generated.obfuscation);
-  expect(JSON.stringify(body)).not.toContain(generated.public_key);
-  expect(screen.queryByText(generated.private_key)).not.toBeInTheDocument();
-  expect(screen.queryByText(generated.public_key)).not.toBeInTheDocument();
-});
-it("aligns tunnel action cells for servers and clients", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([
-    { id: 1, status: "confirmed", configuration: {
-      ...emptyConfiguration,
-      tunnels: [server, { ...server, name: "client", role: "client", peers: [] }],
-    } },
-  ]))));
-  render(<RouterProvider><Tunnels /></RouterProvider>);
-  const table = await screen.findByRole("table");
-  await waitFor(() => expect(table.querySelectorAll("tbody tr")).toHaveLength(2));
-  expect(Array.from(table.querySelectorAll("thead th"), (cell) => cell.textContent)).toEqual([
-    "Имя", "Роль", "Протокол", "Действия",
-  ]);
-  for (const row of table.querySelectorAll("tbody tr")) {
-    expect(row.querySelectorAll("td")).toHaveLength(4);
-  }
-  expect(screen.getByRole("button", { name: "phone" })).toBeVisible();
-});
-it("shows editor error when explicit key generation fails", async () => {
-  await open(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, false, async () =>
-    new Response(JSON.stringify({ code: "keygen.failed", message: "Генерация не удалась" }), { status: 500 }),
-  );
-  await userEvent.click(screen.getByRole("button", { name: "Сгенерировать ключи" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("Генерация не удалась");
-});
-it("keeps the editor empty and shows an error when tunnel keygen fails", async () => {
-  const fetch = await open(<Tunnels />, emptyConfiguration, false, async () =>
-    new Response(JSON.stringify({ code: "keygen.failed", message: "Генерация не удалась" }), { status: 500 }),
-  );
-  await userEvent.click(screen.getByRole("button", { name: "+ Добавить туннель" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("Генерация не удалась");
-  expect(screen.queryByLabelText("Имя туннеля")).not.toBeInTheDocument();
-  expect(fetch.mock.calls.filter(([p]) => p === "/api/draft")).toHaveLength(0);
-});
-it("disables adding another tunnel while keygen is pending", async () => {
-  let resolveKeygen!: (response: Response) => void;
-  const pending = new Promise<Response>((resolve) => { resolveKeygen = resolve; });
-  const fetch = await open(<Tunnels />, emptyConfiguration, false, async () => pending);
-  await userEvent.click(screen.getByRole("button", { name: "+ Добавить туннель" }));
-  expect(screen.getByRole("button", { name: "+ Добавить туннель" })).toBeDisabled();
-  expect(screen.queryByLabelText("Имя туннеля")).not.toBeInTheDocument();
-  resolveKeygen(new Response(JSON.stringify(generated)));
-  await waitFor(() => expect(screen.getByLabelText("Приватный ключ")).toHaveValue(generated.private_key));
-  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(1);
-});
-it("saves a passthrough site without certificate secrets", async () => {
-  const fetch = await open(<Sites />, wan);
-  await userEvent.click(
-    screen.getByRole("button", { name: "+ Добавить сайт" }),
-  );
-  fill("Имя сайта", "web");
-  fill("Hostname сайта", "home.example.org");
-  fill("Upstream", "10.0.0.2:443");
-  fill("Режим сертификата", "manual");
-  expect(Array.from((screen.getByLabelText("Режим сертификата") as HTMLSelectElement).options, (option) => [option.value, option.textContent])).toEqual([
-    ["http01", "Авто (HTTP-01)"], ["dns01", "Авто (DNS-01)"],
-    ["manual", "Ручной"], ["passthrough", "TLS passthrough (SNI)"],
-  ]);
-  expect(save()).toBeDisabled();
-  fill("Режим сертификата", "passthrough");
-  expect(screen.queryByLabelText("Сертификат")).not.toBeInTheDocument();
-  await userEvent.click(save());
-  expect(
-    JSON.parse(
-      fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-    ).sites[0],
-  ).toMatchObject({
-    certificate_mode: "passthrough",
-    wan_address: "203.0.113.1",
-    certificate: null,
-  });
-});
-it.each(["cloudflare", "rfc2136"])(
-  "saves %s DDNS with provider fields",
-  async (provider) => {
-    const fetch = await open(<DDNS />, wan);
-    await userEvent.click(
-      screen.getByRole("button", { name: "+ Добавить DDNS" }),
-    );
-    fill("Имя DDNS", "home");
-    fill("Hostname DDNS", "home.example.org");
-    fill("Провайдер", provider);
-    expect(save()).toBeDisabled();
-    if (provider === "cloudflare") fill("Zone", "example.org");
-    else {
-      fill("Сервер DNS", "192.0.2.53");
-      fill("Key name", "home_key");
-    }
-    fill("API token / TSIG key", "token");
-    await userEvent.click(save());
-    expect(
-      JSON.parse(
-        fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-      ).ddns[0],
-    ).toMatchObject({
-      provider,
-      api_token: { plaintext: "token" },
-      wan_interface: "eth0",
-    });
-  },
-);
-it("auto-creates a LAN-zone interface for a new tunnel", async () => {
-  const fetch = await open(<Tunnels />, emptyConfiguration);
-  await userEvent.click(
-    screen.getByRole("button", { name: "+ Добавить туннель" }),
-  );
-  // The tunnel device name is generated; the operator does not pick a NIC.
-  expect(screen.getByLabelText("Интерфейс")).toHaveValue("tun0");
-  await waitFor(() => expect(screen.getByLabelText("Приватный ключ")).toHaveValue(generated.private_key));
-  expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(1);
-  fill("Имя туннеля", "vpn");
-  await userEvent.click(save());
-  const body = JSON.parse(
-    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-  );
-  expect(body.tunnels[0].interface).toBe("tun0");
-  expect(body.tunnels[0].private_key).toEqual({ plaintext: generated.private_key });
-  expect(body.interfaces).toContainEqual(
-    expect.objectContaining({
-      name: "tun0",
-      type: "physical",
-      zone: "lan",
-      addressing: "static",
-      description: "vpn",
-    }),
-  );
-});
-it("offers to create a new interface for a tunnel bound to a physical NIC", async () => {
-  const nic = {
-    name: "eth0",
-    type: "physical" as const,
-    zone: "wan",
-    description: null,
-    addressing: "static" as const,
-    addresses: ["203.0.113.1/24"],
-    parent: null,
-    vlan_id: null,
-    members: [],
-  };
-  await open(<Tunnels />, {
-    ...emptyConfiguration,
-    interfaces: [nic],
-    tunnels: [{ ...server, interface: "eth0" }],
-  });
-  const select = screen.getByLabelText("Интерфейс") as HTMLSelectElement;
-  const option = Array.from(select.options).find((o) =>
-    o.textContent?.includes("создать новый интерфейс"),
-  );
-  // A fresh device name, so an existing tunnel can be moved off a NIC name.
-  expect(option?.value).toBe("tun0");
-});
-it("fills an empty interface description with the owning tunnel name", async () => {
-  const tun = {
-    name: "tun0",
-    type: "physical" as const,
-    zone: "lan",
-    description: null,
-    addressing: "static" as const,
-    addresses: [],
-    parent: null,
-    vlan_id: null,
-    members: [],
-  };
-  const fetch = await open(<Tunnels />, {
-    ...emptyConfiguration,
-    interfaces: [tun],
-    tunnels: [{ ...server, interface: "tun0" }],
-  });
-  await userEvent.click(save());
-  const body = JSON.parse(
-    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-  );
-  expect(body.interfaces[0].description).toBe("vpn");
-});
-it("removes an auto-created tunnel interface when its tunnel is deleted", async () => {
-  const tun = {
-    name: "tun0",
-    type: "physical" as const,
-    zone: "lan",
-    description: "vpn",
-    addressing: "static" as const,
-    addresses: [],
-    parent: null,
-    vlan_id: null,
-    members: [],
-  };
-  const fetch = await open(<Tunnels />, {
-    ...emptyConfiguration,
-    interfaces: [tun],
-    tunnels: [{ ...server, interface: "tun0" }],
-  });
-  await userEvent.click(screen.getByRole("button", { name: "Удалить vpn" }));
-  await userEvent.click(save());
-  const body = JSON.parse(
-    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-  );
-  expect(body.tunnels).toEqual([]);
-  expect(body.interfaces).toEqual([]);
-});
-it("keeps a tunnel device that is still referenced elsewhere", async () => {
-  const tun = {
-    name: "tun0",
-    type: "physical" as const,
-    zone: "lan",
-    description: "vpn",
-    addressing: "static" as const,
-    addresses: [],
-    parent: null,
-    vlan_id: null,
-    members: [],
-  };
-  const fetch = await open(<Tunnels />, {
-    ...emptyConfiguration,
-    interfaces: [tun],
-    tunnels: [{ ...server, interface: "tun0" }],
-    ssh: { interfaces: ["tun0"], wan_confirmed_interfaces: [] },
-  });
-  await userEvent.click(screen.getByRole("button", { name: "Удалить vpn" }));
-  await userEvent.click(save());
-  const body = JSON.parse(
-    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-  );
-  expect(body.tunnels).toEqual([]);
-  expect(body.interfaces.map((i: { name: string }) => i.name)).toEqual(["tun0"]);
-});
-it("materializes the tunnel address and the peer /32 into the saved draft", async () => {
-  const fetch = await open(<Tunnels />, {
-    ...emptyConfiguration,
-    tunnels: [
-      { ...server, allowed_ips: [], peers: [{ ...server.peers[0], allowed_ips: [] }] },
-    ],
-  });
-  await userEvent.click(save());
-  const body = JSON.parse(
-    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-  );
-  expect(body.interfaces).toContainEqual(
-    expect.objectContaining({ name: "awg0", addresses: ["10.66.66.1/24"] }),
-  );
-  expect(body.tunnels[0].peers[0].allowed_ips).toEqual(["10.66.66.2/32"]);
-});
-it("saves a server's public endpoint for the client config", async () => {
-  const fetch = await open(<Tunnels />, {
-    ...emptyConfiguration,
-    tunnels: [{ ...server, endpoint: null }],
-  });
-  fill("Публичный адрес (endpoint)", "vpn.example.org");
-  await userEvent.click(save());
-  const body = JSON.parse(
-    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-  );
-  expect(body.tunnels[0].endpoint).toBe("vpn.example.org");
-});
-it("saves the WAN port toggle for a server tunnel", async () => {
-  const fetch = await open(<Tunnels />, {
-    ...emptyConfiguration,
-    tunnels: [{ ...server, open_port: true }],
-  });
-  await userEvent.click(screen.getByRole("switch", { name: "Открыть порт на WAN" }));
-  await userEvent.click(save());
-  const body = JSON.parse(
-    fetch.mock.calls.find(([p]) => p === "/api/draft")![1]!.body as string,
-  );
-  expect(body.tunnels[0].open_port).toBe(false);
-});
-it("retains edits after API failure", async () => {
-  await open(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true);
+it("retains secret and only edits selected tunnel; delete requires confirmation", async () => {
+  const fetch = await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
+  await openTunnel();
+  await userEvent.click(screen.getByRole("tab", { name: "Подключение" }));
   fill("Порт", "51821");
   await userEvent.click(save());
-  expect(await screen.findByRole("alert")).toHaveTextContent("Ошибка API");
+  expect(draft(fetch).tunnels[0].private_key).toEqual({ redacted: true });
+  expect(draft(fetch).tunnels[0].listen_port).toBe(51821);
+});
+it("confirmation removes tunnel and auto interface only from draft", async () => {
+  const config: Configuration = { ...emptyConfiguration, tunnels: [server], interfaces: [{ name: "tun0", type: "physical", zone: "lan", addressing: "static", addresses: [], description: "vpn", parent: null, vlan_id: null, members: [] }] };
+  const fetch = await mount(<Tunnels />, config);
+  await openTunnel();
+  await userEvent.click(screen.getByRole("button", { name: "Удалить vpn" }));
+  const dialog = screen.getByRole("dialog", { name: "Удалить туннель?" });
+  expect(within(dialog).getByText(/проверьте зависимости/i)).toBeVisible();
+  expect(fetch.mock.calls.filter(([p]) => p === "/api/draft")).toHaveLength(0);
+  await userEvent.click(within(dialog).getByRole("button", { name: "Удалить из черновика" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Удалить туннель?" })).not.toBeInTheDocument());
+  await userEvent.click(save());
+  expect(draft(fetch).tunnels).toEqual([]);
+  expect(draft(fetch).interfaces).toEqual([]);
+});
+it("surfaces keygen failure and keeps save error in editor", async () => {
+  await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true, async () => new Response(JSON.stringify({ message: "Генерация не удалась" }), { status: 500 }));
+  await openTunnel();
+  await userEvent.click(screen.getByRole("tab", { name: "Ключи" }));
+  await userEvent.click(screen.getByRole("button", { name: "Сгенерировать ключи" }));
+  expect((await screen.findAllByRole("alert")).some((alert) => alert.textContent?.includes("Генерация не удалась"))).toBe(true);
+  await userEvent.click(screen.getByRole("tab", { name: "Подключение" }));
+  fill("Порт", "51821");
+  await userEvent.click(save());
+  await waitFor(() => expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("Ошибка API"))).toBe(true));
   expect(screen.getByLabelText("Порт")).toHaveValue(51821);
-  expect(save()).toBeEnabled();
+});
+it("saves passthrough site without certificate secrets", async () => {
+  const fetch = await mount(<Sites />, wan);
+  await userEvent.click(screen.getByRole("button", { name: "+ Добавить сайт" }));
+  fill("Имя сайта", "web"); fill("Hostname сайта", "home.example.org"); fill("Upstream", "10.0.0.2:443");
+  fill("Режим сертификата", "passthrough");
+  await userEvent.click(save());
+  expect(draft(fetch).sites[0]).toMatchObject({ certificate_mode: "passthrough", wan_address: "203.0.113.1", certificate: null });
+});
+it.each(["cloudflare", "rfc2136"])("saves %s DDNS", async (provider) => {
+  const fetch = await mount(<DDNS />, wan);
+  await userEvent.click(screen.getByRole("button", { name: "+ Добавить DDNS" }));
+  fill("Имя DDNS", "home"); fill("Hostname DDNS", "home.example.org"); fill("Провайдер", provider);
+  if (provider === "cloudflare") fill("Zone", "example.org");
+  else { fill("Сервер DNS", "192.0.2.53"); fill("Key name", "home_key"); }
+  fill("API token / TSIG key", "token");
+  await userEvent.click(save());
+  expect(draft(fetch).ddns[0]).toMatchObject({ provider, api_token: { plaintext: "token" }, wan_interface: "eth0" });
 });

@@ -16,6 +16,11 @@ import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { EditorShell } from "../components/EditorShell";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { InlineStatus } from "../components/InlineStatus";
+import { InfoNote } from "../components/InfoNote";
+import { EmptyState } from "../components/EmptyState";
+import { PageTabs } from "../components/Tabs";
 import { Field } from "../components/Field";
 import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
@@ -252,16 +257,16 @@ function Collection<T extends Row>({
   title: string;
   addLabel: string;
   empty: (rows: T[]) => T;
-  create?: (rows: T[]) => Promise<T>;
+  create?: (rows: T[], role: Tunnel["role"], protocol: Tunnel["protocol"]) => Promise<T>;
   valid: (v: T) => boolean;
   clean?: (v: T) => T;
-  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean, setError: (error: unknown) => void) => ReactNode;
+  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean, setError: (error: unknown) => void, tab: number, importedAddresses: Record<string, string>) => ReactNode;
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
   /** Extra configuration derived from the edited rows (e.g. auto-created
    * tunnel interfaces). Merged into the whole-configuration save. */
-  configPatch?: (rows: T[]) => Partial<Configuration>;
-  importRow?: (text: string, rows: T[]) => { row?: T; error?: string };
+  configPatch?: (rows: T[], importedAddresses: Record<string, string>) => Partial<Configuration>;
+  importRow?: (text: string, rows: T[]) => { row?: T; error?: string; address?: string };
 }) {
   const { configuration: c, version, noConfiguration } = useConfiguration();
   const editor = useDraftEditor<EditableRow<T>[]>();
@@ -270,6 +275,13 @@ function Collection<T extends Row>({
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
+  const [importAddresses, setImportAddresses] = useState<Record<string, string>>({});
+  const [preview, setPreview] = useState(false);
+  const [scenario, setScenario] = useState<"client" | "server" | null>(null);
+  const [protocol, setProtocol] = useState<Tunnel["protocol"]>("wg");
+  const [selected, setSelected] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
+  const [tab, setTab] = useState(0);
   const creatingRef = useRef(false);
   const editEpoch = useRef(0);
   const currentEditing = useRef<EditableRow<T>[] | null>(null);
@@ -290,25 +302,31 @@ function Collection<T extends Row>({
         sites: c.sites,
         ddns: c.ddns,
         [kind]: rows,
-        ...(configPatch ? configPatch(rows) : {}),
+        ...(configPatch ? configPatch(rows, importAddresses) : {}),
       };
     });
-  const add = async () => {
-    if (!editing || creatingRef.current) return;
+  const add = async (role: Tunnel["role"] = "server", chosenProtocol: Tunnel["protocol"] = "wg") => {
+    const initial = editing ?? currentEditing.current;
+    if (!initial || creatingRef.current) return;
+    const id = Math.max(next, initial.reduce((max, item) => Math.max(max, item.id + 1), 0));
     if (!create) {
-      editor.setValue([...editing, { id: next, created: true, row: empty(editing.map((v) => v.row)) }]);
-      setNext(next + 1);
+      editor.setValue([...initial, { id, created: true, row: empty(initial.map((v) => v.row)) }]);
+      setSelected(id);
+      setNext(id + 1);
       return;
     }
     creatingRef.current = true;
     setCreating(true);
     const epoch = editEpoch.current;
     try {
-      const row = await create(editing.map((v) => v.row));
+      const row = await create(initial.map((v) => v.row), role, chosenProtocol);
       const latest = currentEditing.current;
       if (epoch === editEpoch.current && latest) {
-        editor.setValue([...latest, { id: next, created: true, row }]);
-        setNext(next + 1);
+        editor.setValue([...latest, { id, created: true, row }]);
+        setSelected(id);
+        setTab(0);
+        setNext(id + 1);
+        setScenario(null);
       }
     } catch (error) {
       if (epoch === editEpoch.current) editor.setError(error);
@@ -321,19 +339,27 @@ function Collection<T extends Row>({
     setImportOpen(false);
     setImportText("");
     setImportError(null);
+    setPreview(false);
   };
+  const parsedImport = importText.trim() && importRow
+    ? importRow(importText, (currentEditing.current ?? collection.map((row, id) => ({ id, created: false, row }))).map(({ row }) => row))
+    : null;
   const submitImport = () => {
     if (!importText.trim()) {
       setImportError("Вставьте содержимое .conf");
       return;
     }
+    if (!preview) { setPreview(true); return; }
     const rows = currentEditing.current ?? collection.map((row, id) => ({ id, created: false, row }));
-    const result = importRow?.(importText, rows.map(({ row }) => row));
+    const result = parsedImport;
     if (!result?.row) {
       setImportError(result?.error ?? "Не удалось импортировать .conf");
       return;
     }
     const id = rows.reduce((max, item) => Math.max(max, item.id + 1), 0);
+    if (result.address && "interface" in result.row) setImportAddresses((old) => ({ ...old, [String((result.row as Tunnel).interface)]: result.address! }));
+    setSelected(id);
+    setTab(0);
     if (!isEdit) {
       editEpoch.current += 1;
       editor.begin([...rows, { id, created: true, row: result.row }]);
@@ -355,7 +381,8 @@ function Collection<T extends Row>({
                 Импорт .conf
               </Button>
             )}
-            {!isEdit && (
+            {kind === "tunnels" && !isEdit && <Button disabled={!version} onClick={() => setScenario("client")}>{addLabel}</Button>}
+            {!isEdit && kind !== "tunnels" && (
               <Button
                 disabled={!version}
                 onClick={() => {
@@ -379,37 +406,45 @@ function Collection<T extends Row>({
             editor.cancel();
           }}
           onSave={() => void save()}
-          view={
+          view={kind === "tunnels" ? (
+            collection.length ? collection.map((row, id) => {
+              const tunnel = row as Tunnel;
+              return <Card key={id} title={`${tunnel.name} · ${tunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"} · ${tunnel.role === "server" ? "Сервер" : "Клиент"}`}
+                action={<Button disabled={!version} onClick={() => {
+                  editor.begin(collection.map((item, index) => ({ id: index, created: false, row: item })));
+                  setNext(collection.length); setSelected(id); setTab(0);
+                }}>Открыть</Button>}>
+                <p>Интерфейс: {tunnel.interface}</p>
+                <p>{tunnel.role === "server" ? `Клиентов: ${tunnel.peers.length}` : `Endpoint: ${tunnel.endpoint ?? "не задан"}`}</p>
+                <InlineStatus tone="unknown" text="Состояние недоступно" />
+              </Card>;
+            }) : <EmptyState title="Туннелей пока нет">Добавьте туннель или импортируйте клиентский .conf.</EmptyState>
+          ) : (
             <DataTable
-              heads={
-                kind === "tunnels"
-                  ? ["Имя", "Роль", "Протокол", "Действия"]
-                  : kind === "sites"
-                    ? ["Имя", "Hostname", "Upstream", "Сертификат", "Статус"]
-                    : ["Имя", "Провайдер", "Hostname", "Статус"]
-              }
+              heads={kind === "sites"
+                ? ["Имя", "Hostname", "Upstream", "Сертификат", "Статус"]
+                : ["Имя", "Провайдер", "Hostname", "Статус"]}
               rows={collection.map((row) => {
                 const cells = summary(row);
-                if (rowActions) {
-                  cells.push(noConfiguration ? null : rowActions(row));
-                }
+                if (rowActions) cells.push(noConfiguration ? null : rowActions(row));
                 return cells;
               })}
             />
-          }
+          )}
           edit={() =>
             editing ? (
               <>
-                {editing.map(({ id, row, created }) => (
+                {kind === "tunnels" && <PageTabs values={((editing.find((v) => v.id === selected)?.row as Tunnel | undefined)?.role === "server")
+                  ? ["Общие", "Подключение", "Ключи", "Клиенты", "Дополнительно"]
+                  : ["Общие", "Подключение", "Ключи", "Дополнительно"]} value={tab} change={setTab} />}
+                {editing.filter(({ id }) => kind !== "tunnels" || id === selected).map(({ id, row, created }) => (
                   <Card
                     key={id}
                     title={row.name || "Новая запись"}
                     action={
                       <DeleteButton
                         label={`Удалить ${row.name || "запись"}`}
-                        onClick={() =>
-                          editor.setValue(editing.filter((v) => v.id !== id))
-                        }
+                        onClick={() => kind === "tunnels" ? setDeleteTarget(id) : editor.setValue(editing.filter((v) => v.id !== id))}
                       />
                     }
                   >
@@ -429,14 +464,22 @@ function Collection<T extends Row>({
                       created,
                       noConfiguration,
                       editor.setError,
+                      tab,
+                      importAddresses,
                     )}
                   </Card>
                 ))}
-                <FormActions>
+                {kind !== "tunnels" && <FormActions>
                   <Button disabled={creating} onClick={() => void add()}>
                     {addLabel}
                   </Button>
-                </FormActions>
+                </FormActions>}
+                {kind === "tunnels" && (() => {
+                  const tunnel = editing.find((item) => item.id === selected)?.row as Tunnel | undefined;
+                  if (!tunnel) return <InfoNote>Сохранение удалит выбранный туннель только из черновика. Изменения вступят в силу после применения.</InfoNote>;
+                  const address = importAddresses[tunnel.interface] ?? c.interfaces.find((i) => i.name === tunnel.interface)?.addresses[0] ?? tunnelAddress(tunnel, editing.map((v) => v.row as Tunnel));
+                  return <InfoNote>При сохранении: {tunnel.name || "новый туннель"} · {tunnel.role === "server" ? "сервер" : "клиент"} · {tunnel.protocol === "awg" ? "AmneziaWG" : "WireGuard"}; интерфейс {tunnel.interface} ({c.interfaces.some((i) => i.name === tunnel.interface) ? "существующий" : "будет создан"}, зона LAN), адрес {address}; WAN UDP-порт {tunnel.role === "server" && tunnel.open_port ? `${tunnel.listen_port} будет открыт после применения` : "не открывается"}. Сохранение создаёт только черновик.</InfoNote>;
+                })()}
                 {!allValid && (
                   <p role="status">
                     Проверьте обязательные поля, формат значений и уникальность
@@ -448,6 +491,29 @@ function Collection<T extends Row>({
           }
         />
       </Card>
+      {kind === "tunnels" && <ConfirmDialog open={deleteTarget !== null} title="Удалить туннель?"
+        body="Туннель, его клиенты и автоматически созданный интерфейс будут удалены из черновика. Проверьте зависимости перед применением."
+        confirmLabel="Удалить из черновика" cancelLabel="Отмена" danger
+        onCancel={() => setDeleteTarget(null)} onConfirm={() => {
+          const remaining = (currentEditing.current ?? []).filter((v) => v.id !== deleteTarget);
+          currentEditing.current = remaining; editor.setValue(remaining); setSelected(null); setDeleteTarget(null);
+        }} />}
+      {kind === "tunnels" && <Dialog open={scenario !== null} onClose={() => setScenario(null)} fullWidth aria-labelledby="scenario-title">
+        <DialogTitle id="scenario-title">Новый туннель</DialogTitle>
+        <DialogContent>
+          <FormGrid>
+            <FormWide><Button onClick={() => { setScenario(null); setImportOpen(true); }}>Импортировать клиентский .conf</Button></FormWide>
+            <Button variant={scenario === "client" ? "contained" : "text"} onClick={() => setScenario("client")}>Подключиться как клиент</Button>
+            <Button variant={scenario === "server" ? "contained" : "text"} onClick={() => setScenario("server")}>Поднять сервер</Button>
+            <Select label="Протокол нового туннеля" value={protocol} options={[{ value: "wg", label: "WireGuard" }, { value: "awg", label: "AmneziaWG" }]} onChange={(v) => setProtocol(v as Tunnel["protocol"])} />
+          </FormGrid>
+          <InfoNote>До сохранения ничего не создаётся. Сохранение создаёт только черновик; серверный WAN-порт по умолчанию закрыт.</InfoNote>
+        </DialogContent>
+        <DialogActions><Button onClick={() => setScenario(null)}>Отмена</Button><Button disabled={creating} onClick={() => {
+          if (!isEdit) { const rows = collection.map((row, id) => ({ id, created: false, row })); currentEditing.current = rows; editor.begin(rows); setNext(collection.length); }
+          void add(scenario ?? "client", protocol);
+        }}>Продолжить</Button></DialogActions>
+      </Dialog>}
       {importRow && (
         <Dialog open={importOpen} onClose={closeImport} fullWidth maxWidth="sm" aria-labelledby="tunnel-conf-import-title">
           <DialogTitle id="tunnel-conf-import-title">Импорт .conf</DialogTitle>
@@ -455,14 +521,16 @@ function Collection<T extends Row>({
             <FormGrid>
               <FormWide>
                 <Field label="Содержимое .conf" multiline value={importText}
-                  onChange={(text) => { setImportText(text); setImportError(null); }} />
+                  onChange={(text) => { setImportText(text); setImportError(null); setPreview(false); }} />
               </FormWide>
             </FormGrid>
+            {preview && parsedImport?.error && <ErrorNotice error={new Error(parsedImport.error)} />}
+            {preview && parsedImport?.row && <InfoNote>Распознано: клиент · {(parsedImport.row as Tunnel).protocol === "awg" ? "AmneziaWG" : "WireGuard"}; endpoint {(parsedImport.row as Tunnel).endpoint}; AllowedIPs {(parsedImport.row as Tunnel).allowed_ips.join(", ")}; Address {parsedImport.address ?? "отсутствует — будет назначен автоматически"}; PSK отсутствует. Приватный ключ скрыт. Сохранение создаёт только черновик.</InfoNote>}
             <ErrorNotice error={importError ? new Error(importError) : null} />
           </DialogContent>
           <DialogActions>
             <Button onClick={closeImport}>Отмена</Button>
-            <Button onClick={submitImport}>Импортировать</Button>
+            <Button onClick={submitImport}>{preview ? "Добавить в черновик" : "Показать распознанные поля"}</Button>
           </DialogActions>
         </Dialog>
       )}
@@ -491,8 +559,8 @@ export function Tunnels() {
     obfuscation: {},
     open_port: true,
   });
-  const createTunnel = async (rows: Tunnel[]): Promise<Tunnel> => {
-    const row = emptyTunnel(rows);
+  const createTunnel = async (rows: Tunnel[], role: Tunnel["role"], protocol: Tunnel["protocol"]): Promise<Tunnel> => {
+    const row = { ...emptyTunnel(rows), role, protocol, listen_port: role === "server" ? 51820 : null, open_port: false };
     if (row.private_key && "plaintext" in row.private_key && row.private_key.plaintext) return row;
     const keys = await api.keygenTunnel(row.protocol);
     if (!keys.private_key?.trim()) throw new Error("Сервер не вернул приватный ключ туннеля");
@@ -522,8 +590,8 @@ export function Tunnels() {
             </div>
           ) : null
         }
-        configPatch={(rows) => ({
-          interfaces: reconcileTunnelInterfaces(c, rows),
+        configPatch={(rows, importedAddresses) => ({
+          interfaces: reconcileTunnelInterfaces(c, rows).map((iface) => importedAddresses[iface.name] ? { ...iface, addresses: [importedAddresses[iface.name]] } : iface),
           tunnels: materializeTunnels(c, rows),
         })}
         empty={emptyTunnel}
@@ -531,10 +599,14 @@ export function Tunnels() {
         importRow={(text, rows) => {
           const result = parseWireGuardConf(text);
           if (result.error) return { error: result.error };
+          const addresses = [...text.matchAll(/^\s*Address\s*=\s*([^\r\n#;]+)/gim)].map((match) => match[1].trim());
+          if (addresses.length > 1 || (addresses[0] && (addresses[0].includes(",") || !addressValid(addresses[0]))))
+            return { error: "Address содержит несколько адресов или имеет неверный формат; импорт без потери адреса невозможен" };
           const taken = new Set(rows.map((row) => row.name));
           let index = 1;
           while (taken.has(`tunnel${index}`)) index += 1;
           return {
+            address: addresses[0],
             row: {
               ...emptyTunnel(rows),
               ...result.tunnel,
@@ -577,8 +649,9 @@ export function Tunnels() {
           <Badge>{t.role === "server" ? "сервер" : "клиент"}</Badge>,
           t.protocol,
         ]}
-        form={(t, patch, created, disabled, setError) => (
+        form={(t, patch, created, disabled, setError, tab, importedAddresses) => (
           <FormGrid>
+            {tab === 0 && <>
             {created ? (
               <Field
                 label="Имя туннеля"
@@ -625,28 +698,7 @@ export function Tunnels() {
                 «создать новый интерфейс».
               </p>
             </div>
-            {created ? (
-              <SelectField
-                label="Роль"
-                value={t.role}
-                options={["server", "client"]}
-                onChange={(role) =>
-                  patch({
-                    role,
-                    peers: [],
-                    endpoint: null,
-                    server_public_key: null,
-                    listen_port: role === "server" ? 51820 : null,
-                  })
-                }
-              />
-            ) : (
-              <Field
-                label="Роль"
-                value={t.role === "server" ? "сервер" : "клиент"}
-                readOnly
-              />
-            )}
+            <Field label="Роль" value={t.role === "server" ? "сервер" : "клиент"} readOnly hint="Роль выбирается при создании и затем не меняется" />
             <SelectField
               label="Протокол"
               value={t.protocol}
@@ -665,6 +717,11 @@ export function Tunnels() {
                 }
               }}
             />
+            <Field label="Адрес туннеля" value={importedAddresses[t.interface] ?? c.interfaces.find((i) => i.name === t.interface)?.addresses[0] ?? tunnelAddress(t, [...c.tunnels.filter((item) => item.name !== t.name), t])} readOnly hint="Адрес интерфейса; импортированный Address сохраняется при записи черновика" />
+            </>}
+            {tab === 2 && <>
+            <FormWide><InfoNote severity="warning">Повторная генерация ключей разорвёт соединение клиентов. Обновите конфигурации другой стороны.</InfoNote></FormWide>
+            {t.role === "client" && <Field label="Публичный ключ сервера" value={t.server_public_key ?? ""} valid={!!t.server_public_key?.trim()} onChange={(server_public_key) => patch({ server_public_key })} />}
             <div>
               <SecretField
                 label="Приватный ключ"
@@ -685,8 +742,8 @@ export function Tunnels() {
                 <p className="sub">Публичный ключ этого туннеля для удалённых клиентов не отображается: он выводится из приватного на хосте при применении.</p>
               </FormWide>
             )}
-            {t.role === "server" ? (
-              <>
+            </>}
+            {tab === 1 && t.role === "server" && <>
                 <Field
                   label="Порт"
                   type="number"
@@ -705,6 +762,8 @@ export function Tunnels() {
                   value={t.open_port}
                   onChange={(open_port) => patch({ open_port })}
                 />
+            </>}
+            {tab === 3 && t.role === "server" && <>
                 {t.peers.map((p, index) => {
                   const update = (v: Partial<typeof p>) =>
                     patch({
@@ -798,20 +857,13 @@ export function Tunnels() {
                     + Добавить пира
                   </Button>
                 </FormActions>
-              </>
-            ) : (
-              <>
+            </>}
+            {tab === 1 && t.role === "client" && <>
                 <Field
                   label="Endpoint"
                   value={t.endpoint ?? ""}
                   valid={!!t.endpoint?.trim()}
                   onChange={(endpoint) => patch({ endpoint })}
-                />
-                <Field
-                  label="Публичный ключ сервера"
-                  value={t.server_public_key ?? ""}
-                  valid={!!t.server_public_key?.trim()}
-                  onChange={(server_public_key) => patch({ server_public_key })}
                 />
                 <Field
                   label="AllowedIPs"
@@ -831,9 +883,8 @@ export function Tunnels() {
                   }
                   onChange={(v) => patch({ keepalive: Number(v) })}
                 />
-              </>
-            )}
-            {t.protocol === "awg" && (
+            </>}
+            {t.protocol === "awg" && tab === (t.role === "server" ? 4 : 3) && (
               <FormWide>
                 <Card title="Обфускация">
                   <FormGrid>
