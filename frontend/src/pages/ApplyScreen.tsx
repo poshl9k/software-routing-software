@@ -14,6 +14,7 @@ import { useApplyStatus } from "../hooks/useApplyStatus";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
+import { DiffReview } from "../components/DiffReview";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { Field } from "../components/Field";
 import { PageHeader } from "../components/PageHeader";
@@ -200,7 +201,7 @@ export default function ApplyScreen() {
       >
         <ErrorNotice error={diffQuery.error} />
         {diffQuery.data ? (
-          <pre className="diff">{JSON.stringify(diffQuery.data, null, 2)}</pre>
+          <DiffReview data={diffQuery.data} />
         ) : (
           <p className="sub">
             Для diff нужны подтверждённая версия и черновик.

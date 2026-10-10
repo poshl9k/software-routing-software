@@ -33,6 +33,16 @@ describe("API client", () => {
       }),
     );
   });
+  it("fetches the structured diff with credentials", async () => {
+    const payload = {
+      changes: [{ op: "replace", path: "/dhcp_subnets/0/valid_lifetime", before: 3600, after: 7200 }],
+      summary: [{ area: "dhcp", title: "DHCP", added: 0, removed: 0, changed: 1, consequences: ["Клиенты получат новый срок аренды"] }],
+    };
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)));
+    vi.stubGlobal("fetch", fetch);
+    await expect(api.diff(3, 4)).resolves.toEqual(payload);
+    expect(fetch).toHaveBeenCalledWith("/api/diff/3/4", expect.objectContaining({ credentials: "include" }));
+  });
   it("preserves structured errors and details", async () => {
     vi.stubGlobal(
       "fetch",

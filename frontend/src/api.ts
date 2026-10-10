@@ -5,6 +5,7 @@ import type {
   ApplyMarker,
   Configuration,
   ConfigurationVersion,
+  DiffResponse,
   Credentials,
   ErrorBody,
   User,
@@ -94,8 +95,8 @@ export const api = {
   confirm: (version_id: number) =>
     post<ApplyResult>("/api/confirm", { version_id }),
   rollback: () => post<ApplyResult>("/api/rollback", {}),
-  diff: (before: number, after: number) =>
-    request<unknown[]>(`/api/diff/${before}/${after}`),
+  diff: (before: number, after: number): Promise<DiffResponse> =>
+    request<DiffResponse>(`/api/diff/${before}/${after}`),
   exportAliases: async (format: "json" | "txt" | "csv", names: string[] | null) => {
     const response = await fetch("/api/aliases/export", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ format, names }) });
     if (!response.ok) throw await responseError(response);
