@@ -188,7 +188,7 @@ stage_apt_deps() {
     # future operator-managed security updates after bootstrap completes.
     apt_with_release update
     apt_with_release install -y dbus python3 python3-pip python3-venv python3-setuptools python3-wheel git build-essential golang-go \
-        kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor wireguard-tools traceroute \
+        kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor wireguard-tools ppp traceroute \
         socat curl nodejs npm debian-keyring debian-archive-keyring \
         openssh-server fail2ban python3-systemd dnscrypt-proxy
     # Mask the packaged units so our own unit (vs-router-dnscrypt.service) is the

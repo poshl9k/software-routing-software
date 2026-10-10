@@ -18,7 +18,7 @@ RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadOnlyPaths=/usr /bin
-ReadWritePaths=/etc/vs-router-ssh /run/vs-router-ssh /var/lib/vs-router-ssh /etc/systemd/network /etc/caddy /etc/systemd/system /etc/vs-router /run/vs-router /var/lib/vs-router /etc/unbound/unbound.conf.d /etc/kea
+ReadWritePaths=/etc/vs-router-ssh /run/vs-router-ssh /var/lib/vs-router-ssh /etc/systemd/network /etc/caddy /etc/systemd/system /etc/vs-router /etc/ppp /run/vs-router /var/lib/vs-router /etc/unbound/unbound.conf.d /etc/kea
 UMask=0007
 
 [Install]

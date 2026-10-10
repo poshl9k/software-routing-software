@@ -217,6 +217,9 @@ class ApplyEngine:
 
     def reload_service(self, name):
         command = self.reload_commands.get(name)
+        if command is None and name == 'pppoe':
+            from .services import PPPoEReloader
+            command = PPPoEReloader(self.executor, self.fs)
         # The gated nft artifacts must be activated, not merely moved into place.
         # A test may inject a command; production wires the same fixed-argv loader
         # in daemon.main. Never accept a filename from an RPC.
@@ -226,7 +229,8 @@ class ApplyEngine:
             command = lambda path: self._load_tproxy_nft(path)
         if callable(command):
             try:
-                command(APPLIED_DIR / (FILES.get(name) or nft_files[name]))
+                command(APPLIED_DIR / (FILES.get(name) or
+                                         ('pppoe.json' if name == 'pppoe' else nft_files[name])))
             except ApplyError:
                 self._failed_service = name
                 raise
@@ -409,6 +413,9 @@ class ApplyEngine:
             version = ConfigurationVersion.model_validate(version_snapshot)
         tproxy_files, tproxy_validators = _tproxy_branch(version)
         doh_files, doh_validators = _doh_branch(version)
+        from . import pppoe_apply
+        pppoe_files = dict(pppoe_apply.FILES) if any(
+            i.addressing == 'pppoe' for i in version.configuration.interfaces) else {}
         try:
             backup = json.loads(self.fs.read(CONFIRMED_DIR / 'snapshot.json'))
         except FileNotFoundError:
@@ -449,10 +456,16 @@ class ApplyEngine:
             marker['tproxy'] = tproxy_apply.describe(version)
         if doh_files:
             marker['doh'] = True
-        apply_files = {**FILES, **tproxy_files, **doh_files}
+        if pppoe_files:
+            marker['pppoe'] = True
+        apply_files = {**FILES, **pppoe_files, **tproxy_files, **doh_files}
         apply_validators = _merged_validators(
             _merged_validators(self.validators if validators is None else validators, tproxy_validators),
             doh_validators)
+        if pppoe_files:
+            apply_validators['pppoe'] = lambda _name, path: (
+                pppoe_apply.interfaces(self.fs.read(path)),
+                self.executor.run(['/usr/sbin/pppd', '--version'], 15))[1]
         try:
             contents = {name: gen(version) for name, gen in (
                 ('nftables', lambda v: generate_nftables(v, management)), ('unbound', generate_unbound), ('kea', generate_kea))}
@@ -476,6 +489,9 @@ class ApplyEngine:
                     f'Name={management.interface}\n',
                     f'Name={management.interface}\nMACAddress={management.mac}\n', 1)
             contents["networkd"] = serialize_networkd(network)
+            if pppoe_files:
+                contents['pppoe'] = pppoe_apply.generate(
+                    version, os.environ.get('VS_ROUTER_SECRET_KEY', '').encode())
             contents["wireguard"] = serialize_wireguard(generate_wg_bundle(version, {}))
             contents["ssh"] = version.configuration.ssh.model_dump_json()
             contents["caddy"] = serialize_caddy(generate_caddy_bundle(version, management))
@@ -488,6 +504,8 @@ class ApplyEngine:
                           steps=self._readiness_steps(version, doh_files),
                           steps_before=('tproxy_interception' if tproxy_files else
                                         'unbound' if doh_files else None))
+            if not pppoe_files and backup is not None and 'pppoe' in backup['files']:
+                self._teardown_pppoe(strict=True)
             if tproxy_files:
                 self._verify_tproxy_tables()
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
@@ -498,6 +516,8 @@ class ApplyEngine:
                 raise ApplyError('panel.unavailable')
             if not safe_mode:
                 self._backup(version.id, files=apply_files)
+                if not pppoe_files and backup is not None and 'pppoe' in backup['files']:
+                    self.fs.remove(CONFIRMED_DIR / 'pppoe.json')
             self.marker(marker)
             return ApplyResult(version.id, marker['status'], marker['phases'])
         except (OSError, subprocess.SubprocessError, ValueError, ApplyError, KeyError) as exc:
@@ -554,6 +574,8 @@ class ApplyEngine:
                     self._teardown_doh_steps()
                 except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError):
                     pass  # Report the primary failure; teardown is best-effort.
+            if mutated and backup is None and pppoe_files:
+                self._teardown_pppoe()
             return ApplyResult(version.id, 'failed', marker['phases'], marker['error'])
 
     def confirm_version(self, version_id):
@@ -572,13 +594,25 @@ class ApplyEngine:
         files = ({**FILES, **tproxy_apply.TPROXY_FILES} if 'tproxy' in marker else None)
         if doh_files_in_marker:
             files = {**FILES, **DOH_FILES} if files is None else {**files, **DOH_FILES}
+        if marker.get('pppoe'):
+            from . import pppoe_apply
+            files = {**(FILES if files is None else files), **pppoe_apply.FILES}
         if 'tproxy' in marker:
             try:
                 self._verify_tproxy_tables()
             except (OSError, subprocess.SubprocessError, ApplyError):
                 self.rollback('agent.tproxy_tables_missing')
                 raise ApplyError('agent.tproxy_tables_missing') from None
+        old_pppoe = False
+        if not marker.get('pppoe'):
+            try:
+                old_pppoe = 'pppoe' in json.loads(
+                    self.fs.read(CONFIRMED_DIR / 'snapshot.json'))['files']
+            except FileNotFoundError:
+                pass
         self._backup(version_id, files=files)
+        if old_pppoe:
+            self.fs.remove(CONFIRMED_DIR / 'pppoe.json')
         self.fs.remove(MARKER_PATH)
         self.fs.remove(JOURNAL_PATH)
         return {'version_id': version_id, 'status': 'confirmed'}
@@ -633,6 +667,18 @@ class ApplyEngine:
         except (OSError, subprocess.SubprocessError, ValueError, ApplyError):
             pass
 
+    def _teardown_pppoe(self, strict=False):
+        from .services import PPPoEReloader
+        from .pppoe_apply import FILES as PPP_FILES
+        path = APPLIED_DIR / PPP_FILES['pppoe']
+        try:
+            self.fs.write(path, '{}')
+            PPPoEReloader(self.executor, self.fs)(path)
+        except (OSError, subprocess.SubprocessError, ValueError, ApplyError):
+            if strict:
+                raise
+        self.fs.remove(path)
+
     def rollback(self, reason):
         try:
             backup = json.loads(self.fs.read(CONFIRMED_DIR / 'snapshot.json'))
@@ -644,11 +690,18 @@ class ApplyEngine:
         # (installing the old product nftables alone does not touch them).
         tproxy_applied = self._tproxy_artifacts_applied()
         doh_applied = self._doh_artifacts_applied()
+        pppoe_applied = bool((self.status() or {}).get('pppoe'))
         tproxy_files, tproxy_validators = _tproxy_branch_from_snapshot(backup['version_snapshot'])
         doh_files, doh_validators = _doh_branch_from_snapshot(backup['version_snapshot'])
-        rollback_files = {**FILES, **tproxy_files, **doh_files}
+        from . import pppoe_apply
+        pppoe_files = dict(pppoe_apply.FILES) if 'pppoe' in backup['files'] else {}
+        rollback_files = {**FILES, **pppoe_files, **tproxy_files, **doh_files}
         rollback_validators = _merged_validators(
             _merged_validators(self.validators, tproxy_validators), doh_validators)
+        if pppoe_files:
+            rollback_validators['pppoe'] = lambda _name, path: (
+                pppoe_apply.interfaces(self.fs.read(path)),
+                self.executor.run(['/usr/sbin/pppd', '--version'], 15))[1]
         contents = dict(backup['files'])
         if not tproxy_files and tproxy_applied:
             contents['tproxy_cleanup'] = tproxy_apply.cleanup_content()
@@ -677,6 +730,13 @@ class ApplyEngine:
             # The confirmed target is not a DoH state: stop the dnscrypt-proxy
             # unit so a reboot cannot re-raise its DoH client.
             self._teardown_doh_steps()
+        if not pppoe_files and pppoe_applied:
+            try:
+                self._teardown_pppoe(strict=True)
+            except (OSError, subprocess.SubprocessError, ValueError, ApplyError) as exc:
+                marker.update(status='rollback_failed', deadline=self.clock())
+                self.marker(marker)
+                raise ApplyError('agent.rollback_failed') from exc
         self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(backup['version_snapshot']))
         marker['deadline'] = None
         marker['status'] = 'rolled_back'

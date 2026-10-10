@@ -178,6 +178,47 @@ class NetworkdReloader:
         self.fs.write(self.manifest_path, serialize_networkd(files))
 
 
+class PPPoEReloader:
+    """Install owned pppd files and reconcile fixed template units."""
+
+    def __init__(self, executor=None, filesystem=None, manifest_path=Path('/etc/vs-router/pppoe-manifest.json')):
+        self.executor = executor or SubprocessExecutor()
+        self.fs = filesystem or LocalFileSystem()
+        self.manifest_path = manifest_path
+
+    def __call__(self, path):
+        from .pppoe_apply import interfaces
+        files, names = interfaces(self.fs.read(path))
+        try:
+            previous, old_names = interfaces(self.fs.read(self.manifest_path))
+        except FileNotFoundError:
+            previous, old_names = {}, []
+        # The union survives an interrupted install and makes cleanup retryable.
+        self.fs.write(self.manifest_path, json.dumps(previous | files, sort_keys=True))
+        changed = set(old_names) ^ set(names)
+        if any(previous.get(secret) != files.get(secret) for secret in
+               ('/etc/ppp/chap-secrets', '/etc/ppp/pap-secrets')):
+            changed.update(set(old_names) & set(names))
+        changed.update(name for name in set(old_names) & set(names)
+                       if previous.get(f'/etc/ppp/peers/vs-router-{name}') !=
+                       files.get(f'/etc/ppp/peers/vs-router-{name}'))
+        for name in sorted(set(old_names) & changed):
+            checked(self.executor, ['systemctl', 'stop', f'vs-router-pppoe@{name}.service'])
+        for filename, content in files.items():
+            target = Path(filename)
+            self.fs.write(target, content)
+            checked(self.executor, ['chown', 'root:root', str(target)])
+            checked(self.executor, ['chmod', '0600', str(target)])
+        for name in names:
+            unit = f'vs-router-pppoe@{name}.service'
+            if name in changed or self.executor.run(
+                    ['systemctl', 'is-active', '--quiet', unit], 15).returncode:
+                checked(self.executor, ['systemctl', 'start', unit])
+        for filename in previous.keys() - files.keys():
+            self.fs.remove(Path(filename))
+        self.fs.write(self.manifest_path, json.dumps(files, sort_keys=True))
+
+
 class WireGuardReloader:
     """Install private bundles, then configure devices after readiness.
 

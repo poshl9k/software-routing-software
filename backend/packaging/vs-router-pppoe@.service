@@ -1,0 +1,14 @@
+[Unit]
+Description=vs-router PPPoE connection on %i
+After=vs-router-bootrestore.service network.target
+Requires=vs-router-bootrestore.service
+
+[Service]
+Type=exec
+ExecStart=/usr/sbin/pppd call vs-router-%i nodetach
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install after installing the Python package and its system dependencies.
-# Requires: kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor
+# Requires: kea-dhcp4-server kea-ctrl-agent unbound nftables apparmor ppp
 # (validators: nft -c, unbound-checkconf, kea-dhcp4 -t must be on PATH).
 # Tunnel templates start wg-go/awg-go with the interface name; ExecStartPost
 # feeds setconf only after UAPI is ready. Install both binaries in /usr/local/bin
@@ -13,6 +13,7 @@
 # EnvironmentFile; never put the encryption key into generated bundles.
 set -eu
 umask 022
+command -v pppd >/dev/null 2>&1 || { echo 'ERROR: Debian ppp package is required' >&2; exit 1; }
 # Listener remains closed until the agent has installed the interface firewall.
 systemctl mask ssh.service ssh.socket
 systemctl stop ssh.service ssh.socket
@@ -111,6 +112,20 @@ if command -v awg >/dev/null 2>&1 && ! awg --version 2>/dev/null | grep -q "v3\.
 fi
 install -d -m 0770 /etc/vs-router /etc/vs-router/applied /etc/vs-router/confirmed
 chgrp vs-router-web /etc/vs-router /etc/vs-router/applied /etc/vs-router/confirmed
+# pppd reads these as root. Keep credentials private even on an installer rerun.
+install -d -o root -g root -m 0755 /etc/ppp/peers
+for peer in /etc/ppp/peers/vs-router-*; do
+    [ ! -L "$peer" ] || { echo "ERROR: PPPoE peer is a symlink: $peer" >&2; exit 1; }
+    [ -f "$peer" ] || continue
+    chown root:root "$peer"
+    chmod 0600 "$peer"
+done
+for secrets in /etc/ppp/chap-secrets /etc/ppp/pap-secrets; do
+    [ ! -L "$secrets" ] || { echo "ERROR: PPP secrets file is a symlink: $secrets" >&2; exit 1; }
+    [ -f "$secrets" ] || continue
+    chown root:root "$secrets"
+    chmod 0600 "$secrets"
+done
 install -d -m 0770 /run/vs-router
 chgrp vs-router-web /run/vs-router
 install -d -m 0770 -o vs-router-web -g vs-router-web /run/vs-router/web /var/lib/vs-router
@@ -195,7 +210,7 @@ printf '{"commit":"%s","semver":"%s","installed_at":"%s","source":"%s"}\n' \
     "$commit" "$semver" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${VS_ROUTER_RELEASE_SOURCE:-unknown}" \
     > /etc/vs-router/version.json
 chmod 0644 /etc/vs-router/version.json
-systemctl enable vs-router-bootrestore.service vs-router-tproxy-postboot.service
+systemctl enable vs-router-bootrestore.service vs-router-tproxy-postboot.service vs-router-pppoe-postboot.service
 systemctl daemon-reload
 systemctl restart vs-router-agent.service vs-router-web.service
 systemctl is-active --quiet vs-router-agent.service
