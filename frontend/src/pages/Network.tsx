@@ -11,6 +11,7 @@ import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { QuickConnectDialog } from "../components/QuickConnectDialog";
 import { EditorFooter } from "../components/EditorShell";
 import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { InfoNote } from "../components/InfoNote";
@@ -47,6 +48,7 @@ export default function Network() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState("general");
   const [deleteKey, setDeleteKey] = useState<string | null>(null);
+  const [quickOpen, setQuickOpen] = useState(false);
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "interfaces";
   const knownTab = ["interfaces", "wan", "routes", "diagnostics"].includes(tab)
@@ -112,6 +114,20 @@ export default function Network() {
     const key = `new-${Date.now()}`;
     next.push({ ...emptyInterface(key), name: `${prefix}${id}`,
       type, parent, vlan_id: type === "vlan" ? 1 : null });
+    if (editor.isEdit) editor.setValue(next);
+    else editor.begin(next);
+    setSelectedKey(key);
+    setDetailTab("general");
+  };
+
+  const addQuick = (entry: Interface, references: string[]) => {
+    const next = [...rows];
+    for (const name of references) {
+      if (!next.some((i) => i.name === name))
+        next.push({ ...emptyInterface(`host-${name}`), name });
+    }
+    const key = `new-${Date.now()}`;
+    next.push({ ...entry, key });
     if (editor.isEdit) editor.setValue(next);
     else editor.begin(next);
     setSelectedKey(key);
@@ -193,7 +209,7 @@ export default function Network() {
 
       {knownTab === "interfaces" && <>
         <ErrorNotice error={editor.error} /><ErrorNotice error={hostError} />
-        <Card title="Интерфейсы и зоны" action={rows.length > 0 ? <FormActions><Button onClick={addRow}>Добавить интерфейс</Button>{physicalNics.map((p) => <Button key={p.name} onClick={() => addVirtual("vlan", p.name)}>+ VLAN на {p.name}</Button>)}<Button onClick={() => addVirtual("bridge")}>+ Мост</Button></FormActions> : undefined}>
+        <Card title="Интерфейсы и зоны" action={<FormActions><Button onClick={() => setQuickOpen(true)}>Быстро подключить</Button>{rows.length > 0 && <><Button onClick={addRow}>Добавить интерфейс</Button>{physicalNics.map((p) => <Button key={p.name} onClick={() => addVirtual("vlan", p.name)}>+ VLAN на {p.name}</Button>)}<Button onClick={() => addVirtual("bridge")}>+ Мост</Button></>}</FormActions>}>
           {!rows.length && <EmptyState action={<Button onClick={addRow}>Добавить интерфейс</Button>}>Нет назначенных интерфейсов</EmptyState>}
           {!!rows.length && <DataTable heads={["Название", "Системное имя", "Роль", "IP", "Черновик", "Состояние"]}
             rows={rows.map((i) => {
@@ -239,6 +255,8 @@ export default function Network() {
           <EditorFooter saving={editor.saving} valid={allValid} cancel={cancel} save={() => void save()} />
         </Card>}
         {draftDirty && version?.status === "draft" && <p className="sub">Черновик изменён и ожидает применения (экран «Применение»).</p>}
+        <QuickConnectDialog open={quickOpen} onClose={() => setQuickOpen(false)} onAdd={addQuick}
+          ports={allRealNics} existing={rows} loading={hostInterfaces.isPending} unavailable={hostInterfaces.isError} />
         <ConfirmDialog open={deleteKey !== null} title="Удалить интерфейс?" body={`Интерфейс ${rows.find((i) => i.key === deleteKey)?.name || "без имени"} будет удалён из черновика. Проверьте зависимости и доступ к панели перед применением.`} confirmLabel="Удалить" cancelLabel="Отмена" danger onConfirm={() => {const target=rows.find((i) => i.key === deleteKey);if(target)removeRow(target);}} onCancel={() => setDeleteKey(null)} />
       </>}
 
