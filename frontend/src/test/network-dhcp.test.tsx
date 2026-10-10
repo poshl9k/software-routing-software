@@ -118,3 +118,39 @@ it("quick static rejects missing CIDR and cancellation leaves no draft", async (
   expect(screen.queryByRole("button", { name: "Без названия" })).toBeNull();
   expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
 });
+
+it("saves PPPoE credentials through one draft and clears them on mode change", async () => {
+  const initial = { ...emptyConfiguration, interfaces: [{
+    name: "eth0", type: "physical", zone: "wan", description: null,
+    addressing: "static", addresses: ["192.0.2.2/24"], parent: null, vlan_id: null, members: [],
+  }] };
+  const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    const configuration = init?.body ? JSON.parse(String(init.body)) : initial;
+    const version = { id: 1, status: "draft", configuration };
+    return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] :
+      path === "/api/host/interfaces" ? [{ name: "eth0", kind: "physical", parent: null, operstate: "UP" }] : version)));
+  });
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("button", { name: "Без названия" }));
+  await user.click(screen.getByRole("tab", { name: "IP" }));
+  await user.selectOptions(screen.getByLabelText("Режим адресации"), "pppoe");
+  expect(screen.queryByLabelText("Основной адрес (CIDR)")).toBeNull();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await user.type(screen.getByLabelText("Логин"), "subscriber");
+  await user.type(screen.getByLabelText("Пароль"), "private-pass");
+  expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
+  const saved = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === "PUT")![1].body));
+  expect(saved.interfaces[0]).toEqual(expect.objectContaining({ addressing: "pppoe", addresses: [], pppoe_username: "subscriber", pppoe_password: { plaintext: "private-pass" } }));
+  await user.click(await screen.findByRole("button", { name: "Без названия" }));
+  await user.click(screen.getByRole("tab", { name: "IP" }));
+  await user.selectOptions(screen.getByLabelText("Режим адресации"), "dhcp");
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(2));
+  const second = JSON.parse(String(fetch.mock.calls.filter(([, init]) => init?.method === "PUT")[1][1].body));
+  expect(second.interfaces[0]).not.toHaveProperty("pppoe_username");
+  expect(second.interfaces[0]).not.toHaveProperty("pppoe_password");
+});

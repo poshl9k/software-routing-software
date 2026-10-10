@@ -132,7 +132,25 @@ def validate_configuration(c):
     # A parent link that carries an assigned VLAN is a trunk: it must not also run
     # its own DHCP client (two clients on one port).
     vlan_parents = {i.parent for i in c.interfaces if i.type == "vlan" and i.zone and i.parent}
+    if len({i.pppoe_username for i in c.interfaces if i.addressing == "pppoe"}) != sum(
+            i.addressing == "pppoe" for i in c.interfaces):
+        fail("interface.pppoe_duplicate_username")
     for i in c.interfaces:
+        if i.addressing == "pppoe":
+            if i.type != "physical" or i.zone != "wan":
+                fail("interface.pppoe_physical_wan_required")
+            if not i.pppoe_username or not i.pppoe_username.strip() or i.pppoe_password is None:
+                fail("interface.pppoe_credentials_required")
+            if i.addresses:
+                fail("interface.pppoe_with_addresses")
+            if i.name in members or i.members:
+                fail("interface.pppoe_on_bridge")
+            if i.name in vlan_parents:
+                fail("interface.pppoe_on_trunk")
+            if any(s.interface == i.name for s in c.dhcp_subnets):
+                fail("interface.pppoe_kea_conflict")
+        elif i.pppoe_username is not None or i.pppoe_password is not None:
+            fail("interface.pppoe_credentials_unexpected")
         if i.zone == "router":
             fail("interface.router_zone_reserved")
         for addr in i.addresses:

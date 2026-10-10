@@ -9,7 +9,9 @@ export interface Interface {
   /** Free-form operator note / friendly label; UI-only, never generated. */
   description: string | null;
   /** static: addresses are configured; dhcp: this interface is a DHCPv4 client. */
-  addressing: "static" | "dhcp";
+  addressing: "static" | "dhcp" | "pppoe";
+  pppoe_username?: string | null;
+  pppoe_password?: Secret | null;
   addresses: string[];
   parent: string | null;
   vlan_id: number | null;

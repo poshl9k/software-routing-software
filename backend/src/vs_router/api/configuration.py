@@ -65,7 +65,8 @@ def encrypt_inputs(value):
                 except (ValueError, TypeError):
                     raise APIError(503, "secret.encryption_unavailable") from None
         return row
-    for collection, fields in (("tunnels", ("private_key",)),
+    for collection, fields in (("interfaces", ("pppoe_password",)),
+                               ("tunnels", ("private_key",)),
                                ("sites", ("certificate", "private_key", "dns_api_token")),
                                ("ddns", ("api_token",))):
         if isinstance(value.get(collection), list):
