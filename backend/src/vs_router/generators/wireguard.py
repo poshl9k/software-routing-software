@@ -1,5 +1,14 @@
-"""setconf files and client exports; plaintext exists only in protected bundles."""
+"""setconf files and client exports; plaintext exists only in protected bundles.
+
+Auto IPv4 tunnel subnets use 10.66.(66 + SHA-256(name) % 190).0/24;
+server/client devices use .1/.2. Auto peers use host
+2 + SHA-256(peer name) % 253 in that subnet, as /32. Hash inputs are UTF-8;
+collisions raise wireguard.address_collision, never probe by list order.
+Explicit interface addresses and peer AllowedIPs take precedence. Existing
+materialized addresses remain explicit, including those from older schemes.
+"""
 import base64
+import hashlib
 import json
 import os
 from ipaddress import ip_interface, ip_network
@@ -63,14 +72,33 @@ def generate_wg_conf(tunnel, key_material: dict, configuration=None) -> str:
     return '\n'.join(lines) + '\n'
 
 
-# Deterministic MVP tunnel pool: the Nth tunnel (by name) owns
-# 10.66.<base+N>.0/24, so a single tunnel keeps the historical 10.66.66.0/24 and
-# further tunnels no longer collide. Explicit interface addresses always win.
 SUBNET_BASE = 66
+SUBNET_SLOTS = 256 - SUBNET_BASE
+
+
+def _hash_slot(name: str, slots: int) -> int:
+    return int.from_bytes(hashlib.sha256(name.encode('utf-8')).digest(), 'big') % slots
+
+
+def _automatic_tunnel(tunnel, configuration) -> bool:
+    if any(i.name == tunnel.interface and i.addresses for i in configuration.interfaces):
+        return False
+    if tunnel.role == 'server':
+        for value in tunnel.allowed_ips:
+            net = ip_network(value, strict=False)
+            if net.prefixlen and net.num_addresses > 1:
+                return False
+    return True
 
 
 def tunnel_index(tunnel, configuration) -> int:
-    return sorted(t.name for t in configuration.tunnels).index(tunnel.name)
+    slot = _hash_slot(tunnel.name, SUBNET_SLOTS)
+    if _automatic_tunnel(tunnel, configuration):
+        for other in configuration.tunnels:
+            if (other.name != tunnel.name and _automatic_tunnel(other, configuration)
+                    and _hash_slot(other.name, SUBNET_SLOTS) == slot):
+                raise ValueError('wireguard.address_collision')
+    return slot
 
 
 def tunnel_addresses(tunnel, configuration):
@@ -78,7 +106,7 @@ def tunnel_addresses(tunnel, configuration):
 
     Prefer declared interface addresses; a server may also take the first host of
     a non-default subnet from its AllowedIPs. Otherwise the tunnel gets a
-    deterministic host in its own /24 slot (server .1, client .2).
+    hash-selected /24 slot (server .1, client .2).
     """
     for interface in configuration.interfaces:
         if interface.name == tunnel.interface and interface.addresses:
@@ -95,18 +123,21 @@ def tunnel_addresses(tunnel, configuration):
 def peer_address(tunnel, peer, configuration):
     """A server peer's tunnel address.
 
-    Its own AllowedIPs win; otherwise the peer gets the next free host in the
-    tunnel subnet (.2, .3, … in name order) as a /32, so every client receives a
-    usable address without hand-assignment.
+    Its own AllowedIPs win; otherwise hash its name into the usable host range
+    starting at .2 (reserving .1 for the server). A collision with another
+    automatically assigned peer is an error, not an order-dependent probe.
     """
     if peer.allowed_ips:
         return list(peer.allowed_ips)
     network = ip_network(tunnel_addresses(tunnel, configuration)[0], strict=False)
-    order = [p.name for p in sorted(tunnel.peers, key=lambda p: p.name)]
-    host = 2 + order.index(peer.name)
-    if host >= network.num_addresses:
+    slots = network.num_addresses - 3  # .0 network, .1 server, last broadcast
+    if slots < 1:
         raise ValueError('wireguard.peer_pool_exhausted')
-    bits = network.max_prefixlen if network.version == 6 else 32
+    host = 2 + _hash_slot(peer.name, slots)
+    if any(p.name != peer.name and not p.allowed_ips
+           and 2 + _hash_slot(p.name, slots) == host for p in tunnel.peers):
+        raise ValueError('wireguard.address_collision')
+    bits = network.max_prefixlen
     return [f'{network.network_address + host}/{bits}']
 
 
@@ -115,8 +146,8 @@ def materialize_addresses(configuration):
 
     The stored configuration then carries them (the panel shows and can edit
     them). Explicit values always win; a tunnel without a declared interface
-    address takes its own pool slot, a server peer without AllowedIPs takes the
-    next free /32 in the tunnel subnet.
+    address takes its hash-selected pool slot; a server peer without AllowedIPs
+    takes a hash-selected /32 in the tunnel subnet.
     """
     peers_by_tunnel = []
     for tunnel in configuration.tunnels:
