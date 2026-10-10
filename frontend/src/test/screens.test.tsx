@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import App from "../App";
+import { DiffReview } from "../components/DiffReview";
 import { emptyConfiguration } from "../fixtures";
 import { observation, RouterProvider, useCountdown, useRouterState } from "../state";
 const versions = [
@@ -38,6 +39,23 @@ function open(path: string) {
   );
 }
 describe("screens", () => {
+  it("shows area summary and warnings before disclosing redacted raw changes", async () => {
+    const user = userEvent.setup();
+    const changes = [{ op: "replace" as const, path: "/dhcp_subnets/0/valid_lifetime", before: 3600, after: 7200 }];
+    render(<DiffReview data={{ changes, summary: [{ area: "dhcp", title: "DHCP", added: 1, removed: 2, changed: 3, consequences: ["Переподключение клиентов"] }] }} />);
+    expect(screen.getByRole("heading", { name: "DHCP" })).toBeVisible();
+    for (const count of ["+1", "−2", "×3"]) expect(screen.getByText(count)).toBeVisible();
+    expect(screen.getByText("Переподключение клиентов")).toBeVisible();
+    const disclosure = screen.getByText("Показать технический diff");
+    expect(disclosure.closest("details")).not.toHaveAttribute("open");
+    await user.click(disclosure);
+    expect(disclosure.closest("details")).toHaveAttribute("open");
+    expect(screen.getByText(/valid_lifetime/)).toBeVisible();
+  });
+  it("shows empty diff summary", () => {
+    render(<DiffReview data={{ changes: [], summary: [] }} />);
+    expect(screen.getByText("Нет изменений")).toBeVisible();
+  });
   it.each([
     ["/", "Обзор сети"],
     ["/network", "Сеть"],

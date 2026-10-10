@@ -289,7 +289,15 @@ export function DHCPEditor({ children }: { children: (actions: {
                 valid={listValid(s.dns_servers, ipv4)}
                 onChange={(v) => update(index, { dns_servers: v.split("\n") })}
               />
-                <Field label="Срок аренды, с" type="number" value={s.valid_lifetime} valid={integer(s.valid_lifetime)} onChange={(v) => update(index, { valid_lifetime: Number(v) })} />
+              <Field
+                label="Срок аренды, с"
+                type="number"
+                value={s.valid_lifetime}
+                valid={integer(s.valid_lifetime)}
+                hint="Время, на которое DHCP выдаёт клиенту IP-адрес (в секундах); больше нуля"
+                inputProps={{ min: 1, step: 1 }}
+                onChange={(v) => update(index, { valid_lifetime: Number(v) })}
+              />
               </FormGrid>
               <InfoNote>Диапазон адресов может включать несколько пулов. Постоянный IP может быть вне пула.</InfoNote>
               <DataTable

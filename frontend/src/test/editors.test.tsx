@@ -91,6 +91,31 @@ it("saves a new Firewall rule with unchanged API values", async () => {
   expect(saved.firewall_rules[0]).toMatchObject({ name: "allow_web", protocol: "tcp_udp", action: "pass", ingress_zone: "wan" });
 });
 
+it("validates DHCP lease seconds and saves them through the same draft", async () => {
+  const configuration: Configuration = { ...emptyConfiguration,
+    interfaces: [{ name: "lan0", type: "physical", zone: "lan", description: null, addressing: "static", addresses: ["192.168.1.1/24"], parent: null, vlan_id: null, members: [] }],
+    dhcp_subnets: [{ id: 1, interface: "lan0", subnet: "192.168.1.0/24", pools: [], reservations: [], routers: [], dns_servers: [], valid_lifetime: 3600 }] };
+  const fetch = mockApi(configuration);
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("tab", { name: "Подсети и диапазоны" }));
+  await user.click(screen.getByRole("button", { name: "Настроить" }));
+  const field = screen.getByLabelText("Срок аренды, с");
+  expect(field).toHaveValue(3600);
+  expect(field).toHaveAttribute("min", "1");
+  expect(screen.getByText(/Время, на которое DHCP выдаёт клиенту IP-адрес/)).toBeVisible();
+  await user.clear(field);
+  await user.type(field, "0");
+  expect(saveButton()).toBeDisabled();
+  await user.clear(field);
+  await user.type(field, "7200");
+  expect(saveButton()).toBeEnabled();
+  await user.click(saveButton());
+  await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(true));
+  const saved = JSON.parse(fetch.mock.calls.find(([path]) => path === "/api/draft")![1].body);
+  expect(saved.dhcp_subnets[0].valid_lifetime).toBe(7200);
+});
+
 it("saves a device reservation in its selected subnet and DNS lists through the draft", async () => {
   const configuration: Configuration = { ...emptyConfiguration, interfaces: [{ name: "lan0", type: "physical", zone: "lan", description: null, addressing: "static", addresses: ["192.168.1.1/24"], parent: null, vlan_id: null, members: [] }],
     dhcp_subnets: [{ id: 1, interface: "lan0", subnet: "192.168.1.0/24", pools: [{ start: "192.168.1.100", end: "192.168.1.200" }], reservations: [], routers: ["192.168.1.1"], dns_servers: ["192.168.1.1"], valid_lifetime: 3600 }] };

@@ -288,6 +288,24 @@ export interface ConfigurationVersion {
   configuration: Configuration;
   created_at?: string | null;
 }
+export interface DiffChange {
+  op: "add" | "remove" | "replace";
+  path: string;
+  before?: unknown;
+  after?: unknown;
+}
+export interface DiffSummary {
+  area: string;
+  title: string;
+  added: number;
+  removed: number;
+  changed: number;
+  consequences: string[];
+}
+export interface DiffResponse {
+  changes: DiffChange[];
+  summary: DiffSummary[];
+}
 export interface ErrorBody {
   code: string;
   message: string;
