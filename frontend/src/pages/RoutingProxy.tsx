@@ -13,6 +13,7 @@ import type {
 } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter } from "../components/EditorShell";
@@ -175,6 +176,7 @@ export function ProxiesEditor() {
   const [importError, setImportError] = useState<Error | null>(null);
   const [importCount, setImportCount] = useState(0);
   const [selected, setSelected] = useState<number[]>([]);
+  const [pendingDelete, setPendingDelete] = useState<{ tags: string[]; refs: string[]; kind: "outbound" | "group"; indices: number[] } | null>(null);
   const current: ProxySettings = editor.value ?? configuration.proxies;
   const patch = (value: Partial<ProxySettings>) =>
     editor.setValue({ ...current, ...value });
@@ -217,10 +219,21 @@ export function ProxiesEditor() {
     setImportError(errors.length ? new Error(`Не импортировано: ${errors.length}. ${errors[0]}`) : null);
   };
 
+  const references = (tags: string[]) => [
+    ...configuration.tproxy.rules.filter((r) => r.action === "route" && tags.includes(r.outbound ?? ""))
+      .map((r) => `правило ${r.name}`),
+    ...(configuration.tproxy.final === "route" && tags.includes(configuration.tproxy.final_outbound ?? "")
+      ? ["конечное действие"] : []),
+    ...current.groups.filter((g) => !tags.includes(g.tag) && g.outbounds.some((t) => tags.includes(t)))
+      .map((g) => `группа ${g.tag}`),
+  ];
+  const requestDelete = (indices: number[], kind: "outbound" | "group") => {
+    const tags = indices.map((i) => kind === "outbound" ? current.outbounds[i].tag : current.groups[i].tag);
+    setPendingDelete({ tags, indices, kind, refs: references(tags) });
+  };
   const removeSelected = () => {
-    if (!selected.length || !window.confirm(`Удалить выбранные выходы (${selected.length})?`)) return;
-    patch({ outbounds: current.outbounds.filter((_, index) => !selected.includes(index)) });
-    setSelected([]);
+    if (!selected.length) return;
+    requestDelete(selected, "outbound");
   };
   const duplicateSelected = () => {
     if (!selected.length) return;
@@ -282,6 +295,19 @@ export function ProxiesEditor() {
   return (
     <>
       <ErrorNotice error={editor.error} />
+      <InfoNote>Прокси-выходы — конфигурация черновика, не проверка доступности. Секция выходов {current.enabled ? "задана включённой" : "выключена"}; TProxy недоступен.</InfoNote>
+      <ConfirmDialog open={!!pendingDelete} title="Удалить выходы из черновика?"
+        body={`Ссылки на ${pendingDelete?.tags.join(", ")}: ${pendingDelete?.refs.join(", ") || "нет"}. Зависимые правила после удаления потребуют исправления.`}
+        confirmLabel="Удалить" cancelLabel="Отмена" danger
+        onCancel={() => setPendingDelete(null)} onConfirm={() => {
+          if (pendingDelete?.kind === "outbound") {
+            patch({ outbounds: current.outbounds.filter((_, i) => !pendingDelete.indices.includes(i)) });
+            setSelected([]);
+          } else if (pendingDelete) {
+            patch({ groups: current.groups.filter((_, i) => !pendingDelete.indices.includes(i)) });
+          }
+          setPendingDelete(null);
+        }} />
       {!editor.isEdit ? (
         <>
           <div className="toolbar-actions">
@@ -405,6 +431,7 @@ export function ProxiesEditor() {
                                 update({ tls_insecure })
                               }
                             />
+                            {o.tls_insecure && <InfoNote>Отключение проверки сертификата снижает защиту от подмены сервера.</InfoNote>}
                           </>
                         )}
                         <Field
@@ -423,14 +450,7 @@ export function ProxiesEditor() {
                     <FormActions>
                       <DeleteButton
                         label={`Удалить выход ${o.tag || index + 1}`}
-                        onClick={() => {
-                          patch({
-                            outbounds: current.outbounds.filter(
-                              (_, i) => i !== index,
-                            ),
-                          });
-                          setSelected(selected.filter((i) => i !== index).map((i) => i > index ? i - 1 : i));
-                        }}
+                        onClick={() => requestDelete([index], "outbound")}
                       />
                     </FormActions>
                   </FormGrid>
@@ -621,6 +641,8 @@ export function ProxiesEditor() {
                           ссылки.
                         </InfoNote>
                       )}
+                      {g.outbounds.filter((tag) => !allTags.includes(tag)).map((tag) =>
+                        <InfoNote key={tag}>ссылка сломана: {tag}</InfoNote>)}
                     </FormWide>
                     {g.type === "urltest" && (
                       <>
@@ -652,13 +674,7 @@ export function ProxiesEditor() {
                     <FormActions>
                       <DeleteButton
                         label={`Удалить группу ${g.tag || index + 1}`}
-                        onClick={() =>
-                          patch({
-                            groups: current.groups.filter(
-                              (_, i) => i !== index,
-                            ),
-                          })
-                        }
+                        onClick={() => requestDelete([index], "group")}
                       />
                     </FormActions>
                   </FormGrid>
@@ -746,22 +762,21 @@ export function RuleSets() {
     <Card title="Rule-set (источники списков)">
       <ErrorNotice error={error ?? sources.error} />
       <InfoNote>
-        Источники rule-set загружает агент (SSRF-защищённый downloader). Список —
-        только для чтения: имя, формат, URL и статус обновления. Ручное
-        обновление доступно администратору.
+        Источники списков: статус сообщает агент. Ручное обновление — действие агента, не сохранение черновика; успешная проверка может сменить рабочую версию без общего применения. TProxy остаётся недоступен.
       </InfoNote>
       <DataTable
-        heads={["Имя", "Формат", "URL", "Статус", "Актуальность", "Обновление"]}
+        heads={["Имя", "Формат", "Статус", "Актуальность", "Последняя попытка", "Последний успех", "Обновление"]}
         rows={(sources.data ?? []).map((row) => [
           row.name,
           row.format ?? "—",
-          row.url ?? "—",
           <Badge tone={RULESET_STATUS[row.status].tone}>
             {RULESET_STATUS[row.status].label}
           </Badge>,
-          <Badge tone={row.stale ? "amber" : "green"}>
-            {row.stale ? "устарел" : "актуален"}
+          <Badge tone={row.stale ? "amber" : "blue"}>
+            {row.stale ? "устарел" : "не устарел по данным агента"}
           </Badge>,
+          row.last_attempt != null ? new Date(row.last_attempt * 1000).toLocaleString("ru-RU") : "состояние недоступно",
+          row.last_success != null ? new Date(row.last_success * 1000).toLocaleString("ru-RU") : "состояние недоступно",
           row.url && canUpdate ? (
             <Button
               size="small"
