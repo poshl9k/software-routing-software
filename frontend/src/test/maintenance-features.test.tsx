@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import { RouterProvider } from "../state";
 import { emptyConfiguration, sampleConfiguration } from "../fixtures";
@@ -41,8 +41,36 @@ it("exports aliases in the selected format",async()=>{
   Object.defineProperty(URL,"createObjectURL",{configurable:true,value:vi.fn(()=>"blob:aliases")});vi.spyOn(HTMLAnchorElement.prototype,"click").mockImplementation(()=>{});const user=userEvent.setup();mount(<Firewall/>);await user.click(screen.getByRole("tab",{name:"Псевдонимы"}));await user.click(screen.getByRole("button",{name:"Экспорт"}));await waitFor(()=>expect(fetch).toHaveBeenCalledWith("/api/aliases/export",expect.objectContaining({method:"POST",body:JSON.stringify({format:"json",names:null})})));
 });
 it("renders and validates the ping host field",async()=>{
-  setup(emptyConfiguration);mount(<Maintenance/>);const host=screen.getAllByLabelText("Узел")[0];expect(host).toHaveAttribute("aria-invalid","true");expect(screen.getByRole("button",{name:"Ping"})).toBeDisabled();
+  setup(emptyConfiguration);mount(<Maintenance/>);await userEvent.click(screen.getByRole("tab",{name:"Диагностика"}));const host=screen.getAllByLabelText("Узел")[0];expect(host).toHaveAttribute("aria-invalid","true");expect(screen.getByRole("button",{name:"Ping"})).toBeDisabled();
 });
+function Location() { const { pathname, search } = useLocation(); return <output data-testid="location">{pathname}{search}</output>; }
+it("keeps the bare backup URL and deep-links diagnostic and release tabs",async()=>{
+  setup(emptyConfiguration);
+  render(<MemoryRouter initialEntries={["/maintenance"]}><RouterProvider><Maintenance/><Location/></RouterProvider></MemoryRouter>);
+  const user=userEvent.setup();
+  expect(screen.getByTestId("location")).toHaveTextContent("/maintenance");
+  expect(screen.getByText(/Импорт создаёт черновик/)).toBeVisible();
+  expect(screen.queryByRole("button",{name:"Ping"})).toBeNull();
+  await user.click(screen.getByRole("tab",{name:"Диагностика"}));
+  expect(screen.getByTestId("location")).toHaveTextContent("/maintenance?tab=diagnostics");
+  await user.click(screen.getByRole("tab",{name:"Выпуск установки"}));
+  expect(screen.getByTestId("location")).toHaveTextContent("/maintenance?tab=release");
+  await user.click(screen.getByRole("tab",{name:"Резервные копии"}));
+  expect(screen.getByTestId("location")).toHaveTextContent("/maintenance");
+});
+it("distinguishes counter failure from a genuinely empty result",async()=>{
+  const fetch=setup(emptyConfiguration,(path)=>path==="/api/diag/rules-counters"?new Response(JSON.stringify({detail:"Ошибка счётчиков"}),{status:503}):new Response("{}"));
+  render(<MemoryRouter initialEntries={["/maintenance?tab=diagnostics"]}><App/></MemoryRouter>);
+  await waitFor(()=>expect(fetch.mock.calls.some(([path])=>path==="/api/diag/rules-counters")).toBe(true));
+  expect(await screen.findByText(/Ошибка счётчиков|503|rules-counters/)).toBeVisible();
+  expect(screen.queryByText("Нет данных счётчиков")).toBeNull();
+});
+it("shows a genuine empty counters result without an error",async()=>{
+  setup(emptyConfiguration,(path)=>path==="/api/diag/rules-counters"?new Response("{}"):new Response("{}"));
+  render(<MemoryRouter initialEntries={["/maintenance?tab=diagnostics"]}><App/></MemoryRouter>);
+  expect(await screen.findByText("Нет данных счётчиков")).toBeVisible();
+});
+
 it("renders the maintenance screen through its route",async()=>{
   setup(emptyConfiguration);render(<MemoryRouter initialEntries={["/maintenance"]}><App/></MemoryRouter>);expect(await screen.findByRole("heading",{name:"Обслуживание",level:1})).toBeVisible();
 });
@@ -88,6 +116,7 @@ it("imports backup into a draft without applying it",async()=>{
   await userEvent.click(await screen.findByRole("checkbox",{name:/Разрешить пропуск записей без секретов/}));
   await userEvent.click(await screen.findByRole("button",{name:"Импортировать в черновик"}));
   expect(await screen.findByText(/Создан черновик из последней версии; пропущено версий: 1/)).toBeVisible();
+  expect(screen.getByRole("link",{name:"Открыть применение"})).toHaveAttribute("href","/apply");
   expect(fetch).toHaveBeenCalledWith("/api/backup/restore",expect.objectContaining({
     method:"POST",body:expect.stringContaining('"allow_partial":true'),
   }));
@@ -108,9 +137,9 @@ function adminExtras(status:unknown) {
     : path==="/api/update" ? new Response(JSON.stringify(status)) : new Response("{}");
 }
 async function openMaintenance() {
-  render(<MemoryRouter initialEntries={["/maintenance"]}><App/></MemoryRouter>);
+  render(<MemoryRouter initialEntries={["/maintenance?tab=release"]}><App/></MemoryRouter>);
   await screen.findByText("admin");
-  const check=await screen.findByRole("button",{name:"Проверить обновление"});
+  const check=await screen.findByRole("button",{name:"Проверить выпуск"});
   await waitFor(()=>expect(check).toBeEnabled());
   return check;
 }
@@ -121,27 +150,28 @@ it("checks the release manifest and offers the available update",async()=>{
   const check=await openMaintenance();
   await user.click(check);
   expect(await screen.findByText("Доступен новый выпуск")).toBeVisible();
-  expect(screen.getByRole("button",{name:"Применить обновление"})).toBeEnabled();
-  expect(screen.getByText(/0\.2\.0 · aaaaaaa/)).toBeVisible();
+  expect(screen.getByRole("button",{name:"Установить выпуск"})).toBeEnabled();
+  expect(screen.getByText(`0.2.0 · ${RELEASE_COMMIT}`)).toBeVisible();
 });
 
-it("does not apply the update when the confirmation is dismissed",async()=>{
+it("does not install the release when confirmation is dismissed",async()=>{
   const fetch=setup(emptyConfiguration, adminExtras(updateStatus(true)));
-  vi.spyOn(window,"confirm").mockReturnValue(false);
   const user=userEvent.setup();
   const check=await openMaintenance();
   await user.click(check);
-  await user.click(await screen.findByRole("button",{name:"Применить обновление"}));
+  await user.click(await screen.findByRole("button",{name:"Установить выпуск"}));
+  expect(screen.getByRole("dialog")).toHaveTextContent("потребуется войти заново");
+  await user.click(screen.getByRole("button",{name:"Отмена"}));
   expect(fetch.mock.calls.some(([path,init])=>path==="/api/update"&&(init as RequestInit|undefined)?.method==="POST")).toBe(false);
 });
 
-it("applies the pinned release commit after confirmation",async()=>{
+it("installs the pinned release commit after confirmation",async()=>{
   const fetch=setup(emptyConfiguration, adminExtras(updateStatus(true)));
-  vi.spyOn(window,"confirm").mockReturnValue(true);
   const user=userEvent.setup();
   const check=await openMaintenance();
   await user.click(check);
-  await user.click(await screen.findByRole("button",{name:"Применить обновление"}));
+  await user.click(await screen.findByRole("button",{name:"Установить выпуск"}));
+  await user.click(screen.getByRole("dialog").querySelector("button:last-child")!);
   await waitFor(()=>expect(fetch).toHaveBeenCalledWith("/api/update",expect.objectContaining({method:"POST",body:JSON.stringify({release:RELEASE_COMMIT})})));
 });
 
@@ -151,5 +181,5 @@ it("shows that no update is available",async()=>{
   const check=await openMaintenance();
   await user.click(check);
   expect(await screen.findByText("Установлен актуальный выпуск")).toBeVisible();
-  expect(screen.queryByRole("button",{name:"Применить обновление"})).toBeNull();
+  expect(screen.queryByRole("button",{name:"Установить выпуск"})).toBeNull();
 });
