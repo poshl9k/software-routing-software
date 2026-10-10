@@ -1,0 +1,16 @@
+[Unit]
+Description=vs-router PPPoE restore after base network startup
+After=vs-router-bootrestore.service network-online.target
+Requires=vs-router-bootrestore.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -c 'from vs_router.agent.boot_restore import post_boot_pppoe; raise SystemExit(post_boot_pppoe())'
+TimeoutStartSec=90
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/ppp /etc/vs-router /run
+
+[Install]
+WantedBy=multi-user.target

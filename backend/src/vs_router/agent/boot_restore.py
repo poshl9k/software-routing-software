@@ -18,6 +18,7 @@ APPLIED = "/etc/vs-router/applied"
 NETWORK_DIR = "/etc/systemd/network"
 UNBOUND_INCLUDE = "/etc/unbound/unbound.conf.d/vs-router.conf"
 KEA_CONF = "/etc/kea/kea-dhcp4.conf"
+PPPOE_PEERS_DIR = "/etc/ppp/peers"
 
 
 def run(argv: list[str]) -> int:
@@ -361,6 +362,8 @@ def post_boot_tproxy() -> int:
     if not (applied / tproxy_apply.TPROXY_FILES['tproxy_guards']).exists():
         print('TProxy guard artifact missing; capture withheld', file=sys.stderr)
         return 1
+
+
     try:
         tables = subprocess.run(['/usr/sbin/nft', 'list', 'tables'],
                                 capture_output=True, text=True, timeout=15, check=True).stdout
@@ -384,6 +387,57 @@ def post_boot_tproxy() -> int:
         print(f'TProxy post-boot restore failed: {exc}', file=sys.stderr)
         return 1
 
+def post_boot_pppoe(executor=None) -> int:
+    """Start confirmed PPPoE peers after network-online, outside base bootrestore.
+
+    The packaging unit owns ordering. Never read or print credentials here; only
+    interface names from the confirmed snapshot are passed to systemctl.
+    """
+    from pathlib import Path
+    from .apply import CONFIRMED_DIR, SubprocessExecutor
+
+    if executor is None:
+        executor = SubprocessExecutor()
+    try:
+        confirmed = json.loads((CONFIRMED_DIR / 'snapshot.json').read_text())
+        snapshot = confirmed['version_snapshot']
+        applied = json.loads((Path(APPLIED) / 'snapshot.json').read_text())
+        if applied != snapshot:
+            print('PPPoE confirmed snapshot mismatch; startup withheld', file=sys.stderr)
+            return 1
+        interfaces = snapshot['configuration']['interfaces']
+    except FileNotFoundError:
+        return 0
+    except (OSError, ValueError, KeyError, TypeError):
+        print('PPPoE confirmed snapshot unavailable', file=sys.stderr)
+        return 1
+
+    failed = False
+    for interface in interfaces:
+        if interface.get('addressing') != 'pppoe':
+            continue
+        name = interface.get('name')
+        # Never let snapshot data become an arbitrary unit name or option.
+        if not isinstance(name, str) or not name or len(name) > 15 or not all(
+                char.isascii() and (char.isalnum() or char in '_.-') for char in name):
+            print('PPPoE interface name invalid; startup withheld', file=sys.stderr)
+            failed = True
+            continue
+        if not (Path(PPPOE_PEERS_DIR) / f'vs-router-{name}').is_file():
+            print(f'PPPoE peer file missing for {name}', file=sys.stderr)
+            failed = True
+            continue
+        try:
+            result = executor.run(['systemctl', 'start', f'vs-router-pppoe@{name}.service'],
+                                  timeout=30)
+            if result.returncode:
+                print(f'PPPoE service start failed for {name}', file=sys.stderr)
+                failed = True
+        except (OSError, subprocess.SubprocessError):
+            print(f'PPPoE service start failed for {name}', file=sys.stderr)
+            failed = True
+    return int(failed)
+
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(post_boot_pppoe() if sys.argv[1:] == ['pppoe-postboot'] else main())
