@@ -16,7 +16,8 @@ function open(path: string) {
     url === "/api/versions" ? versions :
     url === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
     url === "/api/apply/status" ? null :
-    url.startsWith("/api/diff") || url === "/api/host/interfaces" ? [] :
+    url === "/api/host/interfaces" ? [] :
+    url.startsWith("/api/diff") ? { changes: [], summary: [] } :
     url === "/api/apply" ? { version_id: 2, status: "confirmed", phases: {} } : {},
   ))));
   vi.stubGlobal("fetch", fetch);

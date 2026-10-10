@@ -21,8 +21,10 @@ function mockApi() {
               ? versions
               : path === "/api/auth/me"
                 ? { id: 1, username: "admin", role: "admin" }
-                : path === "/api/host/interfaces" || path.startsWith("/api/diff")
+                : path === "/api/host/interfaces"
                   ? []
+                  : path.startsWith("/api/diff")
+                    ? { changes: [], summary: [] }
                   : {},
           ),
         ),
@@ -150,7 +152,7 @@ describe("screens", () => {
       path === "/api/apply/status" ? null :
       path === "/api/draft" && init?.method === "DELETE" ? {
         code: "draft.unavailable", message: "Черновик не удалён", details: [],
-      } : [],
+      } : path.startsWith("/api/diff") ? { changes: [], summary: [] } : [],
     ), { status: path === "/api/draft" && init?.method === "DELETE" ? 503 : 200 })));
     open("/apply");
     await screen.findByText("admin");
@@ -274,7 +276,7 @@ describe("screens", () => {
       path === "/api/apply/status" ? {
         version_id: 2, status: "pending", applied_at: deadline - 60,
         deadline, phases: { nftables: "applied" },
-      } : path.startsWith("/api/diff") ? [] : {},
+      } : path.startsWith("/api/diff") ? { changes: [], summary: [] } : {},
     ))));
     open("/apply");
     expect(await screen.findByText(/Неподтверждённые изменения · v2/)).toBeVisible();
@@ -291,7 +293,7 @@ describe("screens", () => {
         version_id: 2, status: "failed", applied_at: 0, deadline: null,
         phases: { nftables: "failed" },
         error: { code: "agent.reload_failed", message: "agent.reload_failed", details: [] },
-      } : [],
+      } : path.startsWith("/api/diff") ? { changes: [], summary: [] } : [],
     ))));
     open("/apply");
     expect(await screen.findByText(/Ошибка применения · v2/)).toBeVisible();
@@ -333,7 +335,7 @@ describe("screens", () => {
     fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions" ? versions :
       path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
-      path.startsWith("/api/diff") ? [] :
+      path.startsWith("/api/diff") ? { changes: [], summary: [] } :
       { code: "agent.unavailable", message: "Агент недоступен", details: [] },
     ), { status: path === "/api/apply/status" ? 503 : 200 })));
     open("/apply");
@@ -353,7 +355,8 @@ describe("screens", () => {
       }
       return Promise.resolve(new Response(JSON.stringify(
         path === "/api/versions" ? versions :
-        path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } : [],
+        path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+        path.startsWith("/api/diff") ? { changes: [], summary: [] } : [],
       )));
     });
     open("/apply");
@@ -372,7 +375,7 @@ describe("screens", () => {
       Promise.resolve(new Response(JSON.stringify(
         path === "/api/versions" ? versions :
         path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
-        path.startsWith("/api/diff") ? [] : {},
+        path.startsWith("/api/diff") ? { changes: [], summary: [] } : {},
       ))));
     open("/apply");
     await screen.findByText("admin");
@@ -392,7 +395,7 @@ describe("screens", () => {
       } : path === "/api/apply/status" ? {
         version_id: 2, status: "pending", applied_at: Date.now() / 1000,
         deadline: Date.now() / 1000 + 180, phases: {},
-      } : [],
+      } : path.startsWith("/api/diff") ? { changes: [], summary: [] } : [],
     ), { status: path === "/api/apply/status" && statusReads > 1 ? 503 : 200 })));
     const user = userEvent.setup();
     open("/");
@@ -441,8 +444,10 @@ describe("screens", () => {
                   } : null
               : path === "/api/auth/me"
                 ? { id: 1, username: "admin", role: "admin" }
-              : path === "/api/host/interfaces" || path.startsWith("/api/diff")
+              : path === "/api/host/interfaces"
                 ? []
+                : path.startsWith("/api/diff")
+                  ? { changes: [], summary: [] }
                 : path === "/api/apply"
                   ? {
                       version_id: 2,
@@ -608,7 +613,7 @@ describe("screens", () => {
       path === "/api/versions" ? versions :
       path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
       path === "/api/apply/status" ? null :
-      path.startsWith("/api/diff") ? [] : {},
+      path.startsWith("/api/diff") ? { changes: [], summary: [] } : {},
     ))));
     open("/");
     await userEvent.click(await screen.findByRole("link", { name: "Проверить изменения" }));

@@ -18,8 +18,10 @@ const generated = { private_key: "generated-private-key", public_key: "generated
 const wan: Configuration = { ...emptyConfiguration, interfaces: [{ name: "eth0", type: "physical", zone: "wan", description: null,
   addressing: "static", addresses: ["203.0.113.1/24"], parent: null, vlan_id: null, members: [] }] };
 async function mount(page: React.ReactNode, config: Configuration = emptyConfiguration, fail = false,
-  keygen: (protocol: "wg" | "awg") => Promise<Response> = async (protocol) => new Response(JSON.stringify(protocol === "awg" ? generated : { private_key: generated.private_key, public_key: generated.public_key }))) {
+  keygen: (protocol: "wg" | "awg") => Promise<Response> = async (protocol) => new Response(JSON.stringify(protocol === "awg" ? generated : { private_key: generated.private_key, public_key: generated.public_key })),
+  status: Response = new Response(JSON.stringify({ generated_at: "2026-01-01T00:00:00Z", services: [] }))) {
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === "/api/status/services") return status.clone();
     if (path === "/api/keygen/tunnel") return keygen(JSON.parse(String(init?.body)).protocol);
     if (path === "/api/versions") return new Response(JSON.stringify([{ id: 1, status: "confirmed", configuration: config }]));
     if (fail) return new Response(JSON.stringify({ code: "save.failed", message: "Ошибка API" }), { status: 500 });
@@ -46,7 +48,7 @@ it("shows one tunnel card with honest status; opens one editor with role locked 
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
   expect(screen.getByText("vpn · AmneziaWG · Сервер")).toBeVisible();
   expect(screen.getByText("Клиентов: 1")).toBeVisible();
-  expect(screen.getByText("Состояние недоступно")).toBeVisible();
+  expect(await screen.findByText("Статус недоступен")).toBeVisible();
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
   await openTunnel();
   expect(screen.getByLabelText("Роль")).toHaveAttribute("readonly");
@@ -58,6 +60,25 @@ it("shows one tunnel card with honest status; opens one editor with role locked 
   expect(screen.getByText("phone")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Дополнительно" }));
   expect(screen.getByLabelText("Jc")).toHaveValue(4);
+});
+it.each([
+  ["running", "Работает"], ["stopped", "Остановлена"], ["unknown", "Состояние неизвестно"],
+])("shows %s tunnel state and timestamp from matching interface only", async (state, label) => {
+  const status = new Response(JSON.stringify({ generated_at: "2026-01-01T00:00:00Z", services: [
+    { name: "tunnel:tun1", state: "running", detail: null },
+    { name: "tunnel:tun0", state, detail: null },
+  ] }));
+  const fetch = await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, false, undefined, status);
+  expect(await screen.findByText(label)).toBeVisible();
+  expect(screen.getByText("2026-01-01T00:00:00Z")).toBeVisible();
+  expect(fetch.mock.calls.some(([path]) => path === "/api/status/services")).toBe(true);
+  expect(screen.queryByText("Черновик")).not.toBeInTheDocument();
+});
+it("keeps failed telemetry unknown, never green", async () => {
+  await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, false, undefined,
+    new Response(JSON.stringify({ code: "unavailable", message: "Нет статуса" }), { status: 503 }));
+  expect(await screen.findByText("Статус недоступен")).toBeVisible();
+  expect(screen.queryByText("Работает")).not.toBeInTheDocument();
 });
 it("selects client and protocol before keygen; saves one draft without opening WAN port", async () => {
   const fetch = await mount(<Tunnels />);

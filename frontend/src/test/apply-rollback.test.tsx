@@ -31,8 +31,10 @@ it("shows why a rolled-back apply failed and which service broke", async () => {
                 ? { id: 1, username: "admin", role: "admin" }
                 : path === "/api/apply/status"
                   ? marker
-                  : path === "/api/host/interfaces" || path.startsWith("/api/diff")
+                  : path === "/api/host/interfaces"
                     ? []
+                    : path.startsWith("/api/diff")
+                      ? { changes: [], summary: [] }
                     : {},
           ),
         ),
