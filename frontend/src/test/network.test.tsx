@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { RouterProvider } from "../state";
 import Network from "../pages/Network";
 import { emptyConfiguration } from "../fixtures";
+import type { Configuration } from "../types";
 
 it("selects OS links, creates a VLAN and saves bridge members with draft references", async () => {
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
@@ -49,6 +50,58 @@ it("selects OS links, creates a VLAN and saves bridge members with draft referen
     expect.objectContaining({ name: "eth1", zone: null }),
     expect.objectContaining({ name: "bond0", zone: null }),
   ]));
+});
+
+it("creates, edits and deletes static routes only through the single draft", async () => {
+  const user = userEvent.setup();
+  let configuration: Configuration = { ...emptyConfiguration, interfaces: [{
+    name: "eth0", type: "physical" as const, zone: "wan", description: null,
+    addressing: "static" as const, addresses: ["192.0.2.2/24"], parent: null,
+    vlan_id: null, members: [],
+  }] };
+  const saves: Configuration[] = [];
+  const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      configuration = JSON.parse(String(init.body));
+      saves.push(configuration);
+    }
+    const version = { id: 1, status: "draft", configuration };
+    return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] :
+      path === "/api/host/interfaces" ? [] : path === "/api/host/addresses" ? {} : version)));
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<MemoryRouter initialEntries={["/network?tab=routes"]}><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("button", { name: "Добавить маршрут" }));
+  expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
+  await user.type(screen.getByLabelText(/Куда \(CIDR\)/), "10.8.0.1/24");
+  await user.selectOptions(screen.getByLabelText("Интерфейс"), "eth0");
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await user.clear(screen.getByLabelText(/Куда \(CIDR\)/));
+  await user.type(screen.getByLabelText(/Куда \(CIDR\)/), "10.8.0.0/24");
+  await user.type(screen.getByLabelText("Через шлюз"), "192.0.2.1");
+  await user.clear(screen.getByLabelText("Метрика"));
+  await user.type(screen.getByLabelText("Метрика"), "7");
+  expect(screen.getByLabelText(/Куда \(CIDR\)/)).toHaveValue("10.8.0.0/24");
+  expect(screen.getByLabelText("Интерфейс")).toHaveValue("eth0");
+  expect(screen.getByLabelText("Через шлюз")).toHaveValue("192.0.2.1");
+  expect(screen.getByLabelText("Метрика")).toHaveValue(7);
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(saves).toHaveLength(1));
+  expect(saves[0].static_routes).toEqual([{ destination: "10.8.0.0/24", gateway: "192.0.2.1", interface: "eth0", metric: 7, enabled: true }]);
+  await user.click(await screen.findByRole("button", { name: "Редактировать маршрут 10.8.0.0/24" }));
+  await user.click(screen.getByRole("switch", { name: "Включён" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(saves).toHaveLength(2));
+  expect(saves[1].static_routes?.[0]).toEqual(expect.objectContaining({ enabled: false }));
+  await user.click(await screen.findByRole("button", { name: "Удалить маршрут 10.8.0.0/24" }));
+  expect(saves).toHaveLength(2);
+  await user.click(screen.getByRole("button", { name: "Удалить" }));
+  expect(saves).toHaveLength(2);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(saves).toHaveLength(3));
+  expect(saves[2].static_routes).toEqual([]);
 });
 
 it("quick VLAN and bridge stage complete references without a partial write", async () => {

@@ -64,6 +64,14 @@ def generate_networkd(version: ConfigurationVersion) -> dict[str, str]:
                     lines.append("BindCarrier=" + " ".join(members))
             lines += [f"VLAN={v.name}" for v in interfaces
                       if v.type == "vlan" and v.zone and v.parent == i.name]
+            for route in sorted((r for r in version.configuration.static_routes
+                                 if r.enabled and r.interface == i.name),
+                                key=lambda r: (r.destination, r.gateway or "", r.metric)):
+                lines += ["", "[Route]", f"Destination={route.destination}"]
+                if route.gateway is not None:
+                    lines.append(f"Gateway={route.gateway}")
+                if route.metric > 0:
+                    lines.append(f"Metric={route.metric}")
             if dhcp:
                 lines += ["", "[DHCPv4]", "UseDNS=no", "UseNTP=no", "UseHostname=no",
                           "UseRoutes=yes", "UseGateway=yes"]

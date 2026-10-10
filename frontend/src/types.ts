@@ -15,6 +15,13 @@ export interface Interface {
   vlan_id: number | null;
   members: string[];
 }
+export interface StaticRoute {
+  destination: string;
+  interface: string;
+  gateway: string | null;
+  metric: number;
+  enabled: boolean;
+}
 export interface Alias {
   name: string;
   type: "address" | "port";
@@ -265,6 +272,8 @@ export interface TProxyPreview {
 export interface Configuration {
   schema_version: 1;
   interfaces: Interface[];
+  /** Optional in legacy snapshots; backend defaults to an empty tuple. */
+  static_routes?: StaticRoute[];
   aliases: Alias[];
   dhcp_subnets: DHCPSubnet[];
   firewall_rules: FirewallRule[];
