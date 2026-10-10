@@ -200,8 +200,13 @@ async def test_versions_crud_diff_and_persistence(api):
     assert (await client.put('/api/draft', json={'panel_port': 9443})).status_code == 200
     assert (await client.get('/api/versions/2')).json()['configuration']['panel_port'] == 9443
     assert [v['id'] for v in (await client.get('/api/versions')).json()] == [2, 1]
-    assert (await client.get('/api/diff/1/2')).json() == [{'op': 'replace', 'path': '/panel_port', 'before': 8443, 'after': 9443}]
-    assert (await client.get('/api/diff/2/2')).json() == []
+    assert (await client.get('/api/diff/1/2')).json() == {
+        'changes': [{'op': 'replace', 'path': '/panel_port', 'before': 8443, 'after': 9443}],
+        'summary': [{'area': 'panel_port', 'title': 'Доступ к панели', 'added': 0,
+                     'removed': 0, 'changed': 1, 'consequences': [
+                         'Изменяется сеть или доступ к панели — проверьте доступ к веб-панели после применения.']}],
+    }
+    assert (await client.get('/api/diff/2/2')).json() == {'changes': [], 'summary': []}
     assert (await client.get('/api/versions/999')).status_code == 404
     assert (await client.get('/api/diff/1/999')).status_code == 404
     assert (await client.get('/api/versions/0')).status_code == 422
@@ -264,9 +269,21 @@ async def test_secrets_redacted_and_preserved(api):
         text = (await client.get(path)).text
         assert 'ciphertext' not in text and 'gAAAA' not in text and ('private-value' not in text)
     diff = (await client.get('/api/diff/1/2')).json()
+    assert set(diff) == {'changes', 'summary'}
     # The saved draft also carries the auto-materialized tunnel address, so the
     # secret change is one entry among several.
-    assert any(entry['path'] == '/tunnels/0/private_key' for entry in diff)
+    assert any(entry['path'] == '/tunnels/0/private_key' and
+               entry['before'] == entry['after'] == {'redacted': True}
+               for entry in diff['changes'])
+    assert diff['summary'] == [
+        {'area': 'interfaces', 'title': 'Сетевые интерфейсы', 'added': 1,
+         'removed': 0, 'changed': 0, 'consequences': [
+             'Изменяется сеть или доступ к панели — проверьте доступ к веб-панели после применения.']},
+        {'area': 'tunnels', 'title': 'Туннели', 'added': 0,
+         'removed': 0, 'changed': 1,
+         'consequences': ['Изменяются туннели/DDNS — проверьте подключения.']},
+    ]
+    assert 'ciphertext' not in str(diff['summary']) and 'private-value' not in str(diff['summary'])
     public['panel_port'] = 8443
     assert (await client.put('/api/draft', json=public)).status_code == 200
     with Session(engine) as db:

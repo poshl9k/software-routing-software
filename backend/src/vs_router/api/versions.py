@@ -18,6 +18,49 @@ from .errors import APIError
 router = APIRouter(dependencies=[Depends(current_user)])
 PositiveID = Annotated[int, Path(ge=1)]
 
+_DIFF_TITLES = {
+    'interfaces': 'Сетевые интерфейсы', 'aliases': 'Псевдонимы',
+    'dhcp_subnets': 'DHCP', 'firewall_rules': 'Правила firewall',
+    'port_forwards': 'Проброс портов', 'outbound_nat_mode': 'NAT',
+    'outbound_nat': 'NAT', 'dns': 'DNS', 'tunnels': 'Туннели',
+    'sites': 'Входящие сайты', 'ddns': 'DDNS', 'ssh': 'Доступ по SSH',
+    'tproxy': 'Выборочная маршрутизация (TProxy)', 'proxies': 'Прокси-выходы',
+    'rule_sets': 'Источники списков', 'anti_lockout': 'Доступ к панели',
+    'panel_port': 'Доступ к панели',
+}
+_DIFF_CONSEQUENCES = {
+    **dict.fromkeys(('interfaces', 'panel_port', 'anti_lockout'),
+                    'Изменяется сеть или доступ к панели — проверьте доступ к веб-панели после применения.'),
+    'ssh': 'Изменяется доступ по SSH.',
+    **dict.fromkeys(('firewall_rules', 'outbound_nat', 'outbound_nat_mode', 'port_forwards'),
+                    'Изменяются правила firewall/NAT — проверьте порядок (первое совпадение решает) и доступ.'),
+    **dict.fromkeys(('tunnels', 'ddns'),
+                    'Изменяются туннели/DDNS — проверьте подключения.'),
+    'sites': 'Изменяются входящие сайты — проверьте сертификаты и порты.',
+    'dns': 'Изменяется DNS — проверьте разрешение имён.',
+}
+
+
+def diff_summary(changes):
+    """Summarize redacted JSON Pointer changes without inspecting their values."""
+    areas = {}
+    for change in changes:
+        path = change['path']
+        if not path or not path.startswith('/'):
+            continue
+        area = path[1:].split('/', 1)[0].replace('~1', '/').replace('~0', '~')
+        if area == 'schema_version':
+            continue
+        if area not in areas:
+            areas[area] = {
+                'area': area, 'title': _DIFF_TITLES.get(area, area),
+                'added': 0, 'removed': 0, 'changed': 0,
+                'consequences': ([_DIFF_CONSEQUENCES[area]]
+                                 if area in _DIFF_CONSEQUENCES else []),
+            }
+        areas[area][{'add': 'added', 'remove': 'removed', 'replace': 'changed'}[change['op']]] += 1
+    return [areas[area] for area in sorted(areas)]
+
 
 def agent_call(method, body):
     transport = UnixSocketTransport(os.environ.get('VS_ROUTER_AGENT_SOCKET', '/run/vs-router/agent.sock'))
@@ -118,8 +161,9 @@ def delete_draft(db: Session = Depends(get_db)):
 @router.get("/diff/{id1}/{id2}")
 def diff(id1: PositiveID, id2: PositiveID, db: Session = Depends(get_db)):
     first, second = version(db, id1), version(db, id2)
-    return structural_diff(first.configuration.model_dump(mode="json"),
-                           second.configuration.model_dump(mode="json"))
+    changes = structural_diff(first.configuration.model_dump(mode="json"),
+                              second.configuration.model_dump(mode="json"))
+    return {'changes': changes, 'summary': diff_summary(changes)}
 
 
 @router.post("/apply", dependencies=[Depends(admin)])
