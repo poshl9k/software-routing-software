@@ -347,6 +347,16 @@ export interface ApplyMarker extends ApplyResult {
   applied_at: number;
   deadline: number | null;
 }
+/** Read-only runtime state from the agent; not a configuration or apply status. */
+export interface ServiceStatus {
+  name: string;
+  state: "running" | "stopped" | "unknown";
+  detail: string | null;
+}
+export interface ServiceStatusResponse {
+  generated_at: string;
+  services: ServiceStatus[];
+}
 export interface ApplyRequest {
   version_id: number;
   safe_mode: boolean;

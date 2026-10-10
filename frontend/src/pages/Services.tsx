@@ -3,6 +3,7 @@ import { Button } from "@mui/material";
 import { useConfiguration } from "../state";
 import { Badge } from "../components/Badge";
 import { ServiceStatusHeader } from "../components/ServiceStatusHeader";
+import { InlineStatus } from "../components/InlineStatus";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
@@ -17,6 +18,40 @@ import { api, ApiError } from "../api";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
 
+export function useServiceTelemetry() {
+  return useQuery({
+    queryKey: queryKeys.serviceStatus(),
+    queryFn: async ({ signal }) => {
+      const result = await api.serviceStatus(signal);
+      if (!Array.isArray(result.services) || typeof result.generated_at !== "string")
+        throw new Error("Некорректный статус служб");
+      return result;
+    },
+    refetchInterval: 30_000,
+  });
+}
+
+type Telemetry = ReturnType<typeof useServiceTelemetry>;
+
+export function RuntimeServiceInline({ name, telemetry }: { name: string; telemetry: Telemetry }) {
+  if (telemetry.isPending) return <InlineStatus tone="unknown" text="Статус загружается…" />;
+  if (telemetry.isError) return <InlineStatus tone="unknown" text="Статус недоступен" />;
+  const service = telemetry.data.services.find((item) => item.name === name);
+  const state = service?.state ?? "unknown";
+  const labels = { running: "Работает", stopped: "Остановлена", unknown: "Состояние неизвестно" };
+  return <InlineStatus tone={state === "running" ? "green" : state === "stopped" ? "amber" : "unknown"}
+    text={labels[state]} asOf={telemetry.data.generated_at} />;
+}
+
+function RuntimeServiceHeader({ name, serviceName, telemetry }: { name: string; serviceName: string; telemetry: Telemetry }) {
+  if (telemetry.isPending || telemetry.isError) return <RuntimeServiceInline name={serviceName} telemetry={telemetry} />;
+  const service = telemetry.data.services.find((item) => item.name === serviceName);
+  return <>
+    <ServiceStatusHeader name={name} state={service?.state ?? "unknown"} asOf={telemetry.data.generated_at} />
+    {service?.detail && <InfoNote>{service.detail}</InfoNote>}
+  </>;
+}
+
 export function DHCP() {
   return (
     <DHCPEditor>{(actions) => <DHCPReadOnly actions={actions} />}</DHCPEditor>
@@ -24,6 +59,7 @@ export function DHCP() {
 }
 function DHCPReadOnly({ actions }: { actions: { addDevice: () => void; editDevice: (subnet: number, reservation: number) => void; editSubnets: () => void } }) {
   const { configuration: c } = useConfiguration();
+  const telemetry = useServiceTelemetry();
   const [tab, setTab] = useState(0);
   const [query, setQuery] = useState("");
   const [term, setTerm] = useState("");
@@ -37,7 +73,7 @@ function DHCPReadOnly({ actions }: { actions: { addDevice: () => void; editDevic
   return (
     <>
       <PageHeader>DHCP (Kea)</PageHeader>
-      <ServiceStatusHeader name="DHCP" state="unknown" />
+      <RuntimeServiceHeader name="DHCP" serviceName="kea" telemetry={telemetry} />
       <PageTabs values={["Устройства с постоянным IP", "Подсети и диапазоны", "Аренды"]} value={tab} change={setTab} />
       {tab === 0 && <Card title="Устройства с постоянным IP" action={<Button onClick={actions.addDevice} disabled={!c.dhcp_subnets.length}>Добавить устройство</Button>}>
         {!c.dhcp_subnets.length && <InfoNote>Сначала добавьте подсеть, затем назначьте устройству постоянный IP.</InfoNote>}
@@ -68,10 +104,11 @@ function DNSReadOnly({ actions }: { actions: { addRecord: () => void; addForward
   const {
     configuration: { dns },
   } = useConfiguration();
+  const telemetry = useServiceTelemetry();
   return (
     <>
       <PageHeader>DNS (Unbound)</PageHeader>
-      <ServiceStatusHeader name="DNS" state="unknown" />
+      <RuntimeServiceHeader name="DNS" serviceName="unbound" telemetry={telemetry} />
       <Card title="Локальные имена" action={<Button onClick={actions.addRecord}>Добавить имя</Button>}>
         <DataTable heads={["Имя", "Тип", "Значение", "TTL"]} rows={dns.records.map((r) => [r.name, r.type, r.value, r.ttl])} />
       </Card>
@@ -94,10 +131,12 @@ function DNSReadOnly({ actions }: { actions: { addRecord: () => void; addForward
 export { Tunnels } from "./ConnectionEditors";
 export function Proxy() {
   const [tab, setTab] = useState(0);
+  const telemetry = useServiceTelemetry();
   return (
     <>
       <PageHeader>Прокси (Caddy)</PageHeader>
-      <ServiceStatusHeader name="Caddy" state="unknown" />
+      {tab === 0 ? <RuntimeServiceHeader name="Входящие сайты" serviceName="caddy" telemetry={telemetry} />
+        : <RuntimeServiceHeader name="DDNS" serviceName="ddns" telemetry={telemetry} />}
       <PageTabs
         values={["Сайты", "DDNS", "Журнал"]}
         value={tab}

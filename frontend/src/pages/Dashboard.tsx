@@ -7,6 +7,7 @@ import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
 import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
+import { RuntimeServiceInline, useServiceTelemetry } from "./Services";
 
 export function Events({ standalone = true }: { standalone?: boolean }) {
   return (
@@ -23,11 +24,18 @@ export function Events({ standalone = true }: { standalone?: boolean }) {
 }
 export default function Dashboard() {
   const { configuration: c, versions, applyState } = useConfiguration();
+  const telemetry = useServiceTelemetry();
   const draft = versions.find((v) => v.status === "draft");
   const confirmed = versions.find((v) => v.status === "confirmed");
   return (
     <>
       <PageHeader>Обзор сети</PageHeader>
+      <Card title="Службы · текущее состояние">
+        <div className="stats">
+          {([ ["DHCP", "kea"], ["DNS", "unbound"], ["Caddy", "caddy"], ["DDNS", "ddns"] ] as const).map(([label, name]) =>
+            <div key={name}>{label}: <RuntimeServiceInline name={name} telemetry={telemetry} /></div>)}
+        </div>
+      </Card>
       <StatusHero title="Интернет · состояние соединения" tone="unknown" primary={null}
         facts={[{ label: "Источник", value: "Телеметрия не подключена" }, { label: "WAN и адрес сейчас", value: "Нет данных" }]} />
       <div className="dash-grid">
@@ -103,7 +111,7 @@ export default function Dashboard() {
               rows={c.tunnels.map((t) => [
                 t.name,
                 t.protocol === "wg" ? "WireGuard" : "AmneziaWG",
-                "—",
+                <RuntimeServiceInline name={`tunnel:${t.interface}`} telemetry={telemetry} />,
                 t.role === "server" ? t.peers.length : "клиент",
                 "—",
               ])}
