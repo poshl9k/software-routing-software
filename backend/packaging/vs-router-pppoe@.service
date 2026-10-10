@@ -5,6 +5,8 @@ Requires=vs-router-bootrestore.service
 
 [Service]
 Type=exec
+# No ordinary .network owns a PPPoE transport NIC; bring carrier up explicitly.
+ExecStartPre=/usr/sbin/ip link set dev %i up
 ExecStart=/usr/sbin/pppd call vs-router-%i nodetach
 Restart=on-failure
 RestartSec=5

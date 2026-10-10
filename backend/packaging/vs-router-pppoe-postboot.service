@@ -1,8 +1,7 @@
 [Unit]
 Description=vs-router PPPoE restore after base network startup
-After=vs-router-bootrestore.service network-online.target
+After=vs-router-bootrestore.service network.target
 Requires=vs-router-bootrestore.service
-Wants=network-online.target
 
 [Service]
 Type=oneshot

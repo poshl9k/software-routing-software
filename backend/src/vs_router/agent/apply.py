@@ -504,6 +504,13 @@ class ApplyEngine:
                           steps=self._readiness_steps(version, doh_files),
                           steps_before=('tproxy_interception' if tproxy_files else
                                         'unbound' if doh_files else None))
+            if pppoe_files:
+                _, peer_names = pppoe_apply.interfaces(contents['pppoe'])
+                if not pppoe_apply.wait_ready(self.executor, peer_names):
+                    self._failed_service = 'pppoe'
+                    raise ApplyError('pppoe.not_ready')
+                marker['phases']['pppoe_readiness'] = 'applied'
+                self.marker(marker)
             if not pppoe_files and backup is not None and 'pppoe' in backup['files']:
                 self._teardown_pppoe(strict=True)
             if tproxy_files:
@@ -597,6 +604,10 @@ class ApplyEngine:
         if marker.get('pppoe'):
             from . import pppoe_apply
             files = {**(FILES if files is None else files), **pppoe_apply.FILES}
+            _, peer_names = pppoe_apply.interfaces(self.fs.read(APPLIED_DIR / 'pppoe.json'))
+            if not pppoe_apply.ready(self.executor, peer_names):
+                self.rollback('pppoe.not_ready')
+                raise ApplyError('pppoe.not_ready')
         if 'tproxy' in marker:
             try:
                 self._verify_tproxy_tables()

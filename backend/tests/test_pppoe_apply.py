@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 
-from vs_router.agent.apply import ApplyEngine, APPLIED_DIR, CONFIRMED_DIR
+from vs_router.agent.apply import ApplyEngine, ApplyError, APPLIED_DIR, CONFIRMED_DIR
+from vs_router.agent import pppoe_apply
 from vs_router.agent.services import PPPoEReloader, NetworkdReloader
 from vs_router.secrets import encrypt_secret
 from vs_router.schema import ConfigurationVersion
@@ -35,10 +36,16 @@ class Exec:
     def __init__(self):
         self.calls = []
         self.fail: list[str] | None = None
+        self.link_ready = True
+        self.route_ready = True
 
     def run(self, argv, timeout):
         self.calls.append(argv)
-        return SimpleNamespace(returncode=int(self.fail == argv))
+        links = ([{'ifname': 'ppp0', 'flags': ['LOWER_UP'], 'addr_info': [
+            {'family': 'inet', 'local': '10.41.0.2', 'address': '10.41.0.1'}]}]
+            if self.link_ready else [])
+        stdout = ([{'dst': 'default', 'dev': 'ppp0'}] if self.route_ready else []) if argv[:4] == ['ip', '-j', '-4', 'route'] else links
+        return SimpleNamespace(returncode=int(self.fail == argv), stdout=json.dumps(stdout).encode())
 
 
 def version(number, password=None, mode='pppoe'):
@@ -131,3 +138,50 @@ def test_ordinary_artifact_map_and_validator_are_unchanged(monkeypatch):
     assert not any('pppd' in argv or 'vs-router-pppoe@eth0.service' in argv
                    for argv in executor.calls)
     assert 'pppoe' not in VALIDATORS
+
+
+def test_readiness_timeout_rolls_back_bad_credentials(monkeypatch):
+    engine, fs, executor, password = setup(monkeypatch)
+    assert engine.apply_version(version(1, mode='dhcp')).status == 'confirmed'
+    executor.link_ready = False
+    ticks = [0]
+    def clock():
+        return ticks[0]
+    def sleep(seconds):
+        ticks[0] += seconds
+    real_wait = pppoe_apply.wait_ready
+    monkeypatch.setattr(pppoe_apply, 'wait_ready',
+                        lambda executor, names: real_wait(executor, names, timeout=3,
+                                                          clock=clock, sleep=sleep))
+    result = engine.apply_version(version(2, password))
+    assert result.status == 'rolled_back'
+    assert result.reason == 'pppoe.not_ready'
+    assert result.reason_service == 'pppoe'
+    assert ticks[0] == 3
+    assert CONFIRMED_DIR / 'pppoe.json' not in fs.files
+    assert Path('/etc/ppp/peers/vs-router-eth0') not in fs.files
+
+
+def test_pppoe_requires_ipcp_route_and_carrier(monkeypatch):
+    engine, fs, executor, password = setup(monkeypatch)
+    assert engine.apply_version(version(1, mode='dhcp')).status == 'confirmed'
+    executor.route_ready = False
+    assert not pppoe_apply.ready(executor, ['eth0'])
+    executor.route_ready = True
+    assert pppoe_apply.ready(executor, ['eth0'])
+    assert ['ip', '-j', '-4', 'route', 'show'] in executor.calls
+
+
+def test_pending_peer_loss_rolls_back_on_confirmation(monkeypatch):
+    engine, fs, executor, password = setup(monkeypatch)
+    assert engine.apply_version(version(1, mode='dhcp')).status == 'confirmed'
+    assert engine.apply_version(version(2, password), safe_mode=True).status == 'pending'
+    executor.link_ready = False
+    try:
+        engine.confirm_version(2)
+    except ApplyError as exc:
+        assert exc.code == 'pppoe.not_ready'
+    else:
+        assert False, 'confirmation should reject a lost PPP link'
+    assert engine.status()['status'] == 'rolled_back'
+    assert CONFIRMED_DIR / 'pppoe.json' not in fs.files

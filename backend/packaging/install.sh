@@ -45,7 +45,14 @@ install -d -m 0750 /etc/caddy/vs-router
 chown root:caddy /etc/caddy/vs-router
 install -d -m 0700 /etc/vs-router/wireguard
 install -d -m 0755 /etc/systemd/system/caddy.service.d
+# systemd cannot remove vendor After=/Wants= via drop-ins; install exact
+# Debian unit copies with network-online.target replaced by network.target.
+/usr/bin/python3 "$(dirname "$0")/kea-network-order.py"
 cat > /etc/systemd/system/caddy.service.d/vs-router.conf <<EOF
+[Unit]
+After=
+After=network.target
+Wants=
 [Service]
 ExecStart=
 ExecStart=${CADDY_BIN} run --config /etc/caddy/caddy.json
@@ -131,6 +138,8 @@ chgrp vs-router-web /run/vs-router
 install -d -m 0770 -o vs-router-web -g vs-router-web /run/vs-router/web /var/lib/vs-router
 packaging_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install -m 0644 "$packaging_dir"/*.service "$packaging_dir"/*.timer /etc/systemd/system/
+install -d -m 0755 /usr/local/libexec/vs-router
+install -m 0644 "$packaging_dir/reconcile-networkd-boot.py" /usr/local/libexec/vs-router/reconcile-networkd-boot.py
 install -m 0644 "$packaging_dir/vs-router.conf" /etc/tmpfiles.d/vs-router.conf
 install -m 0644 "$packaging_dir/90-vs-router-forward.conf" /etc/sysctl.d/90-vs-router-forward.conf
 sysctl -w net.ipv4.ip_forward=1

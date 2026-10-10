@@ -1,9 +1,43 @@
-"""Post-network-online PPPoE startup uses only confirmed interface names."""
+"""PPPoE boot startup and networkd file reconciliation."""
 import json
+import runpy
 import subprocess
+from pathlib import Path
 
 from vs_router.agent import boot_restore
 from vs_router.agent import apply
+
+
+RECONCILE = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'packaging' /
+                             'reconcile-networkd-boot.py'))['reconcile']
+
+
+def test_boot_reconcile_pppoe_static_dhcp_switches(tmp_path):
+    applied = tmp_path / 'networkd.conf'
+    network_dir = tmp_path / 'network'
+    network_dir.mkdir()
+    wan = network_dir / '10-vs-router-eth0.network'
+    lan = network_dir / '10-vs-router-eth1.network'
+    unrelated = network_dir / '20-other.network'
+    lan.write_text('LAN')
+    unrelated.write_text('other')
+    wan.write_text('DHCP=ipv4')
+    # PPPoE bundle excludes the physical WAN. A stale DHCP file must go.
+    applied.write_text('### FILE: 10-vs-router-eth1.network\nLAN\n')
+    RECONCILE(applied, network_dir)
+    assert not wan.exists()
+    assert lan.read_text() == 'LAN'
+    assert unrelated.read_text() == 'other'
+    # Static and DHCP both retain the WAN file on reboot.
+    for addressing in ('Address=192.0.2.2/24', 'DHCP=ipv4'):
+        wan.write_text(addressing)
+        applied.write_text('### FILE: 10-vs-router-eth0.network\n' + addressing + '\n'
+                           '### FILE: 10-vs-router-eth1.network\nLAN\n')
+        RECONCILE(applied, network_dir)
+        assert wan.read_text() == addressing
+    applied.unlink()
+    RECONCILE(applied, network_dir)
+    assert wan.exists()
 
 
 class Executor:

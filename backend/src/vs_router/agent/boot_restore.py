@@ -206,6 +206,44 @@ def restore_tproxy_interception() -> int:
     return run(["/usr/sbin/nft", "-f", str(capture)])
 
 
+def restore_pppoe_files(previous_bundle, confirmed_bundle, *, applied_dir=None,
+                        peers_dir=None, ppp_dir=None, manifest=None):
+    """Reconcile interrupted PPP credentials at boot without starting pppd.
+
+    Starting a unit ordered After=bootrestore here would deadlock; postboot
+    starts only the confirmed peers once the base oneshot has exited.
+    """
+    from pathlib import Path
+    from .apply import LocalFileSystem
+    fs = LocalFileSystem()
+    from .pppoe_apply import interfaces
+    applied_dir = Path(applied_dir or APPLIED)
+    peers_dir = Path(peers_dir or PPPOE_PEERS_DIR)
+    ppp_dir = Path(ppp_dir or '/etc/ppp')
+    manifest = Path(manifest or '/etc/vs-router/pppoe-manifest.json')
+    old, _ = interfaces(previous_bundle)
+    desired, _ = interfaces(confirmed_bundle)
+    for filename in old.keys() - desired.keys():
+        target = Path(filename)
+        # Never remove a path not owned by the PPP bundle.
+        if (target.parent == peers_dir or target in
+                (ppp_dir / 'chap-secrets', ppp_dir / 'pap-secrets')):
+            target.unlink(missing_ok=True)
+    for filename, content in desired.items():
+        target = Path(filename)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fs.write(target, content)
+        target.chmod(0o600)
+    fs.write(manifest, json.dumps(desired, sort_keys=True))
+    manifest.chmod(0o600)
+    artifact = applied_dir / 'pppoe.json'
+    if desired:
+        fs.write(artifact, confirmed_bundle)
+        artifact.chmod(0o600)
+    else:
+        artifact.unlink(missing_ok=True)
+
+
 def recover_interrupted_apply():
     """Reboot never promotes a pending/partially installed snapshot."""
     from pathlib import Path
@@ -222,6 +260,14 @@ def recover_interrupted_apply():
         return  # SSH restore rejects this failed/interrupted first apply.
     version = ConfigurationVersion.model_validate(backup['version_snapshot'])
     files = dict(backup['files'])
+    from .pppoe_apply import interfaces as pppoe_interfaces
+    pppoe_artifact = Path(APPLIED) / 'pppoe.json'
+    pppoe_manifest = Path('/etc/vs-router/pppoe-manifest.json')
+    previous_pppoe = (pppoe_manifest.read_text() if pppoe_manifest.exists() else
+                      pppoe_artifact.read_text() if pppoe_artifact.exists() else '{}')
+    # Validate both bundles before touching private host files.
+    pppoe_interfaces(previous_pppoe)
+    pppoe_interfaces(files.get('pppoe', '{}'))
     files.setdefault('ssh', version.configuration.ssh.model_dump_json())
     # Old snapshots predate the dedicated SSH decision; regenerate their nft.
     from ..management import read_management
@@ -253,6 +299,8 @@ def recover_interrupted_apply():
         # reboot whose confirmed target is not a TProxy state. Routed through the
         # engine's executor so no adapter bypasses the injected, typed surface.
         engine._teardown_tproxy_steps()
+    if previous_pppoe != '{}' or 'pppoe' in files:
+        restore_pppoe_files(previous_pppoe, files.get('pppoe', '{}'))
     engine.fs.write(Path(APPLIED) / 'snapshot.json', json.dumps(backup['version_snapshot']))
     engine.marker({'version_id': backup['version_id'], 'status': 'rolled_back',
                    'deadline': None, 'reason': 'reboot', 'phases': {'rollback': 'rolled_back'}})
