@@ -345,13 +345,19 @@ def make_handlers(engine, database, updater=None):
     def source_status():
         return get_updater().status()
 
+    def service_status():
+        from .services import ServiceStatus
+        return ServiceStatus(executor=getattr(engine, 'executor', None),
+                             filesystem=getattr(engine, 'fs', None))()
+
     return {'apply_version': apply_version, 'confirm_version': confirm_version,
             'rollback': lambda: engine.rollback('requested'), 'status': status,
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
             'nft_counters': nft_counters, 'list_interfaces': list_interfaces,
             'list_addresses': list_addresses, 'update_status': update_status,
             'apply_update': apply_update,
-            'update_source': update_source, 'source_status': source_status}
+            'update_source': update_source, 'source_status': source_status,
+            'service_status': service_status}
 
 
 def main():
