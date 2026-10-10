@@ -35,6 +35,14 @@ class Interface(Model):
     members: tuple[InterfaceName, ...] = ()
 
 
+class StaticRoute(Model):
+    destination: str
+    interface: InterfaceName
+    gateway: str | None = None
+    metric: int = Field(default=0, ge=0)
+    enabled: bool = True
+
+
 class Alias(Model):
     name: Name
     type: Literal["address", "port"]
@@ -483,6 +491,7 @@ class RuleSetSource(Model):
 class Configuration(Model):
     schema_version: Literal[1] = 1
     interfaces: tuple[Interface, ...] = ()
+    static_routes: tuple[StaticRoute, ...] = ()
     aliases: tuple[Alias, ...] = ()
     dhcp_subnets: tuple[DHCPSubnet, ...] = ()
     firewall_rules: tuple[FirewallRule, ...] = ()

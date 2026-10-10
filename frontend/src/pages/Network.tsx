@@ -5,7 +5,7 @@ import { useConfiguration } from "../state";
 import { api } from "../api";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
-import type { HostInterface, Interface } from "../types";
+import type { HostInterface, Interface, StaticRoute } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
@@ -21,13 +21,101 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageHeader } from "../components/PageHeader";
 import { Field } from "../components/Field";
-import { Select, type SelectOption } from "../components/Select";
-import { addressValid, ifaceNameValid } from "../components/validators";
+import { Select, InterfaceSelect, type SelectOption } from "../components/Select";
+import { Toggle } from "../components/Toggle";
+import { addressValid, ifaceNameValid, ipValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 
 type Editable = Interface & { key: string };
 
 const ZONES = ["wan", "lan", "guest", "iot", "vpn"];
+
+function destinationValid(value: string): boolean {
+  if (!value.includes("/") || !addressValid(value)) return false;
+  const [ip, length] = value.split("/");
+  if (ip.includes(":")) return true; // The server checks canonical IPv6 network alignment.
+  const bits = Number(length);
+  const address = ip.split(".").reduce((n, octet) => (n << 8) | Number(octet), 0) >>> 0;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (address & mask) >>> 0 === address;
+}
+
+function StaticRoutes({ configuration: c }: { configuration: ReturnType<typeof useConfiguration>["configuration"] }) {
+  const editor = useDraftEditor<StaticRoute[]>();
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [deleteIndex, setDeleteIndex] = useState<number | null>(null);
+  const routes = editor.value ?? c.static_routes ?? [];
+  const selected = selectedIndex === null ? null : routes[selectedIndex] ?? null;
+  const valid = routes.every((route) => destinationValid(route.destination.trim()) &&
+    c.interfaces.some((i) => i.name === route.interface && !!i.zone) &&
+    (!route.gateway || ipValid(route.gateway.trim())) &&
+    Number.isInteger(route.metric) && route.metric >= 0);
+  const open = (index: number) => {
+    if (!editor.isEdit) editor.begin([...routes]);
+    setSelectedIndex(index);
+  };
+  const add = () => {
+    const next = [...routes, { destination: "", interface: "", gateway: null, metric: 0, enabled: true }];
+    if (editor.isEdit) editor.setValue(next);
+    else editor.begin(next);
+    setSelectedIndex(next.length - 1);
+  };
+  const update = (patch: Partial<StaticRoute>) => {
+    if (selectedIndex === null) return;
+    editor.setValue(routes.map((r, index) => index === selectedIndex ? { ...r, ...patch } : r));
+  };
+  const cancel = () => { editor.cancel(); setSelectedIndex(null); };
+  const save = async () => {
+    await editor.save((value) => ({ ...c, static_routes: value.map((r) => ({
+      ...r, destination: r.destination.trim(), gateway: r.gateway?.trim() || null,
+    })) }));
+    // The hook owns persistence and errors; keep selection only while editing.
+  };
+  return <>
+    <ErrorNotice error={editor.error} />
+    <Card title="Статические маршруты" action={<Button onClick={add}>Добавить маршрут</Button>}>
+      {!routes.length ? <EmptyState>Статических маршрутов нет. Добавьте маршрут в черновик.</EmptyState> :
+        <DataTable heads={["Куда", "Через шлюз", "Интерфейс", "Метрика", "Состояние", "Действия"]}
+          rows={routes.map((r, index) => [
+            r.destination || "Не указано", r.gateway || "Напрямую", r.interface || "Не выбран", r.metric,
+            <Badge tone={r.enabled ? "blue" : "amber"}>{r.enabled ? "Включён в черновике" : "Выключен"}</Badge>,
+            <><Button onClick={() => open(index)} aria-label={`Редактировать маршрут ${r.destination || index + 1}`}>Изменить</Button>
+              <DeleteButton label={`Удалить маршрут ${r.destination || index + 1}`} onClick={() => setDeleteIndex(index)} /></>,
+          ])} />}
+      <InfoNote>Это настройки черновика, не состояние таблицы маршрутизации на устройстве. Сохранение не применяет изменения.</InfoNote>
+    </Card>
+    {editor.isEdit && <Card title={selected ? "Редактирование маршрута" : "Изменения маршрутов"}>
+      {selected && <FormGrid>
+        <Field label="Куда (CIDR)" value={selected.destination} required placeholder="192.0.2.0/24"
+          valid={destinationValid(selected.destination)} hint="Сеть назначения с префиксом, например 192.0.2.0/24"
+          onChange={(destination) => update({ destination })} />
+        <InterfaceSelect label="Интерфейс" value={selected.interface} interfaces={c.interfaces.filter((i) => !!i.zone)}
+          emptyLabel="Выберите интерфейс" error={!c.interfaces.some((i) => i.name === selected.interface && !!i.zone)}
+          onChange={(value) => update({ interface: value })} />
+        <Field label="Через шлюз" value={selected.gateway ?? ""} placeholder="Необязательно"
+          valid={!selected.gateway || ipValid(selected.gateway.trim())} hint="IP-адрес; пусто — маршрут напрямую"
+          onChange={(gateway) => update({ gateway: gateway || null })} />
+        <Field label="Метрика" type="number" value={selected.metric} inputProps={{ min: 0, step: 1 }}
+          valid={Number.isInteger(selected.metric) && selected.metric >= 0} hint="Неотрицательное целое число"
+          onChange={(metric) => update({ metric: metric === "" ? 0 : Number(metric) })} />
+        <FormWide><Toggle label="Включён" value={selected.enabled} onChange={(enabled) => update({ enabled })} /></FormWide>
+      </FormGrid>}
+      <EditorFooter saving={editor.saving} valid={valid} cancel={cancel} save={() => void save()} />
+    </Card>}
+    <ConfirmDialog open={deleteIndex !== null} title="Удалить маршрут?"
+      body={`Маршрут ${deleteIndex === null ? "" : routes[deleteIndex]?.destination || "без назначения"} будет удалён из черновика после сохранения.`}
+      confirmLabel="Удалить" cancelLabel="Отмена" danger
+      onConfirm={() => {
+        if (deleteIndex !== null) {
+          const next = routes.filter((_, index) => index !== deleteIndex);
+          if (editor.isEdit) editor.setValue(next);
+          else editor.begin(next);
+          if (selectedIndex !== null) setSelectedIndex(selectedIndex === deleteIndex ? null : selectedIndex > deleteIndex ? selectedIndex - 1 : selectedIndex);
+        }
+        setDeleteIndex(null);
+      }} onCancel={() => setDeleteIndex(null)} />
+  </>;
+}
 
 const emptyInterface = (key: string): Editable => ({
   key,
@@ -294,11 +382,7 @@ export default function Network() {
         </>
       )}
 
-      {knownTab === "routes" && (
-        <Card title="Статические маршруты">
-          <EmptyState>Статические маршруты пока нельзя настроить в панели</EmptyState>
-        </Card>
-      )}
+      {knownTab === "routes" && <StaticRoutes configuration={c} />}
 
       {knownTab === "diagnostics" && (
         <Card title="Диагностика">

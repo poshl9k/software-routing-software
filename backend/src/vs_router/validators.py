@@ -78,6 +78,24 @@ def validate_configuration(c):
     interfaces = {i.name: i for i in c.interfaces}
     if len(interfaces) != len(c.interfaces):
         fail("interface.duplicate")
+    for route in c.static_routes:
+        if route.interface not in interfaces:
+            fail("route.interface")
+        # Unassigned links remain fail-closed: networkd deliberately ignores
+        # addresses and L2 attachments there, so never accept an active route.
+        if route.enabled and interfaces[route.interface].zone is None:
+            fail("route.interface_unassigned")
+        try:
+            destination = ip_network(route.destination, strict=True)
+        except ValueError:
+            fail("route.destination")
+        if route.gateway is not None:
+            try:
+                gateway = ip_address(route.gateway)
+            except ValueError:
+                fail("route.gateway")
+            if gateway.version != destination.version:
+                fail("route.gateway_family")
     ingress = c.tproxy.ingress_interfaces
     if len({r.name for r in c.tproxy.rules}) != len(c.tproxy.rules):
         fail("tproxy.duplicate_rule")
