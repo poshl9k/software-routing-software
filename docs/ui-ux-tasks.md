@@ -83,9 +83,9 @@
 ## Статус исполнения P2
 
 - [x] **P2-1. Diff-контракт + review** — `/diff` отдаёт `{changes, summary}` (области, RU-заголовки, последствия; секреты redacted); экран «Применение» рендерит `DiffReview` с раскрываемым техническим diff (b1 backend + b2 frontend).
-- [x] **P2-5 (часть). DHCP срок аренды** — поле «Срок аренды, с» в редакторе подсети (`valid_lifetime`). Осталось: объект резервации «устройство→IP» уже в S4; PPPoE — ждёт схемы секретов.
+- [x] **P2-5 (часть). DHCP срок аренды** — поле «Срок аренды, с» (`valid_lifetime`); объект резервации «устройство→IP» (S4). **PPPoE отложен:** `systemd-networkd` PPPoE не поддерживает (проверено по systemd-докам) — нужен отдельный клиент (`pppd`) + интеграция с агентом применения и appliance-пакетирование; это отдельная фича L+, не UI-остаток.
 - [x] **P2-2. Модель статических маршрутов** — `StaticRoute` в схеме/валидаторе/networkd-генераторе (additive, golden без изменений) + CRUD во вкладке «Статические маршруты» (routes).
-- [x] **P2-3. Runtime-телеметрия** — backend: read-only RPC `service_status` + `GET /api/status/services` (honest `unknown`, 503). Frontend: полоска статуса на DHCP/DNS/Сайты/DDNS и обзорная строка (tui). Оговорка: список туннелей в `ConnectionEditors.tsx` не подключён (вне файлов потока).
+- [x] **P2-3. Runtime-телеметрия** — backend: read-only RPC `service_status` + `GET /api/status/services` (honest `unknown`, 503). Frontend: полоска статуса на DHCP/DNS/Сайты/DDNS, обзорная строка и список туннелей (`tunnel:<ifname>`).
 - [x] **P2-4. TProxy — приёмка пройдена** — apply грузит 9/9 таблиц и проверяет до `confirmed`; split-Unbound/DNS отвечают; реальный reboot восстанавливает base + 9/9 + policy-route + `ip_forward=1`; отказ TProxy не валит base; **пакетный fail-closed с positive transit control пройден** (lab-40, отдельный LAN-клиент). Оговорка: транзит-контроль доказан для обычного FORWARD-контроля + guard-drop; «здоровый sing-box capture» отдельной метрикой не измерялся (offline lab-27…33). Публичный гейт закрыт.
 - [x] **P2-6. Устойчивость адресов туннелей** — SHA-256 имени выбирает стабильный туннельный `/24` и адрес пира; явные/материализованные адреса сохраняются, коллизия → `wireguard.address_collision`; golden без изменений (addr).
 
