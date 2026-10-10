@@ -1,11 +1,63 @@
 """Live service adapters; commands and HTTP transport are injectable."""
 import base64
 import json
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, ProxyHandler, build_opener
 
 from .apply import ApplyError, LocalFileSystem, SubprocessExecutor
+
+
+class ServiceStatus:
+    """Read fixed systemd units only. No desired configuration is treated as health."""
+
+    MANIFEST = Path('/etc/vs-router/wireguard/manifest.json')
+    IFACE = re.compile(r'[a-zA-Z][a-zA-Z0-9_.-]{0,14}\Z')
+
+    def __init__(self, executor=None, filesystem=None, clock=None):
+        self.executor = executor if executor is not None else SubprocessExecutor()
+        self.fs = filesystem if filesystem is not None else LocalFileSystem()
+        self.clock = clock if clock is not None else lambda: datetime.now(timezone.utc)
+
+    def _unit(self, name, unit, *, tunnel=False):
+        try:
+            result = self.executor.run(['systemctl', 'is-active', unit], 5)
+            # is-active: 0=active, 3=inactive/failed, 4=unknown/not found.
+            if result.returncode == 0:
+                return {'name': name, 'state': 'running', 'detail': None}
+            if result.returncode == 3 and not tunnel:
+                return {'name': name, 'state': 'stopped', 'detail': 'Служба остановлена'}
+            if result.returncode == 3 and tunnel:
+                # An inactive userspace unit does not prove a kernel WG link is down.
+                return {'name': name, 'state': 'unknown', 'detail': 'Состояние туннеля не определено'}
+        except Exception:
+            # A failed probe cannot establish that the process is running.
+            pass
+        return {'name': name, 'state': 'unknown', 'detail': 'Не удалось определить состояние службы'}
+
+    def __call__(self):
+        from .singbox_service import SINGBOX_UNIT
+        services = [self._unit('kea', 'kea-dhcp4-server.service'),
+                    self._unit('unbound', 'unbound.service'),
+                    self._unit('caddy', 'caddy.service'),
+                    self._unit('tproxy', SINGBOX_UNIT),
+                    {'name': 'ddns', 'state': 'unknown',
+                     'detail': 'У DDNS нет отдельной службы'}]
+        try:
+            manifest = json.loads(self.fs.read(self.MANIFEST))
+            if not isinstance(manifest, dict):
+                manifest = {}
+        except (OSError, ValueError, TypeError):
+            manifest = {}
+        for iface, entry in sorted(manifest.items()):
+            if (not isinstance(iface, str) or not self.IFACE.fullmatch(iface)
+                    or not isinstance(entry, dict) or entry.get('protocol') not in ('wg', 'awg')):
+                continue
+            unit = f"vs-router-{entry['protocol']}@{iface}.service"
+            services.append(self._unit(f'tunnel:{iface}', unit, tunnel=True))
+        return {'generated_at': self.clock().isoformat(), 'services': services}
 
 
 def checked(executor, argv):

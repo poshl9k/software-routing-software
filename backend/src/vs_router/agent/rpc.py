@@ -11,7 +11,7 @@ VersionID = Annotated[int, Field(strict=True, ge=1)]
 Method = Literal["apply_version", "confirm_version", "rollback", "status",
                  "diag_ping", "diag_traceroute", "nft_counters", "list_interfaces",
                  "list_addresses", "update_status", "apply_update",
-                 "update_source", "source_status"]
+                 "update_source", "source_status", "service_status"]
 
 
 class ApplyParams(Model):
@@ -69,7 +69,8 @@ PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "nft_counters": EmptyParams, "list_interfaces": EmptyParams,
           "list_addresses": EmptyParams, "update_status": EmptyParams,
           "apply_update": ApplyUpdateParams,
-          "update_source": UpdateSourceParams, "source_status": EmptyParams}
+          "update_source": UpdateSourceParams, "source_status": EmptyParams,
+          "service_status": EmptyParams}
 
 
 class RPCRequest(Model):
