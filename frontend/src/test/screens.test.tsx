@@ -105,6 +105,8 @@ describe("screens", () => {
     const fileLabel = screen.getByRole("button", { name: "Выбрать файл импорта" });
     expect(fileLabel).toHaveAttribute("aria-disabled", "true");
     expect(fileLabel.querySelector("input")).toBeDisabled();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: "Диагностика" }));
     expect(screen.getByRole("button", { name: "Ping" })).toBeDisabled();
     expect(screen.getAllByRole("button", { name: "Обновить" }).at(-1)).toBeDisabled();
     expect(fetch.mock.calls.some(([path]) => path === "/api/diag/rules-counters")).toBe(false);
