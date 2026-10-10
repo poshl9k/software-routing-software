@@ -4,12 +4,14 @@ import {
   Box,
   Button,
   CssBaseline,
+  Drawer,
   GlobalStyles,
   LinearProgress,
   Snackbar,
   TextField,
   ThemeProvider,
   Tooltip,
+  useMediaQuery,
 } from "@mui/material";
 import {
   Link,
@@ -112,6 +114,12 @@ function Layout() {
   const { pathname, search } = useLocation();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const desktop = useMediaQuery("(min-width: 651px)");
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  useEffect(() => {
+    if (desktop) setDrawerOpen(false);
+  }, [desktop]);
   const {
     loading,
     error,
@@ -144,44 +152,60 @@ function Layout() {
       : draft ? { state: "draft", draftVersion: draft.id, stableVersion: confirmed?.id }
       : confirmed ? { state: "applied", confirmedVersion: confirmed.id }
       : { state: "uncertain" };
+  const navContents = (mobile: boolean) => navigation.map((group) => {
+    const items = group.items.filter((item) =>
+      item.label.toLowerCase().includes(query.trim().toLowerCase()) ||
+      group.group.toLowerCase().includes(query.trim().toLowerCase()));
+    if (!items.length) return null;
+    return (
+      <Box component="section" key={group.group} aria-label={group.group} sx={{ mb: 1 }}>
+        <Box component="h2" sx={{ px: 2.5, mt: 1.5, mb: 0.5, fontSize: 12, fontWeight: 600, color: "text.secondary" }}>
+          {group.group}
+        </Box>
+        {items.map((item) => (
+          <NavLink key={item.to} to={item.to} end
+            onClick={mobile ? () => setDrawerOpen(false) : undefined}
+            className={() => item.to === pathname ? "active" : ""}
+            aria-current={item.to === pathname ? "page" : undefined}
+          >
+            <span className="icon"><Icon name={item.icon} /></span>
+            {item.label}
+          </NavLink>
+        ))}
+      </Box>
+    );
+  });
+  const configurationRail = (mobile: boolean) => (
+    <Box className="configuration-rail">
+      <Box component="h2" sx={{ px: 2, fontSize: 12, color: "text.secondary" }}>Конфигурация</Box>
+      <ApplyStatusRail {...rail} action={user?.role === "admin" ?
+        (mobile ? <Button component={Link} to="/apply" onClick={() => setDrawerOpen(false)} variant="outlined">Проверить изменения</Button> : undefined) :
+        <Button component={Link} to="/apply" onClick={mobile ? () => setDrawerOpen(false) : undefined}>Открыть</Button>} />
+    </Box>
+  );
   return (
     <div className="shell">
       <Box component="aside" className="sidebar" sx={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div className="logo">
-          <span className="logo-mark" />
-          VS-ROUTER
-        </div>
+        <div className="logo"><span className="logo-mark" />VS-ROUTER</div>
         <Box component="nav" className="nav" aria-label="Разделы панели" sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-          {navigation.map((group) => {
-            const items = group.items.filter((item) =>
-              item.label.toLowerCase().includes(query.trim().toLowerCase()) ||
-              group.group.toLowerCase().includes(query.trim().toLowerCase()));
-            if (!items.length) return null;
-            return (
-              <Box component="section" key={group.group} aria-label={group.group} sx={{ mb: 1 }}>
-                <Box component="h2" sx={{ px: 2.5, mt: 1.5, mb: 0.5, fontSize: 12, fontWeight: 600, color: "text.secondary" }}>
-                  {group.group}
-                </Box>
-                {items.map((item) => (
-                  <NavLink key={item.to} to={item.to} end
-                    className={() => item.to === pathname ? "active" : ""}
-                    aria-current={item.to === pathname ? "page" : undefined}
-                  >
-                    <span className="icon"><Icon name={item.icon} /></span>
-                    {item.label}
-                  </NavLink>
-                ))}
-              </Box>
-            );
-          })}
+          {navContents(false)}
         </Box>
-        <Box sx={{ px: 0, mt: "auto" }}>
-          <Box component="h2" sx={{ px: 2, fontSize: 12, color: "text.secondary" }}>Конфигурация</Box>
-          <ApplyStatusRail {...rail} action={user?.role === "admin" ? undefined : <Button component={Link} to="/apply">Открыть</Button>} />
-        </Box>
+        {configurationRail(false)}
       </Box>
+      <Drawer anchor="left" open={drawerOpen} onClose={() => setDrawerOpen(false)}
+        transitionDuration={reducedMotion ? 0 : { enter: 160, exit: 120 }}
+        slotProps={{ paper: { className: "mobile-drawer" } }}
+      >
+        <div className="logo"><span className="logo-mark" />VS-ROUTER</div>
+        <TextField label="Поиск раздела" value={query} onChange={(e) => setQuery(e.target.value)} sx={{ mx: 2, mb: 1 }} />
+        <Box component="nav" className="nav" aria-label="Разделы панели" sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {navContents(true)}
+        </Box>
+        {configurationRail(true)}
+      </Drawer>
       <main className="main">
         <header className="topbar">
+          <Button className="mobile-menu" variant="outlined" onClick={() => setDrawerOpen(true)} aria-label="Разделы" aria-haspopup="dialog" aria-expanded={drawerOpen}>Разделы</Button>
           <div className="breadcrumbs">
             vs-router › <b>{title}</b>
           </div>
@@ -198,6 +222,9 @@ function Layout() {
             onChange={(e) => setQuery(e.target.value)}
           />
           <ApplyTopButton checking={checking} />
+          <Button className="mobile-status" component={Link} to="/apply" variant="outlined" aria-label={`Конфигурация: ${rail.state === "pending" ? "ожидается подтверждение" : rail.state === "running" ? "применение выполняется" : rail.state === "draft" ? "черновик" : rail.state === "applied" ? "подтверждена" : rail.state === "error" ? "ошибка применения" : "состояние неизвестно"}. Открыть применение`}>
+            Конфигурация{rail.state === "pending" ? " · подтвердить" : rail.state === "error" ? " · ошибка" : ""}
+          </Button>
           {user ? (
             <>
               <span className="user-name">{user.username}</span>

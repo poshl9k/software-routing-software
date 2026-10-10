@@ -290,6 +290,9 @@ describe("screens", () => {
     ))));
     open("/");
     expect(await screen.findByRole("button", { name: /Подтвердить ·/ })).toBeEnabled();
+    expect(screen.getByRole("link", { name: /Конфигурация: ожидается подтверждение.*Открыть применение/ })).toHaveAttribute("href", "/apply");
+    expect(screen.getByText("Ожидается подтверждение").closest('[aria-live="polite"]')).toBeInTheDocument();
+    expect(screen.getByText(/Осталось \d\d:\d\d/).closest("[aria-live]")).toBeNull();
     expect(screen.queryByRole("button", { name: "Применить" })).not.toBeInTheDocument();
     expect(fetch.mock.calls.some(([path]) => path === "/api/apply/status")).toBe(true);
   });

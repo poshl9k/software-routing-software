@@ -128,6 +128,26 @@ a:hover {
   opacity: 0.9;
 }
 
+.mobile-menu,
+.mobile-status {
+  display: none !important;
+}
+.mobile-drawer {
+  width: min(320px, 88vw);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.configuration-rail {
+  margin-top: auto;
+  flex-shrink: 0;
+}
+.mobile-drawer .configuration-rail {
+  max-height: 38vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--vs-border-subtle);
+}
+
 .main {
   flex: 1;
   padding: 20px 28px 48px;
@@ -463,32 +483,33 @@ pre {
     display: block;
   }
   .sidebar {
-    position: static;
-    width: 100%;
-    height: auto;
-    min-width: 0;
-    border-right: none;
-    border-bottom: 1px solid var(--vs-border-subtle);
+    display: none !important;
   }
-  .nav {
-    display: flex;
-    flex-wrap: wrap;
-  }
-  .nav a {
-    padding: 8px 12px;
-  }
-  .logo {
-    padding-bottom: 10px;
+  .mobile-menu,
+  .mobile-status {
+    display: inline-flex !important;
   }
   .main {
-    padding: 16px;
+    padding: 12px;
   }
   .topbar {
     flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
   }
-  .topbar .search {
-    width: 100%;
-    order: 3;
+  .topbar .breadcrumbs {
+    flex: 1 1 100%;
+    order: -1;
+  }
+  .topbar .search,
+  .topbar .user-name {
+    display: none;
+  }
+  .topbar .mobile-status {
+    margin-right: auto;
+  }
+  .topbar .MuiButton-root {
+    max-width: 100%;
   }
   .status-strip {
     grid-template-columns: 1fr;
@@ -502,5 +523,14 @@ pre {
   }
   .card-head {
     flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav a,
+  .MuiDrawer-paper,
+  .MuiBackdrop-root {
+    transition-duration: 0ms !important;
+    animation: none !important;
   }
 }

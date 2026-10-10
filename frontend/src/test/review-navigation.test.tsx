@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
@@ -45,6 +45,32 @@ it("applies the draft selected for review", async () => {
   await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/apply", expect.objectContaining({
     body: expect.stringContaining('"version_id":2'),
   })));
+});
+
+it("mobile drawer preserves grouped navigation, configuration, keyboard escape and focus return", async () => {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query === "(prefers-reduced-motion: reduce)",
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  open("/");
+  const menu = await screen.findByRole("button", { name: "Разделы" });
+  const status = screen.getByRole("link", { name: /Конфигурация: .*Открыть применение/ });
+  expect(status).toHaveAttribute("href", "/apply");
+  await userEvent.click(menu);
+  const drawer = screen.getByRole("dialog");
+  expect(within(drawer).getByRole("navigation", { name: "Разделы панели" })).toBeVisible();
+  expect(within(drawer).getByRole("region", { name: "Интернет" })).toBeVisible();
+  expect(within(drawer).getByRole("complementary", { name: "Состояние конфигурации" })).toBeVisible();
+  expect(within(drawer).getByRole("link", { name: "Проверить изменения" })).toHaveAttribute("href", "/apply");
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(menu).toHaveFocus();
+  await userEvent.click(menu);
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("link", { name: "Туннели" }));
+  expect(await screen.findByRole("heading", { name: "Туннели", level: 1 })).toBeVisible();
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });
 
 it("labels the events page and explains that its journal is unavailable", async () => {
