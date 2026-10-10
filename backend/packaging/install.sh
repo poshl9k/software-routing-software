@@ -117,6 +117,8 @@ install -d -m 0770 -o vs-router-web -g vs-router-web /run/vs-router/web /var/lib
 packaging_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install -m 0644 "$packaging_dir"/*.service "$packaging_dir"/*.timer /etc/systemd/system/
 install -m 0644 "$packaging_dir/vs-router.conf" /etc/tmpfiles.d/vs-router.conf
+install -m 0644 "$packaging_dir/90-vs-router-forward.conf" /etc/sysctl.d/90-vs-router-forward.conf
+sysctl -w net.ipv4.ip_forward=1
 systemctl daemon-reload
 # Web DB must be writable by both the web user (owner) and the agent (group).
 DB=/var/lib/vs-router/vs-router.db
@@ -193,7 +195,7 @@ printf '{"commit":"%s","semver":"%s","installed_at":"%s","source":"%s"}\n' \
     "$commit" "$semver" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${VS_ROUTER_RELEASE_SOURCE:-unknown}" \
     > /etc/vs-router/version.json
 chmod 0644 /etc/vs-router/version.json
-systemctl enable vs-router-bootrestore.service
+systemctl enable vs-router-bootrestore.service vs-router-tproxy-postboot.service
 systemctl daemon-reload
 systemctl restart vs-router-agent.service vs-router-web.service
 systemctl is-active --quiet vs-router-agent.service

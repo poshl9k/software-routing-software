@@ -1,28 +1,13 @@
 #!/usr/bin/env python3
-"""Restore-on-boot: apply the last applied vs-router configs after the machine
-comes up. Runs BEFORE vs-router-web, so the panel (and the confirmation loop)
-always starts on the last applied state; nftables ruleset is not persistent
-across reboots by design, networkd/unbound/kea read their own config files.
+"""Restore base state and protective TProxy guards before networkd starts.
 
-Order matters:
-1. networkd files -> /etc/systemd/network (before networkd starts via Before=)
-2. nftables ruleset (network is useless without it)
-3. unbound include + config check (no restart needed: systemctl reload after boot)
-4. kea config copy (kea-dhcp4 reads it at its own startup)
-
-The gated TProxy tract is restored in front of the base product files, in the
-same fail-closed order the apply contract uses (``tproxy_apply.PHASE_ORDER``):
-
-    guards -> bounded DNS + engine readiness -> interception + policy route
-
-The protective guards load first (:func:`restore_tproxy_protection`); the two
-ADR-0014 resolvers (:func:`restore_tproxy_resolvers`) and the pinned engine
-(:func:`restore_tproxy_engine`) are proven ready next; only then is the capture
-table loaded and the owned policy route installed
-(:func:`restore_tproxy_interception`). Traffic is therefore never captured
-before the fail-closed state exists. A substep failure withholds capture (fail
-closed) but is **non-fatal to the base services**: the agent/Caddy units still
-come up, so a broken TProxy contour never strands the panel off the box.
+This oneshot must never synchronously start units ordered after network-online:
+networkd itself waits for this unit. The separately enabled
+vs-router-tproxy-postboot.service runs :func:`post_boot_tproxy` after the base
+oneshot and network-online have finished. It checks live guards, starts split
+DNS and the engine, then installs the policy route and capture tables. A TProxy
+failure cannot hold the base agent/Caddy transaction or expose capture before
+readiness. Base networkd, nft, Unbound, Kea and SSH files are restored here.
 """
 import json
 import os
@@ -305,58 +290,17 @@ def main() -> int:
         print("interrupted apply recovery failed", file=sys.stderr)
         return 1
 
-    # TProxy tract, in fail-closed order: protective guards first, then the
-    # bounded DNS + engine readiness, and only then the capture table and its
-    # policy route. No-op for every configuration with no TProxy artifacts.
-    #
-    # A substep failure withholds capture (fail closed) but is deliberately
-    # *not* counted in ``failures``: ``vs-router-agent.service`` (and Caddy)
-    # Requires this oneshot, so failing the unit here would strand the panel off
-    # the box (lab-37). Base services always continue; only the capture tract
-    # stays shut.
-    from .apply import ApplyError as _ApplyError
-    _substep_errors = (OSError, ValueError, KeyError,
-                       subprocess.SubprocessError, _ApplyError)
-    tproxy_failures = 0
-    guard_ok = False
+    # Only load guards here. Starting split resolvers from this oneshot waits
+    # on network-online.target, which itself waits on networkd (ordered AFTER
+    # this unit): a systemd transaction cycle. A separate post-boot unit owns
+    # readiness and capture; its failure cannot block agent/Caddy.
     try:
-        guard_ok = restore_tproxy_protection() == 0
-        capture_file = os.path.join(APPLIED, 'tproxy-intercept.nft')
-        guard_file = os.path.join(APPLIED, 'tproxy-guards.nft')
-        if os.path.exists(capture_file) and not os.path.exists(guard_file):
-            guard_ok = False
-            print('TProxy guard artifact missing; capture withheld', file=sys.stderr)
-    except _substep_errors as exc:
-        print(f"TProxy protection restore failed: {exc}", file=sys.stderr)
-
-    dns_ok = False
-    try:
-        dns_ok = restore_tproxy_resolvers() == 0
-    except _substep_errors as exc:
-        print(f"TProxy resolver restore failed: {exc}", file=sys.stderr)
-
-    engine_ok = False
-    try:
-        engine_ok = restore_tproxy_engine() == 0
-    except _substep_errors as exc:
-        print(f"TProxy engine restore failed: {exc}", file=sys.stderr)
-
-    if guard_ok and dns_ok and engine_ok:
-        # Readiness proven: open the capture tract (policy route, then capture).
-        try:
-            if restore_tproxy_interception():
-                print("TProxy capture restore failed", file=sys.stderr)
-                tproxy_failures += 1
-        except _substep_errors as exc:
-            print(f"TProxy capture restore failed: {exc}", file=sys.stderr)
-            tproxy_failures += 1
-    elif any(os.path.exists(os.path.join(APPLIED, name))
-             for name in _tproxy_artifact_filenames()):
-        # A TProxy contour exists but readiness is not proven: never open the
-        # capture tract. Guards (if loaded) keep it fail-closed.
-        print("TProxy readiness incomplete; capture withheld (fail-closed)",
-              file=sys.stderr)
-        tproxy_failures += 1
+        if restore_tproxy_protection():
+            print('TProxy guards unavailable; capture withheld', file=sys.stderr)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        print(f'TProxy guards unavailable: {exc}', file=sys.stderr)
+    if run(['/usr/sbin/sysctl', '-w', 'net.ipv4.ip_forward=1']):
+        print('IPv4 forwarding not restored', file=sys.stderr)
 
     try:
         failures += restore_tunnel_proxy_files()
@@ -400,12 +344,45 @@ def main() -> int:
             print("SSH protection restore failed", file=sys.stderr)
             failures += 1
     print("boot-restore:", "OK" if not failures else f"{failures} failures")
-    if tproxy_failures:
-        # Reported separately: the TProxy tract stayed fail-closed while the base
-        # services were restored. The unit still exits 0 so agent/Caddy start.
-        print(f"boot-restore: TProxy fail-closed "
-              f"({tproxy_failures} substep failure(s))", file=sys.stderr)
     return 1 if failures else 0
+
+
+def post_boot_tproxy() -> int:
+    """Complete gated capture after networkd and base boot restore have exited."""
+    from . import tproxy_apply
+    from .apply import ApplyError
+    from pathlib import Path
+    applied = Path(APPLIED)
+    capture = applied / tproxy_apply.TPROXY_FILES['tproxy_interception']
+    if not capture.exists():
+        return 0
+    # Never trust a stale artifact or a successful oneshot status: prove all
+    # protective tables are live in the current kernel before opening capture.
+    if not (applied / tproxy_apply.TPROXY_FILES['tproxy_guards']).exists():
+        print('TProxy guard artifact missing; capture withheld', file=sys.stderr)
+        return 1
+    try:
+        tables = subprocess.run(['/usr/sbin/nft', 'list', 'tables'],
+                                capture_output=True, text=True, timeout=15, check=True).stdout
+        guard_names = tproxy_apply.owned_tables()
+        capture_names = ('inet vs_router_tproxy_interception',
+                         'inet vs_router_tproxy_ct_reset', 'inet vs_router_tproxy_input')
+        if not all(f'table {name}' in tables.splitlines() for name in guard_names
+                   if name not in capture_names):
+            print('TProxy guards not loaded; capture withheld', file=sys.stderr)
+            return 1
+        if restore_tproxy_resolvers() or restore_tproxy_engine():
+            return 1
+        if restore_tproxy_interception():
+            return 1
+        tables = subprocess.run(['/usr/sbin/nft', 'list', 'tables'],
+                                capture_output=True, text=True, timeout=15, check=True).stdout
+        if not all(f'table {name}' in tables.splitlines() for name in guard_names):
+            return 1
+        return 0
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, ApplyError) as exc:
+        print(f'TProxy post-boot restore failed: {exc}', file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

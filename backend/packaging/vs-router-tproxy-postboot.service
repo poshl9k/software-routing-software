@@ -1,0 +1,16 @@
+[Unit]
+Description=vs-router gated TProxy readiness and capture after base boot
+After=vs-router-bootrestore.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/vs-router/applied/tproxy-intercept.nft
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -c 'from vs_router.agent.boot_restore import post_boot_tproxy; raise SystemExit(post_boot_tproxy())'
+TimeoutStartSec=90
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/systemd/system /etc/vs-router /run
+
+[Install]
+WantedBy=multi-user.target

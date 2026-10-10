@@ -90,11 +90,49 @@ def _run_main(monkeypatch, applied, order, *, guard_rc=0, dns_error=None,
         return 0
 
     monkeypatch.setattr(boot_restore, "run", fake_run)
-    return boot_restore.main()
+    main_rc = boot_restore.main()
+    # The post-boot unit runs in a separate transaction after the base unit.
+    class Tables:
+        stdout = ('\n'.join('table ' + name for name in tproxy_apply.owned_tables())
+                  if not guard_rc else '')
+    monkeypatch.setattr(boot_restore.subprocess, 'run', lambda *a, **kw: Tables())
+    boot_restore.post_boot_tproxy()
+    return main_rc
 
 
 def _index(order, item):
     return order.index(item)
+
+
+def test_post_boot_requires_live_kernel_guards(monkeypatch, tmp_path):
+    _write(tmp_path, [GUARD, SELECTED, ORDINARY, SINGBOX, CAPTURE])
+    monkeypatch.setattr(boot_restore, 'APPLIED', str(tmp_path))
+    class Tables:
+        stdout = 'table inet vs_router_tproxy_guard\n'
+    monkeypatch.setattr(boot_restore.subprocess, 'run', lambda *a, **kw: Tables())
+    monkeypatch.setattr(boot_restore, '_unbound_service',
+                        lambda: pytest.fail('must not start DNS before guards'))
+    assert boot_restore.post_boot_tproxy() == 1
+
+
+def test_base_oneshot_never_starts_tproxy_units(monkeypatch, tmp_path):
+    _write(tmp_path, [GUARD, SELECTED, ORDINARY, SINGBOX, CAPTURE])
+    order = []
+    monkeypatch.setattr(boot_restore, 'APPLIED', str(tmp_path))
+    monkeypatch.setattr('vs_router.agent.management_console.check', lambda: None)
+    monkeypatch.setattr('vs_router.management.read_management', lambda: None)
+    monkeypatch.setattr(boot_restore, 'recover_interrupted_apply', lambda: None)
+    monkeypatch.setattr(boot_restore, 'restore_tunnel_proxy_files', lambda: 0)
+    monkeypatch.setattr(boot_restore, 'restore_ssh', lambda: order.append('ssh'))
+    monkeypatch.setattr(boot_restore, '_unbound_service',
+                        lambda: pytest.fail('unit start inside boot oneshot'))
+    monkeypatch.setattr(boot_restore, '_singbox_service',
+                        lambda: pytest.fail('unit start inside boot oneshot'))
+    monkeypatch.setattr(boot_restore, 'run', lambda argv: order.append(tuple(argv)) or 0)
+    assert boot_restore.main() == 0
+    assert order[0][1] == '-f'
+    assert ('/usr/sbin/sysctl', '-w', 'net.ipv4.ip_forward=1') in order
+    assert order[-1] == 'ssh'
 
 
 # --------------------------------------------------------------------------
@@ -111,12 +149,11 @@ def test_capture_and_policy_route_only_after_guard_and_readiness(monkeypatch, tm
     capture_nft = ("/usr/sbin/nft", "-f", str(tmp_path / CAPTURE))
     base_nft = ("/usr/sbin/nft", "-f", str(tmp_path / "nftables.conf"))
 
-    # Guards load first, then the bounded DNS + engine readiness, then the
-    # policy route and the capture table, and only then the base product files.
-    assert _index(order, guard_nft) < _index(order, "dns") \
+    # Base firewall and SSH finish before post-boot unit touches systemd.
+    assert _index(order, guard_nft) < _index(order, base_nft) \
+        < _index(order, "ssh") < _index(order, "dns") \
         < _index(order, "engine") < _index(order, "policy_route") \
-        < _index(order, capture_nft) < _index(order, base_nft)
-    assert order[-1] == "ssh"
+        < _index(order, capture_nft)
 
 
 def test_readiness_proven_installs_policy_route_before_capture(monkeypatch, tmp_path):

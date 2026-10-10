@@ -297,7 +297,9 @@ def test_boot_restores_bootstrap_firewall_before_services(tmp_path, monkeypatch)
     monkeypatch.setattr(boot_restore, 'restore_tunnel_proxy_files', lambda: calls.append('proxy') or 0)
     monkeypatch.setattr(boot_restore, 'restore_ssh', lambda: calls.append('ssh') or None)
     assert boot_restore.main() == 0
-    assert calls == [['/usr/sbin/nft', '-f', str(tmp_path / 'management.nft')], 'proxy', 'ssh']
+    assert calls == [['/usr/sbin/nft', '-f', str(tmp_path / 'management.nft')],
+                     ['/usr/sbin/sysctl', '-w', 'net.ipv4.ip_forward=1'],
+                     'proxy', 'ssh']
 
 
 def test_first_apply_https_probe_failure_does_not_confirm():
