@@ -209,7 +209,7 @@ it("shows device-first DHCP controls and rejects duplicate reservations", async 
   render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
   expect(await screen.findByRole("tab", { name: "Устройства с постоянным IP" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("columnheader", { name: "Постоянный IP" })).toBeVisible();
-  expect(screen.getByText("Состояние неизвестно")).toBeVisible();
+  expect(screen.getByText("Статус загружается…")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Добавить устройство" }));
   await user.type(screen.getByLabelText("MAC"), "aa:bb:cc:dd:ee:01");
   await user.type(screen.getByLabelText("Постоянный IP"), "192.168.1.21");

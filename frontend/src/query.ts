@@ -25,6 +25,7 @@ export const queryKeys = {
     ["diff", before, after] as const,
   hostInterfaces: () => ["host", "interfaces"] as const,
   hostAddresses: () => ["host", "addresses"] as const,
+  serviceStatus: () => ["status", "services"] as const,
   tproxyPreview: (versionId: number | null) =>
     ["tproxy", "preview", versionId] as const,
   rulesets: () => ["rulesets"] as const,

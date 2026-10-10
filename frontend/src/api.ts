@@ -12,7 +12,7 @@ import type {
   TProxyPreview,
   Alias, DHCPLease, ImportPreview, PingResult,
   RuleSetStatus, RuleSetUpdate,
-  UpdateStatus, UpdateStart,
+  UpdateStatus, UpdateStart, ServiceStatusResponse,
 } from "./types";
 export class ApiError extends Error {
   constructor(
@@ -70,6 +70,7 @@ const post = <T>(path: `/api/${string}`, body: unknown) =>
 export const api = {
   hostInterfaces: () => request<HostInterface[]>("/api/host/interfaces"),
   hostAddresses: () => request<Record<string, string[]>>("/api/host/addresses"),
+  serviceStatus: (signal?: AbortSignal) => request<ServiceStatusResponse>("/api/status/services", { signal }),
   keygenTunnel: (protocol: "wg" | "awg") => post<{ private_key: string; public_key: string; obfuscation?: Record<string, number> }>("/api/keygen/tunnel", { protocol }),
   keygenPeer: () => post<{ preshared_key: string }>("/api/keygen/peer", {}),
   keygenPeerKeypair: () => post<{ private_key: string; public_key: string }>("/api/keygen/peer-keypair", {}),
