@@ -33,6 +33,25 @@ def test_encrypt_and_restore(monkeypatch):
     assert parse_configuration(redact(saved), saved) == config
 
 
+def test_pppoe_password_encrypted_redacted_and_restored(monkeypatch):
+    key = Fernet.generate_key()
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', key.decode())
+    input_config = {'interfaces': [{'name': 'enp1s0', 'type': 'physical', 'zone': 'wan',
+                                    'addressing': 'pppoe', 'pppoe_username': 'subscriber',
+                                    'pppoe_password': {'plaintext': 'private-pass'}}]}
+    config = parse_configuration(input_config)
+    assert decrypt_secret(config.interfaces[0].pppoe_password, key) == 'private-pass'
+    saved = config.model_dump(mode='json')
+    assert 'private-pass' not in str(saved)
+    public = redact(saved)
+    assert public['interfaces'][0]['pppoe_password'] == {'redacted': True}
+    assert parse_configuration(public, saved) == config
+    replacement = {'interfaces': [{**public['interfaces'][0],
+                                   'pppoe_password': {'plaintext': 'new-pass'}}]}
+    updated = parse_configuration(replacement, saved)
+    assert decrypt_secret(updated.interfaces[0].pppoe_password, key) == 'new-pass'
+
+
 def test_missing_encryption_key_does_not_accept_plaintext(monkeypatch):
     monkeypatch.delenv('VS_ROUTER_SECRET_KEY', raising=False)
     with pytest.raises(APIError) as error:

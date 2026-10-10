@@ -2,7 +2,7 @@
 from datetime import datetime
 from ipaddress import ip_address
 from typing import Annotated, Literal
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 Name = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,30}$")]
 InterfaceName = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$")]
@@ -28,11 +28,22 @@ class Interface(Model):
     # static: addresses are configured; dhcp: the interface is a DHCPv4 client
     # (any type/zone). DHCP is explicit so "no address" never silently changes
     # meaning; the management LAN and Kea server interfaces forbid it.
-    addressing: Literal["static", "dhcp"] = "static"
+    addressing: Literal["static", "dhcp", "pppoe"] = "static"
+    pppoe_username: str | None = None
+    pppoe_password: EncryptedSecret | None = None
     addresses: tuple[str, ...] = ()
     parent: InterfaceName | None = None
     vlan_id: int | None = Field(default=None, ge=1, le=4094)
     members: tuple[InterfaceName, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        # Preserve pre-PPPoE snapshot/API bytes for every ordinary interface.
+        if self.addressing != "pppoe":
+            data.pop("pppoe_username", None)
+            data.pop("pppoe_password", None)
+        return data
 
 
 class StaticRoute(Model):

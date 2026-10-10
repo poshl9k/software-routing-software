@@ -33,6 +33,8 @@ def generate_networkd(version: ConfigurationVersion) -> dict[str, str]:
                     bridges[member] = i.name
     files = {}
     for i in interfaces:
+        if i.addressing == "pppoe":
+            continue
         prefix = f"10-vs-router-{i.name}"
         # DHCP is explicit (addressing="dhcp") and allowed for any assigned type
         # or zone; the management LAN and Kea server interfaces forbid it, and

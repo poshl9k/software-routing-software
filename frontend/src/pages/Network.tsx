@@ -23,8 +23,9 @@ import { PageHeader } from "../components/PageHeader";
 import { Field } from "../components/Field";
 import { Select, InterfaceSelect, type SelectOption } from "../components/Select";
 import { Toggle } from "../components/Toggle";
-import { addressValid, ifaceNameValid, ipValid } from "../components/validators";
+import { addressValid, ifaceNameValid, ipValid, secretValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
+import { SecretField } from "./ConnectionEditors";
 
 type Editable = Interface & { key: string };
 
@@ -245,13 +246,15 @@ export default function Network() {
       ...c,
       interfaces: value.map(({ key: _key, ...rest }) => ({
         ...rest,
+        pppoe_username: rest.addressing === "pppoe" ? rest.pppoe_username?.trim() : undefined,
+        pppoe_password: rest.addressing === "pppoe" ? rest.pppoe_password : undefined,
         name: rest.name.trim(),
         description: rest.description?.trim() || null,
         // A DHCP client owns no static address: never send the address a row
         // held before it was switched to DHCP (avoids interface.dhcp_with_addresses
         // and a stale-address conflict at apply time).
         addresses:
-          rest.addressing === "dhcp"
+          rest.addressing !== "static"
             ? []
             : rest.addresses.filter((a) => a.trim()),
         members: rest.members.filter((m) => m.trim()),
@@ -265,7 +268,8 @@ export default function Network() {
   const allValid = new Set(names).size === names.length &&
     new Set(staticAddresses).size === staticAddresses.length &&
     rows.every((i) => validName(i) &&
-      (i.addressing === "dhcp" || i.addresses.every((a) => a.includes("/") && addressValid(a.trim()))) &&
+      (i.addressing !== "static" || i.addresses.every((a) => a.includes("/") && addressValid(a.trim()))) &&
+      (i.addressing !== "pppoe" || (i.type === "physical" && i.zone === "wan" && !i.parent && !i.members.length && !rows.some((other) => other.type === "vlan" && other.parent === i.name) && !!i.pppoe_username?.trim() && secretValid(i.pppoe_password ?? null) && !c.dhcp_subnets?.some((subnet) => subnet.interface === i.name))) &&
       (i.type !== "vlan" || (i.vlan_id !== null && Number.isInteger(i.vlan_id) && i.vlan_id >= 1 && i.vlan_id <= 4094)));
 
   const nameOptions = (i: Editable): SelectOption[] => {
@@ -307,7 +311,7 @@ export default function Network() {
                 <Button onClick={() => open(i.key)}>{i.description?.trim() || "Без названия"}</Button>,
                 i.name || "Не выбрано",
                 <Badge tone={!i.zone ? "amber" : i.zone === "wan" ? "red" : "blue"}>{i.zone === "wan" ? "Интернет (WAN)" : i.zone === "lan" ? "Домашняя сеть (LAN)" : i.zone ? i.zone.toUpperCase() : "Не назначен"}</Badge>,
-                i.addressing === "dhcp" ? <InlineStatus tone={hostAddresses.isPending || hostAddresses.isError ? "unknown" : live.length ? "green" : "amber"} text={hostAddresses.isPending ? "DHCP: загрузка" : hostAddresses.isError ? "DHCP: данные недоступны" : live.length ? `DHCP: ${live.join(", ")}` : "DHCP: адрес не получен"} /> : i.addresses.join(", ") || "Адрес не задан",
+                i.addressing === "pppoe" ? <InlineStatus tone="unknown" text="PPPoE: состояние подключения недоступно" /> : i.addressing === "dhcp" ? <InlineStatus tone={hostAddresses.isPending || hostAddresses.isError ? "unknown" : live.length ? "green" : "amber"} text={hostAddresses.isPending ? "DHCP: загрузка" : hostAddresses.isError ? "DHCP: данные недоступны" : live.length ? `DHCP: ${live.join(", ")}` : "DHCP: адрес не получен"} /> : i.addresses.join(", ") || "Адрес не задан",
                 <Badge tone={version?.status === "draft" || isEditMode ? "amber" : version ? "blue" : "amber"}>{version?.status === "draft" || isEditMode ? "Черновик" : version ? "Применено" : "Статус неизвестен"}</Badge>,
                 hostInterfaces.isPending ? <InlineStatus tone="unknown" text="Состояние хоста: загрузка" /> : hostInterfaces.isError || !host ? <InlineStatus tone="unknown" text="Состояние хоста недоступно" /> : host.kind !== "physical" ? <InlineStatus tone="unknown" text={`Состояние ${host.operstate}; данные о кабеле недоступны`} /> : <InlineStatus tone={host.operstate === "UP" ? "green" : host.operstate === "DOWN" ? "red" : "unknown"} text={`Кабель: ${host.operstate === "UP" ? "подключён" : host.operstate === "DOWN" ? "отключён" : host.operstate}`} />,
               ];
@@ -321,16 +325,19 @@ export default function Network() {
             <Field label="Дружественное имя" value={selected.description ?? ""} placeholder="напр. «оптика провайдера»" maxLength={64} onChange={(v) => setField(selected.key,{description:v || null})} />
             <Select label="Системное имя" value={selected.name} error={!!selected.name && !validName(selected)} placeholder={{label:"— выберите интерфейс —"}} options={nameOptions(selected)} onChange={(name) => setField(selected.key,{name})} />
             <Field label="Описание" value={selected.description ?? ""} readOnly hint="Хранится как дружественное имя интерфейса." />
-            <Select label="Тип" value={selected.type} options={[{value:"physical",label:"Физический"},{value:"bridge",label:"Мост"},{value:"vlan",label:"VLAN"}]} onChange={(v) => setField(selected.key,{type:v as Interface["type"]})} />
-            <Select label="Роль / зона" value={selected.zone ?? ""} placeholder={{label:"Не назначен — транзит запрещён"}} options={ZONES.map((z) => ({value:z,label:z === "wan" ? "Интернет (WAN)" : z === "lan" ? "Домашняя сеть (LAN)" : z.toUpperCase()}))} onChange={(v) => setField(selected.key,{zone:v || null})} />
+            <Select label="Тип" value={selected.type} options={[{value:"physical",label:"Физический"},{value:"bridge",label:"Мост"},{value:"vlan",label:"VLAN"}]} onChange={(v) => setField(selected.key,{type:v as Interface["type"], ...(selected.addressing === "pppoe" && v !== "physical" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
+            <Select label="Роль / зона" value={selected.zone ?? ""} placeholder={{label:"Не назначен — транзит запрещён"}} options={ZONES.map((z) => ({value:z,label:z === "wan" ? "Интернет (WAN)" : z === "lan" ? "Домашняя сеть (LAN)" : z.toUpperCase()}))} onChange={(v) => setField(selected.key,{zone:v || null, ...(selected.addressing === "pppoe" && v !== "wan" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
             <Field label="MAC хоста" value={allRealNics.find((h) => h.name === selected.name)?.mac ?? "Данные недоступны"} readOnly />
             <FormWide><InfoNote>Без зоны транзит запрещён. Изменения вступят в силу только после применения черновика.</InfoNote></FormWide>
           </FormGrid>}
           {selected && detailTab === "ip" && <FormGrid>
-            <Select label="Режим адресации" value={selected.addressing} options={[{value:"static",label:"Статический IP"},{value:"dhcp",label:"DHCP"}]} onChange={(v) => setField(selected.key,v === "dhcp" ? {addressing:"dhcp",addresses:[]} : {addressing:"static"})} />
-            <Field label="Основной адрес (CIDR)" value={selected.addressing === "dhcp" ? "" : selected.addresses[0] ?? ""} disabled={selected.addressing === "dhcp"} placeholder={selected.addressing === "dhcp" ? "адрес по DHCP" : "192.168.10.1/24"} valid={selected.addressing === "dhcp" || !selected.addresses.length || (selected.addresses[0].includes("/") && addressValid(selected.addresses[0]) && staticAddresses.filter((a) => a === selected.addresses[0].trim().toLowerCase()).length === 1)} hint="/24 = маска 255.255.255.0. Первый WAN-адрес основной для исходящего трафика." onChange={(v) => setField(selected.key,{addresses:[v,...selected.addresses.slice(1)]})} />
+            <Select label="Режим адресации" value={selected.addressing} options={[{value:"static",label:"Статический IP"},{value:"dhcp",label:"DHCP"},...(selected.type === "physical" && selected.zone === "wan" ? [{value:"pppoe",label:"PPPoE"}] : [])]} onChange={(v) => setField(selected.key,v === "pppoe" ? {addressing:"pppoe",addresses:[],parent:null,members:[]} : v === "dhcp" ? {addressing:"dhcp",addresses:[],pppoe_username:undefined,pppoe_password:undefined} : {addressing:"static",pppoe_username:undefined,pppoe_password:undefined})} />
+            {selected.addressing === "pppoe" ? <>
+              <Field label="Логин" value={selected.pppoe_username ?? ""} valid={!!selected.pppoe_username?.trim()} onChange={(v) => setField(selected.key,{pppoe_username:v})} />
+              <SecretField key={selected.key} label="Пароль" value={selected.pppoe_password ?? null} change={(pppoe_password) => setField(selected.key,{pppoe_password})} />
+            </> : <Field label="Основной адрес (CIDR)" value={selected.addressing === "dhcp" ? "" : selected.addresses[0] ?? ""} disabled={selected.addressing === "dhcp"} placeholder={selected.addressing === "dhcp" ? "адрес по DHCP" : "192.168.10.1/24"} valid={selected.addressing === "dhcp" || !selected.addresses.length || (selected.addresses[0].includes("/") && addressValid(selected.addresses[0]) && staticAddresses.filter((a) => a === selected.addresses[0].trim().toLowerCase()).length === 1)} hint="/24 = маска 255.255.255.0. Первый WAN-адрес основной для исходящего трафика." onChange={(v) => setField(selected.key,{addresses:[v,...selected.addresses.slice(1)]})} />}
             {selected.addressing === "static" && <FormWide>{selected.addresses.slice(1).map((address,index) => <FormActions key={index}><Field ariaLabel={`Дополнительный адрес ${index + 1} (CIDR)`} value={address} valid={address.includes("/") && addressValid(address) && staticAddresses.filter((a) => a === address.trim().toLowerCase()).length === 1} hint="Укажите уникальный IP/CIDR" onChange={(v) => setField(selected.key,{addresses:selected.addresses.map((a,n) => n === index + 1 ? v : a)})} /><DeleteButton label={`Удалить дополнительный адрес ${index + 1}`} onClick={() => setField(selected.key,{addresses:selected.addresses.filter((_,n) => n !== index + 1)})} /></FormActions>)}<Button onClick={() => setField(selected.key,{addresses:[...(selected.addresses.length ? selected.addresses : [""]),""]})}>Добавить адрес</Button></FormWide>}
-            <FormWide><InfoNote>{selected.addressing === "dhcp" ? hostAddresses.isPending ? "Полученный адрес: загрузка…" : hostAddresses.isError ? "Полученный адрес: состояние недоступно" : `Полученный адрес: ${(liveAddresses[selected.name] ?? []).join(", ") || "адрес не получен"}` : "Статические адреса показаны из конфигурации."}</InfoNote></FormWide>
+            <FormWide><InfoNote>{selected.addressing === "dhcp" ? hostAddresses.isPending ? "Полученный адрес: загрузка…" : hostAddresses.isError ? "Полученный адрес: состояние недоступно" : `Полученный адрес: ${(liveAddresses[selected.name] ?? []).join(", ") || "адрес не получен"}` : selected.addressing === "pppoe" ? "PPPoE сохранён в черновике. Подключение пока не поддерживается применением конфигурации; потребуется отдельное обновление агента." : "Статические адреса показаны из конфигурации."}</InfoNote></FormWide>
           </FormGrid>}
           {selected && detailTab === "connection" && <FormGrid>
             {selected.type === "vlan" && <><Select label="Родительский интерфейс" value={selected.parent ?? ""} placeholder={{label:"— выберите —"}} options={candidates(selected,physicalNics).filter((name) => name === selected.parent || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{parent:v || null})} /><Field label="VLAN ID" type="number" value={selected.vlan_id ?? ""} onChange={(v) => setField(selected.key,{vlan_id:Number(v) || null})} /></>}
