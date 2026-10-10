@@ -6,13 +6,14 @@ import { expect, it, vi } from "vitest";
 import Routing from "../pages/Routing";
 import { RouterProvider, useRouterState } from "../state";
 import { emptyConfiguration } from "../fixtures";
-import type { ProxyOutbound, ProxySettings, RuleSetStatus } from "../types";
+import type { ProxyOutbound, ProxySettings, RuleSetStatus, TProxy } from "../types";
 
 type Role = "admin" | "operator";
 
 function setup(options?: {
   fail?: boolean;
   proxies?: ProxySettings;
+  tproxy?: TProxy;
   role?: Role;
   rulesets?: RuleSetStatus[];
   updateFails?: boolean;
@@ -20,6 +21,7 @@ function setup(options?: {
   const configuration = {
     ...emptyConfiguration,
     proxies: options?.proxies ?? emptyConfiguration.proxies,
+    tproxy: options?.tproxy ?? emptyConfiguration.tproxy,
   };
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
     if (path === "/api/versions")
@@ -168,6 +170,23 @@ it("imports pasted links into the saved draft and clears the input", async () =>
   ]);
 });
 
+it("warns about policy and group references before deleting an outbound", async () => {
+  const outbound: ProxyOutbound = { tag: "exit_a", type: "vless", server: "example.org", port: 443,
+    secret: null, method: null, tls: false, tls_server_name: null, tls_insecure: false, admin_listen: null };
+  setup({ proxies: { ...emptyConfiguration.proxies, outbounds: [outbound],
+    groups: [{ tag: "pool", type: "selector", outbounds: ["exit_a"], url: null, interval_minutes: null }] },
+    tproxy: { ...emptyConfiguration.tproxy, final: "route", final_outbound: "exit_a",
+      rules: [{ name: "sites", domain_suffix: ["example.org"], ip_cidr: [], source_ip_cidr: [],
+        rule_sets: [], protocol: "any", ports: [], action: "route", outbound: "exit_a", order: 0 }] } });
+  const user = userEvent.setup();
+  await openTab(user, "Прокси-выходы");
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "Удалить выход exit_a" }));
+  expect(screen.getByText(/правило sites, конечное действие, группа pool/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Отмена" }));
+  expect(screen.getByDisplayValue("exit_a")).toBeVisible();
+});
+
 it("removes selected outbounds from the saved draft", async () => {
   const base: ProxyOutbound = {
     tag: "first", type: "shadowsocks", server: "exit.example.com", port: 8388,
@@ -186,7 +205,9 @@ it("removes selected outbounds from the saved draft", async () => {
   await user.click(screen.getByRole("checkbox", { name: "Выбрать выход first" }));
   await user.click(screen.getByRole("checkbox", { name: "Выбрать выход third" }));
   await user.click(screen.getByRole("button", { name: "Удалить выбранные" }));
-  expect(screen.getByRole("button", { name: "Удалить выбранные" })).toBeDisabled();
+  expect(screen.getByText(/Ссылки на first, third: нет/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Удалить" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Удалить выбранные" })).toBeDisabled());
   await user.click(saveButton());
   await waitFor(() => expect(sentProxies(fetch).outbounds).toHaveLength(1));
   expect(sentProxies(fetch).outbounds[0].tag).toBe("second");
@@ -268,7 +289,7 @@ it("shows empty-state prompts for every proxy collection and the rule-set list",
   expect(screen.getByText("Нет прокси-выходов")).toBeVisible();
   expect(screen.getByText("Нет подписок")).toBeVisible();
   expect(screen.getByText("Нет групп")).toBeVisible();
-  await openTab(user, "Rule-set");
+  await openTab(user, "Источники списков");
   expect(screen.getByText("Rule-set не подключены")).toBeVisible();
   expect(screen.getByRole("table")).toBeVisible();
 });
@@ -318,11 +339,13 @@ it("lists rule-set sources with status/stale and refreshes via the typed RPC", a
   const fetch = setup({ rulesets: [GEO] });
   const user = userEvent.setup();
   await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
-  await openTab(user, "Rule-set");
+  await openTab(user, "Источники списков");
 
   expect(await screen.findByText("geo")).toBeVisible();
   expect(screen.getByText("ок")).toBeVisible();
-  expect(screen.getByText("актуален")).toBeVisible();
+  expect(screen.getByText("не устарел по данным агента")).toBeVisible();
+  expect(screen.getAllByText(/01\.01\.1970/)).toHaveLength(2);
+  expect(screen.getByText(/Ручное обновление — действие агента, не сохранение черновика/)).toBeVisible();
 
   await user.click(screen.getByRole("button", { name: "Обновить geo" }));
   await waitFor(() => {
@@ -339,7 +362,7 @@ it("shows a stale rule-set source with an honest status badge", async () => {
   setup({ rulesets: [{ ...GEO, status: "never", stale: true, sha256: null }] });
   const user = userEvent.setup();
   await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
-  await openTab(user, "Rule-set");
+  await openTab(user, "Источники списков");
   expect(await screen.findByText("не обновлялся")).toBeVisible();
   expect(screen.getByText("устарел")).toBeVisible();
 });
@@ -348,7 +371,7 @@ it("surfaces a rejected rule-set update", async () => {
   setup({ rulesets: [GEO], updateFails: true });
   const user = userEvent.setup();
   await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
-  await openTab(user, "Rule-set");
+  await openTab(user, "Источники списков");
   await user.click(await screen.findByRole("button", { name: "Обновить geo" }));
   expect(await screen.findByText(/Ошибка загрузки/)).toBeVisible();
 });
@@ -356,7 +379,7 @@ it("surfaces a rejected rule-set update", async () => {
 it("keeps the rule-set list read-only for an operator", async () => {
   setup({ role: "operator", rulesets: [GEO] });
   const user = userEvent.setup();
-  await openTab(user, "Rule-set");
+  await openTab(user, "Источники списков");
   expect(await screen.findByText("geo")).toBeVisible();
   expect(screen.queryByRole("button", { name: "Обновить geo" })).not.toBeInTheDocument();
 });

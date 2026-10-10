@@ -27,6 +27,27 @@ function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfigurat
   return fetch;
 }
 
+it("warns about DNS rule references before deleting its server", async () => {
+  const configuration = emptyConfiguration.tproxy;
+  const server = { tag: "resolver", type: "udp" as const, server: "1.1.1.1", server_port: null,
+    tls_name: null, path: null, domain_resolver: null, detour: null };
+  const fetch = vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+    path === "/api/versions" ? [{ id: 1, status: "draft", configuration: {
+      ...emptyConfiguration, tproxy: { ...configuration, dns: { servers: [server], rules: [
+        { name: "domains", domain_suffix: ["example.org"], rule_sets: [], server: "resolver" },
+      ] } },
+    } }] : []))));
+  vi.stubGlobal("fetch", fetch);
+  render(<MemoryRouter><RouterProvider><Routing /></RouterProvider></MemoryRouter>);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "Удалить DNS-сервер resolver" }));
+  expect(screen.getByText(/DNS-правило domains/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Удалить" }));
+  expect(await screen.findByText(/ссылка сломана: resolver/)).toBeVisible();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled());
+});
+
 it("saves disabled TProxy ingress and ordered block rule in draft", async () => {
   const fetch = setup();
   const user = userEvent.setup();
@@ -49,7 +70,7 @@ it("saves disabled TProxy ingress and ordered block rule in draft", async () => 
       action: "block", outbound: null, order: 0,
     }]);
   });
-  expect(await screen.findByText(/blocked_site · block/)).toBeVisible();
+  expect(await screen.findByText(/blocked_site · block · домен example.org/)).toBeVisible();
 });
 
 it("retains unsaved TProxy edits after rejected draft", async () => {
@@ -92,7 +113,8 @@ it("shows configured first-match order and updates it on move", async () => {
   const user = userEvent.setup();
   await screen.findByText(/first · direct/);
   expect(screen.getAllByText(/(?:later|first) ·/).map((el) => el.textContent)).toEqual([
-    "first · direct", "later · block",
+    "1. first · direct · домен first.test → Обычный маршрут",
+    "2. later · block · домен later.test → Блокировать",
   ]);
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "Вверх later" }));
@@ -130,7 +152,7 @@ it("routes a rule to a chosen outbound on save", async () => {
         action: "route", outbound: "proxy_a", order: 0 },
     ]);
   });
-  expect(await screen.findByText(/via_proxy · route → proxy_a/)).toBeVisible();
+  expect(await screen.findByText(/via_proxy · route · домен example.com → Прокси-выход → proxy_a/)).toBeVisible();
 });
 
 it("clears the outbound when a routing rule stops routing", async () => {
@@ -173,16 +195,16 @@ it("shows the Simple overview and reveals expert fields on toggle", async () => 
   const user = userEvent.setup();
   // Browse defaults to Простой: counters + flow summary.
   expect(screen.getByText(/Источники: 0/)).toBeVisible();
-  expect(screen.getByText(/→ sing-box →/)).toBeVisible();
+  expect(screen.getByText(/→ исключения → правила по порядку →/)).toBeVisible();
   // Editing opens in Эксперт with the full field editor.
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   expect(await screen.findByText("Источники трафика")).toBeVisible();
-  // Switching to Простой while editing keeps the compact overview + footer only.
+  // Compact mode is read-only, even when draft editing was started.
   await user.click(screen.getByRole("tab", { name: "Простой" }));
   await waitFor(() =>
     expect(screen.queryByText("Источники трафика")).not.toBeInTheDocument());
-  expect(screen.getByText(/→ sing-box →/)).toBeVisible();
-  expect(screen.getByRole("button", { name: "Сохранить" })).toBeVisible();
+  expect(screen.getByText(/→ исключения → правила по порядку →/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument();
 });
 
 it("saves a TProxy bypass exclusion in the draft", async () => {
@@ -263,5 +285,5 @@ it("walks the wizard through 4 steps and saves a draft rule with disabled state 
       action: "block", outbound: null, order: 0,
     }]);
   });
-  expect(await screen.findByText(/blocked_site · block/)).toBeVisible();
+  expect(await screen.findByText(/blocked_site · block · домен example.org/)).toBeVisible();
 });
