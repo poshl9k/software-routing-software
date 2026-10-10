@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
 import type {
@@ -9,6 +10,7 @@ import type {
   Configuration,
   Interface,
   Secret,
+  ServiceStatusResponse,
 } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
@@ -37,6 +39,7 @@ import {
 } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { api } from "../api";
+import { queryKeys } from "../query";
 import { parseWireGuardConf } from "../tunnelConf";
 
 const ipsValid = (v: string[]) =>
@@ -252,6 +255,7 @@ function Collection<T extends Row>({
   rowActions,
   configPatch,
   importRow,
+  tunnelStatus,
 }: {
   kind: "tunnels" | "sites" | "ddns";
   title: string;
@@ -267,6 +271,7 @@ function Collection<T extends Row>({
    * tunnel interfaces). Merged into the whole-configuration save. */
   configPatch?: (rows: T[], importedAddresses: Record<string, string>) => Partial<Configuration>;
   importRow?: (text: string, rows: T[]) => { row?: T; error?: string; address?: string };
+  tunnelStatus?: ServiceStatusResponse;
 }) {
   const { configuration: c, version, noConfiguration } = useConfiguration();
   const editor = useDraftEditor<EditableRow<T>[]>();
@@ -409,6 +414,7 @@ function Collection<T extends Row>({
           view={kind === "tunnels" ? (
             collection.length ? collection.map((row, id) => {
               const tunnel = row as Tunnel;
+              const service = tunnelStatus?.services.find((item) => item.name === `tunnel:${tunnel.interface}`);
               return <Card key={id} title={`${tunnel.name} · ${tunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"} · ${tunnel.role === "server" ? "Сервер" : "Клиент"}`}
                 action={<Button disabled={!version} onClick={() => {
                   editor.begin(collection.map((item, index) => ({ id: index, created: false, row: item })));
@@ -416,7 +422,12 @@ function Collection<T extends Row>({
                 }}>Открыть</Button>}>
                 <p>Интерфейс: {tunnel.interface}</p>
                 <p>{tunnel.role === "server" ? `Клиентов: ${tunnel.peers.length}` : `Endpoint: ${tunnel.endpoint ?? "не задан"}`}</p>
-                <InlineStatus tone="unknown" text="Состояние недоступно" />
+                {version?.status === "draft" && <Badge tone="blue">Черновик</Badge>}
+                {service ? <InlineStatus
+                  tone={service.state === "running" ? "green" : service.state === "stopped" ? "amber" : "unknown"}
+                  text={service.state === "running" ? "Работает" : service.state === "stopped" ? "Остановлена" : "Состояние неизвестно"}
+                  asOf={tunnelStatus?.generated_at}
+                /> : <InlineStatus tone="unknown" text="Статус недоступен" />}
               </Card>;
             }) : <EmptyState title="Туннелей пока нет">Добавьте туннель или импортируйте клиентский .conf.</EmptyState>
           ) : (
@@ -539,6 +550,17 @@ function Collection<T extends Row>({
 }
 export function Tunnels() {
   const { configuration: c } = useConfiguration();
+  const telemetry = useQuery({
+    queryKey: queryKeys.serviceStatus(),
+    queryFn: async ({ signal }) => {
+      const result = await api.serviceStatus(signal);
+      if (!Array.isArray(result.services) || typeof result.generated_at !== "string")
+        throw new Error("Некорректный статус служб");
+      return result;
+    },
+    enabled: c.tunnels.length > 0,
+    refetchInterval: 30_000,
+  });
   const [qr,setQr]=useState<{peer:string;url:string}|null>(null); const [qrError,setQrError]=useState<unknown>(null);
   const showQr=async(tunnel:string,peer:string)=>{setQrError(null);try{const blob=await api.peerQr(tunnel,peer);setQr({peer,url:URL.createObjectURL(blob)});}catch(e){setQrError(e);}};
   const emptyTunnel = (rows: Tunnel[]): Tunnel => ({
@@ -576,6 +598,7 @@ export function Tunnels() {
       <PageHeader>Туннели</PageHeader>
       <Collection<Tunnel>
         kind="tunnels"
+        tunnelStatus={telemetry.isSuccess ? telemetry.data : undefined}
         title="Туннели"
         addLabel="+ Добавить туннель"
         rowActions={(row) =>
