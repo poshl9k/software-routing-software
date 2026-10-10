@@ -49,7 +49,7 @@ class UnboundExecutor:
         role = self._role_of_check(argv)
         if role is not None:
             return SimpleNamespace(returncode=self.check_rc[role], stdout="")
-        if argv[:3] == ["systemctl", "enable", "--now"]:
+        if argv[:2] == ["systemctl", "restart"]:
             return SimpleNamespace(returncode=self.enable_rc, stdout="")
         if argv[:2] == ["systemctl", "is-active"]:
             role = self._role_of_unit(argv)
@@ -165,12 +165,13 @@ def test_start_checks_both_configs_installs_units_then_enables_and_waits():
     argv = argv_of(executor)
     sel_check = list(unbound_service.checkconf_argv(SELECTED))
     ord_check = list(unbound_service.checkconf_argv(ORDINARY))
-    sel_enable = ["systemctl", "enable", "--now", unbound_service.unit_name(SELECTED)]
-    ord_enable = ["systemctl", "enable", "--now", unbound_service.unit_name(ORDINARY)]
+    sel_restart = ["systemctl", "restart", unbound_service.unit_name(SELECTED)]
+    ord_restart = ["systemctl", "restart", unbound_service.unit_name(ORDINARY)]
     active = ["systemctl", "is-active", "--quiet", unbound_service.unit_name(SELECTED)]
-    # Check every config -> install -> enable both -> prove readiness.
+    # Check every config -> disable boot autostart -> restart both -> prove readiness.
     assert argv.index(sel_check) < argv.index(ord_check) \
-        < argv.index(sel_enable) < argv.index(ord_enable) < argv.index(active)
+        < argv.index(sel_restart) < argv.index(ord_restart) < argv.index(active)
+    assert ["systemctl", "disable", unbound_service.unit_name(SELECTED)] in argv
 
 
 @pytest.mark.parametrize("role", [SELECTED, ORDINARY])
@@ -206,7 +207,8 @@ def test_stop_is_best_effort_and_typed():
     unbound_service.UnboundService(executor, fs).stop()
     assert argv_of(executor) == [
         ["systemctl", "disable", "--now", unbound_service.unit_name(SELECTED)],
-        ["systemctl", "disable", "--now", unbound_service.unit_name(ORDINARY)]]
+        ["systemctl", "disable", "--now", unbound_service.unit_name(ORDINARY)],
+        ["systemctl", "start", unbound_service.PRODUCT_UNBOUND_UNIT]]
 
 
 # --------------------------------------------------------------------------
@@ -214,8 +216,10 @@ def test_stop_is_best_effort_and_typed():
 # --------------------------------------------------------------------------
 
 def _engine(fs=None, executor=None):
-    return ApplyEngine(filesystem=fs or FakeFS(), executor=executor or UnboundExecutor(),
-                       clock=lambda: 100.0)
+    engine = ApplyEngine(filesystem=fs or FakeFS(), executor=executor or UnboundExecutor(),
+                         clock=lambda: 100.0)
+    engine._verify_tproxy_tables = lambda expected=None: None  # order test, not nft probe
+    return engine
 
 
 def test_readiness_runs_resolvers_after_policy_route_and_before_capture():

@@ -35,6 +35,13 @@ from vs_router.agent.rollback_check import check_deadline
 
 
 def _engine(fs, executor, now):
+    original = executor.run
+    def with_loaded_tables(argv, timeout):
+        if argv == ['/usr/sbin/nft', 'list', 'tables']:
+            return SimpleNamespace(returncode=0, stdout=''.join(
+                f'table {name}\n' for name in tproxy_apply.owned_tables()))
+        return original(argv, timeout)
+    executor.run = with_loaded_tables
     return ApplyEngine(filesystem=fs, executor=executor, clock=lambda: now[0])
 
 

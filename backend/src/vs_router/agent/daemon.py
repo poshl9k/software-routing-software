@@ -372,6 +372,8 @@ def main():
         'networkd': NetworkdReloader(),
         'wireguard': WireGuardReloader(), 'caddy': CaddyReloader(),
     })
+    for name in ('tproxy_guards', 'tproxy_interception', 'tproxy_cleanup'):
+        engine.reload_commands[name] = engine._load_tproxy_nft
     serve(os.environ.get('VS_ROUTER_AGENT_SOCKET', SOCKET_PATH), make_handlers(engine, database),
           {0, web_user.pw_uid}, socket_gid=None)
 
