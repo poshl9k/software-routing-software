@@ -52,7 +52,7 @@ class PinExecutor:
             return SimpleNamespace(returncode=self.digest_rc, stdout=self.digest_output)
         if argv == list(singbox_service.SINGBOX_CHECK_ARGV):
             return SimpleNamespace(returncode=self.check_rc, stdout="")
-        if argv[:3] == ["systemctl", "enable", "--now"]:
+        if argv[:2] == ["systemctl", "restart"]:
             return SimpleNamespace(returncode=self.enable_rc, stdout="")
         if argv[:2] == ["systemctl", "is-active"]:
             return SimpleNamespace(returncode=0 if self.active else 3, stdout="")
@@ -130,12 +130,13 @@ def test_start_verifies_binary_checks_config_then_enables():
     version = list(singbox_service.SINGBOX_VERSION_ARGV)
     digest = list(singbox_service.SINGBOX_DIGEST_ARGV)
     check = list(singbox_service.SINGBOX_CHECK_ARGV)
-    enable = ["systemctl", "enable", "--now", singbox_service.SINGBOX_UNIT]
+    restart = ["systemctl", "restart", singbox_service.SINGBOX_UNIT]
+    disable = ["systemctl", "disable", singbox_service.SINGBOX_UNIT]
     active = ["systemctl", "is-active", "--quiet", singbox_service.SINGBOX_UNIT]
-    assert enable in argv and active in argv
-    # Verify -> check -> enable -> ready, in that order.
+    assert disable in argv and restart in argv and active in argv
+    # Verify -> check -> disable boot autostart -> restart -> ready.
     assert argv.index(version) < argv.index(digest) < argv.index(check) \
-        < argv.index(enable) < argv.index(active)
+        < argv.index(disable) < argv.index(restart) < argv.index(active)
 
 
 @pytest.mark.parametrize("field,value", [

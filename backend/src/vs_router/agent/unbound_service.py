@@ -26,6 +26,17 @@ Safety
   :data:`generators.tproxy_dns.TPROXY_SELECTED_UID`, the ordinary one from the
   sibling reserved constant — so the OUTPUT guard's ``meta skuid`` boundary and
   the resolver processes cannot drift apart.
+* Config access (lab-37 defect 4): the agent stages each split config ``0600``
+  owned by root, so a dedicated non-root resolver UID cannot read it
+  (``Permission denied`` -> ``217/USER``). Each unit's privileged ``ExecStartPre``
+  re-owns its own fixed config to the resolver UID before ``ExecStart``; the
+  running resolver still sees ``/etc`` read-only (``ProtectSystem=strict``).
+* Listener collision (lab-37 defect 4): the two resolvers *replace* the stock
+  product resolver while the contour is up — selected owns the ingress listeners
+  and ordinary the rest — so the product unit must not keep binding ``:53`` on
+  those addresses. Each split unit declares ``Conflicts=`` + ``After=`` against
+  the product unit, so systemd stops it as part of starting a split unit and the
+  ordinary resolver (now the split ``ordinary`` process) stays up.
 
 This is the scaffold counterpart of :mod:`agent.singbox_service`: it is
 unreachable from any valid configuration while ``tproxy.not_available`` stays
@@ -52,6 +63,18 @@ UNIT_DIR = Path("/etc/systemd/system")
 #: Fixed absolute paths. Never a value from the RPC or the configuration.
 UNBOUND_BINARY = "/usr/sbin/unbound"
 UNBOUND_CHECKCONF_BINARY = "/usr/sbin/unbound-checkconf"
+#: Used only in the privileged ``ExecStartPre`` that re-owns a staged config.
+CHOWN_BINARY = "/usr/bin/chown"
+
+#: The stock Debian/product resolver unit. The two ADR-0014 resolvers *replace*
+#: it while the contour is up (selected owns the ingress listeners, ordinary the
+#: rest), so the product unit must not keep binding ``:53`` on those addresses —
+#: lab-37 found the ordinary resolver already holding the ingress ``:53`` once
+#: the split configs became readable. Declaring the conflict in the unit text
+#: lets systemd stop the product resolver as part of starting a split unit (no
+#: imperative ``stop`` an aborted apply could strand) and keeps the ordinary
+#: resolver working through the split ``ordinary`` process.
+PRODUCT_UNBOUND_UNIT = "unbound.service"
 
 READINESS_ATTEMPTS = 50
 READINESS_INTERVAL = 0.1
@@ -119,12 +142,19 @@ def unit_content(role: str) -> str:
     return (
         "[Unit]\n"
         f"Description=vs-router TProxy DNS resolver ({role})\n"
-        "After=network-online.target\n"
+        f"After=network-online.target {PRODUCT_UNBOUND_UNIT}\n"
         "Wants=network-online.target\n"
+        f"Conflicts={PRODUCT_UNBOUND_UNIT}\n"
         "\n"
         "[Service]\n"
         "Type=simple\n"
         f"User={spec['uid']}\n"
+        # The agent stages the split config 0600 owned by root; a dedicated
+        # non-root resolver UID cannot read it. ``+`` runs this line with full
+        # privileges, so it can re-own its own fixed config to the resolver UID
+        # before ExecStart. Path and UID come from the role registry only; no
+        # caller data reaches the command and no secret is placed here.
+        f"ExecStartPre=+{CHOWN_BINARY} {spec['uid']} {spec['config']}\n"
         f"ExecStart={UNBOUND_BINARY} -d -c {spec['config']}\n"
         "Restart=on-failure\n"
         "NoNewPrivileges=true\n"
@@ -182,8 +212,14 @@ class UnboundService:
                 raise ApplyError(CONFIG_INVALID)
         self.install_units()
         for role in ROLES:
-            if self.executor.run(
-                    ["systemctl", "enable", "--now", unit_name(role)], 15).returncode:
+            unit = unit_name(role)
+            # Boot-restore, not multi-user.target, owns startup order. Do not
+            # let systemd auto-start DNS before guards on the next reboot.
+            if self.executor.run(["systemctl", "disable", unit], 15).returncode:
+                raise ApplyError("agent.reload_failed")
+            # Restart even if already active: atomic_move replaced a 0600 root
+            # config and ExecStartPre must re-own the NEW inode before reading.
+            if self.executor.run(["systemctl", "restart", unit], 15).returncode:
                 raise ApplyError("agent.reload_failed")
         for _ in range(self.attempts):
             if self.ready():
@@ -195,6 +231,9 @@ class UnboundService:
         # Best-effort teardown: a missing/inactive unit is not an error.
         for role in ROLES:
             self.executor.run(["systemctl", "disable", "--now", unit_name(role)], 15)
+        # The stock resolver was stopped by the split units' Conflicts=.
+        # Compensation must restore ordinary DNS, not strand it until reboot.
+        self.executor.run(["systemctl", "start", PRODUCT_UNBOUND_UNIT], 15)
 
     def __call__(self) -> None:
         self.start()

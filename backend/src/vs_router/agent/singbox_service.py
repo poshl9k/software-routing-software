@@ -195,7 +195,11 @@ class SingboxService:
         self.install_unit()
         if not self.check_config():
             raise ApplyError(CONFIG_INVALID)
-        if self.executor.run(["systemctl", "enable", "--now", self.unit], 15).returncode:
+        if self.executor.run(["systemctl", "disable", self.unit], 15).returncode:
+            raise ApplyError("agent.reload_failed")
+        # Boot restore starts the engine after guards; never auto-start it at
+        # multi-user.target before the fail-closed nft boundary exists.
+        if self.executor.run(["systemctl", "restart", self.unit], 15).returncode:
             raise ApplyError("agent.reload_failed")
         for _ in range(self.attempts):
             if self.ready():

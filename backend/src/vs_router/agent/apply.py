@@ -217,15 +217,37 @@ class ApplyEngine:
 
     def reload_service(self, name):
         command = self.reload_commands.get(name)
+        # The gated nft artifacts must be activated, not merely moved into place.
+        # A test may inject a command; production wires the same fixed-argv loader
+        # in daemon.main. Never accept a filename from an RPC.
+        nft_files = {**tproxy_apply.TPROXY_FILES,
+                     'tproxy_cleanup': tproxy_apply.TPROXY_CLEANUP_FILE}
+        if command is None and name in ('tproxy_guards', 'tproxy_interception', 'tproxy_cleanup'):
+            command = lambda path: self._load_tproxy_nft(path)
         if callable(command):
             try:
-                command(APPLIED_DIR / FILES[name])
+                command(APPLIED_DIR / (FILES.get(name) or nft_files[name]))
             except ApplyError:
                 self._failed_service = name
                 raise
         elif command and self.executor.run(command, 15).returncode:
             self._failed_service = name
             raise ApplyError('agent.reload_failed')
+
+    def _load_tproxy_nft(self, path):
+        if self.executor.run(['/usr/sbin/nft', '-f', str(path)], 15).returncode:
+            raise ApplyError('agent.reload_failed')
+
+    def _verify_tproxy_tables(self, expected=None):
+        result = self.executor.run(['/usr/sbin/nft', 'list', 'tables'], 15)
+        if result.returncode:
+            raise ApplyError('agent.tproxy_tables_missing')
+        output = getattr(result, 'stdout', b'') or b''
+        if isinstance(output, bytes):
+            output = output.decode('utf-8', 'replace')
+        present = set(re.findall(r'^table\s+(\w+)\s+(\w+)\s*$', output, re.M))
+        if any(tuple(table.split()) not in present for table in (expected or tproxy_apply.owned_tables())):
+            raise ApplyError('agent.tproxy_tables_missing')
 
     def _install(self, contents, marker, validators, files=None, steps=None,
                  steps_before=None):
@@ -261,6 +283,13 @@ class ApplyEngine:
                 steps = []
             self.fs.atomic_move(PENDING_DIR / filename, APPLIED_DIR / filename)
             self.reload_service(name)
+            if name == 'tproxy_guards':
+                # Do not start DNS/engine or install the policy route if the
+                # containment/preauth/DNS boundary silently failed to load.
+                capture = ('interception', 'ct_reset', 'input')
+                self._verify_tproxy_tables(tuple(
+                    table for table in tproxy_apply.owned_tables()
+                    if not any(table.endswith('_' + suffix) for suffix in capture)))
             marker['phases'][name] = 'applied'
             self.marker(marker)
         if self.ssh_controller is not None:
@@ -459,6 +488,8 @@ class ApplyEngine:
                           steps=self._readiness_steps(version, doh_files),
                           steps_before=('tproxy_interception' if tproxy_files else
                                         'unbound' if doh_files else None))
+            if tproxy_files:
+                self._verify_tproxy_tables()
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
             if self.panel_probe is not None and not self.panel_probe():
@@ -470,6 +501,13 @@ class ApplyEngine:
             self.marker(marker)
             return ApplyResult(version.id, marker['status'], marker['phases'])
         except (OSError, subprocess.SubprocessError, ValueError, ApplyError, KeyError) as exc:
+            # A failed activation can leave staged secrets/resolver configs in
+            # /run even after compensation; remove every unconsumed artifact.
+            for filename in apply_files.values():
+                try:
+                    self.fs.remove(PENDING_DIR / filename)
+                except OSError:
+                    pass
             code = exc.code if isinstance(exc, ApplyError) else 'agent.apply_failed'
             mutated = any(v == 'applied' for v in marker['phases'].values()) or self.status() == marker
             marker.update(status='failed', error={'code': code, 'message': code, 'details': []})
@@ -534,6 +572,12 @@ class ApplyEngine:
         files = ({**FILES, **tproxy_apply.TPROXY_FILES} if 'tproxy' in marker else None)
         if doh_files_in_marker:
             files = {**FILES, **DOH_FILES} if files is None else {**files, **DOH_FILES}
+        if 'tproxy' in marker:
+            try:
+                self._verify_tproxy_tables()
+            except (OSError, subprocess.SubprocessError, ApplyError):
+                self.rollback('agent.tproxy_tables_missing')
+                raise ApplyError('agent.tproxy_tables_missing') from None
         self._backup(version_id, files=files)
         self.fs.remove(MARKER_PATH)
         self.fs.remove(JOURNAL_PATH)

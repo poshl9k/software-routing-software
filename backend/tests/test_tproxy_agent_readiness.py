@@ -20,8 +20,10 @@ from vs_router.agent.apply import APPLIED_DIR, FILES, ApplyEngine, ApplyError
 
 
 def engine_with(fs=None, executor=None):
-    return ApplyEngine(filesystem=fs or FakeFS(), executor=executor or FakeExecutor(),
-                       clock=lambda: 100.0)
+    engine = ApplyEngine(filesystem=fs or FakeFS(), executor=executor or FakeExecutor(),
+                         clock=lambda: 100.0)
+    engine._verify_tproxy_tables = lambda expected=None: None  # readiness order only
+    return engine
 
 
 def _recording_validators(order):

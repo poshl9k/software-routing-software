@@ -78,7 +78,9 @@ def forced(ingress):
 
 def engine_with():
     fs, executor = FakeFS(), FakeExecutor()
-    return ApplyEngine(filesystem=fs, executor=executor, clock=lambda: 100.0), fs, executor
+    engine = ApplyEngine(filesystem=fs, executor=executor, clock=lambda: 100.0)
+    engine._verify_tproxy_tables = lambda expected=None: None  # artifact-order fixture
+    return engine, fs, executor
 
 
 # --------------------------------------------------------------------------

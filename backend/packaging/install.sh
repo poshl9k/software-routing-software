@@ -68,6 +68,31 @@ systemctl enable caddy
 systemctl restart caddy
 systemctl is-active --quiet caddy
 id vs-router-web >/dev/null 2>&1 || useradd --system --home-dir /var/lib/vs-router --shell /usr/sbin/nologin vs-router-web
+# ADR-0014 / lab-37 defect 4: the TProxy DNS contour runs two Unbound processes
+# under dedicated, fixed numeric UIDs. Provision both system accounts here
+# (install-time, idempotent) so the agent's split units never reference a UID
+# that does not exist — lab-37 failed with systemd `217/USER` because the
+# accounts were absent. The UIDs are pinned and must stay equal to
+# generators.tproxy_dns.TPROXY_SELECTED_UID / TPROXY_ORDINARY_UID. The split
+# configs are staged 0600 and re-owned to these UIDs by each unit's privileged
+# ExecStartPre (agent/unbound_service.py); /etc/vs-router and .../applied keep
+# the o+x traversal bit set below so a resolver can reach its own config.
+# >>> resolver-uids
+provision_resolver_user() {
+    name=$1 uid=$2
+    if id -u "$name" >/dev/null 2>&1; then
+        [ "$(id -u "$name")" = "$uid" ] || {
+            echo "ERROR: ${name} exists with UID $(id -u "$name"), expected ${uid}" >&2
+            exit 1
+        }
+    else
+        useradd --system --no-create-home --home-dir /nonexistent \
+            --shell /usr/sbin/nologin --uid "$uid" "$name"
+    fi
+}
+provision_resolver_user vs-router-unbound-selected 29092
+provision_resolver_user vs-router-unbound-ordinary 29093
+# <<< resolver-uids
 # Caddy proxies the restricted web Unix socket, never a TCP bridge.
 usermod -a -G vs-router-web caddy
 install -d -m 0755 /etc/systemd/system/caddy.service.d

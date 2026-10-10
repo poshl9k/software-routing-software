@@ -9,6 +9,20 @@ Order matters:
 2. nftables ruleset (network is useless without it)
 3. unbound include + config check (no restart needed: systemctl reload after boot)
 4. kea config copy (kea-dhcp4 reads it at its own startup)
+
+The gated TProxy tract is restored in front of the base product files, in the
+same fail-closed order the apply contract uses (``tproxy_apply.PHASE_ORDER``):
+
+    guards -> bounded DNS + engine readiness -> interception + policy route
+
+The protective guards load first (:func:`restore_tproxy_protection`); the two
+ADR-0014 resolvers (:func:`restore_tproxy_resolvers`) and the pinned engine
+(:func:`restore_tproxy_engine`) are proven ready next; only then is the capture
+table loaded and the owned policy route installed
+(:func:`restore_tproxy_interception`). Traffic is therefore never captured
+before the fail-closed state exists. A substep failure withholds capture (fail
+closed) but is **non-fatal to the base services**: the agent/Caddy units still
+come up, so a broken TProxy contour never strands the panel off the box.
 """
 import json
 import os
@@ -92,6 +106,12 @@ def restore_tunnel_proxy_files() -> int:
     return 0
 
 
+def _tproxy_artifact_filenames() -> tuple[str, ...]:
+    """Every applied-artifact filename owned by the gated TProxy tract."""
+    from . import tproxy_apply
+    return tuple(tproxy_apply.TPROXY_FILES.values())
+
+
 def restore_tproxy_protection() -> int:
     """Restore the TProxy protective state *before* any capture tract opens.
 
@@ -115,6 +135,18 @@ def _unbound_service():
     return UnboundService(SubprocessExecutor(), LocalFileSystem())
 
 
+def _singbox_service():
+    from .apply import LocalFileSystem, SubprocessExecutor
+    from .singbox_service import SingboxService
+    return SingboxService(SubprocessExecutor(), LocalFileSystem())
+
+
+def _policy_route_loader():
+    from .apply import SubprocessExecutor
+    from .policy_route import PolicyRouteLoader
+    return PolicyRouteLoader(SubprocessExecutor())
+
+
 def restore_tproxy_resolvers() -> int:
     """Start the two ADR-0014 resolvers *before* the product tract loads.
 
@@ -134,10 +166,58 @@ def restore_tproxy_resolvers() -> int:
     from .apply import ApplyError
     try:
         _unbound_service().start()
-    except (OSError, ValueError, ApplyError):
+    except (OSError, ValueError, ApplyError, subprocess.SubprocessError):
         print("TProxy resolver restore failed", file=sys.stderr)
         return 1
     return 0
+
+
+def restore_tproxy_engine() -> int:
+    """Start the pinned engine and prove readiness *before* capture.
+
+    Inert unless an apply staged ``singbox.json``. :meth:`SingboxService.start`
+    re-verifies the pinned artifact, checks the staged config and blocks until
+    ``systemctl is-active`` reports the unit up (fail-closed), so a missing or
+    invalid engine keeps capture withheld. Bounded: the adapter uses fixed
+    per-command timeouts and a bounded readiness loop; any timeout is reported
+    as a failure instead of escaping and aborting the whole boot restore.
+    """
+    from pathlib import Path
+    from . import tproxy_apply
+    if not (Path(APPLIED) / tproxy_apply.TPROXY_FILES["singbox"]).exists():
+        return 0
+    from .apply import ApplyError
+    try:
+        _singbox_service().start()
+    except (OSError, ValueError, ApplyError, subprocess.SubprocessError):
+        print("TProxy engine restore failed", file=sys.stderr)
+        return 1
+    return 0
+
+
+def restore_tproxy_interception() -> int:
+    """Open the capture tract *last*, only after readiness has been proven.
+
+    Installs the owned policy route first (so marked packets are deliverable to
+    the loopback listeners) and only then loads ``tproxy-intercept.nft``, the
+    same order the apply contract uses (the policy route is a readiness step
+    that runs before the capture table). A missing capture artifact is a no-op.
+    A policy-route failure withholds the capture entirely; either failure
+    returns non-zero without leaving a half-open tract. The caller treats it as
+    non-fatal to the base services and keeps the tract fail-closed.
+    """
+    from pathlib import Path
+    from . import tproxy_apply
+    capture = Path(APPLIED) / tproxy_apply.TPROXY_FILES["tproxy_interception"]
+    if not capture.exists():
+        return 0
+    from .apply import ApplyError
+    try:
+        _policy_route_loader().apply()
+    except (OSError, ValueError, ApplyError, subprocess.SubprocessError):
+        print("TProxy policy route restore failed", file=sys.stderr)
+        return 1
+    return run(["/usr/sbin/nft", "-f", str(capture)])
 
 
 def recover_interrupted_apply():
@@ -225,22 +305,58 @@ def main() -> int:
         print("interrupted apply recovery failed", file=sys.stderr)
         return 1
 
-    # Restore the TProxy fail-closed guards before anything routes or a listener
-    # opens. No-op unless a (gated-off) TProxy artifact is present.
+    # TProxy tract, in fail-closed order: protective guards first, then the
+    # bounded DNS + engine readiness, and only then the capture table and its
+    # policy route. No-op for every configuration with no TProxy artifacts.
+    #
+    # A substep failure withholds capture (fail closed) but is deliberately
+    # *not* counted in ``failures``: ``vs-router-agent.service`` (and Caddy)
+    # Requires this oneshot, so failing the unit here would strand the panel off
+    # the box (lab-37). Base services always continue; only the capture tract
+    # stays shut.
+    from .apply import ApplyError as _ApplyError
+    _substep_errors = (OSError, ValueError, KeyError,
+                       subprocess.SubprocessError, _ApplyError)
+    tproxy_failures = 0
+    guard_ok = False
     try:
-        failures += restore_tproxy_protection()
-    except (OSError, ValueError, KeyError):
-        print("TProxy protection restore failed", file=sys.stderr)
-        failures += 1
+        guard_ok = restore_tproxy_protection() == 0
+        capture_file = os.path.join(APPLIED, 'tproxy-intercept.nft')
+        guard_file = os.path.join(APPLIED, 'tproxy-guards.nft')
+        if os.path.exists(capture_file) and not os.path.exists(guard_file):
+            guard_ok = False
+            print('TProxy guard artifact missing; capture withheld', file=sys.stderr)
+    except _substep_errors as exc:
+        print(f"TProxy protection restore failed: {exc}", file=sys.stderr)
 
-    # Bring the ADR-0014 DNS resolvers up after the guards but strictly before
-    # the product tract, so a staged contour never serves DNS without its
-    # fail-closed boundary. No-op unless split resolver configs are present.
+    dns_ok = False
     try:
-        failures += restore_tproxy_resolvers()
-    except (OSError, ValueError, KeyError):
-        print("TProxy resolver restore failed", file=sys.stderr)
-        failures += 1
+        dns_ok = restore_tproxy_resolvers() == 0
+    except _substep_errors as exc:
+        print(f"TProxy resolver restore failed: {exc}", file=sys.stderr)
+
+    engine_ok = False
+    try:
+        engine_ok = restore_tproxy_engine() == 0
+    except _substep_errors as exc:
+        print(f"TProxy engine restore failed: {exc}", file=sys.stderr)
+
+    if guard_ok and dns_ok and engine_ok:
+        # Readiness proven: open the capture tract (policy route, then capture).
+        try:
+            if restore_tproxy_interception():
+                print("TProxy capture restore failed", file=sys.stderr)
+                tproxy_failures += 1
+        except _substep_errors as exc:
+            print(f"TProxy capture restore failed: {exc}", file=sys.stderr)
+            tproxy_failures += 1
+    elif any(os.path.exists(os.path.join(APPLIED, name))
+             for name in _tproxy_artifact_filenames()):
+        # A TProxy contour exists but readiness is not proven: never open the
+        # capture tract. Guards (if loaded) keep it fail-closed.
+        print("TProxy readiness incomplete; capture withheld (fail-closed)",
+              file=sys.stderr)
+        tproxy_failures += 1
 
     try:
         failures += restore_tunnel_proxy_files()
@@ -284,6 +400,11 @@ def main() -> int:
             print("SSH protection restore failed", file=sys.stderr)
             failures += 1
     print("boot-restore:", "OK" if not failures else f"{failures} failures")
+    if tproxy_failures:
+        # Reported separately: the TProxy tract stayed fail-closed while the base
+        # services were restored. The unit still exits 0 so agent/Caddy start.
+        print(f"boot-restore: TProxy fail-closed "
+              f"({tproxy_failures} substep failure(s))", file=sys.stderr)
     return 1 if failures else 0
 
 

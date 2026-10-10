@@ -98,7 +98,7 @@ TPROXY_VALIDATORS: dict[str, list[str]] = {
     "tproxy_guards": ["nft", "-c", "-f"],
     "tproxy_unbound_selected": ["unbound-checkconf"],
     "tproxy_unbound_ordinary": ["unbound-checkconf"],
-    "singbox": ["sing-box", "check", "-c"],
+    "singbox": ["/usr/local/lib/vs-router/sing-box", "check", "-c"],
     "tproxy_interception": ["nft", "-c", "-f"],
 }
 

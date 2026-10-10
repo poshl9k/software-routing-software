@@ -44,6 +44,13 @@ def enabled_version(ingress=("lan0",)):
 def engine_with(fs=None, executor=None, now=None, **kw):
     fs = fs or FakeFS()
     executor = executor or FakeExecutor()
+    original = executor.run
+    def with_loaded_tables(argv, timeout):
+        if argv == ['/usr/sbin/nft', 'list', 'tables']:
+            return SimpleNamespace(returncode=0, stdout=''.join(
+                f'table {name}\n' for name in tproxy_apply.owned_tables()))
+        return original(argv, timeout)
+    executor.run = with_loaded_tables
     now = now or [100.0]
     return ApplyEngine(filesystem=fs, executor=executor, clock=lambda: now[0], **kw), fs, executor
 
