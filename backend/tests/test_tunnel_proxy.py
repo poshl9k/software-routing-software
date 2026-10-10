@@ -196,9 +196,9 @@ def test_peers_without_allowedips_get_an_address(config, role):
     lines = files['vpn.conf'].splitlines()
     assert not any(line.replace(' ', '') == 'AllowedIPs=' for line in lines)
     if role == 'server':
-        # server keeps .1, the peer takes .2 in the same /24
-        assert 'AllowedIPs = 10.66.66.2/32' in lines
-        assert 'Address = 10.66.66.2/32' in files['vpn.peer-alice.conf']
+        # server keeps .1; the peer is auto-allocated within the same /24
+        assert 'AllowedIPs = 10.66.66.215/32' in lines
+        assert 'Address = 10.66.66.215/32' in files['vpn.peer-alice.conf']
 
 
 def test_each_server_tunnel_gets_its_own_subnet(config):
@@ -210,10 +210,10 @@ def test_each_server_tunnel_gets_its_own_subnet(config):
     data['configuration']['interfaces'].append({'name': 'wg1', 'zone': 'lan'})
     files = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
     manifest = json.loads(files['manifest.json'])
-    # wg0 has an explicit address; the address-less wg1 takes the next pool slot.
+    # wg0 has an explicit address; the address-less wg1 gets a stable /24 from its name.
     assert manifest['wg0']['addresses'] == ['10.66.66.1/24']
-    assert manifest['wg1']['addresses'] == ['10.66.67.1/24']
-    assert 'AllowedIPs = 10.66.67.2/32' in files['vpn2.conf']
+    assert manifest['wg1']['addresses'] == ['10.66.203.1/24']
+    assert 'AllowedIPs = 10.66.203.230/32' in files['vpn2.conf']
 
 
 def test_server_tunnel_opens_its_listen_port_on_the_wan(config):
@@ -256,8 +256,8 @@ def test_materialize_addresses_fills_tunnel_and_peer(config):
     version = ConfigurationVersion.model_validate(data)
     filled = materialize_addresses(version.configuration)
     device = next(i for i in filled.interfaces if i.name == 'wg0')
-    assert list(device.addresses) == ['10.66.66.1/24']
-    assert list(filled.tunnels[0].peers[0].allowed_ips) == ['10.66.66.2/32']
+    assert list(device.addresses) == ['10.66.102.1/24']
+    assert list(filled.tunnels[0].peers[0].allowed_ips) == ['10.66.102.215/32']
     again = materialize_addresses(filled)
     assert next(i for i in again.interfaces if i.name == 'wg0').addresses == device.addresses
     assert again.tunnels[0].peers[0].allowed_ips == filled.tunnels[0].peers[0].allowed_ips

@@ -498,5 +498,5 @@ async def test_draft_save_materializes_tunnel_and_peer_addresses(api, monkeypatc
     response = await client.post('/api/draft', json=body)
     assert response.status_code == 201, response.text
     saved = response.json()['configuration']
-    assert saved['interfaces'][0]['addresses'] == ['10.66.66.1/24']
-    assert saved['tunnels'][0]['peers'][0]['allowed_ips'] == ['10.66.66.2/32']
+    assert saved['interfaces'][0]['addresses'] == ['10.66.102.1/24']
+    assert saved['tunnels'][0]['peers'][0]['allowed_ips'] == ['10.66.102.189/32']
