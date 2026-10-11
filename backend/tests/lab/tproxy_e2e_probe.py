@@ -20,9 +20,8 @@ It then drives the norm, fault, recovery, emulated-reboot and off matrix. Each
 scenario records PASS or a hard failure; the process exits non-zero on any hard
 failure or cleanup error.
 
-The public gate ``tproxy.not_available`` stays closed: the enabled configuration
-is only the offline ``model_copy`` fixture produced by
-``generate_tproxy_e2e_cases.py``. Nothing here touches the guest root network
+The enabled configuration here is an offline ``model_copy`` fixture produced
+by ``generate_tproxy_e2e_cases.py``. Nothing here touches the guest root network
 namespace, its routes or its firewall; ``vsr-live-403ab3a`` is never involved.
 
 lab-31 (F4): capture is gated on the preauth stamp (``meta mark & 0x400``). With

@@ -1,8 +1,7 @@
 """Host-free tests for the deterministic TProxy IPv6-WAN-escape guard.
 
-The public gate ``tproxy.not_available`` still rejects ``tproxy.enabled=True``
-(``validators.py``), so an enabled configuration only exists as an offline
-``model_copy`` -- the same idiom the other offline generators use. These tests
+A complete enabled policy now passes public validation. Some generator fixtures
+still use ``model_copy`` to isolate guard behavior from policy matching. These tests
 never touch nftables, routing or a host: they pin rule narrowness, the fail-closed
 priority, mark/table/hook ownership, determinism, the disabled/off behaviour and
 the agent scaffold wiring, plus host-free checks of the VM fixture/probe.
@@ -62,6 +61,17 @@ def test_disabled_guard_is_destroy_only():
     text = generate_tproxy_ipv6_guard(ConfigurationVersion())
     assert text == f"destroy table {GUARD_TABLE}\n"
     assert "chain" not in text and "hook" not in text and "counter" not in text
+
+
+def test_complete_enabled_policy_renders_ipv6_guard():
+    payload = base().model_dump(mode="json")
+    payload["configuration"]["tproxy"].update({
+        "enabled": True,
+        "rules": [{"name": "blocked", "ip_cidr": ["198.18.0.0/15"], "action": "block"}],
+    })
+    version = ConfigurationVersion.model_validate(payload)
+    assert version.configuration.tproxy.enabled
+    assert 'counter drop comment "tproxy_ipv6_guard"' in generate_tproxy_ipv6_guard(version)
 
 
 def test_guard_is_forward_before_containment():
@@ -220,4 +230,4 @@ def test_probe_reports_the_documented_boundary():
     text = (LAB / "tproxy_ipv6_guard_probe.py").read_text()
     assert "bridge/flow-offload" in text
     assert "ECMP" in text
-    assert "not_available" in text
+    assert "lab-only guard probe" in text

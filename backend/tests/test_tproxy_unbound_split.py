@@ -45,7 +45,7 @@ def test_split_is_offline_with_distinct_listeners_and_identical_local_exceptions
     assert 'name: "."\n    forward-addr: 198.18.0.3' in ordinary
     assert '127.0.0.1@15353' not in ordinary
     assert generate_tproxy_unbound_split(v)["selected"] == selected
-    with pytest.raises(ValueError, match="tproxy.not_available"):
+    with pytest.raises(ValueError, match="tproxy.enabled_incomplete"):
         ConfigurationVersion.model_validate(v.model_dump())
     # The live generator is byte-for-byte independent of disabled draft intent.
     off = version().model_copy(update={"configuration": v.configuration.model_copy(

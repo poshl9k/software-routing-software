@@ -55,7 +55,7 @@ def test_offline_containment_precedes_conntrack_and_covers_both_families():
         "interfaces": [{"name": "lan0", "zone": "lan"}],
         "tproxy": {"ingress_interfaces": ["lan0"]},
     }})
-    # Offline fixture only; public validation must keep rejecting live enablement.
+    # This fixture bypasses validation to exercise containment with no rules.
     policy = version.configuration.tproxy.model_copy(update={"enabled": True})
     config = version.configuration.model_copy(update={"tproxy": policy})
     version = version.model_copy(update={"configuration": config})
@@ -115,7 +115,7 @@ def test_offline_dns_ingress_guard_scope_and_order():
     assert 'lan1' not in rules and 'wan0' not in rules
     assert nftables.generate_tproxy_dns_ingress_guard(ConfigurationVersion()) == (
         'destroy table inet vs_router_tproxy_dns_ingress\n')
-    with pytest.raises(ValueError, match='tproxy.not_available'):
+    with pytest.raises(ValueError, match='tproxy.enabled_incomplete'):
         ConfigurationVersion.model_validate(version.model_dump())
 
 

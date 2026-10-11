@@ -1,7 +1,7 @@
 """Readiness gating and phase order for the TProxy agent adapters.
 
-Exercises the *offline* enabled branch (public gate ``tproxy.not_available``
-stays closed, so an enabled version only exists as a ``model_copy``) and proves:
+Exercises the enabled branch with offline fixtures (``model_copy`` isolates
+phase checks from policy matching) and proves:
 
 * the typed readiness steps add no file/phase for an ``enabled=False`` config;
 * the policy route and the engine start run after the engine config and strictly

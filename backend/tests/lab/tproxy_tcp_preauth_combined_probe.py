@@ -10,7 +10,7 @@ effective/ambient CAP_NET_RAW.
 Real ordinary firewall, preauth and containment text and the sing-box JSON come
 from the product generators. The TProxy interception, INPUT proof and UID OUTPUT
 observer are LAB-ONLY rules scoped to this experiment; this is not a product
-enablement path and does not reopen tproxy.not_available. Bounded observation:
+enablement path. Bounded observation:
 sender timeout 1.5s plus a 1.5s window per negative case; counters include
 ACK/retransmissions, not independent payloads.
 

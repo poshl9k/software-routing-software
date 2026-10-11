@@ -150,6 +150,18 @@ def test_proxy_secret_encrypted_and_redacted(monkeypatch):
     assert parse_configuration(redacted, saved) == config
 
 
-def test_tproxy_still_cannot_be_enabled():
-    with pytest.raises(ValidationError, match="tproxy.not_available"):
+def test_tproxy_enabled_with_rendered_outbound_and_final_route():
+    config = Configuration.model_validate({
+        "interfaces": [{"name": "lan0", "zone": "lan"}],
+        "proxies": {"enabled": True, "outbounds": [{"tag": "p", "type": "direct"}]},
+        "tproxy": {"enabled": True, "ingress_interfaces": ["lan0"],
+                   "rules": [{"name": "r", "ip_cidr": ["198.18.0.0/15"],
+                              "action": "route", "outbound": "p"}],
+                   "final": "route", "final_outbound": "p"},
+    })
+    assert config.tproxy.final_outbound == "p"
+
+
+def test_tproxy_enabled_without_ingress_or_rules_is_incomplete():
+    with pytest.raises(ValidationError, match="tproxy.enabled_incomplete"):
         Configuration.model_validate({"tproxy": {"enabled": True}})

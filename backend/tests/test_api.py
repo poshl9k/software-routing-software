@@ -141,7 +141,7 @@ async def test_apply_status_reads_agent_marker_without_db_fallback(api, monkeypa
     state['result'] = None
     assert (await client.get('/api/apply/status')).json() is None
 
-async def test_tproxy_draft_roundtrip_and_enable_rejected(api):
+async def test_tproxy_draft_roundtrip_and_incomplete_enable_rejected(api):
     client, _, _ = api
     await sign_in(client)
     response = await client.post('/api/draft', json={})
@@ -160,8 +160,15 @@ async def test_tproxy_draft_roundtrip_and_enable_rejected(api):
     assert saved['update_schedule']['mode'] == 'window'
     config['tproxy']['enabled'] = True
     response = await client.put('/api/draft', json=config)
+    assert response.status_code == 200
+    enabled = response.json()['configuration']['tproxy']
+    assert enabled['enabled'] is True
+    assert enabled['rules'] == saved['rules']
+    config['tproxy']['rules'] = []
+    response = await client.put('/api/draft', json=config)
     assert response.status_code == 422
-    assert (await client.get('/api/versions')).json()[0]['configuration']['tproxy'] == saved
+    assert 'tproxy.enabled_incomplete' in response.text
+    assert (await client.get('/api/versions')).json()[0]['configuration']['tproxy'] == enabled
 
 
 async def test_tproxy_preview_uses_saved_draft_without_side_effects(api):

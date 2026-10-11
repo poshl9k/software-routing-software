@@ -1,9 +1,7 @@
 """Engine failure-injection matrix for the gated sing-box TProxy apply path.
 
-Offline only (``FakeFS``/``FakeExecutor``, no host, no shell). The public gate
-``tproxy.not_available`` stays closed, so the enabled branch is reachable solely
-through the offline ``model_copy`` snapshot
-(:func:`test_tproxy_apply_integration.enabled_version`).
+Offline only (``FakeFS``/``FakeExecutor``, no host, no shell). Enabled policy
+fixtures use ``model_copy`` to isolate failure injection from rule validation.
 
 The matrix injects a failure at *each* TProxy phase and pins the atomicity and
 safety invariants the plan (``docs/sing-box-tproxy-plan.md`` §«1. Контракт и

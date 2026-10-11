@@ -90,9 +90,9 @@ def test_invalid_ingress(ingress):
         generate_tproxy_preauthorization(enabled(ingress=ingress))
 
 
-def test_off_only_destroys_own_table_and_public_enable_is_forbidden():
+def test_off_only_destroys_own_table_and_incomplete_enable_is_rejected():
     assert generate_tproxy_preauthorization(scenario('typical')) == 'destroy table inet vs_router_tproxy_preauth\n'
-    with pytest.raises(ValueError, match='tproxy.not_available'):
+    with pytest.raises(ValueError, match='tproxy.enabled_incomplete'):
         ConfigurationVersion.model_validate(enabled().model_dump())
 
 

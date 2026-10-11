@@ -3,7 +3,7 @@
 Covers deterministic rendering of the disabled-by-default ``proxies`` section:
 outbounds (local + proxied), selector/urltest groups, route linkage to the
 default tag, reference integrity, secret non-leakage and legacy stability. No
-fetch, no apply, TProxy gate stays closed.
+fetch, no apply, and no host changes.
 """
 import json
 
@@ -341,7 +341,7 @@ def test_reserved_block_tag_rejected():
                  "outbounds": [outbound("p")]})
 
 
-# Offline DNS policy preview; the public TProxy availability gate stays closed.
+# Offline DNS policy preview; no host actions.
 def dns_preview(dns):
     draft = version(tproxy={"dns": dns})
     enabled_tproxy = draft.configuration.tproxy.model_copy(update={"enabled": True})

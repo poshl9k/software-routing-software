@@ -128,11 +128,11 @@ def test_disabled_plan_still_rejects_provided_invalid_uid(uid):
         plan_tproxy_dns(disabled(), uid)
 
 
-def test_public_gate_stays_closed_and_plan_offs_validated_model():
+def test_incomplete_enabled_policy_is_rejected_and_disabled_plan_is_off():
     v = version()
-    with pytest.raises(ValueError, match="tproxy.not_available"):
+    with pytest.raises(ValueError, match="tproxy.enabled_incomplete"):
         ConfigurationVersion.model_validate(v.model_dump())
-    # A validated (necessarily disabled) model only ever yields the off-plan.
+    # A validated disabled model yields the off-plan.
     plain = ConfigurationVersion.model_validate({"configuration": {}})
     assert plan_tproxy_dns(plain, None).enabled is False
 

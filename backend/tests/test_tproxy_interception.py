@@ -1,8 +1,8 @@
 """Host-free tests for the deterministic TProxy interception generator.
 
-The public gate ``tproxy.not_available`` still rejects ``tproxy.enabled=True``
-(``validators.py``), so an enabled configuration only exists as an offline
-``model_copy`` — the same idiom the other offline generators use. These tests
+An enabled configuration with a complete ingress and rule policy passes public
+validation. Offline ``model_copy`` fixtures here isolate interception behavior
+from policy matching. These tests
 never touch nftables, policy routing or a host: they pin rule narrowness, hook
 order/priority, mark ownership, determinism, the disabled/off behaviour and the
 agent scaffold wiring (guards -> readiness -> interception).

@@ -104,9 +104,10 @@ def validate_configuration(c):
         for name in ingress
     ):
         fail("tproxy.ingress_interface")
-    # No sing-box process, packet interception or crash guard is installed yet.
-    if c.tproxy.enabled:
-        fail("tproxy.not_available")
+    # An enabled policy must identify both its capture source and actual matches;
+    # an empty default policy is not a meaningful opt-in to interception.
+    if c.tproxy.enabled and (not ingress or not c.tproxy.rules):
+        fail("tproxy.enabled_incomplete")
     # A routing rule may only target an outbound that the generator actually
     # renders: a declared proxy outbound/group tag, and only while the proxies
     # section is enabled (otherwise it is not emitted).

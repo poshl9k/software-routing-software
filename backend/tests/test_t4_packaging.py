@@ -4,8 +4,7 @@ ordinary-resolver listener collision.
 Scope of the fix this guards: ``backend/packaging/install.sh`` (provision the two
 fixed resolver UIDs, AppArmor/traversal) and
 ``backend/src/vs_router/agent/unbound_service.py`` (config re-owning and the
-product-resolver conflict). Generator output, the public gate
-``tproxy.not_available`` and the apply/boot ordering are untouched.
+product-resolver conflict). Generator output and apply/boot ordering are untouched.
 
 The packaging tests run the provisioning block with fake ``id``/``useradd``; they
 never touch a real account, service or network.

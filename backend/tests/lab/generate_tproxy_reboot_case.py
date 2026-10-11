@@ -10,10 +10,8 @@ contour: the ordinary product firewall (``generate_nftables``), the guards phase
 (``tproxy_apply.build_artifacts``) and the owned policy route
 (``marks.POLICY_ROUTES``).
 
-The public gate ``tproxy.not_available`` stays closed: the enabled configuration
-is only reachable through the standard offline ``model_copy`` idiom used by
-``generate_tproxy_e2e_cases.py``. No host file, service or network is touched;
-this writes plain files that the VM harness installs.
+This generator uses an offline ``model_copy`` fixture. No host file, service
+or network is touched; it writes plain files the VM harness installs.
 
 The single lab-scaffold line (``LAB_INPUT_ACCEPT``) is the *same* modelled
 authorization the lab-30/31 e2e probe used to let an intercepted flow reach the

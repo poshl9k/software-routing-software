@@ -5,8 +5,7 @@ Copy OUTPUT.json and tproxy_ipv6_guard_probe.py to an authorized disposable Debi
 VM. Run the probe there as root, never on the host or production router.
 
 The generated guard text comes byte-for-byte from
-``generate_tproxy_ipv6_guard`` (enabled via the offline ``model_copy`` idiom; the
-public ``tproxy.not_available`` gate stays closed).
+``generate_tproxy_ipv6_guard`` (enabled via an offline ``model_copy`` fixture).
 """
 import argparse
 import json
