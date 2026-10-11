@@ -1,5 +1,7 @@
 import { Alert, Button, Checkbox, FormControlLabel, Typography } from "@mui/material";
+import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
+import { Toggle } from "../components/Toggle";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InfoNote } from "../components/InfoNote";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -61,9 +63,11 @@ const emptyWizardRule = (): TProxyRule => ({
   protocol: "any", ports: [], action: "direct", outbound: null, order: 0,
 });
 
-/** Draft-only TProxy policy. Live interception stays blocked by the backend. */
+/** TProxy policy is saved as a draft; only the shared apply flow changes traffic. */
 function TProxyEditor() {
-  const { configuration, version, user } = useConfiguration();
+  const { configuration, version, versions, user } = useConfiguration();
+  const applied = versions.filter((item) => item.status === "confirmed")
+    .sort((a, b) => b.id - a.id)[0];
   const editor = useDraftEditor<TProxy>();
   const queryClient = useQueryClient();
   // On-demand: only fetched when the operator asks, so `enabled: false`.
@@ -80,6 +84,7 @@ function TProxyEditor() {
   const [wizardSources, setWizardSources] = useState<string[]>([]);
   const [wizardRule, setWizardRule] = useState<TProxyRule>(emptyWizardRule);
   const [wizardSubmitted, setWizardSubmitted] = useState(false);
+  const [pendingEnable, setPendingEnable] = useState(false);
   const [pendingDNSDelete, setPendingDNSDelete] = useState<{ tag: string; index: number; refs: string[] } | null>(null);
   const current: TProxy = editor.value ?? { ...configuration.tproxy,
     rules: [...configuration.tproxy.rules].sort((a, b) => a.order - b.order) };
@@ -142,15 +147,32 @@ function TProxyEditor() {
     new Set(dnsTags).size === dnsTags.length &&
     current.dns.rules.every((row) => dnsRuleValid(row, dnsTags, ruleSetOptions)) &&
     new Set(current.dns.rules.map((row) => row.name)).size === current.dns.rules.length;
-  const save = async () => {
-    if (user?.role === "operator" || !valid) return;
-    clearPreview();
-    await editor.save((tproxy) => ({ ...configuration, tproxy: { ...tproxy, enabled: false } }));
-  };
   const wizardRuleValid = ruleValid(wizardRule, outboundOptions, ruleSetOptions);
+  const wizardCandidate = view === "wizard";
+  const ingress = wizardCandidate ? wizardSources : current.ingress_interfaces;
+  const rules = wizardCandidate ? [...current.rules, wizardRule] : current.rules;
+  const usesOutbound = rules.some((r) => r.action === "route") || current.final === "route";
+  const enableIssue = ingress.length === 0 ? "Выберите хотя бы один источник трафика." :
+    ingress.some((name) => !sources.some((source) => source.name === name)) ? "Источник трафика недоступен." :
+    rules.length === 0 ? "Добавьте хотя бы одно правило." :
+    !valid || !rules.every((r) => ruleValid(r, outboundOptions, ruleSetOptions)) ||
+      new Set(rules.map((r) => r.name)).size !== rules.length
+      ? "Исправьте правила, ссылки на выходы и обязательные поля." :
+    usesOutbound && !configuration.proxies.enabled
+      ? "Включите секцию прокси-выходов для выбранного выхода." : null;
+  const setEnabled = (enabled: boolean) => {
+    if (!enabled) { setPendingEnable(false); patch({ enabled: false }); }
+    else if (!enableIssue) setPendingEnable(true);
+  };
+  const save = async () => {
+    if (user?.role === "operator" || !valid || (current.enabled && enableIssue)) return;
+    clearPreview();
+    await editor.save((tproxy) => ({ ...configuration, tproxy }));
+  };
   const wizardCanSave = !!version && user?.role !== "operator" && editor.isEdit &&
     !editor.saving && wizardSources.length > 0 && wizardRuleValid && valid &&
-    !current.rules.some((rule) => rule.name === wizardRule.name);
+    !current.rules.some((rule) => rule.name === wizardRule.name) &&
+    (!current.enabled || !enableIssue);
   const updateWizardRule = (change: Partial<TProxyRule>) =>
     setWizardRule((rule) => ({ ...rule, ...change }));
   const saveWizard = async () => {
@@ -160,7 +182,7 @@ function TProxyEditor() {
     // has a working copy to commit (a no-op save would otherwise fail silently).
     setWizardSubmitted(true);
     await editor.save((tproxy) => ({ ...configuration, tproxy: {
-      ...tproxy, enabled: false, ingress_interfaces: wizardSources,
+      ...tproxy, ingress_interfaces: wizardSources,
       rules: [...tproxy.rules, { ...wizardRule, order: tproxy.rules.length }],
     } }));
   };
@@ -175,12 +197,26 @@ function TProxyEditor() {
   }, [wizardSubmitted, editor.isEdit, editor.saving]);
   return (
     <>
-      <Alert severity="warning">
-        Статус: TProxy недоступен. Перехват и защита при отказе не проверены. Это конфигурация черновика, не состояние трафика; сохранение не включает TProxy.
-      </Alert>
+      <Typography component="div">
+        Статус: <Badge tone={version?.status === "confirmed" && !editor.isEdit ? "green" : "amber"}>
+          {!version ? "Конфигурация недоступна" : version.status === "confirmed" && !editor.isEdit
+            ? (current.enabled ? "Применено: включено" : "Применено: выключено")
+            : (current.enabled ? "Включено в черновике" : "Выключено в черновике")}
+        </Badge>
+      </Typography>
+      {version?.status === "draft" && applied && <InfoNote>
+        Подтверждённая конфигурация: {applied.configuration.tproxy.enabled ? "включено" : "выключено"}. Черновик не меняет её до общего применения.
+      </InfoNote>}
+      <InfoNote>Сохранение меняет только черновик. Трафик может измениться при общем применении ещё до подтверждения; статус конфигурации не проверяет доступность выхода.</InfoNote>
       <ErrorNotice error={editor.error ?? preview.error} />
-      <Button disabled>Включить TProxy</Button>
-      <InfoNote>Черновик: источники → исключения (всегда обычный маршрут) → правила по порядку (первое совпадение) → выход / конечное действие. При отказе выбранный трафик не должен уходить напрямую в WAN.</InfoNote>
+      <InfoNote>Источники → исключения (всегда обычный маршрут) → правила по порядку (первое совпадение) → выход / конечное действие. При отказе выбранный трафик не должен уходить напрямую в WAN.</InfoNote>
+      <ConfirmDialog open={pendingEnable} title="Включить выборочную маршрутизацию?"
+        body="После сохранения и общего применения трафик LAN, совпадающий с правилами, будет направляться или перенаправляться согласно политике. Ошибка в настройках может нарушить подключение. Проверьте правила и доступность выходов перед применением."
+        confirmLabel="Включить в черновике" cancelLabel="Отмена"
+        onCancel={() => setPendingEnable(false)} onConfirm={() => {
+          if (!enableIssue && editor.isEdit) patch({ enabled: true });
+          setPendingEnable(false);
+        }} />
       <ConfirmDialog open={!!pendingDNSDelete} title="Удалить DNS-сервер?"
         body={`Ссылки на ${pendingDNSDelete?.tag}: ${pendingDNSDelete?.refs.join(", ") || "нет"}. Удаление оставит зависимые поля без ссылки.`}
         confirmLabel="Удалить" cancelLabel="Отмена" danger
@@ -200,6 +236,11 @@ function TProxyEditor() {
         tabs={[{ value: "simple", label: "Простой" },
           { value: "wizard", label: "Мастер" }, { value: "expert", label: "Эксперт" }]}
       />
+      {editor.isEdit && user?.role !== "operator" && (view === "expert" || (view === "wizard" && step === 3)) && <>
+        <Toggle label="Включить выборочную маршрутизацию" value={current.enabled}
+          disabled={editor.saving || (!current.enabled && !!enableIssue)} onChange={setEnabled} />
+        {enableIssue && <InfoNote severity="warning">Включение недоступно: {enableIssue}</InfoNote>}
+      </>}
       {view === "wizard" ? (
         <>
           <Typography variant="h2">{["Источники", "Признаки", "Выход", "Предпросмотр"][step]}</Typography>
@@ -530,7 +571,7 @@ function TProxyEditor() {
               </>
             )}
           </FormGrid>
-          <EditorFooter saving={editor.saving} valid={valid} cancel={editor.cancel}
+          <EditorFooter saving={editor.saving} valid={valid && (!current.enabled || !enableIssue)} cancel={editor.cancel}
             save={() => void save()} />
         </>
       )}

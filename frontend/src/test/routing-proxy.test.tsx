@@ -286,6 +286,7 @@ it("shows empty-state prompts for every proxy collection and the rule-set list",
   const user = userEvent.setup();
   await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
   await openTab(user, "Прокси-выходы");
+  expect(screen.getByText(/TProxy настраивается отдельно и меняет трафик только после общего применения/)).toBeVisible();
   expect(screen.getByText("Нет прокси-выходов")).toBeVisible();
   expect(screen.getByText("Нет подписок")).toBeVisible();
   expect(screen.getByText("Нет групп")).toBeVisible();
