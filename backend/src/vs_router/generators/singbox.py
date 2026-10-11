@@ -261,4 +261,8 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
             dns["rules"] = dns_rules
         dns["final"] = dns_policy.servers[0].tag
         result["dns"] = dns
+    if tproxy.enabled or proxies.enabled:
+        result["experimental"] = {"clash_api": {
+            "external_controller": f"127.0.0.1:{tproxy.clash_api_port}"
+        }}
     return result

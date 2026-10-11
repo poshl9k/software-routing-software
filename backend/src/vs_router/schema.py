@@ -456,6 +456,7 @@ class TProxy(Model):
     update_schedule: TProxyUpdateSchedule = Field(default_factory=TProxyUpdateSchedule)
     sniff: bool = False
     udp_timeout_seconds: int | None = Field(default=None, ge=1, le=86400)
+    clash_api_port: int = Field(default=9099, strict=True, ge=1, le=65535)
 
     @model_validator(mode="after")
     def check_bypass_names(self):

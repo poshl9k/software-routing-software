@@ -11,7 +11,9 @@ VersionID = Annotated[int, Field(strict=True, ge=1)]
 Method = Literal["apply_version", "confirm_version", "rollback", "status",
                  "diag_ping", "diag_traceroute", "nft_counters", "list_interfaces",
                  "list_addresses", "update_status", "apply_update",
-                 "update_source", "source_status", "service_status"]
+                 "update_source", "source_status", "service_status",
+                 "engine_status", "engine_control", "clash_connections", "clash_close",
+                 "clash_logs", "clash_proxies", "clash_select", "clash_delay"]
 
 
 class ApplyParams(Model):
@@ -63,6 +65,35 @@ class UpdateSourceParams(Model):
     timeout: StrictInt = Field(default=20, ge=1, le=120)
 
 
+class EngineControlParams(Model):
+    action: Literal['start', 'stop', 'restart']
+
+
+ClashTag = Annotated[str, Field(strict=True, min_length=1, max_length=128,
+                                pattern=r'^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$')]
+
+
+class ClashCloseParams(Model):
+    id: Annotated[str, Field(strict=True, min_length=1, max_length=128,
+                             pattern=r'^[a-zA-Z0-9_-]+$')]
+
+
+class ClashLogsParams(Model):
+    level: Literal['debug', 'info', 'warning', 'error'] = 'info'
+    limit: Annotated[int, Field(strict=True, ge=1, le=200)] = 50
+
+
+class ClashSelectParams(Model):
+    group: ClashTag
+    name: ClashTag
+
+
+class ClashDelayParams(Model):
+    tag: ClashTag
+    url: Annotated[str, Field(strict=True, min_length=10, max_length=2048)]
+    timeout_ms: Annotated[int, Field(strict=True, ge=100, le=10000)] = 3000
+
+
 PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "rollback": EmptyParams, "status": EmptyParams,
           "diag_ping": PingParams, "diag_traceroute": HostParams,
@@ -70,7 +101,11 @@ PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "list_addresses": EmptyParams, "update_status": EmptyParams,
           "apply_update": ApplyUpdateParams,
           "update_source": UpdateSourceParams, "source_status": EmptyParams,
-          "service_status": EmptyParams}
+          "service_status": EmptyParams,
+          "engine_status": EmptyParams, "engine_control": EngineControlParams,
+          "clash_connections": EmptyParams, "clash_close": ClashCloseParams,
+          "clash_logs": ClashLogsParams, "clash_proxies": EmptyParams,
+          "clash_select": ClashSelectParams, "clash_delay": ClashDelayParams}
 
 
 class RPCRequest(Model):

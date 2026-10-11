@@ -212,7 +212,24 @@ def list_addresses() -> dict[str, list[str]]:
     return addresses
 
 
-def make_handlers(engine, database, updater=None):
+def make_handlers(engine, database, updater=None, runtime_engine=None, clash_client=None):
+    def get_runtime_engine():
+        nonlocal runtime_engine
+        if runtime_engine is None:
+            from .engine import EngineControl
+            runtime_engine = EngineControl(executor=getattr(engine, 'executor', None),
+                                           filesystem=getattr(engine, 'fs', None))
+        return runtime_engine
+
+    def get_clash_client():
+        if clash_client is not None:
+            return clash_client
+        from .clash import ClashClient
+        from .engine import clash_port
+        from .apply import LocalFileSystem
+        fs = getattr(engine, 'fs', None)
+        return ClashClient(port=clash_port(fs if fs is not None else LocalFileSystem()))
+
     def safe_host(host):
         try:
             import ipaddress
@@ -357,7 +374,15 @@ def make_handlers(engine, database, updater=None):
             'list_addresses': list_addresses, 'update_status': update_status,
             'apply_update': apply_update,
             'update_source': update_source, 'source_status': source_status,
-            'service_status': service_status}
+            'service_status': service_status,
+            'engine_status': lambda: get_runtime_engine().status(),
+            'engine_control': lambda action: get_runtime_engine().control(action),
+            'clash_connections': lambda: get_clash_client().connections(),
+            'clash_close': lambda id: get_clash_client().close_connection(id),
+            'clash_logs': lambda level='info', limit=50: get_clash_client().logs(level, limit),
+            'clash_proxies': lambda: get_clash_client().proxies(),
+            'clash_select': lambda group, name: get_clash_client().select_proxy(group, name),
+            'clash_delay': lambda tag, url, timeout_ms=3000: get_clash_client().proxy_delay(tag, url, timeout_ms)}
 
 
 def main():
