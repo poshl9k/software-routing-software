@@ -166,7 +166,7 @@ function ProxiesView({ settings }: { settings: ProxySettings }) {
 /**
  * Draft-only editor for the `proxies` contract section (outbounds,
  * subscriptions, groups). Saves the whole configuration as a draft — nothing is
- * applied and TProxy stays closed. Read-only for an operator.
+ * applied. Read-only for an operator.
  */
 export function ProxiesEditor() {
   const { configuration, version, user } = useConfiguration();
@@ -295,7 +295,7 @@ export function ProxiesEditor() {
   return (
     <>
       <ErrorNotice error={editor.error} />
-      <InfoNote>Прокси-выходы — конфигурация черновика, не проверка доступности. Секция выходов {current.enabled ? "задана включённой" : "выключена"}; TProxy недоступен.</InfoNote>
+      <InfoNote>Прокси-выходы — конфигурация черновика, не проверка доступности. Секция выходов {current.enabled ? "задана включённой" : "выключена"}; TProxy настраивается отдельно и меняет трафик только после общего применения.</InfoNote>
       <ConfirmDialog open={!!pendingDelete} title="Удалить выходы из черновика?"
         body={`Ссылки на ${pendingDelete?.tags.join(", ")}: ${pendingDelete?.refs.join(", ") || "нет"}. Зависимые правила после удаления потребуют исправления.`}
         confirmLabel="Удалить" cancelLabel="Отмена" danger
@@ -762,7 +762,7 @@ export function RuleSets() {
     <Card title="Rule-set (источники списков)">
       <ErrorNotice error={error ?? sources.error} />
       <InfoNote>
-        Источники списков: статус сообщает агент. Ручное обновление — действие агента, не сохранение черновика; успешная проверка может сменить рабочую версию без общего применения. TProxy остаётся недоступен.
+        Источники списков: статус сообщает агент. Ручное обновление — действие агента, не сохранение черновика; успешная проверка может сменить рабочую версию без общего применения. Включение TProxy настраивается отдельно.
       </InfoNote>
       <DataTable
         heads={["Имя", "Формат", "Статус", "Актуальность", "Последняя попытка", "Последний успех", "Обновление"]}

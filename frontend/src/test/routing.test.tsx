@@ -7,17 +7,18 @@ import { RouterProvider } from "../state";
 import { emptyConfiguration } from "../fixtures";
 import type { TProxyDNS, TProxyRule } from "../types";
 
-function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfiguration.proxies) {
+function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfiguration.proxies,
+  tproxy = emptyConfiguration.tproxy, status: "draft" | "confirmed" = "draft") {
   const configuration = {
     ...emptyConfiguration,
     interfaces: [{ name: "lan0", zone: "lan" as const, kind: "physical" as const }],
-    tproxy: { ...emptyConfiguration.tproxy, rules },
+    tproxy: { ...tproxy, rules },
     proxies,
   };
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) =>
     Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions"
-        ? [{ id: 1, status: "draft", configuration }]
+        ? [{ id: 1, status, configuration }]
         : fail
           ? { code: "validation.failed", message: "Ошибка проверки конфигурации", details: [] }
           : { id: 1, status: "draft", configuration: JSON.parse(String(init?.body)) },
@@ -51,8 +52,9 @@ it("warns about DNS rule references before deleting its server", async () => {
 it("saves disabled TProxy ingress and ordered block rule in draft", async () => {
   const fetch = setup();
   const user = userEvent.setup();
-  expect(screen.getByRole("button", { name: "Включить TProxy" })).toBeDisabled();
+  expect(await screen.findByText("Выключено в черновике")).toBeVisible();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  expect(screen.getByRole("switch", { name: "Включить выборочную маршрутизацию" })).toBeDisabled();
   await user.click(screen.getByRole("checkbox", { name: "lan0" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "blocked_site");
@@ -71,6 +73,57 @@ it("saves disabled TProxy ingress and ordered block rule in draft", async () => 
     }]);
   });
   expect(await screen.findByText(/blocked_site · block · домен example.org/)).toBeVisible();
+});
+
+it("confirms enabling only after a valid ingress and rule; saves enabled draft, not applied", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  const toggle = screen.getByRole("switch", { name: "Включить выборочную маршрутизацию" });
+  expect(toggle).toBeDisabled();
+  expect(screen.getByText(/Выберите хотя бы один источник/)).toBeVisible();
+  await user.click(screen.getByRole("checkbox", { name: "lan0" }));
+  expect(toggle).toBeDisabled();
+  expect(screen.getByText(/Добавьте хотя бы одно правило/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
+  await user.type(screen.getByLabelText("Имя правила"), "route_test");
+  await user.type(screen.getByLabelText("Домены (по строкам)"), "example.org");
+  expect(toggle).toBeEnabled();
+  await user.click(toggle);
+  expect(screen.getByText(/Ошибка в настройках может нарушить подключение/)).toBeVisible();
+  expect(toggle).not.toBeChecked();
+  await user.click(screen.getByRole("button", { name: "Отмена" }));
+  expect(toggle).not.toBeChecked();
+  await user.click(toggle);
+  await user.click(screen.getByRole("button", { name: "Включить в черновике" }));
+  expect(toggle).toBeChecked();
+  await user.click(await screen.findByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBeTruthy());
+  const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+  expect(JSON.parse(String(init.body)).tproxy.enabled).toBe(true);
+  expect(await screen.findByText("Включено в черновике")).toBeVisible();
+  expect(screen.queryByText("Применено: включено")).not.toBeInTheDocument();
+});
+
+it("blocks enabled route when outbound section is off or reference is missing", async () => {
+  const rule: TProxyRule = { name: "proxy_rule", domain_suffix: ["example.org"], ip_cidr: [],
+    source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [], action: "route", outbound: "proxy_a", order: 0 };
+  setup(false, [rule], proxiesWithOutbound, { ...emptyConfiguration.tproxy, ingress_interfaces: ["lan0"] });
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  expect(screen.getByRole("switch", { name: "Включить выборочную маршрутизацию" })).toBeDisabled();
+  expect(screen.getByText(/Включите секцию прокси-выходов/)).toBeVisible();
+  await user.selectOptions(screen.getByLabelText("Выход"), "");
+  expect(screen.getByRole("switch", { name: "Включить выборочную маршрутизацию" })).toBeDisabled();
+});
+
+it("labels confirmed enabled configuration as applied without claiming live health", async () => {
+  const rule: TProxyRule = { name: "allowed", domain_suffix: ["example.org"], ip_cidr: [],
+    source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [], action: "direct", outbound: null, order: 0 };
+  setup(false, [rule], emptyConfiguration.proxies,
+    { ...emptyConfiguration.tproxy, enabled: true, ingress_interfaces: ["lan0"] }, "confirmed");
+  expect(await screen.findByText("Применено: включено")).toBeVisible();
+  expect(screen.getByText(/статус конфигурации не проверяет доступность выхода/)).toBeVisible();
 });
 
 it("retains unsaved TProxy edits after rejected draft", async () => {
@@ -251,7 +304,7 @@ it("saves an expert UDP DNS server and its matching DNS rule", async () => {
   });
 });
 
-it("walks the wizard through 4 steps and saves a draft rule with disabled state checks", async () => {
+it("walks the wizard through 4 steps and saves an enabled draft after confirmation", async () => {
   const fetch = setup();
   const user = userEvent.setup();
   await screen.findByRole("button", { name: "Редактировать" });
@@ -273,11 +326,13 @@ it("walks the wizard through 4 steps and saves a draft rule with disabled state 
   expect(screen.getByText("Назначение: block")).toBeVisible();
   expect(screen.getByText(/Полный предпросмотр sing-box доступен после сохранения черновика/)).toBeVisible();
   expect(fetch.mock.calls.some(([path]) => String(path).includes("preview"))).toBe(false);
-  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await user.click(screen.getByRole("switch", { name: "Включить выборочную маршрутизацию" }));
+  await user.click(screen.getByRole("button", { name: "Включить в черновике" }));
+  await user.click(await screen.findByRole("button", { name: "Сохранить черновик" }));
   await waitFor(() => {
     const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
     const sent = JSON.parse(String(init.body));
-    expect(sent.tproxy.enabled).toBe(false);
+    expect(sent.tproxy.enabled).toBe(true);
     expect(sent.tproxy.ingress_interfaces).toEqual(["lan0"]);
     expect(sent.tproxy.rules).toEqual([{
       name: "blocked_site", domain_suffix: ["example.org"], ip_cidr: [],
