@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import Field, StrictBool, StrictInt, StrictStr, model_validator
-from ..schema import Model
+from ..schema import Model, ProxySubscription, ProxyOutbound
 
 RequestID = StrictInt | StrictStr
 VersionID = Annotated[int, Field(strict=True, ge=1)]
@@ -13,7 +13,8 @@ Method = Literal["apply_version", "confirm_version", "rollback", "status",
                  "list_addresses", "update_status", "apply_update",
                  "update_source", "source_status", "service_status",
                  "engine_status", "engine_control", "clash_connections", "clash_close",
-                 "clash_logs", "clash_proxies", "clash_select", "clash_delay"]
+                 "clash_logs", "clash_proxies", "clash_select", "clash_delay",
+                 "subscription_preview", "subscription_refresh"]
 
 
 class ApplyParams(Model):
@@ -94,6 +95,15 @@ class ClashDelayParams(Model):
     timeout_ms: Annotated[int, Field(strict=True, ge=100, le=10000)] = 3000
 
 
+class SubscriptionPreviewParams(Model):
+    subscription: ProxySubscription
+    authorized: StrictBool
+
+
+class SubscriptionRefreshParams(SubscriptionPreviewParams):
+    current_members: tuple[ProxyOutbound, ...]
+
+
 PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "rollback": EmptyParams, "status": EmptyParams,
           "diag_ping": PingParams, "diag_traceroute": HostParams,
@@ -105,7 +115,9 @@ PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "engine_status": EmptyParams, "engine_control": EngineControlParams,
           "clash_connections": EmptyParams, "clash_close": ClashCloseParams,
           "clash_logs": ClashLogsParams, "clash_proxies": EmptyParams,
-          "clash_select": ClashSelectParams, "clash_delay": ClashDelayParams}
+          "clash_select": ClashSelectParams, "clash_delay": ClashDelayParams,
+          "subscription_preview": SubscriptionPreviewParams,
+          "subscription_refresh": SubscriptionRefreshParams}
 
 
 class RPCRequest(Model):

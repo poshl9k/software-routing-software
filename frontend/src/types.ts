@@ -228,6 +228,31 @@ export interface ProxyOutbound {
   tls_insecure: boolean;
   admin_listen: string | null;
 }
+// Subscription runtime (agent proposals; no implicit draft write).
+export interface SubscriptionMember {
+  tag: string;
+  label: string;
+  protocol: string;
+  server: string;
+  port: number;
+  excluded?: boolean;
+}
+export interface SubscriptionPreview {
+  members: SubscriptionMember[];
+  skipped: { line: number; reason: string }[];
+  outbounds: ProxyOutbound[];
+  groups: ProxyGroup[];
+}
+export interface SubscriptionRefresh {
+  added: SubscriptionMember[];
+  updated: SubscriptionMember[];
+  unchanged: SubscriptionMember[];
+  orphans: SubscriptionMember[];
+  skipped: { line: number; reason: string }[];
+  outbounds: ProxyOutbound[];
+  groups: ProxyGroup[];
+}
+
 export interface ProxySubscription {
   name: string;
   url: string;
