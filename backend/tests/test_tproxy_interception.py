@@ -450,6 +450,19 @@ def test_singbox_preview_bypass_direct_rule_is_first():
                         "outbound": "direct"}
 
 
+def test_singbox_preview_bypass_multiple_fields_are_one_and_rule():
+    rules = generate_singbox(bypass_version([{
+        "name": "selected", "source_ip_cidr": ["192.0.2.0/24"],
+        "ip_cidr": ["10.10.10.103/32"], "ports": ["18874", "18880-18890"],
+        "protocol": "tcp",
+    }]))["route"]["rules"]
+    assert rules == [{
+        "source_ip_cidr": ["192.0.2.0/24"], "ip_cidr": ["10.10.10.103/32"],
+        "port": [18874], "port_range": ["18880:18890"], "network": ["tcp"],
+        "action": "route", "outbound": "direct",
+    }]
+
+
 def test_bypass_validator_codes():
     def build(tproxy):
         ConfigurationVersion.model_validate({"configuration": {
