@@ -13,6 +13,7 @@ import type {
   Alias, DHCPLease, ImportPreview, PingResult,
   RuleSetStatus, RuleSetUpdate,
   UpdateStatus, UpdateStart, ServiceStatusResponse,
+  RuntimeEngine, RuntimeConnections, RuntimeLogEntry, RuntimeProxies, RuntimeProxyDelay,
 } from "./types";
 export class ApiError extends Error {
   constructor(
@@ -125,6 +126,20 @@ export const api = {
     }),
   updateStatus: () => request<UpdateStatus>("/api/update"),
   applyUpdate: (release: string) => post<UpdateStart>("/api/update", { release }),
+  // Runtime API — keep additive: subscriptions use this client independently.
+  runtimeEngine: () => request<RuntimeEngine>("/api/runtime/engine"),
+  runtimeEngineControl: (action: "start" | "stop" | "restart") =>
+    post<RuntimeEngine>(`/api/runtime/engine/${action}`, {}),
+  runtimeConnections: () => request<RuntimeConnections>("/api/runtime/connections"),
+  runtimeCloseConnection: (id: string) =>
+    post<unknown>(`/api/runtime/connections/${encodeURIComponent(id)}/close`, {}),
+  runtimeLogs: (level: "debug" | "info" | "warning" | "error" = "info", limit = 50) =>
+    request<RuntimeLogEntry[]>(`/api/runtime/logs?level=${level}&limit=${limit}`),
+  runtimeProxies: () => request<RuntimeProxies>("/api/runtime/proxies"),
+  runtimeSelectProxy: (group: string, name: string) =>
+    post<unknown>(`/api/runtime/proxies/${encodeURIComponent(group)}/select`, { name }),
+  runtimeProxyDelay: (tag: string, url: string, timeout_ms = 3000) =>
+    request<RuntimeProxyDelay>(`/api/runtime/proxies/${encodeURIComponent(tag)}/delay?url=${encodeURIComponent(url)}&timeout_ms=${timeout_ms}`),
 };
 
 async function responseError(response: Response): Promise<ApiError> {

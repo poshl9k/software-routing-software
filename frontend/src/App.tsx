@@ -31,6 +31,7 @@ import SSH from "./pages/SSH";
 import { DHCP, DNS, Proxy, Tunnels } from "./pages/Services";
 import ApplyScreen from "./pages/ApplyScreen";
 import Maintenance from "./pages/Maintenance";
+import Diagnostics from "./pages/Diagnostics";
 import Onboarding, { Login } from "./pages/Onboarding";
 import { globalStyles, theme } from "./theme";
 import {
@@ -107,6 +108,7 @@ export const navigation: { group: string; items: NavigationItem[] }[] = [
   { group: "Сервисы", items: [{ to: "/proxy", label: "Входящие сайты", icon: "proxy" }] },
   { group: "Управление", items: [
     { to: "/events", label: "Журнал", icon: "events" },
+    { to: "/diagnostics", label: "Диагностика", icon: "events" },
     { to: "/maintenance", label: "Обслуживание", icon: "maintenance" },
   ] },
 ];
@@ -301,6 +303,7 @@ export default function App() {
             <Route path="apply" element={<ApplyScreen />} />
             <Route path="maintenance" element={<Maintenance />} />
             <Route path="events" element={<Events />} />
+            <Route path="diagnostics" element={<Diagnostics />} />
             <Route
               path="*"
               element={
