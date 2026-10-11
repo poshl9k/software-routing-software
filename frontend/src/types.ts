@@ -457,3 +457,53 @@ export interface UpdateStart {
   started: boolean;
   release: string;
 }
+
+// Runtime agent DTOs (backend agent/engine.py and agent/clash.py; separate from configuration).
+export interface RuntimeEngine {
+  installed: boolean;
+  version: string | null;
+  running: boolean;
+  pid: number | null;
+  clash_api: boolean;
+  ip_forward: boolean | null;
+  nft_tproxy_tables: boolean;
+}
+export interface RuntimeConnection {
+  id: string;
+  metadata?: {
+    network?: string;
+    type?: string;
+    sourceIP?: string;
+    sourcePort?: string | number;
+    destinationIP?: string;
+    destinationPort?: string | number;
+    host?: string;
+  };
+  upload?: number;
+  download?: number;
+  start?: string;
+  chains?: string[];
+  rule?: string;
+  rulePayload?: string;
+}
+export interface RuntimeConnections {
+  download: number;
+  upload: number;
+  connections: RuntimeConnection[] | null;
+}
+export interface RuntimeLogEntry {
+  type?: string;
+  payload?: string;
+  source?: string;
+  time?: string;
+}
+export interface RuntimeProxies {
+  proxies: Record<string, {
+    name?: string;
+    type?: string;
+    now?: string;
+    all?: string[];
+    history?: { time?: string; delay?: number }[];
+  }>;
+}
+export interface RuntimeProxyDelay { delay: number }
