@@ -10,7 +10,7 @@ import { useConfiguration } from "../state";
 import { api } from "../api";
 import { queryKeys } from "../query";
 import type { TProxy, TProxyBypass, TProxyDNSServer, TProxyDNSRule, TProxyRule } from "../types";
-import { addressValid, lines, nameValid, portValid } from "../components/validators";
+import { addressValid, engineTagValid, lines, nameValid, portValid } from "../components/validators";
 import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter } from "../components/EditorShell";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -28,17 +28,108 @@ const portRangeValid = (value: string) => {
   return !!match && portValid(Number(match[1])) &&
     (!match[2] || (portValid(Number(match[2])) && Number(match[2]) >= Number(match[1])));
 };
+const macValid = (mac: string) => /^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/.test(mac);
+const regexValid = (pattern: string) => {
+  try { new RegExp(pattern); return true; } catch { return false; }
+};
+const matcherIssue = (rule: TProxyRule, ruleSets: readonly string[], child = false): string | null => {
+  const domains = [rule.domain_suffix, rule.domain_exact ?? [], rule.domain_keyword ?? [], rule.domain_regex ?? []];
+  const hasMatchers = [...domains, rule.ip_cidr, rule.source_ip_cidr, rule.source_mac ?? [],
+    rule.inbound ?? [], rule.rule_sets, rule.ports].some((values) => values.length > 0) ||
+    rule.ip_is_private != null || rule.network != null;
+  if (child && (rule.logical_mode || rule.logical_rules?.length)) return "tproxy.logical_nested";
+  if (child && (rule.action !== "direct" || rule.outbound !== null)) return "tproxy.logical_child_action";
+  if (!rule.logical_mode && rule.logical_rules?.length) return "tproxy.logical_mode_required";
+  if (rule.logical_mode) {
+    if ((rule.logical_rules?.length ?? 0) < 2) return "tproxy.logical_rules_required";
+    if (hasMatchers || rule.protocol !== "any") return "tproxy.logical_matchers_unexpected";
+    for (const nested of rule.logical_rules ?? []) {
+      if (!nameValid(nested.name)) return "tproxy.logical_child_name_invalid";
+      const issue = matcherIssue(nested, ruleSets, true);
+      if (issue) return issue;
+    }
+  } else if (!hasMatchers) return "tproxy.rule_matcher_required";
+  if ([rule.domain_suffix, rule.domain_exact ?? []].some((values) => !values.every(domainValid))) return "tproxy.domain_invalid";
+  if (domains.filter((values) => values.length).length > 1) return "tproxy.domain_matchers_conflict";
+  if ([...(rule.domain_keyword ?? []), ...(rule.domain_regex ?? []), ...(rule.inbound ?? [])]
+    .some((value) => !value.trim())) return "tproxy.matcher_empty";
+  if (!(rule.domain_regex ?? []).every(regexValid)) return "tproxy.domain_regex_invalid";
+  if (!(rule.source_mac ?? []).every(macValid)) return "tproxy.source_mac_invalid";
+  if (rule.network && rule.protocol !== "any" && rule.network !== rule.protocol) return "tproxy.network_conflict";
+  if (!rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))) return "tproxy.ipv4_required";
+  if (!rule.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))) return "tproxy.source_ipv4_required";
+  if (!rule.ports.every(portRangeValid)) return "tproxy.port_invalid";
+  if (!rule.rule_sets.every((name) => ruleSets.includes(name))) return "tproxy.rule_set_unavailable";
+  return null;
+};
 const ruleValid = (rule: TProxyRule, outbounds: readonly string[], ruleSets: readonly string[]) =>
-  nameValid(rule.name) &&
-  (rule.domain_suffix.length > 0 || rule.ip_cidr.length > 0 ||
-    rule.source_ip_cidr.length > 0 || rule.rule_sets.length > 0 || rule.ports.length > 0) &&
-  rule.domain_suffix.every(domainValid) &&
-  rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
-  rule.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) &&
-  rule.ports.every(portRangeValid) &&
-  rule.rule_sets.every((name) => ruleSets.includes(name)) &&
-  (rule.action !== "route" ||
-    (rule.outbound !== null && outbounds.includes(rule.outbound)));
+  nameValid(rule.name) && !matcherIssue(rule, ruleSets) &&
+  (rule.action === "route" ? rule.outbound !== null && outbounds.includes(rule.outbound) : rule.outbound === null);
+const emptyRule = (): TProxyRule => ({
+  name: "", domain_suffix: [], ip_cidr: [], source_ip_cidr: [], rule_sets: [],
+  protocol: "any", ports: [], action: "direct", outbound: null, order: 0,
+});
+const matcherErrorLabels: Record<string, string> = {
+  "tproxy.logical_child_name_invalid": "Укажите корректное имя подправила.",
+  "tproxy.logical_nested": "Вложенные логические группы недопустимы.",
+  "tproxy.logical_child_action": "Подправило не может задавать действие или выход.",
+  "tproxy.logical_mode_required": "Выберите режим логической группы.",
+  "tproxy.logical_rules_required": "Для группы нужны минимум два подправила.",
+  "tproxy.logical_matchers_unexpected": "В логической группе условия задаются только в подправилах.",
+  "tproxy.rule_matcher_required": "Укажите хотя бы одно условие правила.",
+  "tproxy.domain_invalid": "Некорректный домен.",
+  "tproxy.domain_matchers_conflict": "Типы доменных условий нельзя смешивать в одном правиле; используйте группу.",
+  "tproxy.matcher_empty": "Пустое условие недопустимо.",
+  "tproxy.domain_regex_invalid": "Некорректное регулярное выражение домена.",
+  "tproxy.source_mac_invalid": "MAC должен иметь вид 00:11:22:33:44:55.",
+  "tproxy.network_conflict": "Сеть и протокол противоречат друг другу.",
+  "tproxy.ipv4_required": "Укажите корректную IPv4-сеть назначения.",
+  "tproxy.source_ipv4_required": "Укажите корректную IPv4-сеть источника.",
+  "tproxy.port_invalid": "Некорректный порт или диапазон.",
+  "tproxy.rule_set_unavailable": "Набор правил недоступен.",
+};
+function RuleMatchers({ rule, change, ruleSets, prefix = "" }: {
+  rule: TProxyRule; change: (update: Partial<TProxyRule>) => void;
+  ruleSets: readonly string[]; prefix?: string;
+}) {
+  const label = (text: string) => `${prefix}${text}`;
+  return <FormGrid>
+    <Field label={label("Домены (по строкам)")} multiline value={rule.domain_suffix.join("\n")}
+      valid={rule.domain_suffix.every(domainValid)} onChange={(text) => change({ domain_suffix: lines(text) })} />
+    <Field label={label("Точный домен")} multiline value={(rule.domain_exact ?? []).join("\n")}
+      valid={(rule.domain_exact ?? []).every(domainValid)} onChange={(text) => change({ domain_exact: lines(text) })} />
+    <Field label={label("Ключевое слово домена")} multiline value={(rule.domain_keyword ?? []).join("\n")}
+      onChange={(text) => change({ domain_keyword: lines(text) })} />
+    <Field label={label("Регулярное выражение домена")} multiline value={(rule.domain_regex ?? []).join("\n")}
+      valid={(rule.domain_regex ?? []).every(regexValid)} onChange={(text) => change({ domain_regex: lines(text) })} />
+    <Field label={label("IPv4-сети (по строкам)")} multiline value={rule.ip_cidr.join("\n")}
+      valid={rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+      onChange={(text) => change({ ip_cidr: lines(text) })} />
+    <Field label={label("Источник IP (по строкам)")} multiline value={rule.source_ip_cidr.join("\n")}
+      valid={rule.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+      onChange={(text) => change({ source_ip_cidr: lines(text) })} />
+    <Field label={label("MAC источника")} multiline value={(rule.source_mac ?? []).join("\n")}
+      valid={(rule.source_mac ?? []).every(macValid)} onChange={(text) => change({ source_mac: lines(text) })} />
+    <Field label={label("Вход (inbound)")} multiline value={(rule.inbound ?? []).join("\n")}
+      onChange={(text) => change({ inbound: lines(text) })} />
+    <Field label={label("Порты (по строкам)")} multiline value={rule.ports.join("\n")}
+      valid={rule.ports.every(portRangeValid)} onChange={(text) => change({ ports: lines(text) })} />
+    <Select label={label("Частный IP")} value={rule.ip_is_private == null ? "" : String(rule.ip_is_private)}
+      placeholder={{ label: "Любой" }} options={[{ value: "true", label: "Да" }, { value: "false", label: "Нет" }]}
+      onChange={(value) => change({ ip_is_private: value === "" ? null : value === "true" })} />
+    <Select label={label("Сеть")} value={rule.network ?? ""} placeholder={{ label: "Любая" }}
+      options={[{ value: "tcp", label: "TCP" }, { value: "udp", label: "UDP" }]}
+      onChange={(value) => change({ network: value ? value as "tcp" | "udp" : null })} />
+    <SelectField label={label("Протокол")} value={rule.protocol} options={["any", "tcp", "udp"]}
+      onChange={(protocol) => change({ protocol })} />
+    {ruleSets.length > 0 && <div><Typography>Наборы правил</Typography>
+      {ruleSets.map((name) => <FormControlLabel key={name} label={name}
+        control={<Checkbox checked={rule.rule_sets.includes(name)} onChange={(_, checked) => change({
+          rule_sets: checked ? [...rule.rule_sets, name] : rule.rule_sets.filter((n) => n !== name),
+        })} />} />)}
+    </div>}
+  </FormGrid>;
+}
 // A bypass row excludes traffic from capture: at least one of source/dest/ports,
 // IPv4-only addresses, valid ports.
 const bypassValid = (row: TProxyBypass) =>
@@ -58,10 +149,11 @@ const dnsRuleValid = (row: TProxyDNSRule, tags: readonly string[], ruleSets: rea
   row.domain_suffix.every(domainValid) && row.rule_sets.every((name) => ruleSets.includes(name)) &&
   tags.includes(row.server);
 const timeValid = (time: string) => /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(time);
-const emptyWizardRule = (): TProxyRule => ({
-  name: "", domain_suffix: [], ip_cidr: [], source_ip_cidr: [], rule_sets: [],
-  protocol: "any", ports: [], action: "direct", outbound: null, order: 0,
-});
+const emptyWizardRule = (): TProxyRule => ({ ...emptyRule(), action: "route" });
+const wizardDNSDirect = (): TProxyDNSServer => ({ tag: "dns-direct", type: "udp", server: "1.1.1.1",
+  server_port: 53, tls_name: null, path: null, domain_resolver: null, detour: "direct" });
+const wizardDNSTunnel = (outbound: string): TProxyDNSServer => ({ ...wizardDNSDirect(),
+  tag: "dns-tunnel", detour: outbound });
 
 /** TProxy policy is saved as a draft; only the shared apply flow changes traffic. */
 function TProxyEditor() {
@@ -82,6 +174,8 @@ function TProxyEditor() {
   const [view, setView] = useState<"simple" | "wizard" | "expert">("simple");
   const [step, setStep] = useState(0);
   const [wizardSources, setWizardSources] = useState<string[]>([]);
+  const [wizardDNSTags, setWizardDNSTags] = useState({ direct: "dns-direct", tunnel: "dns-tunnel" });
+  const [wizardDNSAddress, setWizardDNSAddress] = useState("1.1.1.1");
   const [wizardRule, setWizardRule] = useState<TProxyRule>(emptyWizardRule);
   const [wizardSubmitted, setWizardSubmitted] = useState(false);
   const [pendingEnable, setPendingEnable] = useState(false);
@@ -138,7 +232,9 @@ function TProxyEditor() {
     : timeValid(schedule.window_start) && timeValid(schedule.window_end) && schedule.window_start < schedule.window_end;
   const finalValid = current.final !== "route" ||
     (current.final_outbound !== null && outboundOptions.includes(current.final_outbound));
-  const valid = scheduleValid && finalValid &&
+  const udpTimeoutValid = current.udp_timeout_seconds == null ||
+    (Number.isInteger(current.udp_timeout_seconds) && current.udp_timeout_seconds >= 1 && current.udp_timeout_seconds <= 86400);
+  const valid = udpTimeoutValid && scheduleValid && finalValid &&
     current.rules.every((r) => ruleValid(r, outboundOptions, ruleSetOptions)) &&
     new Set(current.rules.map((r) => r.name)).size === current.rules.length &&
     current.bypass.every(bypassValid) &&
@@ -148,6 +244,14 @@ function TProxyEditor() {
     current.dns.rules.every((row) => dnsRuleValid(row, dnsTags, ruleSetOptions)) &&
     new Set(current.dns.rules.map((row) => row.name)).size === current.dns.rules.length;
   const wizardRuleValid = ruleValid(wizardRule, outboundOptions, ruleSetOptions);
+  const wizardDNSRuleName = `dns_${wizardRule.name}`.slice(0, 31);
+  const wizardDNSValid = engineTagValid(wizardDNSTags.direct) && engineTagValid(wizardDNSTags.tunnel) &&
+    wizardDNSTags.direct !== wizardDNSTags.tunnel && addressValid(wizardDNSAddress) &&
+    !wizardDNSAddress.includes("/") &&
+    !current.dns.servers.some((server) => [wizardDNSTags.direct, wizardDNSTags.tunnel].includes(server.tag)) &&
+    !current.dns.rules.some((rule) => rule.name === wizardDNSRuleName) &&
+    engineTagValid(wizardDNSRuleName) &&
+    (wizardRule.domain_suffix.length > 0 || wizardRule.rule_sets.length > 0);
   const wizardCandidate = view === "wizard";
   const ingress = wizardCandidate ? wizardSources : current.ingress_interfaces;
   const rules = wizardCandidate ? [...current.rules, wizardRule] : current.rules;
@@ -169,8 +273,11 @@ function TProxyEditor() {
     clearPreview();
     await editor.save((tproxy) => ({ ...configuration, tproxy }));
   };
+  const wizardFresh = !current.enabled && current.rules.length === 0 &&
+    current.dns.rules.length === 0 && current.dns.servers.length === 0;
   const wizardCanSave = !!version && user?.role !== "operator" && editor.isEdit &&
-    !editor.saving && wizardSources.length > 0 && wizardRuleValid && valid &&
+    wizardFresh && configuration.proxies.enabled &&
+    !editor.saving && wizardSources.length > 0 && wizardRuleValid && wizardDNSValid && valid &&
     !current.rules.some((rule) => rule.name === wizardRule.name) &&
     (!current.enabled || !enableIssue);
   const updateWizardRule = (change: Partial<TProxyRule>) =>
@@ -182,8 +289,18 @@ function TProxyEditor() {
     // has a working copy to commit (a no-op save would otherwise fail silently).
     setWizardSubmitted(true);
     await editor.save((tproxy) => ({ ...configuration, tproxy: {
-      ...tproxy, ingress_interfaces: wizardSources,
+      ...tproxy, enabled: false, ingress_interfaces: wizardSources,
+      sniff: true,
+      final: "direct", final_outbound: null,
       rules: [...tproxy.rules, { ...wizardRule, order: tproxy.rules.length }],
+      dns: { ...tproxy.dns,
+        servers: [...tproxy.dns.servers,
+          { ...wizardDNSDirect(), tag: wizardDNSTags.direct, server: wizardDNSAddress },
+          { ...wizardDNSTunnel(wizardRule.outbound!), tag: wizardDNSTags.tunnel, server: wizardDNSAddress }],
+        rules: [...tproxy.dns.rules, { name: wizardDNSRuleName,
+          domain_suffix: wizardRule.domain_suffix, rule_sets: wizardRule.rule_sets,
+          server: wizardDNSTags.tunnel }],
+      },
     } }));
   };
   useEffect(() => {
@@ -236,15 +353,31 @@ function TProxyEditor() {
         tabs={[{ value: "simple", label: "Простой" },
           { value: "wizard", label: "Мастер" }, { value: "expert", label: "Эксперт" }]}
       />
-      {editor.isEdit && user?.role !== "operator" && (view === "expert" || (view === "wizard" && step === 3)) && <>
+      <Card title="Параметры движка">
+        <InfoNote>Sniff — определять домен из SNI/Host; без него матч по домену может не сработать.</InfoNote>
+        {editor.isEdit && user?.role !== "operator" && view === "expert" ? <FormGrid>
+          <Toggle label="Sniff" value={current.sniff ?? false}
+            onChange={(sniff) => patch({ sniff })} />
+          <Field label="Таймаут UDP, секунд" type="number" value={current.udp_timeout_seconds ?? ""}
+            hint="Пусто — выключено" valid={udpTimeoutValid} inputProps={{ min: 1, max: 86400, step: 1 }}
+            onChange={(value) => patch({ udp_timeout_seconds: value === "" ? null : Number(value) })} />
+        </FormGrid> : <Typography>Sniff: {current.sniff ? "включён" : "выключен"}; таймаут UDP: {current.udp_timeout_seconds ?? "выключен"}</Typography>}
+        {!udpTimeoutValid && <ErrorNotice error={new Error("Таймаут UDP: целое число от 1 до 86400 (tproxy.udp_timeout_seconds).")}/>}
+      </Card>
+      {editor.isEdit && user?.role !== "operator" && view === "expert" && <>
         <Toggle label="Включить выборочную маршрутизацию" value={current.enabled}
           disabled={editor.saving || (!current.enabled && !!enableIssue)} onChange={setEnabled} />
         {enableIssue && <InfoNote severity="warning">Включение недоступно: {enableIssue}</InfoNote>}
       </>}
       {view === "wizard" ? (
         <>
-          <Typography variant="h2">{["Источники", "Признаки", "Выход", "Предпросмотр"][step]}</Typography>
+          {!wizardFresh && <ErrorNotice error={new Error("Мастер доступен только для пустой выключенной TProxy/DNS-политики. Существующую политику изменяйте в «Эксперте».")} />}
+          {!configuration.proxies.enabled && <ErrorNotice error={new Error("Включите секцию прокси-выходов перед сохранением мастера.")} />}
+          <Typography variant="h2">{["Туннель", "Что в туннель", "DNS", "Применение"][step]}</Typography>
           {step === 0 && <>
+            <FormGrid><SelectField label="Выход (мастер)" value={wizardRule.outbound ?? ""}
+              required options={outboundOptions} onChange={(outbound) => updateWizardRule({ outbound })} /></FormGrid>
+            <Typography>Источники трафика</Typography>
             {sources.map((source) => <FormControlLabel key={source.name}
               label={interfaceLabel(source.name, configuration.interfaces)}
               control={<Checkbox checked={wizardSources.includes(source.name)}
@@ -279,15 +412,19 @@ function TProxyEditor() {
                     : wizardRule.rule_sets.filter((selected) => selected !== name) })} />} />)}
             </>}
           </>}
-          {step === 2 && <FormGrid>
-            <SelectField label="Действие (мастер)" value={wizardRule.action}
-              options={["direct", "block", "route"]}
-              onChange={(action) => updateWizardRule({ action,
-                outbound: action === "route" ? wizardRule.outbound : null })} />
-            {wizardRule.action === "route" && <SelectField label="Выход (мастер)"
-              value={wizardRule.outbound ?? ""} required options={outboundOptions}
-              onChange={(outbound) => updateWizardRule({ outbound })} />}
-          </FormGrid>}
+          {step === 2 && <>
+            <InfoNote>Мастер создаёт DNS-серверы dns-direct и dns-tunnel и DNS-правило автоматически; теги sing-box допускают дефис.</InfoNote>
+            <FormGrid>
+              <Field label="DNS-сервер (IP)" value={wizardDNSAddress}
+                valid={addressValid(wizardDNSAddress) && !wizardDNSAddress.includes("/")}
+                onChange={setWizardDNSAddress} />
+              <Field label="Тег прямого DNS" value={wizardDNSTags.direct} valid={engineTagValid(wizardDNSTags.direct)}
+                onChange={(direct) => setWizardDNSTags((tags) => ({ ...tags, direct }))} />
+              <Field label="Тег туннельного DNS" value={wizardDNSTags.tunnel} valid={engineTagValid(wizardDNSTags.tunnel)}
+                onChange={(tunnel) => setWizardDNSTags((tags) => ({ ...tags, tunnel }))} />
+            </FormGrid>
+            {!wizardDNSValid && <ErrorNotice error={new Error("Проверьте DNS-теги (латиница, цифры, дефис/подчёркивание), IP, уникальность и наличие доменов или наборов для DNS-правила.")} />}
+          </>}
           {step === 3 && <>
             <Typography>Источники: {wizardSources.join(", ")}</Typography>
             <Typography>Правило: {wizardRule.name}</Typography>
@@ -295,18 +432,22 @@ function TProxyEditor() {
             <Typography>Наборы правил: {wizardRule.rule_sets.join(", ") || "нет"}</Typography>
             <Typography>Назначения IPv4: {wizardRule.ip_cidr.join(", ") || "нет"}</Typography>
             <Typography>Порты: {wizardRule.ports.join(", ") || "нет"}</Typography>
-            <Typography>Назначение: {wizardRule.action === "route" ? wizardRule.outbound : wizardRule.action}</Typography>
+            <Typography>Выход: {wizardRule.outbound}</Typography>
+            <Typography>DNS: {wizardDNSTags.direct} (direct), {wizardDNSTags.tunnel} (через {wizardRule.outbound}), адрес {wizardDNSAddress}</Typography>
+            <Typography>DNS-правило: {wizardDNSRuleName} → {wizardDNSTags.tunnel}</Typography>
+            <Typography>Конечное действие: direct; TProxy останется выключен в черновике.</Typography>
+            <Typography>Sniff: включится для определения доменов.</Typography>
             <Typography>Полный предпросмотр sing-box доступен после сохранения черновика.</Typography>
           </>}
           <FormActions>
             {step > 0 && <Button onClick={() => setStep((previous) => previous - 1)}>Назад</Button>}
-            {step < 3 ? <Button disabled={step === 0 ? wizardSources.length === 0 :
+            {step < 3 ? <Button disabled={step === 0 ? wizardSources.length === 0 || !wizardRule.outbound || !outboundOptions.includes(wizardRule.outbound) :
               step === 1 ? !nameValid(wizardRule.name) ||
                 ![...wizardRule.domain_suffix, ...wizardRule.ip_cidr,
                   ...wizardRule.rule_sets, ...wizardRule.ports].length ||
                 !wizardRule.domain_suffix.every(domainValid) ||
                 !wizardRule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) ||
-                !wizardRule.ports.every(portRangeValid) : !wizardRuleValid}
+                !wizardRule.ports.every(portRangeValid) : !wizardDNSValid || !wizardRuleValid}
               onClick={() => setStep((previous) => previous + 1)}>Далее</Button>
               : <Button disabled={!wizardCanSave} onClick={() => void saveWizard()}>Сохранить черновик</Button>}
           </FormActions>
@@ -399,20 +540,8 @@ function TProxyEditor() {
             <FormGrid>
               <Field label="Имя правила" value={rule.name} valid={nameValid(rule.name)}
                 onChange={(name) => updateRule(index, { name })} />
-              <Field label="Домены (по строкам)" multiline value={rule.domain_suffix.join("\n")}
-                valid={rule.domain_suffix.every(domainValid)}
-                onChange={(text) => updateRule(index, { domain_suffix: lines(text) })} />
-              <Field label="IPv4-сети (по строкам)" multiline value={rule.ip_cidr.join("\n")}
-                valid={rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
-                onChange={(text) => updateRule(index, { ip_cidr: lines(text) })} />
-              <Field label="Источник IP (по строкам)" multiline value={rule.source_ip_cidr.join("\n")}
-                valid={rule.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
-                onChange={(text) => updateRule(index, { source_ip_cidr: lines(text) })} />
-              <Field label="Порты (по строкам)" multiline value={rule.ports.join("\n")}
-                valid={rule.ports.every(portRangeValid)}
-                onChange={(text) => updateRule(index, { ports: lines(text) })} />
-              <SelectField label="Протокол" value={rule.protocol} options={["any", "tcp", "udp"]}
-                onChange={(protocol) => updateRule(index, { protocol })} />
+              {!rule.logical_mode && <RuleMatchers rule={rule} ruleSets={ruleSetOptions}
+                change={(value) => updateRule(index, value)} />}
               <SelectField label="Действие" value={rule.action} options={["direct", "block", "route"]}
                 onChange={(action) => updateRule(index, {
                   action,
@@ -438,21 +567,43 @@ function TProxyEditor() {
                 />
               </FormActions>
             </FormGrid>
-            {ruleSetOptions.length > 0 && (
-              <>
-                <Typography>Наборы правил</Typography>
-                {ruleSetOptions.map((name) => <FormControlLabel key={name} label={name}
-                  control={<Checkbox checked={rule.rule_sets.includes(name)}
-                    onChange={(_, checked) => updateRule(index, { rule_sets: checked
-                      ? [...rule.rule_sets, name]
-                      : rule.rule_sets.filter((n) => n !== name) })} />} />)}
-              </>
-            )}
+            <Select label="Логическая группа" value={rule.logical_mode ?? ""}
+              placeholder={{ label: "Обычное правило" }}
+              options={[{ value: "and", label: "И (and)" }, { value: "or", label: "ИЛИ (or)" }]}
+              onChange={(mode) => updateRule(index, mode ? {
+                logical_mode: mode as "and" | "or",
+                logical_rules: rule.logical_rules?.length ? rule.logical_rules : [
+                  { ...rule, name: "child_a", action: "direct", outbound: null, order: 0,
+                    logical_mode: null, logical_rules: [] },
+                  { ...emptyRule(), name: "child_b" },
+                ], domain_suffix: [], domain_exact: [], domain_keyword: [], domain_regex: [],
+                ip_cidr: [], source_ip_cidr: [], source_mac: [], inbound: [], ip_is_private: null,
+                network: null, rule_sets: [], ports: [], protocol: "any",
+              } : { logical_mode: null, logical_rules: [] })} />
+            {rule.logical_mode && (rule.logical_rules ?? []).map((child, childIndex) => <div
+              key={childIndex} className="rule-row">
+              <Typography>Подправило {childIndex + 1}</Typography>
+              <Field label={`Имя подправила ${childIndex + 1}`} value={child.name}
+                valid={nameValid(child.name)} onChange={(name) => updateRule(index, {
+                  logical_rules: rule.logical_rules?.map((r, i) => i === childIndex ? { ...r, name } : r),
+                })} />
+              <RuleMatchers rule={child} ruleSets={ruleSetOptions} prefix={`Подправило ${childIndex + 1}: `}
+                change={(value) => updateRule(index, {
+                  logical_rules: rule.logical_rules?.map((r, i) => i === childIndex ? { ...r, ...value } : r),
+                })} />
+              <DeleteButton label={`Удалить подправило ${childIndex + 1}`} onClick={() => updateRule(index, {
+                logical_rules: rule.logical_rules?.filter((_, i) => i !== childIndex),
+              })} />
+            </div>)}
+            {rule.logical_mode && <Button onClick={() => updateRule(index, {
+              logical_rules: [...(rule.logical_rules ?? []), { ...emptyRule(), name: `child_${(rule.logical_rules?.length ?? 0) + 1}` }],
+            })}>Добавить подправило</Button>}
+            {matcherIssue(rule, ruleSetOptions) && <ErrorNotice error={new Error(
+              `${matcherErrorLabels[matcherIssue(rule, ruleSetOptions)!]} (${matcherIssue(rule, ruleSetOptions)})`,
+            )} />}
           </div>)}
           <Button onClick={() => patch({ rules: [...current.rules, {
-            name: "", domain_suffix: [], ip_cidr: [], source_ip_cidr: [], rule_sets: [],
-            protocol: "any", ports: [], action: "direct", outbound: null,
-            order: current.rules.length,
+            ...emptyRule(), order: current.rules.length,
           }] })}>+ Добавить правило</Button>
           <Typography variant="h2">Конечное действие</Typography>
           <FormGrid>
@@ -476,7 +627,7 @@ function TProxyEditor() {
           {current.dns.servers.map((row, index) => <div key={index} className="rule-row">
             <FormGrid>
               <Field label="Тег DNS-сервера" value={row.tag}
-                valid={nameValid(row.tag) && dnsTags.indexOf(row.tag) === index}
+                valid={engineTagValid(row.tag) && dnsTags.indexOf(row.tag) === index}
                 onChange={(tag) => updateDNSServer(index, { tag })} />
               <SelectField label="Тип DNS-сервера" value={row.type}
                 options={["udp", "tls", "https"]}
@@ -522,7 +673,7 @@ function TProxyEditor() {
           {current.dns.rules.map((row, index) => <div key={index} className="rule-row">
             <FormGrid>
               <Field label="Имя DNS-правила" value={row.name}
-                valid={nameValid(row.name) && current.dns.rules.findIndex((r) => r.name === row.name) === index}
+                valid={engineTagValid(row.name) && current.dns.rules.findIndex((r) => r.name === row.name) === index}
                 onChange={(name) => updateDNSRule(index, { name })} />
               <Field label="Домены DNS-правила" multiline value={row.domain_suffix.join("\n")}
                 valid={row.domain_suffix.every(domainValid) &&

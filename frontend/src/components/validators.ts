@@ -9,6 +9,9 @@ import type { Secret } from "../types";
 
 export const nameValid = (v: string) => /^[a-zA-Z][a-zA-Z0-9_]{0,30}$/.test(v);
 
+/** sing-box engine tags (DNS servers/rules and refs) — hyphens allowed, e.g. `dns-direct`. */
+export const engineTagValid = (v: string) => /^[a-zA-Z][a-zA-Z0-9_-]{0,30}$/.test(v);
+
 export const ifaceNameValid = (v: string) =>
   /^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$/.test(v);
 
