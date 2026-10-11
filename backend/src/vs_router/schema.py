@@ -5,6 +5,9 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_serializer, model_validator
 
 Name = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,30}$")]
+# Engine-owned tags (DNS servers/rules and references to them) follow sing-box
+# convention and may contain hyphens, e.g. ``dns-direct`` / ``dns-tunnel``.
+EngineTag = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]{0,30}$")]
 InterfaceName = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$")]
 Port = Annotated[int, Field(ge=1, le=65535)]
 
@@ -380,13 +383,13 @@ class TProxyBypass(Model):
 
 
 class TProxyDNSServer(Model):
-    tag: Name
+    tag: EngineTag
     type: Literal["udp", "tls", "https"] = "udp"
     server: str
     server_port: int | None = Field(default=None, ge=1, le=65535)
     tls_name: str | None = None
     path: str | None = None
-    domain_resolver: Name | None = None
+    domain_resolver: EngineTag | None = None
     detour: str | None = None
 
     @model_validator(mode="after")
@@ -399,10 +402,10 @@ class TProxyDNSServer(Model):
 
 
 class TProxyDNSRule(Model):
-    name: Name
+    name: EngineTag
     domain_suffix: tuple[str, ...] = ()
     rule_sets: tuple[Name, ...] = ()
-    server: Name
+    server: EngineTag
 
     @model_validator(mode="after")
     def check_matchers(self):
