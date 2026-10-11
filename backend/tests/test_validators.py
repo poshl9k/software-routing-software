@@ -95,9 +95,56 @@ def test_legacy_configuration_has_disabled_tproxy_and_roundtrips():
     assert Configuration.model_validate(payload).model_dump(mode="json") == payload
 
 
-def test_tproxy_cannot_be_enabled_without_packet_path():
-    with pytest.raises(ValidationError, match="tproxy.not_available"):
-        Configuration.model_validate({"tproxy": {"enabled": True}})
+@pytest.mark.parametrize("tproxy", [
+    {"enabled": True},
+    {"enabled": True, "ingress_interfaces": ["lan0"]},
+    {"enabled": True, "rules": [
+        {"name": "blocked", "domain_suffix": ["example.org"], "action": "block"},
+    ]},
+])
+def test_tproxy_enabled_requires_ingress_and_rules(tproxy):
+    with pytest.raises(ValidationError, match="tproxy.enabled_incomplete"):
+        Configuration.model_validate({"interfaces": [{"name": "lan0", "zone": "lan"}],
+                                      "tproxy": tproxy})
+
+
+def test_tproxy_complete_enabled_policy_validates_and_roundtrips():
+    payload = {"interfaces": [{"name": "lan0", "zone": "lan"}], "tproxy": {
+        "enabled": True, "ingress_interfaces": ["lan0"], "rules": [
+            {"name": "blocked", "domain_suffix": ["example.org"], "action": "block"},
+        ],
+    }}
+    config = Configuration.model_validate(payload)
+    assert config.tproxy.enabled is True
+    assert Configuration.model_validate(config.model_dump(mode="json")) == config
+
+
+@pytest.mark.parametrize(("changes", "error"), [
+    ({"ingress_interfaces": ["wan0"]}, "tproxy.ingress_interface"),
+    ({"ingress_interfaces": ["lan0", "lan0"]}, "tproxy.ingress_interface"),
+    ({"rules": [
+        {"name": "same", "domain_suffix": ["example.org"]},
+        {"name": "same", "ip_cidr": ["198.18.0.0/15"]},
+    ]}, "tproxy.duplicate_rule"),
+    ({"rules": [{"name": "r", "domain_suffix": ["example.org"],
+                 "action": "route", "outbound": "missing"}]}, "tproxy.outbound_unavailable"),
+    ({"rules": [{"name": "r", "rule_sets": ["missing"]}]},
+     "tproxy.ruleset_unavailable"),
+    ({"final": "route"}, "tproxy.final_outbound_required"),
+    ({"final": "route", "final_outbound": "missing"},
+     "tproxy.final_outbound_unavailable"),
+    ({"final": "block", "final_outbound": "missing"},
+     "tproxy.final_outbound_unexpected"),
+])
+def test_invalid_enabled_tproxy_has_specific_error(changes, error):
+    policy = {"enabled": True, "ingress_interfaces": ["lan0"], "rules": [
+        {"name": "blocked", "domain_suffix": ["example.org"], "action": "block"},
+    ]}
+    policy.update(changes)
+    with pytest.raises(ValidationError, match=error):
+        Configuration.model_validate({"interfaces": [
+            {"name": "lan0", "zone": "lan"}, {"name": "wan0", "zone": "wan"},
+        ], "tproxy": policy})
 
 
 def test_tproxy_ingress_must_be_assigned_non_wan_interface():

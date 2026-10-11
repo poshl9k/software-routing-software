@@ -11,9 +11,8 @@ The far WAN destination ``2001:db8:99::1`` lives on the origin loopback and is
 reached only by routed transit through ``wan0``. The guest root namespace, its
 routes and its firewall are untouched. Only ``ip``/``nft``/``ping`` are used.
 
-This is not a product enablement path: the public gate ``tproxy.not_available``
-stays closed and nothing is wired to bundle/apply/boot. The guard text is the
-exact generator output. Negative evidence is bounded (ping timeout).
+This remains a lab-only guard probe. The guard text is exact generator output.
+Negative evidence is bounded (ping timeout).
 
 Proven here (see docs/lab-36-tproxy-ipv6-guard.md): a selected source's routed
 IPv6 to a non-local (WAN) destination is dropped while the guard is active; the

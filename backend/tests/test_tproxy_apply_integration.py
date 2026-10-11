@@ -1,16 +1,15 @@
 """Integration scaffold for the sing-box TProxy apply/boot path.
 
-The public gate ``tproxy.not_available`` still rejects ``tproxy.enabled=True``,
-so an enabled configuration only exists as an offline ``model_copy`` (the idiom
-the offline generators already use). These tests therefore:
+Complete enabled configurations pass public validation. These tests use
+``model_copy`` for isolated phase-order checks. They therefore:
 
 * prove the scaffold is inert for every reachable (``enabled=False``)
   configuration — no extra file, validator, phase or marker key;
 * exercise the enabled branch **offline** to pin the activation order
-  (guards -> engine/readiness; no capture artifact while the gate is closed),
+  (guards -> engine/readiness; no capture artifact before readiness),
   rollback compensation and boot behaviour.
 
-Nothing here opens the gate, runs bpf/sing-box or touches a live host.
+Nothing here runs bpf/sing-box or touches a live host.
 """
 import json
 from pathlib import Path
@@ -23,11 +22,7 @@ from vs_router.schema import ConfigurationVersion
 
 
 def enabled_version(ingress=("lan0",)):
-    """Offline enabled snapshot: validate disabled, then model_copy the intent.
-
-    Re-validating the dump would fail with ``tproxy.not_available``; that is the
-    point — the gate is what keeps this branch unreachable in production.
-    """
+    """Offline fixture with no rule to isolate apply phase behavior."""
     base = ConfigurationVersion.model_validate({"configuration": {
         "interfaces": [
             {"name": "lan0", "zone": "lan", "addresses": ["10.212.1.1/24"]},

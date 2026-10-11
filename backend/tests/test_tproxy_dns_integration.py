@@ -1,13 +1,13 @@
-"""Integration tests for the TProxy DNS contour inside the gated apply scaffold.
+"""Integration tests for the TProxy DNS contour inside the apply path.
 
 ADR-0014 fixes the DNS contour as two Unbound processes (selected/ordinary)
 with ingress/listener/OUTPUT guards. These tests prove that contour is wired
 into :mod:`vs_router.agent.tproxy_apply` / :mod:`vs_router.agent.apply` /
 :mod:`vs_router.agent.boot_restore`:
 
-* the scaffold stays inert for every reachable (``enabled=False``) version —
+* the scaffold stays inert for every disabled (``enabled=False``) version —
   no extra file, phase, validator or marker key;
-* for an (offline-only) enabled version the ordered phases hold: guards
+* for an enabled version the ordered phases hold: guards
   (including the UID-scoped DNS OUTPUT boundary) load before the two readiness
   resolver configs and the engine, which load before capture;
 * guards and resolver configs are composed from the *same* plan
@@ -18,7 +18,7 @@ into :mod:`vs_router.agent.tproxy_apply` / :mod:`vs_router.agent.apply` /
 * teardown removes the tables *and* the split resolver configs on rollback,
   first-apply failure and reboot recovery.
 
-Nothing here opens the public gate, starts Unbound or touches a host.
+These tests do not start Unbound or touch the host.
 """
 import json
 from pathlib import Path
@@ -44,11 +44,7 @@ GUARDS = "tproxy_guards"
 
 
 def enabled_version(ingress=("lan0",)):
-    """Offline enabled snapshot: validate disabled, then model_copy the intent.
-
-    Re-validating the dump fails with ``tproxy.not_available``; that is exactly
-    why this branch is unreachable in production.
-    """
+    """Offline fixture with no rule to isolate DNS contour behavior."""
     base = ConfigurationVersion.model_validate({"configuration": {
         "interfaces": [
             {"name": "lan0", "zone": "lan", "addresses": ["10.212.1.1/24"]},
@@ -67,6 +63,16 @@ def enabled_version(ingress=("lan0",)):
     tproxy = base.configuration.tproxy.model_copy(update={"enabled": True})
     return base.model_copy(update={"configuration": base.configuration.model_copy(
         update={"tproxy": tproxy})})
+
+
+def test_valid_enabled_dns_contour_builds_artifacts():
+    payload = enabled_version().model_dump(mode="json")
+    payload["configuration"]["tproxy"]["rules"] = [
+        {"name": "blocked", "domain_suffix": ["example.org"], "action": "block"},
+    ]
+    version = ConfigurationVersion.model_validate(payload)
+    artifacts = tproxy_apply.build_artifacts(version)
+    assert {GUARDS, SELECTED, ORDINARY, "singbox", "tproxy_interception"} <= artifacts.keys()
 
 
 def engine_with(fs=None, executor=None, now=None):

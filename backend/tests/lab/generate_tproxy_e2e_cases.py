@@ -7,10 +7,7 @@ preauthorization and containment guards, the interception capture (reset +
 capture + conntrack INPUT guard), the three DNS guards, the sing-box engine file,
 the two split Unbound configs and the policy-route data.
 
-The public gate ``tproxy.not_available`` stays closed: an enabled configuration
-is only reachable through the standard offline ``model_copy`` fixture idiom, the
-same one used by ``generate_tproxy_dns_split_cases.py``. Nothing here touches a
-network, a service or a host file. The output JSON is consumed by the VM-only
+This probe exercises offline fixture data. No host files or network actions. The output JSON is consumed by the VM-only
 ``tproxy_e2e_probe.py`` as root inside disposable network namespaces only.
 """
 import argparse
@@ -56,7 +53,7 @@ def _base_version(*, firewall_rules, with_dns=True):
 
 
 def _enabled(version):
-    """Offline fixture bypass: flip only the public gate, then revalidate."""
+    """Offline fixture: enable the prevalidated draft for artifact generation."""
     policy = version.configuration.tproxy.model_copy(update={"enabled": True})
     configuration = version.configuration.model_copy(update={"tproxy": policy})
     return version.model_copy(update={"configuration": configuration})

@@ -7,9 +7,8 @@ freshly created network namespaces. The guest root namespace, its routes and its
 firewall are untouched. Needs the reviewed sing-box binary at
 ``/var/cache/vsr-singbox-probe``.
 
-This is not a product enablement path: the public gate ``tproxy.not_available``
-stays closed, nothing is wired to bundle/apply/boot, and the capture text is the
-exact generator output (off text is ``destroy table`` for its own table only).
+This is a lab-only probe, not a live apply path. Nothing here touches the
+network outside disposable VM namespaces.
 Bounded observation: sender timeout 1.5s plus a 1.5s window per negative case.
 """
 import importlib.util

@@ -17,8 +17,7 @@ Honest boundary: a *privileged* rule that itself writes ``ct mark`` (``ct mark s
 ct mark | 0x200``) still forges the token. Unforgeability against a competing root
 nftables writer is impossible in principle; the real trust boundary is a single
 writer of the mark/table/hook space (root). That residual case is executed and
-recorded, not asserted away. This is a lab-only experiment: the product gate
-``tproxy.not_available`` stays closed and no generator/apply/boot path changes.
+recorded, not asserted away. This is a lab-only experiment; no generator/apply/boot path changes.
 """
 import importlib.util
 import json
