@@ -151,11 +151,20 @@ export interface TProxyUpdateSchedule {
 export interface TProxyRule {
   name: string;
   domain_suffix: string[];
+  domain_exact?: string[];
+  domain_keyword?: string[];
+  domain_regex?: string[];
   ip_cidr: string[];
   source_ip_cidr: string[];
+  source_mac?: string[];
+  inbound?: string[];
+  ip_is_private?: boolean | null;
+  network?: "tcp" | "udp" | null;
   rule_sets: string[];
   protocol: "any" | "tcp" | "udp";
   ports: string[];
+  logical_mode?: "and" | "or" | null;
+  logical_rules?: TProxyRule[];
   action: "direct" | "block" | "route";
   outbound: string | null;
   order: number;
@@ -196,6 +205,8 @@ export interface TProxy {
   final: "direct" | "block" | "route";
   final_outbound: string | null;
   update_schedule: TProxyUpdateSchedule;
+  sniff?: boolean;
+  udp_timeout_seconds?: number | null;
 }
 export interface ProxyOutbound {
   tag: string;
@@ -223,6 +234,17 @@ export interface ProxySubscription {
   format: "auto" | "sing-box" | "clash" | "v2ray" | "base64";
   interval_hours: number;
   enabled: boolean;
+  mode?: "selector" | "urltest";
+  url_test?: string | null;
+  test_interval_minutes?: number | null;
+  test_tolerance_ms?: number | null;
+  headers?: string[];
+  filter_include?: string | null;
+  filter_exclude?: string | null;
+  active_member?: string | null;
+  excluded_members?: string[];
+  inline?: boolean;
+  inline_content?: string | null;
 }
 export interface ProxyGroup {
   tag: string;
@@ -230,6 +252,7 @@ export interface ProxyGroup {
   outbounds: string[];
   url: string | null;
   interval_minutes: number | null;
+  tolerance_ms?: number | null;
 }
 export interface ProxySettings {
   enabled: boolean;

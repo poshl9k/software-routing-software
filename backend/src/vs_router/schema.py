@@ -2,7 +2,7 @@
 from datetime import datetime
 from ipaddress import ip_address
 from typing import Annotated, Literal
-from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_serializer, model_validator
 
 Name = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,30}$")]
 InterfaceName = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$")]
@@ -274,11 +274,20 @@ class TProxyUpdateSchedule(Model):
 class TProxyRule(Model):
     name: Name
     domain_suffix: tuple[str, ...] = ()
+    domain_exact: tuple[str, ...] = ()
+    domain_keyword: tuple[str, ...] = ()
+    domain_regex: tuple[str, ...] = ()
     ip_cidr: tuple[str, ...] = ()
     source_ip_cidr: tuple[str, ...] = ()
+    source_mac: tuple[str, ...] = ()
+    inbound: tuple[str, ...] = ()
+    ip_is_private: StrictBool | None = None
+    network: Literal["tcp", "udp"] | None = None
     rule_sets: tuple[Name, ...] = ()
     protocol: Literal["any", "tcp", "udp"] = "any"
     ports: tuple[str, ...] = ()
+    logical_mode: Literal["and", "or"] | None = None
+    logical_rules: tuple["TProxyRule", ...] = ()
     # Destination of matched traffic (CONTEXT.md «Выход TProxy»): straight out
     # (direct), blocked, or routed to a named outbound (a proxy outbound/group
     # tag). ``outbound`` is only meaningful — and required — for ``route``.
@@ -291,12 +300,46 @@ class TProxyRule(Model):
         from ipaddress import ip_network
         import re
         from vs_router.validators import port_range
-        if not any((self.domain_suffix, self.ip_cidr, self.source_ip_cidr,
-                    self.rule_sets, self.ports)):
+        matchers = (self.domain_suffix, self.domain_exact, self.domain_keyword,
+                    self.domain_regex, self.ip_cidr, self.source_ip_cidr,
+                    self.source_mac, self.inbound, self.ip_is_private is not None,
+                    self.network is not None, self.rule_sets, self.ports)
+        if self.logical_mode is None and self.logical_rules:
+            raise ValueError("tproxy.logical_mode_required")
+        if self.logical_mode is not None:
+            if len(self.logical_rules) < 2:
+                raise ValueError("tproxy.logical_rules_required")
+            if any(matchers) or self.protocol != "any":
+                raise ValueError("tproxy.logical_matchers_unexpected")
+            for child in self.logical_rules:
+                if child.logical_mode is not None or child.logical_rules:
+                    raise ValueError("tproxy.logical_nested")
+                if child.action != "direct" or child.outbound is not None:
+                    raise ValueError("tproxy.logical_child_action")
+        elif not any(matchers):
             raise ValueError("tproxy.rule_matcher_required")
         if any(not re.fullmatch(r"(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+", domain)
-               for domain in self.domain_suffix):
+               for domain in (*self.domain_suffix, *self.domain_exact)):
             raise ValueError("tproxy.domain_invalid")
+        # sing-box ORs distinct domain keys inside a default rule. Refuse a
+        # combination that would silently widen an AND policy; use logical AND
+        # with one domain matcher per child instead.
+        if sum(bool(values) for values in (self.domain_suffix, self.domain_exact,
+                                           self.domain_keyword, self.domain_regex)) > 1:
+            raise ValueError("tproxy.domain_matchers_conflict")
+        if any(not value or not value.strip() for value in (*self.domain_keyword, *self.domain_regex,
+                                                           *self.inbound)):
+            raise ValueError("tproxy.matcher_empty")
+        for pattern in self.domain_regex:
+            try:
+                re.compile(pattern)
+            except re.error:
+                raise ValueError("tproxy.domain_regex_invalid") from None
+        if any(not re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", mac)
+               for mac in self.source_mac):
+            raise ValueError("tproxy.source_mac_invalid")
+        if self.protocol != "any" and self.network is not None and self.protocol != self.network:
+            raise ValueError("tproxy.network_conflict")
         for cidr in self.ip_cidr:
             if ip_network(cidr).version != 4:
                 raise ValueError("tproxy.ipv4_required")
@@ -408,6 +451,8 @@ class TProxy(Model):
     final: Literal["direct", "block", "route"] = "direct"
     final_outbound: Name | None = None
     update_schedule: TProxyUpdateSchedule = Field(default_factory=TProxyUpdateSchedule)
+    sniff: bool = False
+    udp_timeout_seconds: int | None = Field(default=None, ge=1, le=86400)
 
     @model_validator(mode="after")
     def check_bypass_names(self):
@@ -456,6 +501,35 @@ class ProxySubscription(Model):
     format: Literal["auto", "sing-box", "clash", "v2ray", "base64"] = "auto"
     interval_hours: int = Field(default=24, ge=1, le=168)
     enabled: bool = False
+    mode: Literal["selector", "urltest"] = "selector"
+    url_test: str | None = None
+    test_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    test_tolerance_ms: int | None = Field(default=None, ge=0, le=5000)
+    headers: tuple[str, ...] = ()
+    filter_include: str | None = None
+    filter_exclude: str | None = None
+    active_member: str | None = None
+    excluded_members: tuple[str, ...] = ()
+    inline: bool = False
+    inline_content: str | None = None
+
+    @model_validator(mode="after")
+    def check_source(self):
+        import re
+        if self.inline and not self.inline_content:
+            raise ValueError("proxy.subscription_inline_content_required")
+        if not self.inline and self.inline_content is not None:
+            raise ValueError("proxy.subscription_inline_content_unexpected")
+        for header in self.headers:
+            if not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+: [^\r\n]*[^\s\r\n]", header):
+                raise ValueError("proxy.subscription_header_invalid")
+        for pattern in (self.filter_include, self.filter_exclude):
+            if pattern is not None:
+                try:
+                    re.compile(pattern)
+                except re.error:
+                    raise ValueError("proxy.subscription_filter_invalid") from None
+        return self
 
 
 class ProxyGroup(Model):
@@ -464,6 +538,7 @@ class ProxyGroup(Model):
     outbounds: tuple[Name, ...] = ()
     url: str | None = None
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    tolerance_ms: int | None = Field(default=None, ge=0, le=5000)
 
 
 class ProxySettings(Model):
