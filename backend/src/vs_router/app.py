@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from .api import auth, versions, aliases_io, leases, backup, diag, tunnels, keygen, host, release, update, rulesets, status, runtime
+from .api import auth, versions, aliases_io, leases, backup, diag, tunnels, keygen, host, release, update, rulesets, status, runtime, subscriptions_runtime
 from .api.errors import install_errors, issue
 
 
@@ -32,13 +32,13 @@ def create_app(engine=None, *, database_url=None, clock=None) -> FastAPI:
                 return JSONResponse(issue("request.cross_origin"), status_code=403,
                                     headers={'Cache-Control': 'no-store'} if request.url.path.startswith('/api/runtime/') else None)
         result = await call_next(request)
-        if request.url.path.startswith('/api/runtime/'):
+        if request.url.path.startswith(('/api/runtime/', '/api/proxy/subscriptions/')):
             result.headers['Cache-Control'] = 'no-store'
         return result
 
     app.include_router(auth.router, prefix="/api")
     app.include_router(versions.router, prefix="/api")
-    for module in (aliases_io, leases, backup, diag, tunnels, keygen, host, release, update, rulesets, status, runtime):
+    for module in (aliases_io, leases, backup, diag, tunnels, keygen, host, release, update, rulesets, status, runtime, subscriptions_runtime):
         app.include_router(module.router, prefix="/api")
 
     @app.get("/health")

@@ -13,6 +13,7 @@ import type {
   Alias, DHCPLease, ImportPreview, PingResult,
   RuleSetStatus, RuleSetUpdate,
   UpdateStatus, UpdateStart, ServiceStatusResponse,
+  ProxySubscription, SubscriptionPreview, SubscriptionRefresh, SubscriptionMember,
 } from "./types";
 export class ApiError extends Error {
   constructor(
@@ -122,6 +123,17 @@ export const api = {
     post<Record<string, unknown>>("/api/rulesets/update", {
       kind: "rule_set", format: "auto", authorized: true,
       max_bytes: 5_000_000, timeout: 20, ...body,
+    }),
+  // Subscription runtime: explicit fetch authorization; results are draft proposals only.
+  previewSubscription: (subscription: ProxySubscription) =>
+    post<SubscriptionPreview>("/api/proxy/subscriptions/preview", { subscription, authorized: true }),
+  refreshSubscription: (name: string) =>
+    post<SubscriptionRefresh>(`/api/proxy/subscriptions/${encodeURIComponent(name)}/refresh`, { authorized: true }),
+  subscriptionMembers: (name: string) =>
+    request<SubscriptionMember[]>(`/api/proxy/subscriptions/${encodeURIComponent(name)}/members`),
+  patchSubscription: (name: string, changes: Partial<ProxySubscription>) =>
+    request<Partial<ProxySubscription>>(`/api/proxy/subscriptions/${encodeURIComponent(name)}`, {
+      method: "PATCH", body: JSON.stringify(changes),
     }),
   updateStatus: () => request<UpdateStatus>("/api/update"),
   applyUpdate: (release: string) => post<UpdateStart>("/api/update", { release }),

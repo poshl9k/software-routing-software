@@ -103,4 +103,21 @@ describe("API client", () => {
       ["/api/rollback", {}],
     ]);
   });
+  it("subscription calls use typed routes without tokenized URLs in paths", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}")));
+    vi.stubGlobal("fetch", fetch);
+    const subscription = { name: "demo", url: "https://example.org/?token=private", format: "auto" as const,
+      interval_hours: 24, enabled: true };
+    await api.previewSubscription(subscription);
+    await api.refreshSubscription("demo");
+    await api.subscriptionMembers("demo");
+    await api.patchSubscription("demo", { mode: "selector" });
+    expect(fetch.mock.calls.map(([path]) => path)).toEqual([
+      "/api/proxy/subscriptions/preview", "/api/proxy/subscriptions/demo/refresh",
+      "/api/proxy/subscriptions/demo/members", "/api/proxy/subscriptions/demo",
+    ]);
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ subscription, authorized: true });
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ authorized: true });
+    expect(fetch.mock.calls[3][1].method).toBe("PATCH");
+  });
 });

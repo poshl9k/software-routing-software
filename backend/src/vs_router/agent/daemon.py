@@ -362,6 +362,61 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
     def source_status():
         return get_updater().status()
 
+    def subscription_preview(subscription, authorized):
+        from .subscriptions import preview
+        from .subscription_parse import SubscriptionParseError
+        from .downloader import DownloadError
+        from ..schema import ProxySubscription
+        subscription = ProxySubscription.model_validate(subscription)
+        try:
+            parsed, outbounds, groups = preview(
+                subscription, key=os.environ.get('VS_ROUTER_SECRET_KEY', '').encode(),
+                authorized=authorized)
+        except (SubscriptionParseError, DownloadError) as exc:
+            raise ApplyError(exc.code) from None
+        except (ValueError, TypeError):
+            raise ApplyError('secret.encryption_unavailable') from None
+        return {'members': [member_view(m) for m in parsed.members],
+                'skipped': parsed.skipped,
+                'outbounds': [o.model_dump(mode='json') for o in outbounds],
+                'groups': [g.model_dump(mode='json') for g in groups]}
+
+    def member_view(member):
+        return {'tag': member.tag, 'label': member.label, 'protocol': member.protocol,
+                'server': member.server, 'port': member.port, 'sni': member.sni,
+                'transport': member.transport, 'security': member.security,
+                'method': member.method, 'tls_insecure': member.tls_insecure}
+
+    def subscription_refresh(subscription, current_members, authorized):
+        from .subscriptions import preview, refresh
+        from .subscription_parse import Member, Parsed, SubscriptionParseError, materialize
+        from .downloader import DownloadError
+        from ..schema import ProxySubscription, ProxyOutbound
+        subscription = ProxySubscription.model_validate(subscription)
+        current_members = tuple(ProxyOutbound.model_validate(o) for o in current_members)
+        try:
+            parsed, _, _ = preview(subscription, key=os.environ.get('VS_ROUTER_SECRET_KEY', '').encode(),
+                                   authorized=authorized)
+            fetched_labels = {m.tag: m.label for m in parsed.members}
+            old = Parsed(tuple(Member(tag=o.tag, label=fetched_labels.get(o.tag, o.server or o.tag), protocol=o.type,
+                                      server=o.server or '', port=o.port or 0,
+                                      sni=o.tls_server_name, transport='tcp',
+                                      security='tls' if o.tls else 'none', secret=o.secret,
+                                      method=o.method, tls_insecure=o.tls_insecure)
+                               for o in current_members if o.secret is not None))
+            diff = refresh(old, parsed)
+            # Retain orphans until explicit cleanup in the draft editor.
+            outbounds, groups = materialize(subscription, [*parsed.members, *diff.orphans])
+        except (SubscriptionParseError, DownloadError) as exc:
+            raise ApplyError(exc.code) from None
+        except (ValueError, TypeError):
+            raise ApplyError('secret.encryption_unavailable') from None
+        return {**{field: [member_view(m) for m in getattr(diff, field)]
+                   for field in ('added', 'updated', 'unchanged', 'orphans')},
+                'skipped': parsed.skipped,
+                'outbounds': [o.model_dump(mode='json') for o in outbounds],
+                'groups': [g.model_dump(mode='json') for g in groups]}
+
     def service_status():
         from .services import ServiceStatus
         return ServiceStatus(executor=getattr(engine, 'executor', None),
@@ -382,6 +437,8 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
             'clash_logs': lambda level='info', limit=50: get_clash_client().logs(level, limit),
             'clash_proxies': lambda: get_clash_client().proxies(),
             'clash_select': lambda group, name: get_clash_client().select_proxy(group, name),
+            'subscription_preview': subscription_preview,
+            'subscription_refresh': subscription_refresh,
             'clash_delay': lambda tag, url, timeout_ms=3000: get_clash_client().proxy_delay(tag, url, timeout_ms)}
 
 
