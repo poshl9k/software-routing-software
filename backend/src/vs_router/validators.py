@@ -126,7 +126,8 @@ def validate_configuration(c):
     elif c.tproxy.final_outbound is not None:
         fail("tproxy.final_outbound_unexpected")
     rule_set_names = {s.name for s in c.rule_sets}
-    if any(name not in rule_set_names for rule in c.tproxy.rules for name in rule.rule_sets):
+    if any(name not in rule_set_names for rule in c.tproxy.rules
+           for part in (rule, *rule.logical_rules) for name in part.rule_sets):
         fail("tproxy.ruleset_unavailable")
     zones = {i.zone for i in c.interfaces if i.zone}
     members = {m for i in c.interfaces for m in i.members}
@@ -330,7 +331,7 @@ def validate_proxies(c):
     if len({s.name for s in proxies.subscriptions}) != len(proxies.subscriptions):
         fail("proxy.duplicate_subscription")
     for s in proxies.subscriptions:
-        if not s.url.lower().startswith("https://"):
+        if not s.inline and not s.url.lower().startswith("https://"):
             fail("proxy.subscription_https_required")
     own_addresses = {str(ip_interface(a).ip) for i in c.interfaces for a in i.addresses}
     for o in proxies.outbounds:

@@ -79,6 +79,8 @@ def _render_group(group):
             rendered["url"] = group.url
         if group.interval_minutes:
             rendered["interval"] = f"{group.interval_minutes}m"
+        if group.tolerance_ms is not None:
+            rendered["tolerance"] = group.tolerance_ms
     return rendered
 
 
@@ -93,6 +95,45 @@ def _default_outbound_tag(groups):
         for group in sorted((g for g in groups if g.type == wanted), key=lambda g: g.tag):
             return group.tag
     return IMPLICIT_DIRECT_TAG
+
+
+def _rule_matchers(rule):
+    """All matcher keys in one rule are AND; each list is OR within its key."""
+    matchers = []
+    if rule.domain_suffix:
+        matchers.append({"domain_suffix": list(rule.domain_suffix)})
+    for field, key in (("domain_exact", "domain"), ("domain_keyword", "domain_keyword"),
+                       ("domain_regex", "domain_regex")):
+        if getattr(rule, field):
+            matchers.append({key: list(getattr(rule, field))})
+    if rule.ip_cidr:
+        matchers.append({"ip_cidr": list(rule.ip_cidr)})
+    if rule.source_ip_cidr:
+        matchers.append({"source_ip_cidr": list(rule.source_ip_cidr)})
+    for field, key in (("source_mac", "source_mac_address"), ("inbound", "inbound")):
+        if getattr(rule, field):
+            matchers.append({key: list(getattr(rule, field))})
+    if rule.ip_is_private is not None:
+        matchers.append({"ip_is_private": rule.ip_is_private})
+    if rule.rule_sets:
+        matchers.append({"rule_set": list(rule.rule_sets)})
+    singles = [int(port) for port in rule.ports if "-" not in port]
+    if singles:
+        matchers.append({"port": singles})
+    ranges = [port.replace("-", ":") for port in rule.ports if "-" in port]
+    if ranges:
+        matchers.append({"port_range": ranges})
+    network = rule.network or (rule.protocol if rule.protocol != "any" else None)
+    if network:
+        matchers.append({"network": [network]})
+    return {key: value for matcher in matchers for key, value in matcher.items()}
+
+
+def _render_rule_match(rule):
+    if rule.logical_mode is not None:
+        return {"type": "logical", "mode": rule.logical_mode,
+                "rules": [_rule_matchers(child) for child in rule.logical_rules]}
+    return _rule_matchers(rule)
 
 
 def generate_singbox(version: ConfigurationVersion) -> dict:
@@ -128,27 +169,17 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
         bypass_rules.append(match)
 
     rules = list(bypass_rules)
-    if any(r.domain_suffix for r in configuration.tproxy.rules):
+    if configuration.tproxy.sniff:
+        rules.insert(0, {"action": "sniff"})
+    elif any(any((part.domain_suffix, part.domain_exact, part.domain_keyword, part.domain_regex))
+             for r in configuration.tproxy.rules for part in (r, *r.logical_rules)):
         rules.append({"action": "sniff"})
+    if configuration.tproxy.udp_timeout_seconds is not None:
+        rules.insert(1 if configuration.tproxy.sniff else 0,
+                     {"action": "route-options",
+                      "udp_timeout": f"{configuration.tproxy.udp_timeout_seconds}s"})
     for rule in sorted(configuration.tproxy.rules, key=lambda r: r.order):
-        matchers = []
-        if rule.domain_suffix:
-            matchers.append({"domain_suffix": list(rule.domain_suffix)})
-        if rule.ip_cidr:
-            matchers.append({"ip_cidr": list(rule.ip_cidr)})
-        if rule.source_ip_cidr:
-            matchers.append({"source_ip_cidr": list(rule.source_ip_cidr)})
-        if rule.rule_sets:
-            matchers.append({"rule_set": list(rule.rule_sets)})
-        singles = [int(port) for port in rule.ports if "-" not in port]
-        if singles:
-            matchers.append({"port": singles})
-        ranges = [port.replace("-", ":") for port in rule.ports if "-" in port]
-        if ranges:
-            matchers.append({"port_range": ranges})
-        if rule.protocol != "any":
-            matchers.append({"network": [rule.protocol]})
-        match = {key: value for matcher in matchers for key, value in matcher.items()}
+        match = _render_rule_match(rule)
         if rule.action == "block":
             match["action"] = "reject"
         elif rule.action == "route":
