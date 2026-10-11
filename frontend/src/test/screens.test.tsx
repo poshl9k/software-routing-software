@@ -244,7 +244,8 @@ describe("screens", () => {
     await userEvent.click(screen.getByRole("button", { name: "Предпросмотр сохранённого черновика" }));
     expect(await screen.findByText(/Предпросмотр недоступен/)).toBeVisible();
     expect(screen.queryByLabelText("Конфигурация sing-box")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Включить TProxy" })).toBeDisabled();
+    expect(screen.queryByText("Включено в черновике")).not.toBeInTheDocument();
+    expect(screen.queryByText("Применено: включено")).not.toBeInTheDocument();
   });
   it("does not mistake a draft for a pending agent marker", async () => {
     const fetch = mockApi();
