@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { useEffect } from "react";
@@ -138,10 +138,10 @@ it("saves proxy outbound, subscription and group as a draft with a write-only se
     },
   ]);
   expect(proxies.subscriptions).toEqual([
-    { name: "sub1", url: "https://sub.example.com/list", format: "clash", interval_hours: 24, enabled: false },
+    expect.objectContaining({ name: "sub1", url: "https://sub.example.com/list", format: "clash", interval_hours: 24, enabled: false }),
   ]);
   expect(proxies.groups).toEqual([
-    { tag: "grp", type: "selector", outbounds: ["ss1"], url: null, interval_minutes: null },
+    expect.objectContaining({ tag: "grp", type: "selector", outbounds: ["ss1"], url: null, interval_minutes: null }),
   ]);
   // The secret is sent as write-only plaintext, never as a redacted marker.
   expect(JSON.stringify(proxies)).not.toContain("redacted");
@@ -257,6 +257,136 @@ it("blocks saving an outbound without a server/port and a non-https subscription
   await user.clear(screen.getByLabelText("URL подписки"));
   await user.type(screen.getByLabelText("URL подписки"), "https://secure.example.com/list");
   expect(saveButton()).toBeEnabled();
+});
+
+it("validates inline subscription content and header and filter syntax", async () => {
+  setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.type(screen.getByLabelText("Имя подписки"), "sub1");
+  await user.click(screen.getByLabelText("Список вручную (inline)"));
+  expect(screen.queryByLabelText("URL подписки")).not.toBeInTheDocument();
+  expect(saveButton()).toBeDisabled();
+  await user.type(screen.getByLabelText("Список вручную"), "vless://example");
+  expect(saveButton()).toBeEnabled();
+  const headers = screen.getByLabelText("Заголовки (Name: value, по одному на строку)");
+  await user.type(headers, "Bad header: value");
+  expect(saveButton()).toBeDisabled();
+  await user.clear(headers);
+  fireEvent.change(headers, { target: { value: "Authorization: Bearer token" } });
+  expect(saveButton()).toBeEnabled();
+  fireEvent.change(screen.getByLabelText("Включить по regex"), { target: { value: "[" } });
+  expect(saveButton()).toBeDisabled();
+  await user.clear(screen.getByLabelText("Включить по regex"));
+  await user.type(screen.getByLabelText("Включить по regex"), "^eu-");
+  await user.type(screen.getByLabelText("Исключить по regex"), "(");
+  expect(saveButton()).toBeDisabled();
+  await user.clear(screen.getByLabelText("Исключить по regex"));
+  expect(saveButton()).toBeEnabled();
+});
+
+it("saves subscription selection, URL test, filters and member fields", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.type(screen.getByLabelText("Имя подписки"), "sub1");
+  await user.type(screen.getByLabelText("URL подписки"), "https://sub.example.com/list");
+  await user.selectOptions(screen.getByLabelText("Режим выбора"), "urltest");
+  const tolerance = screen.getByLabelText("Допуск проверки, мс");
+  await user.type(screen.getByLabelText("URL проверки скорости"), "https://probe.example.com/204");
+  await user.type(screen.getByLabelText("Интервал проверки, минут"), "30");
+  await user.type(tolerance, "5001");
+  expect(saveButton()).toBeDisabled();
+  fireEvent.change(tolerance, { target: { value: "-1" } });
+  expect(saveButton()).toBeDisabled();
+  await user.clear(tolerance);
+  await user.type(tolerance, "0");
+  expect(saveButton()).toBeEnabled();
+  await user.clear(tolerance);
+  await user.type(tolerance, "5000");
+  expect(saveButton()).toBeEnabled();
+  fireEvent.change(screen.getByLabelText("Заголовки (Name: value, по одному на строку)"), { target: { value: "Authorization: Bearer token" } });
+  await user.type(screen.getByLabelText("Включить по regex"), "^eu-");
+  await user.type(screen.getByLabelText("Исключить по regex"), "deprecated$");
+  await user.type(screen.getByLabelText("Активный участник"), "eu-1");
+  fireEvent.change(screen.getByLabelText("Исключённые участники (по одному на строку)"), { target: { value: "old-1\nold-2" } });
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch).subscriptions).toHaveLength(1));
+  expect(sentProxies(fetch).subscriptions[0]).toMatchObject({
+    mode: "urltest", url_test: "https://probe.example.com/204", test_interval_minutes: 30,
+    test_tolerance_ms: 5000, headers: ["Authorization: Bearer token"],
+    filter_include: "^eu-", filter_exclude: "deprecated$", active_member: "eu-1",
+    excluded_members: ["old-1", "old-2"],
+  });
+});
+
+it("hides stored subscription headers and preserves them unless replaced", async () => {
+  const fetch = setup({ proxies: { ...emptyConfiguration.proxies, subscriptions: [{
+    name: "sub1", url: "https://sub.example.com/list", format: "auto", interval_hours: 24,
+    enabled: false, headers: ["Authorization: Bearer private-token"],
+  }] } });
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  expect(screen.queryByText(/private-token/)).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  expect(screen.getByLabelText("Заголовки (Name: value, по одному на строку)")).toHaveValue("");
+  expect(screen.queryByDisplayValue(/private-token/)).not.toBeInTheDocument();
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch).subscriptions).toHaveLength(1));
+  expect(sentProxies(fetch).subscriptions[0].headers).toEqual(["Authorization: Bearer private-token"]);
+});
+
+it("saves inline content without requiring a subscription URL", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.type(screen.getByLabelText("Имя подписки"), "manual");
+  await user.click(screen.getByLabelText("Список вручную (inline)"));
+  await user.type(screen.getByLabelText("Список вручную"), "vless://node");
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch).subscriptions).toHaveLength(1));
+  expect(sentProxies(fetch).subscriptions[0]).toMatchObject({ inline: true, inline_content: "vless://node", url: "" });
+});
+
+it("shows group tolerance only for urltest and enforces the 0..5000 ms bounds", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await openTab(user, "Прокси-выходы");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
+  await user.type(screen.getByLabelText("Тег выхода"), "exit1");
+  await user.selectOptions(screen.getByLabelText("Тип"), "direct");
+  await user.click(screen.getByRole("button", { name: "+ Добавить группу" }));
+  await user.type(screen.getByLabelText("Тег группы"), "pool");
+  await user.click(screen.getByRole("checkbox", { name: "exit1" }));
+  expect(screen.queryByLabelText("Допуск, мс")).not.toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("Тип группы"), "urltest");
+  const tolerance = screen.getByLabelText("Допуск, мс");
+  expect(tolerance).toHaveValue(null);
+  await user.type(tolerance, "5001");
+  expect(saveButton()).toBeDisabled();
+  fireEvent.change(tolerance, { target: { value: "-1" } });
+  expect(saveButton()).toBeDisabled();
+  await user.clear(tolerance);
+  await user.type(tolerance, "0");
+  expect(saveButton()).toBeEnabled();
+  await user.clear(tolerance);
+  await user.type(tolerance, "5000");
+  expect(saveButton()).toBeEnabled();
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch).groups).toHaveLength(1));
+  expect(sentProxies(fetch).groups[0]).toMatchObject({ type: "urltest", tolerance_ms: 5000 });
 });
 
 it("rejects duplicate outbound tags and a reserved direct tag", async () => {
