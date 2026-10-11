@@ -123,8 +123,7 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
             matchers.append({"port_range": ranges})
         if row.protocol != "any":
             matchers.append({"network": [row.protocol]})
-        match = (matchers[0] if len(matchers) == 1 else
-                 {"type": "logical", "mode": "or", "rules": matchers})
+        match = {key: value for matcher in matchers for key, value in matcher.items()}
         match.update({"action": "route", "outbound": IMPLICIT_DIRECT_TAG})
         bypass_rules.append(match)
 
@@ -149,8 +148,7 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
             matchers.append({"port_range": ranges})
         if rule.protocol != "any":
             matchers.append({"network": [rule.protocol]})
-        match = (matchers[0] if len(matchers) == 1 else
-                 {"type": "logical", "mode": "or", "rules": matchers})
+        match = {key: value for matcher in matchers for key, value in matcher.items()}
         if rule.action == "block":
             match["action"] = "reject"
         elif rule.action == "route":

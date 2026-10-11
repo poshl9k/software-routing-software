@@ -20,9 +20,8 @@ def test_singbox_rule_order_and_address_union():
     ]
     assert generated["route"]["rules"] == [
         {"action": "sniff"},
-        {"type": "logical", "mode": "or", "rules": [
-            {"domain_suffix": ["example.org"]}, {"ip_cidr": ["198.51.100.0/24"]},
-        ], "action": "route", "outbound": "direct"},
+        {"domain_suffix": ["example.org"], "ip_cidr": ["198.51.100.0/24"],
+         "action": "route", "outbound": "direct"},
         {"ip_cidr": ["203.0.113.0/24"], "action": "reject"},
     ]
     assert generated["route"]["final"] == "direct"

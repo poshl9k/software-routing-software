@@ -257,15 +257,26 @@ def test_tproxy_rule_set_matcher():
         {"rule_set": ["geo"], "action": "route", "outbound": "direct"}]
 
 
+def test_tproxy_route_ip_and_port_are_one_and_rule():
+    generated = generate_singbox(version(enabled_proxies(), tproxy={"rules": [{
+        "name": "selected", "ip_cidr": ["10.10.10.103/32"], "ports": ["18874"],
+        "action": "route", "outbound": "proxy_a",
+    }]}))
+    # Same IP on :18875 must not match: both fields belong to one AND rule.
+    assert generated["route"]["rules"] == [{
+        "ip_cidr": ["10.10.10.103/32"], "port": [18874],
+        "action": "route", "outbound": "proxy_a",
+    }]
+
+
 def test_tproxy_source_port_and_protocol_matchers():
     generated = generate_singbox(version(tproxy={"rules": [{
         "name": "r", "source_ip_cidr": ["192.0.2.0/24"], "ports": ["443"],
         "protocol": "tcp",
     }]}))
     assert generated["route"]["rules"] == [{
-        "type": "logical", "mode": "or", "rules": [
-            {"source_ip_cidr": ["192.0.2.0/24"]}, {"port": [443]}, {"network": ["tcp"]},
-        ], "action": "route", "outbound": "direct",
+        "source_ip_cidr": ["192.0.2.0/24"], "port": [443], "network": ["tcp"],
+        "action": "route", "outbound": "direct",
     }]
 
 
@@ -283,11 +294,10 @@ def test_tproxy_multiple_matchers_keep_declared_matcher_order():
         "ports": ["443", "80-90"], "protocol": "udp", "action": "block",
     }]}, rule_sets=[source]))
     assert generated["route"]["rules"][-1] == {
-        "type": "logical", "mode": "or", "rules": [
-            {"domain_suffix": ["example.org"]}, {"ip_cidr": ["203.0.113.0/24"]},
-            {"source_ip_cidr": ["192.0.2.0/24"]}, {"rule_set": ["geo"]},
-            {"port": [443]}, {"port_range": ["80:90"]}, {"network": ["udp"]},
-        ], "action": "reject",
+        "domain_suffix": ["example.org"], "ip_cidr": ["203.0.113.0/24"],
+        "source_ip_cidr": ["192.0.2.0/24"], "rule_set": ["geo"],
+        "port": [443], "port_range": ["80:90"], "network": ["udp"],
+        "action": "reject",
     }
 
 
