@@ -22,7 +22,7 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { Field } from "../components/Field";
 import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { InfoNote } from "../components/InfoNote";
-import { SelectField } from "../components/Select";
+import { Select, SelectField } from "../components/Select";
 import { Toggle } from "../components/Toggle";
 import { hostValid, nameValid, portValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
@@ -64,12 +64,33 @@ const outboundValid = (o: ProxyOutbound) =>
   (!o.tls_server_name || hostValid(o.tls_server_name)) &&
   (!o.admin_listen || loopbackValid(o.admin_listen));
 
+const optionalRange = (v: number | null | undefined, min: number, max: number) =>
+  v == null || (Number.isInteger(v) && v >= min && v <= max);
+const regexValid = (pattern: string | null | undefined) => {
+  if (pattern == null) return true;
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const headerValid = (header: string) =>
+  /^[!#$%&'*+.^_`|~0-9A-Za-z-]+: [^\r\n]*[^\s\r\n]$/.test(header);
+const lines = (text: string) => text.split(/\r?\n/);
+const filledLines = (items: string[]) => items.map((line) => line.trim()).filter(Boolean);
+
 const subscriptionValid = (s: ProxySubscription) =>
   nameValid(s.name) &&
-  httpsValid(s.url) &&
+  (s.inline ? !!s.inline_content?.trim() : httpsValid(s.url) && s.inline_content == null) &&
   Number.isInteger(s.interval_hours) &&
   s.interval_hours >= 1 &&
-  s.interval_hours <= 168;
+  s.interval_hours <= 168 &&
+  (!s.url_test || httpsValid(s.url_test)) &&
+  optionalRange(s.test_interval_minutes, 1, 1440) &&
+  optionalRange(s.test_tolerance_ms, 0, 5000) &&
+  (s.headers ?? []).every((header) => !header.trim() || headerValid(header.trim())) &&
+  regexValid(s.filter_include) && regexValid(s.filter_exclude);
 
 const groupValid = (g: ProxyGroup, allTags: string[]) =>
   nameValid(g.tag) &&
@@ -77,10 +98,8 @@ const groupValid = (g: ProxyGroup, allTags: string[]) =>
   g.outbounds.length > 0 &&
   !g.outbounds.includes(g.tag) &&
   g.outbounds.every((t) => t !== g.tag && allTags.includes(t)) &&
-  (g.interval_minutes === null ||
-    (Number.isInteger(g.interval_minutes) &&
-      g.interval_minutes >= 1 &&
-      g.interval_minutes <= 1440));
+  optionalRange(g.interval_minutes, 1, 1440) &&
+  optionalRange(g.tolerance_ms, 0, 5000);
 
 function localCleared(type: ProxyOutbound["type"]): Partial<ProxyOutbound> {
   return LOCAL_TYPES.includes(type)
@@ -124,11 +143,12 @@ function ProxiesView({ settings }: { settings: ProxySettings }) {
         />
       </Card>
       <Card title="Подписки">
+        <InfoNote>Загрузка и обновление прокси-подписок движком пока не выполняются. NDMS DNS-подписки — другой механизм.</InfoNote>
         <DataTable
           heads={["Имя", "URL", "Формат", "Интервал, ч", "Статус"]}
           rows={settings.subscriptions.map((s) => [
             s.name,
-            s.url,
+            s.inline ? "вручную" : s.url,
             s.format,
             s.interval_hours,
             <Badge tone={s.enabled ? "green" : "amber"}>
@@ -176,6 +196,8 @@ export function ProxiesEditor() {
   const [importError, setImportError] = useState<Error | null>(null);
   const [importCount, setImportCount] = useState(0);
   const [selected, setSelected] = useState<number[]>([]);
+  const [editedHeaders, setEditedHeaders] = useState<number[]>([]);
+  const [editedInline, setEditedInline] = useState<number[]>([]);
   const [pendingDelete, setPendingDelete] = useState<{ tags: string[]; refs: string[]; kind: "outbound" | "group"; indices: number[] } | null>(null);
   const current: ProxySettings = editor.value ?? configuration.proxies;
   const patch = (value: Partial<ProxySettings>) =>
@@ -274,6 +296,8 @@ export function ProxiesEditor() {
     current.groups.every((g) => groupValid(g, allTags));
 
   const begin = () => {
+    setEditedHeaders([]);
+    setEditedInline([]);
     setSelected([]);
     setImportText("");
     setImportError(null);
@@ -287,7 +311,17 @@ export function ProxiesEditor() {
   };
   const save = async () => {
     if (readonly || !valid) return;
-    await editor.save((value) => ({ ...configuration, proxies: value }));
+    await editor.save((value) => ({
+      ...configuration,
+      proxies: {
+        ...value,
+        subscriptions: value.subscriptions.map((s) => ({
+          ...s,
+          headers: filledLines(s.headers ?? []),
+          excluded_members: filledLines(s.excluded_members ?? []),
+        })),
+      },
+    }));
   };
 
   const groupRefs = (tag: string) => allTags.filter((t) => t !== tag);
@@ -505,6 +539,7 @@ export function ProxiesEditor() {
           </Card>
 
           <Card title="Подписки">
+            <InfoNote>Загрузка и обновление прокси-подписок движком пока не выполняются. NDMS DNS-подписки — другой механизм.</InfoNote>
             {current.subscriptions.map((s, index) => {
               const update = (v: Partial<ProxySubscription>) =>
                 patch({
@@ -521,13 +556,34 @@ export function ProxiesEditor() {
                       valid={nameValid(s.name)}
                       onChange={(name) => update({ name })}
                     />
-                    <Field
-                      label="URL подписки"
-                      value={s.url}
-                      valid={httpsValid(s.url)}
-                      hint="Только https://"
-                      onChange={(url) => update({ url })}
+                    <Toggle
+                      label="Список вручную (inline)"
+                      value={s.inline ?? false}
+                      onChange={(inline) => update({ inline, inline_content: inline ? (s.inline_content ?? "") : null })}
                     />
+                    {s.inline ? (
+                      <FormWide>
+                        <Field
+                          label="Список вручную"
+                          multiline
+                          value={editedInline.includes(index) ? (s.inline_content ?? "") : ""}
+                          hint={!editedInline.includes(index) && s.inline_content ? "Сохранённый список скрыт; ввод заменит его" : undefined}
+                          valid={!!s.inline_content?.trim()}
+                          onChange={(inline_content) => {
+                            setEditedInline((indices) => indices.includes(index) ? indices : [...indices, index]);
+                            update({ inline_content });
+                          }}
+                        />
+                      </FormWide>
+                    ) : (
+                      <Field
+                        label="URL подписки"
+                        value={s.url}
+                        valid={httpsValid(s.url)}
+                        hint="Только https://"
+                        onChange={(url) => update({ url })}
+                      />
+                    )}
                     <SelectField
                       label="Формат"
                       value={s.format}
@@ -547,6 +603,78 @@ export function ProxiesEditor() {
                         update({ interval_hours: Number(v) })
                       }
                     />
+                    <Select
+                      label="Режим выбора"
+                      value={s.mode ?? "selector"}
+                      options={[
+                        { value: "selector", label: "Ручной выбор" },
+                        { value: "urltest", label: "Автовыбор по скорости" },
+                      ]}
+                      onChange={(mode) => update({ mode: mode as ProxySubscription["mode"] })}
+                    />
+                    {s.mode === "urltest" && (
+                      <>
+                        <Field
+                          label="URL проверки скорости"
+                          value={s.url_test ?? ""}
+                          placeholder="https://www.gstatic.com/generate_204"
+                          valid={!s.url_test || httpsValid(s.url_test)}
+                          onChange={(v) => update({ url_test: v || null })}
+                        />
+                        <Field
+                          label="Интервал проверки, минут"
+                          type="number"
+                          value={s.test_interval_minutes ?? ""}
+                          valid={optionalRange(s.test_interval_minutes, 1, 1440)}
+                          onChange={(v) => update({ test_interval_minutes: v === "" ? null : Number(v) })}
+                        />
+                        <Field
+                          label="Допуск проверки, мс"
+                          type="number"
+                          value={s.test_tolerance_ms ?? ""}
+                          valid={optionalRange(s.test_tolerance_ms, 0, 5000)}
+                          onChange={(v) => update({ test_tolerance_ms: v === "" ? null : Number(v) })}
+                        />
+                      </>
+                    )}
+                    <FormWide>
+                      <Field
+                        label="Заголовки (Name: value, по одному на строку)"
+                        multiline
+                        value={editedHeaders.includes(index) ? (s.headers ?? []).join("\n") : ""}
+                        hint={!editedHeaders.includes(index) && s.headers?.length ? "Сохранённые заголовки скрыты; ввод заменит их" : "Name: value, по одному на строку"}
+                        valid={(s.headers ?? []).every((header) => !header.trim() || headerValid(header.trim()))}
+                        onChange={(v) => {
+                          setEditedHeaders((indices) => indices.includes(index) ? indices : [...indices, index]);
+                          update({ headers: lines(v) });
+                        }}
+                      />
+                    </FormWide>
+                    <Field
+                      label="Включить по regex"
+                      value={s.filter_include ?? ""}
+                      valid={regexValid(s.filter_include)}
+                      onChange={(v) => update({ filter_include: v || null })}
+                    />
+                    <Field
+                      label="Исключить по regex"
+                      value={s.filter_exclude ?? ""}
+                      valid={regexValid(s.filter_exclude)}
+                      onChange={(v) => update({ filter_exclude: v || null })}
+                    />
+                    <Field
+                      label="Активный участник"
+                      value={s.active_member ?? ""}
+                      onChange={(v) => update({ active_member: v || null })}
+                    />
+                    <FormWide>
+                      <Field
+                        label="Исключённые участники (по одному на строку)"
+                        multiline
+                        value={(s.excluded_members ?? []).join("\n")}
+                        onChange={(v) => update({ excluded_members: lines(v) })}
+                      />
+                    </FormWide>
                     <Toggle
                       label="Включена"
                       value={s.enabled}
@@ -555,13 +683,15 @@ export function ProxiesEditor() {
                     <FormActions>
                       <DeleteButton
                         label={`Удалить подписку ${s.name || index + 1}`}
-                        onClick={() =>
+                        onClick={() => {
+                          setEditedHeaders((indices) => indices.filter((i) => i !== index).map((i) => i > index ? i - 1 : i));
+                          setEditedInline((indices) => indices.filter((i) => i !== index).map((i) => i > index ? i - 1 : i));
                           patch({
                             subscriptions: current.subscriptions.filter(
                               (_, i) => i !== index,
                             ),
-                          })
-                        }
+                          });
+                        }}
                       />
                     </FormActions>
                   </FormGrid>
@@ -580,6 +710,17 @@ export function ProxiesEditor() {
                         format: "auto",
                         interval_hours: 24,
                         enabled: false,
+                        mode: "selector",
+                        url_test: null,
+                        test_interval_minutes: null,
+                        test_tolerance_ms: null,
+                        headers: [],
+                        filter_include: null,
+                        filter_exclude: null,
+                        active_member: null,
+                        excluded_members: [],
+                        inline: false,
+                        inline_content: null,
                       },
                     ],
                   })
@@ -656,18 +797,16 @@ export function ProxiesEditor() {
                           label="Интервал проверки, минут"
                           type="number"
                           value={g.interval_minutes ?? ""}
-                          valid={
-                            g.interval_minutes === null ||
-                            (Number.isInteger(g.interval_minutes) &&
-                              g.interval_minutes >= 1 &&
-                              g.interval_minutes <= 1440)
-                          }
-                          onChange={(v) =>
-                            update({
-                              interval_minutes:
-                                v === "" ? null : Number(v),
-                            })
-                          }
+                          valid={optionalRange(g.interval_minutes, 1, 1440)}
+                          onChange={(v) => update({ interval_minutes: v === "" ? null : Number(v) })}
+                        />
+                        <Field
+                          label="Допуск, мс"
+                          type="number"
+                          value={g.tolerance_ms ?? ""}
+                          valid={optionalRange(g.tolerance_ms, 0, 5000)}
+                          hint="Пусто — по умолчанию"
+                          onChange={(v) => update({ tolerance_ms: v === "" ? null : Number(v) })}
                         />
                       </>
                     )}
@@ -693,6 +832,7 @@ export function ProxiesEditor() {
                         outbounds: [],
                         url: null,
                         interval_minutes: null,
+                        tolerance_ms: null,
                       },
                     ],
                   })
