@@ -1,4 +1,5 @@
 """Catalog port, offline helpers, and authenticated read-only API."""
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,10 +23,15 @@ def anyio_backend():
     return "asyncio"
 
 
+#: SHA-256 of the committed catalog = verbatim copy of awg-manager
+#: ``internal/presets/defaults.json`` at port time (no local edits). Pinned so the
+#: test is self-contained and does not depend on a transient reference checkout.
+CATALOG_SHA256 = '48a555798291933b001c3385ec5247aaa424da5afe4f9d22e31cfd897843d19b'
+
+
 def test_catalog_is_verbatim_and_typed():
-    original = Path('/tmp/awg-manager/internal/presets/defaults.json')
     copied = Path(__file__).parents[1] / 'src/vs_router/agent/presets_catalog.json'
-    assert copied.read_bytes() == original.read_bytes()
+    assert hashlib.sha256(copied.read_bytes()).hexdigest() == CATALOG_SHA256
     raw = json.loads(copied.read_text())
     entries = load_catalog()
     assert len(raw) == len(entries) == 88
