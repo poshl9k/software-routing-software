@@ -112,15 +112,16 @@ def test_singbox_mixed_groups_transports_endpoints_and_skip():
     ]}
     body = json.dumps(fixture)
     parsed = parse_body(body, key=KEY)
-    assert len(parsed.members) == 6
+    assert len(parsed.members) == 5
     assert parsed.skipped == ({'line': 1, 'reason': 'non_server'},
                               {'line': 2, 'reason': 'non_server'},
-                              {'line': 6, 'reason': 'subscription.unsupported_protocol'})
+                              {'line': 6, 'reason': 'subscription.unsupported_protocol'},
+                              {'line': 9, 'reason': 'subscription.unsupported_mieru'})
     assert parsed.members[0].tag == parse_body(body, key=KEY).members[0].tag
     assert decrypt_secret(parsed.members[0].secret, KEY) == 'uuid-a'
     sub = ProxySubscription(name='owner_sub', url='', inline=True, inline_content=body)
     outs, groups = materialize(sub, parsed.members)
-    assert len(outs) == 6 and len(groups) == 1
+    assert len(outs) == 5 and len(groups) == 1
     assert _render_group(groups[0])['tag'] == 'owner_sub'
     assert _render_group(groups[0])['outbounds'] == [o.tag for o in outs]
     assert [_render_outbound(o).get('transport', {}).get('type') for o in outs[:3]] == ['httpupgrade', 'ws', 'grpc']

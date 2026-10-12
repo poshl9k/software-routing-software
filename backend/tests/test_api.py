@@ -194,6 +194,29 @@ async def test_tproxy_preview_uses_saved_draft_without_side_effects(api):
     assert (await client.get('/api/versions')).json() == [created.json()]
 
 
+async def test_tproxy_preview_redacts_encrypted_proxy_credentials(api):
+    from cryptography.fernet import Fernet
+    from vs_router.secrets import encrypt_secret
+    from vs_router.generators.singbox import PLACEHOLDER_UUID
+
+    client, _, _ = api
+    await sign_in(client)
+    key = Fernet.generate_key()
+    token = 'b35057c4-c68d-40d9-9c15-5b51e53b5fd1'
+    secret = encrypt_secret(token, key).model_dump()
+    created = await client.post('/api/draft', json={'proxies': {'enabled': True, 'outbounds': [
+        {'tag': 'edge', 'type': 'vless', 'server': 'edge.example', 'port': 443,
+         'secret': secret, 'tls': True, 'tls_server_name': 'front.example',
+         'transport': {'type': 'httpupgrade', 'path': '/upgrade'}}]}})
+    assert created.status_code == 201, created.text
+    response = await client.get('/api/draft/tproxy/preview')
+    assert response.status_code == 200
+    proxy = next(o for o in response.json()['singbox']['outbounds'] if o['tag'] == 'edge')
+    assert proxy['uuid'] == PLACEHOLDER_UUID
+    assert proxy['transport']['type'] == 'httpupgrade'
+    assert token not in response.text and secret['ciphertext'] not in response.text
+
+
 async def test_versions_crud_diff_and_persistence(api):
     client, engine, _ = api
     await sign_in(client)

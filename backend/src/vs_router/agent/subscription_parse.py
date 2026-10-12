@@ -44,6 +44,10 @@ class Member:
     reality_public_key: str | None = None
     reality_short_id: str | None = None
     username: str | None = None
+    flow: str | None = None
+    tls_utls_fingerprint: str | None = None
+    obfs_type: str | None = None
+    obfs_password: EncryptedSecret | None = None
 
 
 @dataclass(frozen=True)
@@ -67,7 +71,9 @@ def _member(protocol: str, server: str, port: object, password: str, label: str,
             security: str = 'none', method: str | None = None,
             tls_insecure: bool = False, line: int | None = None,
             transport_options: dict | None = None, reality_public_key: str | None = None,
-            reality_short_id: str | None = None, username: str | None = None) -> Member:
+            reality_short_id: str | None = None, username: str | None = None,
+            flow: str | None = None, tls_utls_fingerprint: str | None = None,
+            obfs_type: str | None = None, obfs_password: str | None = None) -> Member:
     if protocol not in {'vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria2', 'tuic', 'naive', 'mieru'}:
         raise SubscriptionParseError('subscription.unsupported_protocol', line)
     if not isinstance(server, str) or not re.fullmatch(r'[A-Za-z0-9_.:\[\]-]{1,253}', server) or not isinstance(password, str) or not password or len(password) > 8192:
@@ -78,8 +84,20 @@ def _member(protocol: str, server: str, port: object, password: str, label: str,
         raise SubscriptionParseError('subscription.invalid_port', line) from exc
     if not 1 <= port_number <= 65535 or isinstance(port, bool):
         raise SubscriptionParseError('subscription.invalid_port', line)
+    if transport == 'xhttp':
+        raise SubscriptionParseError('subscription.unsupported_xhttp', line)
+    if protocol == 'mieru':
+        raise SubscriptionParseError('subscription.unsupported_mieru', line)
     if transport not in {'tcp', 'ws', 'grpc', 'http', 'httpupgrade'} or security not in {'none', 'tls'}:
         raise SubscriptionParseError('subscription.unsupported_transport', line)
+    if flow and (protocol != 'vless' or flow != 'xtls-rprx-vision'):
+        raise SubscriptionParseError('subscription.unsupported_flow', line)
+    if (obfs_type or obfs_password) and (protocol != 'hysteria2' or obfs_type != 'salamander' or not obfs_password):
+        raise SubscriptionParseError('subscription.unsupported_obfs', line)
+    if (reality_public_key or tls_utls_fingerprint) and security != 'tls':
+        raise SubscriptionParseError('subscription.unsupported_transport', line)
+    if reality_short_id and not reality_public_key:
+        raise SubscriptionParseError('subscription.invalid_member', line)
     if protocol == 'shadowsocks' and not method:
         raise SubscriptionParseError('subscription.invalid_member', line)
     if protocol in {'naive', 'mieru'} and not isinstance(username, str):
@@ -91,7 +109,9 @@ def _member(protocol: str, server: str, port: object, password: str, label: str,
     tag = 'sub_' + hashlib.sha256(identity.encode()).hexdigest()[:24]
     return Member(tag, str(label or server)[:256], protocol, server, port_number,
                   sni, transport, security, encrypt_secret(password, key), method, tls_insecure,
-                  transport_options, reality_public_key, reality_short_id, username)
+                  transport_options, reality_public_key, reality_short_id, username, flow,
+                  tls_utls_fingerprint, obfs_type,
+                  encrypt_secret(obfs_password, key) if obfs_password else None)
 
 
 def _share(raw: str, key: bytes, line: int) -> Member:
@@ -118,10 +138,12 @@ def _share(raw: str, key: bytes, line: int) -> Member:
         if scheme not in {'vless', 'trojan', 'hysteria2', 'tuic'}:
             raise SubscriptionParseError('subscription.unsupported_protocol', line)
         q = parse_qs(url.query)
-        if any(k in q for k in ('plugin', 'flow', 'obfs', 'reality')):
+        if 'plugin' in q:
             raise SubscriptionParseError('subscription.unsupported_transport', line)
         transport = q.get('type', ['tcp'])[0]
         security = q.get('security', ['tls' if scheme != 'vless' else 'none'])[0]
+        if security == 'reality':
+            security = 'tls'
         if security not in {'none', 'tls'}:
             raise SubscriptionParseError('subscription.unsupported_transport', line)
         password = unquote(url.username or '')
@@ -129,10 +151,24 @@ def _share(raw: str, key: bytes, line: int) -> Member:
             password += ':' + unquote(url.password or '')
             if not url.password:
                 raise SubscriptionParseError('subscription.invalid_member', line)
+        options = {'type': transport}
+        if transport in {'ws', 'http', 'httpupgrade'}:
+            for source, target in (('path', 'path'), ('host', 'host')):
+                if source in q:
+                    options[target] = q[source][0]
+        elif transport == 'grpc' and 'serviceName' in q:
+            options['service_name'] = q['serviceName'][0]
+        obfs = q.get('obfs', [None])[0]
         return _member(scheme, url.hostname or '', url.port, password,
                        unquote(url.fragment) or url.hostname or '', key=key,
                        sni=q.get('sni', q.get('peer', [None]))[0], transport=transport,
-                       security=security, line=line)
+                       security=security, line=line,
+                       transport_options=options if transport != 'tcp' else None,
+                       reality_public_key=q.get('pbk', [None])[0],
+                       reality_short_id=q.get('sid', [None])[0],
+                       flow=q.get('flow', [None])[0],
+                       tls_utls_fingerprint=q.get('fp', [None])[0],
+                       obfs_type=obfs, obfs_password=q.get('obfs-password', [None])[0])
     except SubscriptionParseError as exc:
         raise SubscriptionParseError(exc.code, line) from None
     except (ValueError, IndexError) as exc:
@@ -169,15 +205,28 @@ def _object(row: dict, key: bytes, line: int | None = None) -> Member:
                    'httpupgrade': ('host', 'path', 'headers')}
         options = {'type': transport, **{k: raw_transport[k] for k in allowed[transport] if k in raw_transport}}
     username = row.get('username') if protocol in {'naive', 'mieru'} else None
+    if protocol == 'tuic':
+        if not row.get('uuid') or not row.get('password'):
+            raise SubscriptionParseError('subscription.invalid_member', line)
+        credential = f"{row['uuid']}:{row['password']}"
+    else:
+        credential = row.get('password') or row.get('uuid') or row.get('id') or ''
+    utls = row.get('tls', {}).get('utls') if isinstance(row.get('tls'), dict) else None
+    obfs = row.get('obfs')
+    if obfs is not None and not isinstance(obfs, dict):
+        raise SubscriptionParseError('subscription.unsupported_obfs', line)
     return _member(protocol, row.get('server') or row.get('add'),
-                   row.get('server_port', row.get('port')), row.get('password') or row.get('uuid') or row.get('id') or '',
+                   row.get('server_port', row.get('port')), credential,
                    row.get('name') or row.get('tag') or row.get('ps'), key=key,
                    sni=sni, transport=transport, security='tls' if tls else 'none',
                    method=row.get('method') or row.get('cipher'), tls_insecure=insecure, line=line,
                    transport_options=options,
                    reality_public_key=reality.get('public_key') if reality else None,
                    reality_short_id=reality.get('short_id') if reality else None,
-                   username=username)
+                   username=username, flow=row.get('flow'),
+                   tls_utls_fingerprint=utls.get('fingerprint') if isinstance(utls, dict) else None,
+                   obfs_type=obfs.get('type') if obfs else None,
+                   obfs_password=obfs.get('password') if obfs else None)
 
 
 def _clash(content: str) -> list[tuple[int, dict]]:
@@ -328,7 +377,9 @@ def materialize(subscription: ProxySubscription, members: tuple[Member, ...] | l
                                tls_server_name=m.sni, tls_insecure=m.tls_insecure,
                                transport=m.transport_options or ({'type': m.transport} if m.transport != 'tcp' else None),
                                reality_public_key=m.reality_public_key,
-                               reality_short_id=m.reality_short_id, username=m.username) for m in selected]
+                               reality_short_id=m.reality_short_id, username=m.username,
+                               flow=m.flow, tls_utls_fingerprint=m.tls_utls_fingerprint,
+                               obfs_type=m.obfs_type, obfs_password=m.obfs_password) for m in selected]
     if not outbounds:
         return outbounds, []
     tags = [o.tag for o in outbounds]

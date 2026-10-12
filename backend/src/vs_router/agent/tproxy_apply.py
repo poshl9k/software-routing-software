@@ -48,13 +48,16 @@ exists. Expressed as ordered phases::
                      destroyed (:func:`cleanup_content`), so a half-open guard
                      or interception is never left behind.
 
-Everything is data: file names, ordered phases, generator calls and nftables
-text. No arbitrary shell, no new subprocess surface, no secret material.
+Everything is typed data: fixed file names, ordered phases and generator calls;
+no arbitrary shell. The agent decrypts proxy credentials only into the private
+sing-box apply artifact; previews and marker data remain redacted.
 """
 
 from __future__ import annotations
 
 import json
+
+from ..secrets import decrypt_secret
 
 from ..generators import marks
 from ..generators import tproxy_dns
@@ -192,7 +195,32 @@ def guard_content(version: ConfigurationVersion) -> str:
     )
 
 
-def build_artifacts(version: ConfigurationVersion) -> dict[str, str]:
+def _secret_provider(key: bytes):
+    """Agent-only credential resolver. Failure is sanitized before leaving apply."""
+    def resolve(outbound):
+        if outbound.type in ('direct', 'block'):
+            return {}
+        if outbound.secret is None:
+            raise ValueError('proxy.secret_required')
+        try:
+            value = decrypt_secret(outbound.secret, key)
+            credentials = {'password': value}
+            if outbound.type in ('vless', 'vmess'):
+                credentials = {'uuid': value}
+            elif outbound.type == 'tuic':
+                uuid, password = value.split(':', 1)
+                credentials = {'uuid': uuid, 'password': password}
+            if outbound.obfs_type:
+                if outbound.obfs_password is None:
+                    raise ValueError('proxy.obfs_password_required')
+                credentials['obfs_password'] = decrypt_secret(outbound.obfs_password, key)
+            return credentials
+        except Exception:
+            raise ValueError('secret.decryption_failed') from None
+    return resolve
+
+
+def build_artifacts(version: ConfigurationVersion, key: bytes | None = None) -> dict[str, str]:
     """Return ``{name: content}`` for the scaffold files, or ``{}`` when off.
 
     Keys match :data:`TPROXY_FILES` and preserve its order (guards, the two
@@ -206,7 +234,7 @@ def build_artifacts(version: ConfigurationVersion) -> dict[str, str]:
         "tproxy_guards": guard_content(version),
         "tproxy_unbound_selected": composed.selected_unbound or "",
         "tproxy_unbound_ordinary": composed.ordinary_unbound or "",
-        "singbox": json.dumps(generate_singbox(version), indent=2) + "\n",
+        "singbox": json.dumps(generate_singbox(version, secret_provider=_secret_provider(key) if key is not None else None), indent=2) + "\n",
         "tproxy_interception": generate_tproxy_interception(version),
     }
 
