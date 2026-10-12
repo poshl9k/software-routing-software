@@ -6,6 +6,9 @@ import App from "../App";
 import { DiffReview } from "../components/DiffReview";
 import { emptyConfiguration } from "../fixtures";
 import { observation, RouterProvider, useCountdown, useRouterState } from "../state";
+import type { RuntimeEngine } from "../types";
+const engine: RuntimeEngine = { installed: true, version: "1.2.3", running: false, pid: null,
+  clash_api: false, ip_forward: true, nft_tproxy_tables: true };
 const versions = [
   { id: 2, status: "draft", configuration: emptyConfiguration },
   { id: 1, status: "confirmed", configuration: emptyConfiguration },
@@ -19,6 +22,8 @@ function mockApi() {
           JSON.stringify(
             path === "/api/versions"
               ? versions
+              : path === "/api/runtime/engine"
+                ? engine
               : path === "/api/auth/me"
                 ? { id: 1, username: "admin", role: "admin" }
                 : path === "/api/host/interfaces"
@@ -106,6 +111,7 @@ describe("screens", () => {
     const fetch = mockApi();
     fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions" ? versions :
+      path === "/api/runtime/engine" ? engine :
       path === "/api/auth/me" ? { id: 2, username: "operator", role: "operator" } : {},
     ))));
     open("/routing");
@@ -217,6 +223,7 @@ describe("screens", () => {
     const fetch = mockApi();
     fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions" ? versions :
+      path === "/api/runtime/engine" ? engine :
       path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
       path === "/api/draft/tproxy/preview" ? {
         version_id: 2,
@@ -236,6 +243,7 @@ describe("screens", () => {
     const fetch = mockApi();
     fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions" ? versions :
+      path === "/api/runtime/engine" ? engine :
       path === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
       { code: "agent.unavailable", message: "Предпросмотр недоступен", details: [] },
     ), { status: path === "/api/draft/tproxy/preview" ? 503 : 200 })));
