@@ -481,6 +481,11 @@ class ProxyOutbound(Model):
     # Shadowsocks cipher name; the contract previously had no field for it, so
     # the generator substituted a placeholder. Imported links can carry it.
     method: str | None = None
+    # VMess transport security and alter id; Shadowsocks plugin support.
+    security: str | None = Field(default=None, pattern=r"^(auto|none|zero|aes-128-gcm|chacha20-poly1305)$")
+    alter_id: int | None = Field(default=None, ge=0, le=65535)
+    plugin: str | None = None
+    plugin_opts: str | None = None
     tls: bool = False
     tls_server_name: str | None = None
     tls_insecure: bool = False

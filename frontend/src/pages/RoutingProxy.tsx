@@ -109,7 +109,7 @@ const groupValid = (g: ProxyGroup, allTags: string[]) =>
 
 function localCleared(type: ProxyOutbound["type"]): Partial<ProxyOutbound> {
   const cleared: Partial<ProxyOutbound> = {
-    type, secret: null, uuid: undefined, transport: null, flow: null,
+    type, secret: null, transport: null, flow: null,
     security: undefined, alter_id: undefined, tls_utls_fingerprint: null,
     reality_public_key: null, reality_short_id: null, username: null,
     method: null, plugin: undefined, plugin_opts: undefined,
@@ -135,9 +135,8 @@ function OutboundProtocolFields({ outbound: o, update, redactIncoming = false }:
   const type = o.type;
   const tlsType = ["vless", "vmess", "trojan", "hysteria2", "tuic", "naive"].includes(type);
   return <>
-    <SecretField label={type === "vless" || type === "vmess" ? "UUID" : type === "shadowsocks" ? "Секрет (пароль / UUID)" : "Пароль"}
+    <SecretField label={type === "vless" || type === "vmess" ? "UUID" : type === "shadowsocks" ? "Секрет (пароль / UUID)" : type === "tuic" ? "UUID:пароль" : "Пароль"}
       value={redactIncoming && o.secret && "plaintext" in o.secret ? { redacted: true } : o.secret} change={(secret) => update({ secret })} />
-    {type === "tuic" && <SecretField label="UUID TUIC" value={redactIncoming && o.uuid && "plaintext" in o.uuid ? { redacted: true } : o.uuid ?? null} change={(uuid) => update({ uuid })} />}
     {(type === "naive" || type === "mieru") && <Field label="Пользователь" value={o.username ?? ""}
       onChange={(username) => update({ username: username || null })} />}
     {type === "shadowsocks" && <>

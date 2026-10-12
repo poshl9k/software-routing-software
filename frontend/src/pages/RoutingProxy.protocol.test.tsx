@@ -112,7 +112,7 @@ it("keeps a materialized subscription outbound editable and saves its protocol d
 
 for (const [type, label] of [
   ["trojan", "Пароль"], ["shadowsocks", "Метод шифрования"],
-  ["hysteria2", "Обфускация (тип)"], ["tuic", "UUID TUIC"],
+  ["hysteria2", "Обфускация (тип)"], ["tuic", "UUID:пароль"],
   ["naive", "Пользователь"], ["mieru", "Пользователь"],
 ] as const) {
   it(`renders ${type} fields and preserves protocol when saving`, async () => {

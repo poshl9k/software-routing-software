@@ -56,10 +56,14 @@ def _render_outbound(outbound: ProxyOutbound,
     if outbound.type == "shadowsocks":
         rendered["method"] = credentials.get("method", outbound.method or PLACEHOLDER_SHADOWSOCKS_METHOD)
         rendered["password"] = credentials.get("password", PLACEHOLDER_PASSWORD)
+        if outbound.plugin:
+            rendered["plugin"] = outbound.plugin
+            if outbound.plugin_opts:
+                rendered["plugin_opts"] = outbound.plugin_opts
     elif outbound.type == "vmess":
         rendered["uuid"] = credentials.get("uuid", PLACEHOLDER_UUID)
-        rendered["security"] = "auto"
-        rendered["alter_id"] = 0
+        rendered["security"] = outbound.security or "auto"
+        rendered["alter_id"] = outbound.alter_id if outbound.alter_id is not None else 0
     elif outbound.type == "vless":
         rendered["uuid"] = credentials.get("uuid", PLACEHOLDER_UUID)
         if outbound.flow:
