@@ -294,12 +294,13 @@ def test_install_singbox_keeps_verified_binary_without_download(tmp_path):
     never touched (no curl call)."""
     from vs_router.agent import singbox_service as sb
     dest = tmp_path / 'sing-box'
+    (tmp_path / 'libcronet.so').write_text('pinned library')
     dest.write_text('#!/bin/sh\n'
                     f'printf "%s\\n" "sing-box version {sb.SINGBOX_VERSION}"\n'
                     f'printf "%s\\n" "Revision: {sb.SINGBOX_PROVENANCE_REVISION}"\n')
     dest.chmod(0o755)
     code = f'''source "{PACKAGING}/install-singbox.sh"
-sha256sum() {{ echo "{sb.SINGBOX_BINARY_SHA256}  $1"; }}
+sha256sum() {{ if [[ $1 == *libcronet.so ]]; then echo "{sb.SINGBOX_LIBCRONET_SHA256}  $1"; else echo "{sb.SINGBOX_BINARY_SHA256}  $1"; fi; }}
 curl() {{ echo CURL_CALLED; return 1; }}
 main
 '''
@@ -321,6 +322,56 @@ main
     assert result.returncode != 0
     assert 'does not match' in result.stdout + result.stderr
     assert not dest.exists()
+
+
+@pytest.mark.parametrize('corrupt_pin', [False, True])
+def test_install_singbox_extracts_verified_libcronet_next_to_binary(tmp_path, corrupt_pin):
+    """Exercise real tar/hash/install flow, with root ownership flags removed only
+    in the unprivileged fixture. A wrong library pin must leave both absent."""
+    import hashlib
+    import tarfile
+
+    from vs_router.agent import singbox_service as sb
+
+    payload = tmp_path / f'sing-box-{sb.SINGBOX_VERSION}-linux-amd64'
+    payload.mkdir()
+    binary = payload / 'sing-box'
+    binary.write_text('#!/bin/sh\n'
+                      f'printf "%s\\n" "sing-box version {sb.SINGBOX_VERSION}"\n'
+                      f'printf "%s\\n" "Revision: {sb.SINGBOX_PROVENANCE_REVISION}"\n')
+    binary.chmod(0o755)
+    library = payload / 'libcronet.so'
+    library.write_bytes(b'fixture library, not a release artifact')
+    archive = tmp_path / 'fixture.tar.gz'
+    with tarfile.open(archive, 'w:gz') as tar:
+        tar.add(payload, arcname=payload.name)
+
+    def digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    source = (PACKAGING / 'install-singbox.sh').read_text()
+    source = source.replace(sb.SINGBOX_ARCHIVE_SHA256, digest(archive))
+    source = source.replace(sb.SINGBOX_BINARY_SHA256, digest(binary))
+    source = source.replace(' -o root -g root ', ' ')
+    script = tmp_path / 'fixture-install.sh'
+    script.write_text(source)
+    manifest = tmp_path / 'library.sha256'
+    manifest.write_text(('0' * 64 if corrupt_pin else digest(library)) + '\n')
+    dest = tmp_path / 'installed/sing-box'
+    result = subprocess.run(['bash', str(script)], capture_output=True, text=True,
+                            env={**os.environ, 'VS_ROUTER_SINGBOX_ARCHIVE': str(archive),
+                                 'VS_ROUTER_SINGBOX_DEST': str(dest),
+                                 'VS_ROUTER_SINGBOX_LIBCRONET_MANIFEST': str(manifest)},
+                            timeout=20)
+    if corrupt_pin:
+        assert result.returncode != 0
+        assert 'extracted libcronet SHA-256 does not match' in result.stderr
+        assert not dest.exists()
+        assert not dest.with_name('libcronet.so').exists()
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert dest.read_bytes() == binary.read_bytes()
+        assert dest.with_name('libcronet.so').read_bytes() == library.read_bytes()
 
 
 def test_unbound_apparmor_override_is_installed_and_enabled(tmp_path):
@@ -678,3 +729,15 @@ def test_make_release_never_uses_a_branch_or_latest_ref():
     assert not re.search(r'^\s*git\s+(fetch|pull|checkout)\b', maker, re.M)
     assert '^[0-9a-f]{40}$' in maker
     assert 'git archive' in maker
+
+
+def test_libcronet_manifest_and_install_placement():
+    from vs_router.agent import singbox_service as sb
+    manifest = (PACKAGING / 'singbox-libcronet.sha256').read_text().strip()
+    script = (PACKAGING / 'install-singbox.sh').read_text()
+    install = (PACKAGING / 'install.sh').read_text()
+    assert manifest == sb.SINGBOX_LIBCRONET_SHA256
+    assert 'VS_ROUTER_SINGBOX_LIBCRONET_MANIFEST' in script
+    assert '"$LIBCRONET_DEST"' in script
+    assert 'install -m 0644 -o root -g root "$libcronet"' in script
+    assert 'bash "$packaging_dir/install-singbox.sh"' in install

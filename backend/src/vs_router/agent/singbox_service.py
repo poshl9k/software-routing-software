@@ -43,6 +43,8 @@ from .apply import ApplyError
 #: (ADR-0012); it is a fixed absolute path, never a value from the RPC.
 SINGBOX_UNIT = "vs-router-singbox.service"
 SINGBOX_BINARY = "/usr/local/lib/vs-router/sing-box"
+SINGBOX_LIBCRONET = "/usr/local/lib/vs-router/libcronet.so"
+SINGBOX_LIBCRONET_SHA256 = "23109c55b08829bb1a68682a61a64852b1bbf243753b153cbd8f6e4ea2c05294"
 SINGBOX_CONFIG = "/etc/vs-router/applied/singbox.json"
 UNIT_PATH = Path("/etc/systemd/system") / SINGBOX_UNIT
 READINESS_ATTEMPTS = 50
@@ -67,6 +69,7 @@ SINGBOX_PROVENANCE_REVISION = "af6e64c3b69e6132ebaee0e1a3d24e93903f6709"
 SINGBOX_VERSION_ARGV: tuple[str, ...] = (SINGBOX_BINARY, "version")
 SINGBOX_CHECK_ARGV: tuple[str, ...] = (SINGBOX_BINARY, "check", "-c", SINGBOX_CONFIG)
 SINGBOX_DIGEST_ARGV: tuple[str, ...] = ("sha256sum", SINGBOX_BINARY)
+SINGBOX_LIBCRONET_DIGEST_ARGV: tuple[str, ...] = ("sha256sum", SINGBOX_LIBCRONET)
 
 #: Stable fail-closed error codes surfaced to the agent RPC (no output echoed).
 BINARY_UNVERIFIED = "agent.singbox_binary_unverified"
@@ -137,10 +140,10 @@ def _version_ok(output: str) -> bool:
             and provenance.group(1) == SINGBOX_PROVENANCE_REVISION)
 
 
-def _digest_ok(output: str) -> bool:
+def _digest_ok(output: str, expected: str = SINGBOX_BINARY_SHA256) -> bool:
     """True iff ``output`` (``sha256sum`` form) carries the pinned binary hash."""
     match = _DIGEST_RE.match(output)
-    return match is not None and match.group(1).lower() == SINGBOX_BINARY_SHA256
+    return match is not None and match.group(1).lower() == expected
 
 
 class SingboxService:
@@ -173,6 +176,10 @@ class SingboxService:
             raise ApplyError(BINARY_UNVERIFIED)
         digest = self.executor.run(list(SINGBOX_DIGEST_ARGV), 15)
         if digest.returncode or not _digest_ok(_text(digest)):
+            raise ApplyError(BINARY_UNVERIFIED)
+
+        libcronet = self.executor.run(list(SINGBOX_LIBCRONET_DIGEST_ARGV), 15)
+        if libcronet.returncode or not _digest_ok(_text(libcronet), SINGBOX_LIBCRONET_SHA256):
             raise ApplyError(BINARY_UNVERIFIED)
 
     def check_config(self) -> bool:

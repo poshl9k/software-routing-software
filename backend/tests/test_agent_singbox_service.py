@@ -25,6 +25,7 @@ VERSION_OUTPUT = (
 )
 #: ``sha256sum <binary>`` prints ``<digest>  <path>``.
 DIGEST_OUTPUT = f"{singbox_service.SINGBOX_BINARY_SHA256}  {singbox_service.SINGBOX_BINARY}\n"
+LIBCRONET_OUTPUT = f"{singbox_service.SINGBOX_LIBCRONET_SHA256}  {singbox_service.SINGBOX_LIBCRONET}\n"
 
 
 class PinExecutor:
@@ -39,6 +40,7 @@ class PinExecutor:
         self.version_rc = 0
         self.version_output = VERSION_OUTPUT
         self.digest_rc = 0
+        self.libcronet_output = LIBCRONET_OUTPUT
         self.digest_output = DIGEST_OUTPUT
         self.check_rc = 0
         self.enable_rc = 0
@@ -50,6 +52,8 @@ class PinExecutor:
             return SimpleNamespace(returncode=self.version_rc, stdout=self.version_output)
         if argv == list(singbox_service.SINGBOX_DIGEST_ARGV):
             return SimpleNamespace(returncode=self.digest_rc, stdout=self.digest_output)
+        if argv == list(singbox_service.SINGBOX_LIBCRONET_DIGEST_ARGV):
+            return SimpleNamespace(returncode=0, stdout=self.libcronet_output)
         if argv == list(singbox_service.SINGBOX_CHECK_ARGV):
             return SimpleNamespace(returncode=self.check_rc, stdout="")
         if argv[:2] == ["systemctl", "restart"]:
@@ -222,3 +226,11 @@ def test_disabled_apply_runs_no_singbox_command():
     marker = engine.status()
     assert marker is not None
     assert tproxy_apply.SINGBOX_PROCESS_STEP not in marker["phases"]
+
+
+def test_libcronet_digest_mismatch_blocks_start():
+    executor = PinExecutor()
+    executor.libcronet_output = "0" * 64 + "  libcronet.so\n"
+    with pytest.raises(ApplyError, match=singbox_service.BINARY_UNVERIFIED):
+        singbox_service.SingboxService(executor, FakeFS()).start()
+    assert list(singbox_service.SINGBOX_CHECK_ARGV) not in argv_of(executor)
