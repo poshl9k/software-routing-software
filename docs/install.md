@@ -120,7 +120,7 @@ sudo ./install.sh
 
 Профиль Unbound получает локальный оверрайд `/etc/apparmor.d/local/usr.sbin.unbound` с каталоговым правилом `/etc/vs-router/applied/** r,`, чтобы ограниченный Debian-профиль `usr.sbin.unbound` разрешал сгенерированные конфиги (в т.ч. split-конфиги TProxy DNS-контура, ADR-0014). Заголовочный `#include <local/usr.sbin.unbound>` — активная директива AppArmor, поэтому локальный файл создаётся перед `apparmor_parser -r`.
 
-Отдельный install-time шаг `backend/packaging/bootstrap.sh` (`stage_singbox`, скрипт `install-singbox.sh`) доставляет закреплённый по ADR-0012 бинарник sing-box в `/usr/local/lib/vs-router/sing-box`: скачивание по пиннутому URL, сверка SHA256 архива и ELF, проверка `version`/`Revision`, установка. Шаг идемпотентен и fail-closed; повторный запуск не трогает сеть. Подробности — `docs/lab-35-pinned-binary-and-apparmor.md`.
+Отдельный install-time шаг `backend/packaging/bootstrap.sh` (`stage_singbox`, скрипт `install-singbox.sh`) доставляет закреплённый по ADR-0012 бинарник sing-box в `/usr/local/lib/vs-router/sing-box`: скачивание по пиннутому URL, сверка SHA256 архива, ELF и `libcronet.so`, проверка `version`/`Revision`, установка обоих файлов с владельцем root. SHA256 библиотеки закреплён в `backend/packaging/singbox-libcronet.sha256` (`23109c55b08829bb1a68682a61a64852b1bbf243753b153cbd8f6e4ea2c05294`); для локального проверенного зеркала путь к манифесту можно задать через `VS_ROUTER_SINGBOX_LIBCRONET_MANIFEST`. Установка при обновлении также проверяет оба файла, а агент проверяет их SHA256 перед запуском. Шаг идемпотентен и fail-closed; повторный запуск не трогает сеть. Подробности — `docs/lab-35-pinned-binary-and-apparmor.md`.
 
 Предупреждение о версии AmneziaWG (<3.1) появится здесь, если шаг 2 пропущен.
 

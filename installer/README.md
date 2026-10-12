@@ -71,8 +71,9 @@ pins Caddy 2.11.4, caddy-l4 v0.1.2, Cloudflare DNS module v0.2.4, xcaddy v0.4.7
 and AmneziaWG v3.1.20260812; it checks AmneziaWG tag commits and fetches
 WireGuard Go at a fixed commit. A dedicated install-time step
 (`install-singbox.sh`, `bootstrap.sh stage_singbox`) delivers the ADR-0012 engine
-binary to `/usr/local/lib/vs-router/sing-box` by pinned URL with archive/ELF
-SHA-256 and provenance checks; it is idempotent and fail-closed. `install.sh`
+binary to `/usr/local/lib/vs-router/sing-box` and `libcronet.so` alongside it
+by pinned URL with archive/ELF/libcronet SHA-256 and provenance checks; it is
+idempotent and fail-closed. `install.sh`
 installs the Unbound AppArmor local override (`/etc/vs-router/applied/** r,`) so
 the confined Debian profile can read generated configs (ADR-0014). Caddy and
 tunnel sources are built with Go

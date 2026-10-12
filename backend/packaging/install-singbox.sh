@@ -27,11 +27,16 @@ readonly SINGBOX_ARCHIVE_DIR="sing-box-${SINGBOX_VERSION}-linux-amd64"
 readonly SINGBOX_PINNED_URL="https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_TAG}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz"
 readonly SINGBOX_ARCHIVE_SHA256='a684484d7477d1437282ee411f4d131d0340aaad60a7868841ebd5d87dd8a0c6'
 readonly SINGBOX_BINARY_SHA256='fc9c6e6ab345f045b16a0ed10d1ff28d68e8e56e7749fca30738d1406e98d7b8'
+readonly SINGBOX_LIBCRONET_MANIFEST_DEFAULT="$(dirname -- "${BASH_SOURCE[0]}")/singbox-libcronet.sha256"
+SINGBOX_LIBCRONET_MANIFEST=${VS_ROUTER_SINGBOX_LIBCRONET_MANIFEST:-$SINGBOX_LIBCRONET_MANIFEST_DEFAULT}
+SINGBOX_LIBCRONET_SHA256=$(cat -- "$SINGBOX_LIBCRONET_MANIFEST")
+[[ $SINGBOX_LIBCRONET_SHA256 =~ ^[0-9a-f]{64}$ ]] || { echo 'invalid libcronet SHA-256 manifest' >&2; exit 1; }
 readonly SINGBOX_PROVENANCE_REVISION='af6e64c3b69e6132ebaee0e1a3d24e93903f6709'
 
 # Fixed absolute destination the agent runs; overridable only for offline lab.
 readonly SINGBOX_DEFAULT_DEST='/usr/local/lib/vs-router/sing-box'
 DEST=${VS_ROUTER_SINGBOX_DEST:-$SINGBOX_DEFAULT_DEST}
+LIBCRONET_DEST=$(dirname -- "$DEST")/libcronet.so
 SOURCE_ARCHIVE=${VS_ROUTER_SINGBOX_ARCHIVE:-}
 URL=${VS_ROUTER_SINGBOX_URL:-$SINGBOX_PINNED_URL}
 
@@ -60,6 +65,10 @@ binary_ok() {
     return 0
 }
 
+libcronet_ok() {
+    [[ -f $LIBCRONET_DEST ]] && [[ $(sha_of "$LIBCRONET_DEST") == "$SINGBOX_LIBCRONET_SHA256" ]]
+}
+
 fetch_archive() {  # $1 destination file
     if [[ -n $SOURCE_ARCHIVE ]]; then
         [[ -r $SOURCE_ARCHIVE ]] || fail "local archive is not readable: ${SOURCE_ARCHIVE}"
@@ -82,13 +91,17 @@ verify_archive() {  # $1 archive path
 }
 
 install_from_archive() {  # $1 archive path
-    local extracted report
+    local extracted libcronet report
     verify_archive "$1"
     tar -xzf "$1" -C "$WORK" --no-same-owner || fail 'archive extraction failed'
     extracted="$WORK/${SINGBOX_ARCHIVE_DIR}/sing-box"
     [[ -f $extracted ]] || fail 'archive does not contain the expected sing-box binary'
     printf '%s  %s\n' "$SINGBOX_BINARY_SHA256" "$extracted" | sha256sum -c - >/dev/null \
         || fail 'extracted binary SHA-256 does not match the ADR-0012 pin'
+    libcronet="$WORK/${SINGBOX_ARCHIVE_DIR}/libcronet.so"
+    [[ -f $libcronet ]] || fail 'archive does not contain libcronet.so'
+    printf '%s  %s\n' "$SINGBOX_LIBCRONET_SHA256" "$libcronet" | sha256sum -c - >/dev/null \
+        || fail 'extracted libcronet SHA-256 does not match the packaging manifest'
     report=$("$extracted" version 2>/dev/null) || fail 'extracted binary did not report a version'
     printf '%s\n' "$report" | grep -qx "sing-box version ${SINGBOX_VERSION}" \
         || fail "extracted binary version is not ${SINGBOX_VERSION}"
@@ -96,11 +109,12 @@ install_from_archive() {  # $1 archive path
         || fail 'extracted binary provenance revision does not match ADR-0012'
     install -d -m 0755 "$(dirname -- "$DEST")"
     install -m 0755 -o root -g root "$extracted" "$DEST"
+    install -m 0644 -o root -g root "$libcronet" "$LIBCRONET_DEST"
     log "installed pinned sing-box ${SINGBOX_VERSION} at ${DEST}"
 }
 
 main() {
-    if binary_ok "$DEST"; then
+    if binary_ok "$DEST" && libcronet_ok; then
         log "pinned sing-box ${SINGBOX_VERSION} already present and verified at ${DEST}; nothing to do"
         return 0
     fi

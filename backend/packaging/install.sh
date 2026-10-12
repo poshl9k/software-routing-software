@@ -41,6 +41,8 @@ getent group caddy >/dev/null 2>&1 || groupadd --system caddy
 id caddy >/dev/null 2>&1 || useradd --system --gid caddy --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy
 CADDY_BIN=$(command -v caddy || echo /usr/local/bin/caddy)
 packaging_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# Verify and repair the pinned engine pair on fresh install and update.
+bash "$packaging_dir/install-singbox.sh"
 install -d -m 0750 /etc/caddy/vs-router
 chown root:caddy /etc/caddy/vs-router
 install -d -m 0700 /etc/vs-router/wireguard
@@ -136,7 +138,6 @@ done
 install -d -m 0770 /run/vs-router
 chgrp vs-router-web /run/vs-router
 install -d -m 0770 -o vs-router-web -g vs-router-web /run/vs-router/web /var/lib/vs-router
-packaging_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 install -m 0644 "$packaging_dir"/*.service "$packaging_dir"/*.timer /etc/systemd/system/
 install -d -m 0755 /usr/local/libexec/vs-router
 install -m 0644 "$packaging_dir/reconcile-networkd-boot.py" /usr/local/libexec/vs-router/reconcile-networkd-boot.py
