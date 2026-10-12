@@ -570,6 +570,25 @@ describe("screens", () => {
       addresses: ["192.168.10.1/24"],
     });
   });
+  it("onboarding continues past an existing administrator (setup.completed)", async () => {
+    // Reproduces the dead end seen on a freshly provisioned VM where an admin
+    // already exists but no configuration does: the wizard must not stop.
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/setup"
+        ? { code: "setup.completed", message: "setup.completed", details: [] }
+        : path === "/api/host/interfaces" ? [
+            { name: "enp2s0", kind: "physical", mac: "52:54:00:00:00:02" },
+          ] : path === "/api/versions" ? [] : {},
+    ), { status: path === "/api/setup" ? 409 : 200 })));
+    const user = userEvent.setup();
+    open("/onboarding");
+    await user.type(screen.getByLabelText("Пароль", { exact: false }), "strong-password");
+    await user.click(screen.getByRole("button", { name: "Продолжить →" }));
+    await screen.findByRole("heading", { name: "Базовая сеть" });
+    expect(fetch.mock.calls.filter(([path]) => path === "/api/setup")).toHaveLength(1);
+    expect(fetch.mock.calls.some(([path]) => path === "/api/auth/login")).toBe(true);
+  });
   it("onboarding blocks draft creation while host inventory is unavailable", async () => {
     const fetch = mockApi();
     fetch.mockImplementation((path: string) => Promise.resolve(new Response(

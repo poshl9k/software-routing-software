@@ -7,7 +7,7 @@ import {
   Typography,
 } from "@mui/material";
 import { Link, useNavigate } from "react-router-dom";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { emptyConfiguration } from "../fixtures";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { WizardProgress } from "../components/WizardProgress";
@@ -48,7 +48,15 @@ export default function Onboarding() {
     try {
       if (step === 0) {
         if (!accountCreated) {
-          await api.setup({ username, password });
+          try {
+            await api.setup({ username, password });
+          } catch (err) {
+            // An administrator already exists (e.g. provisioned out-of-band or a
+            // setup that never finished). Do not dead-end the first-run wizard:
+            // fall through to login, which validates the credentials, and let the
+            // operator continue to create the initial configuration.
+            if (!(err instanceof ApiError) || err.code !== "setup.completed") throw err;
+          }
           setAccountCreated(true);
         }
         // Setup creates an account but does not establish a session.
