@@ -23,13 +23,14 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { Field } from "../components/Field";
 import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { InfoNote } from "../components/InfoNote";
+import { InlineStatus } from "../components/InlineStatus";
+import { PageSection } from "../components/PageSection";
+import { ValueTabs } from "../components/Tabs";
 import { Select, SelectField } from "../components/Select";
 import { Toggle } from "../components/Toggle";
 import { hostValid, nameValid, portValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { parseShareLinks } from "../shareLinks";
-import { tokens } from "../theme";
-import { request } from "../api";
 import { SecretField } from "./ConnectionEditors";
 
 const OUTBOUND_TYPES: ProxyOutbound["type"][] = [
@@ -85,7 +86,7 @@ const filledLines = (items: string[]) => items.map((line) => line.trim()).filter
 
 const subscriptionValid = (s: ProxySubscription) =>
   nameValid(s.name) &&
-  (s.inline ? !!s.inline_content?.trim() : httpsValid(s.url) && s.inline_content == null) &&
+  (s.inline ? !!s.inline_content?.trim() : httpsValid(s.url)) &&
   Number.isInteger(s.interval_hours) &&
   s.interval_hours >= 1 &&
   s.interval_hours <= 168 &&
@@ -132,6 +133,7 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Не проверялась");
+  const [lastError, setLastError] = useState<string | null>(null);
   const [delays, setDelays] = useState<Record<string, number | string>>({});
   const [stored, setStored] = useState<SubscriptionMember[]>([]);
   const members = proposal ? ("members" in proposal ? proposal.members : [
@@ -143,21 +145,23 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
     const source = JSON.stringify(subscription);
     try {
       const data = action === "preview"
-        ? await api.previewSubscription(subscription)
+        ? await api.subscriptionPreview(subscription)
         : await api.refreshSubscription(subscription.name);
       setResult(data);
+      setLastError(null);
       setResultSource(source);
       setStatus(action === "preview" ? "Просмотр выполнен; черновик не изменён" : "Получено предложение обновления; движок не обновлён");
       if (action === "refresh" && !onProposal) setStatus("Получено предложение; откройте черновик для сохранения");
     } catch (err) {
       setError(err);
+      setLastError(err instanceof Error ? err.message : "Недоступно");
       setStatus("Ошибка обновления / просмотра");
     } finally { setBusy(false); }
   };
   const checkOne = async (member: SubscriptionMember) => {
     setError(null);
     try {
-      const value = await request<{ delay: number }>(`/api/runtime/proxies/${encodeURIComponent(member.tag)}/delay?url=${encodeURIComponent(subscription.url_test || "https://www.gstatic.com/generate_204")}`);
+      const value = await api.runtimeProxyDelay(member.tag, subscription.url_test || "https://www.gstatic.com/generate_204");
       setDelays((previous) => ({ ...previous, [member.tag]: value.delay }));
     } catch (err) {
       setError(err);
@@ -170,7 +174,7 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
       let firstError: unknown = null;
       const rows = await Promise.all(members.filter((m) => !excluded.includes(m.tag)).map(async (m) => {
         try {
-          const value = await request<{ delay: number }>(`/api/runtime/proxies/${encodeURIComponent(m.tag)}/delay?url=${encodeURIComponent(subscription.url_test || "https://www.gstatic.com/generate_204")}`);
+          const value = await api.runtimeProxyDelay(m.tag, subscription.url_test || "https://www.gstatic.com/generate_204");
           return [m.tag, value.delay] as const;
         } catch (err) {
           firstError ??= err;
@@ -187,52 +191,61 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
     catch (err) { setError(err); }
   };
   return <Card title={subscription.name || "Новая подписка"}>
-    <Typography sx={{ color: tokens.textTertiary }} role="status">{result && !proposal ? "Настройки изменены — выполните просмотр снова" : status}</Typography>
+    <InlineStatus tone={lastError ? "red" : proposal ? "green" : "unknown"}
+      text={`${subscription.enabled ? "Включена" : "Выключена"} · ${result && !proposal ? "Настройки изменены — выполните просмотр снова" : status} · Серверов: ${members.length} · Активный: ${subscription.active_member || "не выбран"}${lastError ? ` · Ошибка: ${lastError}` : ""}`} />
     <ErrorNotice error={error} />
     <FormActions>
-      <Button disabled={busy || !canFetch} onClick={() => void run("preview")}>Просмотр</Button>
+      <Button disabled={busy || !canFetch || !subscriptionValid(subscription)} onClick={() => void run("preview")}>Просмотр</Button>
       <Button disabled={busy || !canFetch || !subscription.name} onClick={() => void run("refresh")}>Обновить сейчас</Button>
       <Button disabled={busy || !subscription.name} onClick={() => void loadMembers()}>Участники</Button>
       <Button disabled={busy || !members.length} onClick={() => void checkAll()}>Проверить всё</Button>
-      {editable && proposal && <Button onClick={() => { onProposal?.(proposal.outbounds, proposal.groups); setStatus("Предложение добавлено в черновик; сохраните черновик и примените конфигурацию отдельно"); }}>Добавить в черновик</Button>}
+      {editable && proposal && <Button onClick={() => { onProposal?.(proposal.outbounds, proposal.groups); setStatus("Предложение добавлено в черновик; сохраните черновик и примените конфигурацию отдельно"); }}>Применить предложение</Button>}
     </FormActions>
+    {proposal && "added" in proposal && <InfoNote>Изменения: добавлено {proposal.added.length}, обновлено {proposal.updated.length}, без изменений {proposal.unchanged.length}, сирот {proposal.orphans.length}.</InfoNote>}
+    {proposal && proposal.skipped.length > 0 && <InfoNote>Пропущено: {proposal.skipped.length}. {proposal.skipped.map((row) => `Строка ${row.line}: ${row.reason}`).join("; ")}</InfoNote>}
     {proposal && "orphans" in proposal && proposal.orphans.length > 0 &&
-      <InfoNote>Осиротевшие участники: {proposal.orphans.length}. Они сохранены в предложении; проверьте перед удалением.</InfoNote>}
+      <InfoNote>Сироты: {proposal.orphans.length}. Они сохранены в предложении; не удаляются автоматически.</InfoNote>}
     {members.length > 0 && <>
-      <DataTable heads={["Участник", "Протокол", "Адрес", "Задержка", "Действие"]}
+      <PageSection title={`Серверы (${members.length})`}>
+      <DataTable heads={["Сервер", "Протокол", "Транспорт", "SNI / защита", "Задержка", "Действия"]}
         rows={members.filter((m) => !excluded.includes(m.tag)).map((m) => [
-          m.label, m.protocol, `${m.server}:${m.port}`,
-          delays[m.tag] == null ? "Не проверен" : typeof delays[m.tag] === "number" ? `${delays[m.tag]} мс` : delays[m.tag],
+          m.label, m.protocol, m.transport || "—", `${m.sni || "—"} / ${m.security || "—"}`,
+          delays[m.tag] == null ? "Не проверен" : typeof delays[m.tag] === "number" ? `${delays[m.tag]} мс` : `Недоступно: ${delays[m.tag]}`,
           <><Button disabled={busy} onClick={() => void checkOne(m)}>Проверить</Button>
             {editable && <Button onClick={() => onChange?.({ excluded_members: [...excluded, m.tag] })}>Исключить</Button>}</>,
         ])} />
-      {editable && <Select label="Активный участник" value={subscription.active_member ?? ""}
+      </PageSection>
+      {editable && (subscription.mode ?? "selector") === "selector" && <Select label="Активный участник" value={subscription.active_member ?? ""}
         options={[{ value: "", label: "Не выбран" }, ...members.filter((m) => !excluded.includes(m.tag)).map((m) => ({ value: m.tag, label: m.label }))]}
         onChange={(value) => onChange?.({ active_member: value || null })} />}
-      <Typography variant="h2">Исключённые</Typography>
-      {excluded.length ? excluded.map((tag) => <div key={tag}>{members.find((m) => m.tag === tag)?.label ?? tag}
-        {editable && <Button onClick={() => onChange?.({ excluded_members: excluded.filter((x) => x !== tag) })}>Вернуть</Button>}</div>) : <InfoNote>Нет исключённых участников</InfoNote>}
     </>}
+    {editable && <PageSection title={`Исключённые (${excluded.length})`}>
+      {excluded.length ? excluded.map((tag) => <div key={tag}>{members.find((m) => m.tag === tag)?.label ?? tag}
+        <Button onClick={() => onChange?.({ excluded_members: excluded.filter((x) => x !== tag) })}>Вернуть</Button></div>) : <InfoNote>Нет исключённых участников</InfoNote>}
+    </PageSection>}
   </Card>;
 }
 
-function ProxiesView({ settings, readonly }: { settings: ProxySettings; readonly: boolean }) {
+function ProxiesView({ settings, readonly, onEdit }: { settings: ProxySettings; readonly: boolean; onEdit: () => void }) {
+  const [tab, setTab] = useState<"outbounds" | "subscriptions">("outbounds");
   return (
     <>
+      <ValueTabs value={tab} change={setTab} tabs={[
+        { value: "outbounds", label: "Прокси-выходы" }, { value: "subscriptions", label: "Подписки" },
+      ]} />
       <InfoNote>
         Секреты выходов и подписок не отображаются: они хранятся на сервере в
         зашифрованном виде и возвращаются замаскированными. Ввод нового секрета
         заменяет сохранённый; пустое поле оставляет прежний.
       </InfoNote>
-      <Card title="Прокси-выходы">
+      {tab === "outbounds" && <Card title="Прокси-выходы">
         <DataTable
-          heads={["Тег", "Тип", "Сервер", "Порт", "TLS"]}
+          heads={["Тег", "Тип", "Сервер", "Действия"]}
           rows={settings.outbounds.map((o) => [
             o.tag,
             <Badge>{o.type}</Badge>,
             o.server ?? "—",
-            o.port ?? "—",
-            o.tls ? "да" : "нет",
+            <Button disabled={readonly} onClick={onEdit}>Изменить</Button>,
           ])}
           empty={
             <EmptyState title="Нет прокси-выходов">
@@ -241,21 +254,21 @@ function ProxiesView({ settings, readonly }: { settings: ProxySettings; readonly
             </EmptyState>
           }
         />
-      </Card>
-      <Card title="Подписки">
+      </Card>}
+      {tab === "subscriptions" && <Card title="Подписки">
         <InfoNote>Предпросмотр и ручной запрос не применяют изменения к движку. Заголовки пока не поддерживаются безопасным загрузчиком.</InfoNote>
         {settings.subscriptions.length ? settings.subscriptions.map((s) =>
           <SubscriptionCard key={s.name} subscription={s} editable={false} canFetch={!readonly} />) :
           <EmptyState title="Нет подписок">Добавьте подписку в черновике.</EmptyState>}
-      </Card>
-      <Card title="Группы выходов">
+      </Card>}
+      {tab === "outbounds" && <Card title="Группы выходов">
         <DataTable
           heads={["Тег", "Тип", "Выходы", "URL"]}
           rows={settings.groups.map((g) => [
             g.tag,
             <Badge>{g.type}</Badge>,
             g.outbounds.join(", "),
-            g.url ?? "—",
+            g.url ? "https://•••" : "—",
           ])}
           empty={
             <EmptyState title="Нет групп">
@@ -264,7 +277,7 @@ function ProxiesView({ settings, readonly }: { settings: ProxySettings; readonly
             </EmptyState>
           }
         />
-      </Card>
+      </Card>}
     </>
   );
 }
@@ -440,7 +453,7 @@ export function ProxiesEditor() {
           {readonly && (
             <InfoNote>Режим оператора: прокси-выходы только для просмотра.</InfoNote>
           )}
-          <ProxiesView settings={current} readonly={readonly} />
+          <ProxiesView settings={current} readonly={readonly} onEdit={begin} />
         </>
       ) : (
         <>
@@ -629,20 +642,39 @@ export function ProxiesEditor() {
           <Card title="Подписки">
             <InfoNote>Предпросмотр и обновление возвращают предложение. Сохранение и применение — отдельные действия. Заголовки пока не принимаются безопасным загрузчиком.</InfoNote>
             {current.subscriptions.map((s, index) => {
-              const update = (v: Partial<ProxySubscription>) =>
+              const update = (v: Partial<ProxySubscription>) => {
+                const group = current.groups.find((g) => g.tag === s.name);
+                const selected = v.active_member;
+                const excluded = v.excluded_members;
                 patch({
                   subscriptions: current.subscriptions.map((row, i) =>
                     i === index ? { ...row, ...v } : row,
                   ),
+                  ...(group && (selected !== undefined || excluded !== undefined) ? {
+                    groups: current.groups.map((g) => g.tag !== s.name ? g : {
+                      ...g,
+                      outbounds: [...new Set([...g.outbounds,
+                        ...(s.excluded_members ?? []).filter((tag) => current.outbounds.some((o) => o.tag === tag)),
+                      ])].filter((tag) => !(excluded ?? s.excluded_members ?? []).includes(tag))
+                        .sort((a, b) => a === selected ? -1 : b === selected ? 1 : 0),
+                    }),
+                  } : {}),
                 });
+              };
               return (
                 <div key={index} className="rule-row">
                   <SubscriptionCard subscription={s} editable onChange={update}
                     onProposal={(outbounds, groups) => {
+                      if (!outbounds.length || !groups.some((g) => g.tag === s.name && g.outbounds.length)) {
+                        editor.setError(new Error("Нет доступных серверов: предложение не содержит группу выхода."));
+                        return;
+                      }
                       const replacing = new Set(outbounds.map((o) => o.tag));
                       patch({
+                        enabled: true,
+                        subscriptions: current.subscriptions.map((row, i) => i === index ? { ...row, enabled: true } : row),
                         outbounds: [...current.outbounds.filter((o) => !replacing.has(o.tag)), ...outbounds],
-                        groups: [...current.groups.filter((g) => g.tag !== s.name), ...groups],
+                        groups: [...current.groups.filter((g) => !groups.some((incoming) => incoming.tag === g.tag)), ...groups],
                       });
                     }} />
                   <FormGrid>
@@ -671,16 +703,18 @@ export function ProxiesEditor() {
                           }}
                         />
                       </FormWide>
+                    ) : s.url && !editedUrls.includes(index) ? (
+                      <FormWide>
+                        <InfoNote>URL подписки: https://••• (сохранён; адрес и токен скрыты)</InfoNote>
+                        <Button onClick={() => { setEditedUrls((indices) => [...indices, index]); update({ url: "" }); }}>Заменить URL</Button>
+                      </FormWide>
                     ) : (
                       <Field
                         label="URL подписки"
-                        value={editedUrls.includes(index) ? s.url : ""}
+                        value={s.url && editedUrls.includes(index) ? s.url : ""}
                         valid={httpsValid(s.url)}
-                        hint={!editedUrls.includes(index) && s.url ? "Сохранённый URL скрыт; ввод заменит его" : "Только https://"}
-                        onChange={(url) => {
-                          setEditedUrls((indices) => indices.includes(index) ? indices : [...indices, index]);
-                          update({ url });
-                        }}
+                        hint="Только https://; адрес с токеном не показывается после сохранения"
+                        onChange={(url) => { setEditedUrls((indices) => indices.includes(index) ? indices : [...indices, index]); update({ url }); }}
                       />
                     )}
                     <SelectField
@@ -825,7 +859,7 @@ export function ProxiesEditor() {
                   })
                 }
               >
-                + Добавить подписку
+                + Подписка по URL
               </Button>
             </FormActions>
           </Card>

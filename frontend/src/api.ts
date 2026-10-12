@@ -128,6 +128,8 @@ export const api = {
       max_bytes: 5_000_000, timeout: 20, ...body,
     }),
   // Subscription runtime: explicit fetch authorization; results are draft proposals only.
+  subscriptionPreview: (subscription: ProxySubscription) =>
+    post<SubscriptionPreview>("/api/proxy/subscriptions/preview", { subscription, authorized: true }),
   previewSubscription: (subscription: ProxySubscription) =>
     post<SubscriptionPreview>("/api/proxy/subscriptions/preview", { subscription, authorized: true }),
   refreshSubscription: (name: string) =>
