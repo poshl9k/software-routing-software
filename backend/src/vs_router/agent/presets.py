@@ -18,19 +18,121 @@ Licence honesty
 ---------------
 ``license_verified`` means "independently checked as sufficient for *redistribution
 inside the product*", which has **not** been done for any third-party set here.
-Entries therefore carry ``license_verified=False`` and a ``ruleset.*``-style
-provenance warning; ``123jjck/cdn-ip-ranges`` additionally has no licence at all
+Catalog services carry ``license_verified=False`` and the
+``preset.license_unverified`` provenance warning: their URLs point to
+repo.hoaxisr.ru / SagerNet GitHub and redistribution review is pending.
+``123jjck/cdn-ip-ranges`` additionally has no licence at all
 (its GitHub tree carries no licence file). This is data a reviewer must confirm
 before the catalog is shipped, not a guarantee.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
+from urllib.parse import urlsplit
+import re
+from typing import Iterable, Literal
 
 from .downloader import BuiltinSource
+from vs_router.schema import RuleSetSource
 
 WARNING_LICENSE_UNVERIFIED = "preset.license_unverified"
 WARNING_LICENSE_MISSING = "preset.license_missing"
+
+
+@dataclass(frozen=True)
+class CatalogRuleSet:
+    tag: str
+    url: str
+
+
+@dataclass(frozen=True)
+class CatalogPreset:
+    """Upstream service data; redistribution rights have not been verified.
+
+    ``license_verified`` remains false and ``provenance`` carries the warning
+    until the third-party catalog's licensing has been reviewed.
+    """
+
+    id: str
+    name: str
+    icon_slug: str
+    category: str
+    origin: str
+    notice: str | None
+    covers: tuple[str, ...]
+    dns_domains: tuple[str, ...]
+    rule_sets: tuple[CatalogRuleSet, ...]
+    action: str | None
+    license_verified: bool = False
+    provenance: str = WARNING_LICENSE_UNVERIFIED
+
+
+def load_catalog() -> tuple[CatalogPreset, ...]:
+    """Load the bundled upstream JSON as immutable service records."""
+    raw = json.loads(Path(__file__).with_name("presets_catalog.json").read_text(encoding="utf-8"))
+    return tuple(
+        CatalogPreset(
+            id=entry["id"], name=entry["name"],
+            icon_slug=entry["iconSlug"], category=entry["category"],
+            origin=entry["origin"], notice=entry.get("notice"),
+            covers=tuple(entry.get("covers", ())),
+            dns_domains=tuple(entry["engines"].get("dns", {}).get("domains", ())),
+            rule_sets=tuple(CatalogRuleSet(tag=item["tag"], url=item["url"])
+                            for item in entry["engines"].get("singbox", {}).get("ruleSets", ())),
+            action=entry["engines"].get("singbox", {}).get("action"),
+        ) for entry in raw
+    )
+
+
+def service_rule_set_format(url: str) -> Literal["srs", "json"]:
+    """Infer only formats proven by a known filename suffix; never guess text."""
+    path = urlsplit(url).path.lower()
+    if path.endswith(".srs"):
+        return "srs"
+    if path.endswith(".json"):
+        return "json"
+    raise ValueError(f"preset.invalid_rule_set_format: {url}")
+
+
+def _selected(ids: Iterable[str]) -> tuple[CatalogPreset, ...]:
+    catalog = {entry.id: entry for entry in load_catalog()}
+    selected = []
+    seen = set()
+    for id_ in ids:
+        if id_ not in catalog:
+            raise ValueError(f"preset.unknown_service: {id_}")
+        if id_ not in seen:
+            selected.append(catalog[id_])
+            seen.add(id_)
+    return tuple(selected)
+
+
+def selection_to_rule_sets(ids: Iterable[str]) -> tuple[RuleSetSource, ...]:
+    """Resolve selected service rules, retaining first occurrence order.
+
+    Catalog tags are used verbatim as names. RuleSetSource permits only an
+    initial ASCII letter followed by up to 30 letters, digits or underscores;
+    upstream hyphenated tags therefore fail explicitly rather than being renamed.
+    """
+    result = []
+    seen = set()
+    for preset in _selected(ids):
+        for source in preset.rule_sets:
+            if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,30}", source.tag):
+                raise ValueError(f"preset.invalid_rule_set_tag: {source.tag}; RuleSetSource.name allows letters, digits and underscores only")
+            if source.tag in seen:
+                continue
+            result.append(RuleSetSource(name=source.tag, format=service_rule_set_format(source.url), url=source.url))
+            seen.add(source.tag)
+    return tuple(result)
+
+
+def selection_to_domains(ids: Iterable[str]) -> tuple[str, ...]:
+    """Return unique DNS domains in selected-service and source order."""
+    return tuple(dict.fromkeys(domain for preset in _selected(ids)
+                               for domain in preset.dns_domains))
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, Depends, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..agent.presets import sources_view
+from ..agent.presets import sources_view, load_catalog, service_rule_set_format
 from ..agent.rpc import UpdateSourceParams
 from ..db import ConfigurationRow
 from .auth import admin, current_user, get_db
@@ -48,6 +48,42 @@ def list_rulesets(response: Response, db: Session = Depends(get_db)) -> list[dic
     import time
     response.headers["Cache-Control"] = "no-store"
     return sources_view(_declared(db), _history(), now=time.time())
+
+
+@router.get("/presets/catalog")
+def list_preset_catalog(response: Response, db: Session = Depends(get_db)) -> dict:
+    """Read-only catalog; category counts exclude the six composite entries.
+
+    Composite services remain in ``services`` with their ``covers`` intact.
+    Only the draft configuration is considered declared, as in /api/rulesets.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    declared = {entry["name"] for entry in _declared(db)}
+    titles = {
+        "social": "Соцсети", "media": "Медиа", "developer": "Разработка",
+        "cloud": "Облако", "gaming": "Игры", "ai": "AI", "block": "Блок",
+    }
+    counts = {key: 0 for key in titles}
+    services = []
+    for preset in load_catalog():
+        if not preset.covers:
+            counts[preset.category] += 1
+        services.append({
+            "id": preset.id, "name": preset.name, "category": preset.category,
+            "icon_slug": preset.icon_slug, "notice": preset.notice,
+            "covers": list(preset.covers), "dns_domains": list(preset.dns_domains),
+            "rule_sets": [
+                {"tag": source.tag, "url": source.url,
+                 "format": service_rule_set_format(source.url)}
+                for source in preset.rule_sets
+            ],
+            "action": preset.action,
+            "declared": all(source.tag in declared for source in preset.rule_sets),
+        })
+    return {"categories": [
+        {"key": key, "title": title, "count": counts[key]}
+        for key, title in titles.items()
+    ], "services": services}
 
 
 @router.post("/rulesets/update", dependencies=[Depends(admin)])
