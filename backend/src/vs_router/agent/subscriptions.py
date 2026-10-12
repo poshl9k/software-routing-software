@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
-from urllib.parse import urlsplit
+from urllib.parse import urldefrag, urlsplit
 
 from ..schema import ProxySubscription
 from . import downloader
@@ -48,12 +48,16 @@ def fetch(subscription: ProxySubscription, *, key: bytes, authorized: bool = Fal
         parsed_url = urlsplit(subscription.url)
     except ValueError as exc:
         raise downloader.DownloadError('download.invalid_url') from exc
-    if parsed_url.username is not None or parsed_url.password is not None or parsed_url.fragment:
+    # A fragment is a client-side label (e.g. ``.../singbox/?asn=x#Mike``) and is
+    # never sent to the server; drop it instead of rejecting the whole URL. Embedded
+    # credentials are still refused.
+    if parsed_url.username is not None or parsed_url.password is not None:
         raise downloader.DownloadError('download.invalid_url')
+    url = urldefrag(subscription.url).url
     if not authorized:
         raise downloader.DownloadError('download.user_authorization_required')
     builder = downloader.SourceUpdater()
-    spec = builder.build_spec(name=subscription.name, url=subscription.url,
+    spec = builder.build_spec(name=subscription.name, url=url,
                               kind='subscription', format=subscription.format,
                               authorized=True, max_bytes=downloader.DEFAULT_MAX_BYTES,
                               timeout=downloader.DEFAULT_TIMEOUT)
