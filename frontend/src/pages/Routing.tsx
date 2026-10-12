@@ -1,6 +1,9 @@
-import { Alert, Button, Checkbox, FormControlLabel, Typography } from "@mui/material";
+import { Alert, Button, Checkbox, FormControlLabel, Radio, RadioGroup, Typography } from "@mui/material";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
+import { PageSection } from "../components/PageSection";
+import { ExpertDisclosure } from "../components/ExpertDisclosure";
+import { InlineStatus } from "../components/InlineStatus";
 import { Toggle } from "../components/Toggle";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InfoNote } from "../components/InfoNote";
@@ -171,7 +174,12 @@ function TProxyEditor() {
   const clearPreview = () =>
     queryClient.removeQueries({ queryKey: queryKeys.tproxyPreview(version?.id ?? null) });
   // Browse starts in the compact view; editing still opens the full editor.
-  const [view, setView] = useState<"simple" | "wizard" | "expert">("simple");
+  const [view, setView] = useState<"configure" | "expert">("configure");
+  const [quickstart, setQuickstart] = useState(false);
+  const [addingRule, setAddingRule] = useState(false);
+  const [guidedRule, setGuidedRule] = useState<TProxyRule>(emptyRule);
+  const [sourceMode, setSourceMode] = useState<"all" | "selected">("selected");
+  const runtime = useQuery({ queryKey: ["runtime", "engine"], queryFn: api.runtimeEngine, retry: false, refetchInterval: 15000 });
   const [step, setStep] = useState(0);
   const [wizardSources, setWizardSources] = useState<string[]>([]);
   const [wizardDNSTags, setWizardDNSTags] = useState({ direct: "dns-direct", tunnel: "dns-tunnel" });
@@ -183,30 +191,36 @@ function TProxyEditor() {
   const current: TProxy = editor.value ?? { ...configuration.tproxy,
     rules: [...configuration.tproxy.rules].sort((a, b) => a.order - b.order) };
   const sources = configuration.interfaces.filter((i) => i.zone && i.zone !== "wan");
-  // Counters and summary for the "Простой" (compact) view.
-  const sourcesCount = current.ingress_interfaces.length;
-  const rulesCount = current.rules.length;
-  const bypassCount = current.bypass.length;
-  const finalAction = current.final;
-  const countersRow = `Источники: ${sourcesCount} · ` +
-                     `Правила: ${rulesCount} · ` +
-                     `Исключения: ${bypassCount} · ` +
-                     `Конечное действие: ${finalAction}`;
+  const lanSources = sources.filter((i) => i.zone === "lan");
+  const actionOptions = [
+    { value: "direct", label: "Как обычно (напрямую)" },
+    { value: "block", label: "Заблокировать" },
+    { value: "route", label: "Через выход" },
+  ];
   const sourcesJoined = current.ingress_interfaces.join(", ") || "не выбраны";
   const actionLabel = (action: TProxyRule["action"]) =>
     action === "route" ? "Прокси-выход" : action === "block" ? "Блокировать" : "Обычный маршрут";
-  const matchLabel = (rule: TProxyRule) => [
-    ...rule.source_ip_cidr.map((v) => `источник ${v}`),
-    ...rule.domain_suffix.map((v) => `домен ${v}`),
-    ...rule.ip_cidr.map((v) => `сеть ${v}`),
-    ...rule.rule_sets.map((v) => `набор ${v}`),
-    ...rule.ports.map((v) => `порт ${v}`),
-    ...(rule.protocol !== "any" ? [rule.protocol] : []),
-  ].join(", ") || "условия не заданы";
+  const matchLabel = (rule: TProxyRule): string => {
+    if (rule.logical_mode) return `${rule.logical_mode === "and" ? "все" : "любое"} из: ${(rule.logical_rules ?? []).map((child) => matchLabel(child)).join("; ") || "нет условий"}`;
+    return [
+      ...rule.source_ip_cidr.map((v) => `устройство ${v}`),
+      ...(rule.source_mac ?? []).map((v) => `MAC ${v}`),
+      ...rule.domain_suffix.map((v) => `домен ${v}`),
+      ...(rule.domain_exact ?? []).map((v) => `точный домен ${v}`),
+      ...(rule.domain_keyword ?? []).map((v) => `слово в домене ${v}`),
+      ...(rule.domain_regex ?? []).map((v) => `шаблон домена ${v}`),
+      ...rule.ip_cidr.map((v) => `сеть ${v}`),
+      ...rule.rule_sets.map((v) => `список ${v}`),
+      ...rule.ports.map((v) => `порт ${v}`),
+      ...(rule.inbound ?? []).map((v) => `вход ${v}`),
+      ...(rule.ip_is_private == null ? [] : [rule.ip_is_private ? "частный IP" : "публичный IP"]),
+      ...(rule.network ? [rule.network] : rule.protocol !== "any" ? [rule.protocol] : []),
+    ].join(", ") || "условия не заданы";
+  };
   const outboundIssue = (tag: string | null) =>
     !tag || !outboundOptions.includes(tag) ? "ссылка сломана" :
       !configuration.proxies.enabled ? "секция выходов выключена" : null;
-  const summaryLine = `${sourcesJoined} → исключения → правила по порядку → ${actionLabel(current.final)}${current.final_outbound && current.final === "route" ? ` → ${current.final_outbound}` : ""}`;
+  const summaryLine = `${sourcesJoined} → sing-box → первое подходящее правило → ${actionLabel(current.final)}${current.final_outbound && current.final === "route" ? ` → ${current.final_outbound}` : ""}`;
   // Outbounds a rule may route to: declared proxy outbounds and groups. They
   // are only rendered by the generator while the proxies section is enabled.
   const outboundOptions = [
@@ -252,7 +266,7 @@ function TProxyEditor() {
     !current.dns.rules.some((rule) => rule.name === wizardDNSRuleName) &&
     engineTagValid(wizardDNSRuleName) &&
     (wizardRule.domain_suffix.length > 0 || wizardRule.rule_sets.length > 0);
-  const wizardCandidate = view === "wizard";
+  const wizardCandidate = quickstart;
   const ingress = wizardCandidate ? wizardSources : current.ingress_interfaces;
   const rules = wizardCandidate ? [...current.rules, wizardRule] : current.rules;
   const usesOutbound = rules.some((r) => r.action === "route") || current.final === "route";
@@ -309,24 +323,33 @@ function TProxyEditor() {
       setWizardSources([]);
       setWizardRule(emptyWizardRule());
       setWizardSubmitted(false);
-      setView("simple");
+      setQuickstart(false);
+      setView("configure");
     }
   }, [wizardSubmitted, editor.isEdit, editor.saving]);
   return (
     <>
-      <Typography component="div">
-        Статус: <Badge tone={version?.status === "confirmed" && !editor.isEdit ? "green" : "amber"}>
-          {!version ? "Конфигурация недоступна" : version.status === "confirmed" && !editor.isEdit
-            ? (current.enabled ? "Применено: включено" : "Применено: выключено")
-            : (current.enabled ? "Включено в черновике" : "Выключено в черновике")}
+      <PageSection title="Выборочная маршрутизация (TProxy)"
+        subtitle="Трафик выбранных устройств идёт через выбранный выход, остальной — как обычно."
+        action={<Button variant="contained" disabled={!version || user?.role === "operator" || editor.saving ||
+          (!current.enabled && !!enableIssue)} onClick={() => {
+            if (!editor.isEdit) editor.begin(current);
+            setEnabled(!current.enabled);
+          }}>{current.enabled ? "Выключить" : "Включить"}</Button>}>
+        <Badge tone={version?.status === "confirmed" && !editor.isEdit ? (current.enabled ? "green" : "blue") : "amber"}>
+          {!version ? "Конфигурация недоступна" : `${current.enabled ? "Включено" : "Выключено"} · ${editor.isEdit ? "несохранённый черновик" : version.status === "confirmed" ? "применено" : "черновик"}`}
         </Badge>
-      </Typography>
-      {version?.status === "draft" && applied && <InfoNote>
-        Подтверждённая конфигурация: {applied.configuration.tproxy.enabled ? "включено" : "выключено"}. Черновик не меняет её до общего применения.
-      </InfoNote>}
-      <InfoNote>Сохранение меняет только черновик. Трафик может измениться при общем применении ещё до подтверждения; статус конфигурации не проверяет доступность выхода.</InfoNote>
+        {version?.status === "draft" && applied && <Typography variant="body2">Применённая версия: {applied.configuration.tproxy.enabled ? "включена" : "выключена"}. Черновик ещё не применён.</Typography>}
+        <Typography variant="body2">{summaryLine}</Typography>
+        <InlineStatus tone={runtime.isError || !runtime.data ? "unknown" : runtime.data.running ? "green" : "neutral"}
+          text={`Движок: ${runtime.isError || !runtime.data ? "состояние недоступно" : runtime.data.running ? "работает" : "остановлен"} · версия ${runtime.isError ? "неизвестна" : runtime.data?.version ?? "неизвестна"} · Clash API ${runtime.isError || !runtime.data ? "неизвестен" : runtime.data.clash_api ? "доступен" : "недоступен"}`} />
+      </PageSection>
       <ErrorNotice error={editor.error ?? preview.error} />
-      <InfoNote>Источники → исключения (всегда обычный маршрут) → правила по порядку (первое совпадение) → выход / конечное действие. При отказе выбранный трафик не должен уходить напрямую в WAN.</InfoNote>
+      {enableIssue && !current.enabled && <Typography variant="body2">Для включения: {enableIssue}</Typography>}
+      <ExpertDisclosure><Typography variant="h3">Как это работает</Typography>
+        <Typography>Перехватывается только транзит выбранных LAN-источников. Исключения идут обычным маршрутом; остальные правила проверяются сверху вниз. При отказе выбранный трафик не должен уходить напрямую в WAN. Предпросмотр проверяет конфигурацию, но не подтверждает работу перехвата.</Typography>
+        <Typography>Системные правила: sniff определяет домен; DNS на порту 53 перехватывается; локальные IPv4-адреса идут напрямую; для UDP действует настроенный таймаут. Эти правила здесь не редактируются.</Typography>
+      </ExpertDisclosure>
       <ConfirmDialog open={pendingEnable} title="Включить выборочную маршрутизацию?"
         body="После сохранения и общего применения трафик LAN, совпадающий с правилами, будет направляться или перенаправляться согласно политике. Ошибка в настройках может нарушить подключение. Проверьте правила и доступность выходов перед применением."
         confirmLabel="Включить в черновике" cancelLabel="Отмена"
@@ -342,38 +365,33 @@ function TProxyEditor() {
             servers: current.dns.servers.filter((_, i) => i !== pendingDNSDelete.index) } });
           setPendingDNSDelete(null);
         }} />
-      <ValueTabs
-        value={view}
-        change={(next) => {
-          setView(next);
-          if (next === "wizard" && !editor.isEdit && version && user?.role !== "operator") {
-            editor.begin(current);
-          }
-        }}
-        tabs={[{ value: "simple", label: "Простой" },
-          { value: "wizard", label: "Мастер" }, { value: "expert", label: "Эксперт" }]}
-      />
-      <Card title="Параметры движка">
-        <InfoNote>Sniff — определять домен из SNI/Host; без него матч по домену может не сработать.</InfoNote>
-        {editor.isEdit && user?.role !== "operator" && view === "expert" ? <FormGrid>
-          <Toggle label="Sniff" value={current.sniff ?? false}
-            onChange={(sniff) => patch({ sniff })} />
+      <ValueTabs value={view} change={setView}
+        tabs={[{ value: "configure", label: "Настроить" }, { value: "expert", label: "Эксперт" }]} />
+      {view === "expert" && <Card title="Служебные правила (добавляются автоматически)">
+        <Typography variant="body2">Только просмотр: их порядок и условия задаёт движок, а не список ваших правил.</Typography>
+        <Typography>1. Определение домена (sniff) — {current.sniff ? "включено" : "выключено"}</Typography>
+        <Typography>2. DNS-запросы (порт 53) → локальный DNS-контур</Typography>
+        <Typography>3. Локальные адреса IPv4 → напрямую</Typography>
+        <Typography>4. Таймаут UDP → {current.udp_timeout_seconds == null ? "не задан" : `${current.udp_timeout_seconds} с`}</Typography>
+      </Card>}
+      {view === "expert" && <Card title="Параметры движка">
+        {editor.isEdit && user?.role !== "operator" ? <FormGrid>
+          <Toggle label="Sniff" value={current.sniff ?? false} onChange={(sniff) => patch({ sniff })} />
           <Field label="Таймаут UDP, секунд" type="number" value={current.udp_timeout_seconds ?? ""}
             hint="Пусто — выключено" valid={udpTimeoutValid} inputProps={{ min: 1, max: 86400, step: 1 }}
             onChange={(value) => patch({ udp_timeout_seconds: value === "" ? null : Number(value) })} />
         </FormGrid> : <Typography>Sniff: {current.sniff ? "включён" : "выключен"}; таймаут UDP: {current.udp_timeout_seconds ?? "выключен"}</Typography>}
         {!udpTimeoutValid && <ErrorNotice error={new Error("Таймаут UDP: целое число от 1 до 86400 (tproxy.udp_timeout_seconds).")}/>}
-      </Card>
-      {editor.isEdit && user?.role !== "operator" && view === "expert" && <>
+      </Card>}
+      {view === "expert" && editor.isEdit && user?.role !== "operator" &&
         <Toggle label="Включить выборочную маршрутизацию" value={current.enabled}
-          disabled={editor.saving || (!current.enabled && !!enableIssue)} onChange={setEnabled} />
-        {enableIssue && <InfoNote severity="warning">Включение недоступно: {enableIssue}</InfoNote>}
-      </>}
-      {view === "wizard" ? (
+          disabled={editor.saving || (!current.enabled && !!enableIssue)} onChange={setEnabled} />}
+      {view === "configure" && quickstart ? (
         <>
           {!wizardFresh && <ErrorNotice error={new Error("Мастер доступен только для пустой выключенной TProxy/DNS-политики. Существующую политику изменяйте в «Эксперте».")} />}
           {!configuration.proxies.enabled && <ErrorNotice error={new Error("Включите секцию прокси-выходов перед сохранением мастера.")} />}
-          <Typography variant="h2">{["Туннель", "Что в туннель", "DNS", "Применение"][step]}</Typography>
+          <Typography>Источник → Правила → Включить</Typography>
+          <Typography variant="h2">{["Источник", "Правила", "Включить после сохранения"][step]}</Typography>
           {step === 0 && <>
             <FormGrid><SelectField label="Выход (мастер)" value={wizardRule.outbound ?? ""}
               required options={outboundOptions} onChange={(outbound) => updateWizardRule({ outbound })} /></FormGrid>
@@ -413,8 +431,12 @@ function TProxyEditor() {
             </>}
           </>}
           {step === 2 && <>
-            <InfoNote>Мастер создаёт DNS-серверы dns-direct и dns-tunnel и DNS-правило автоматически; теги sing-box допускают дефис.</InfoNote>
-            <FormGrid>
+            <Typography>Источник: {wizardSources.join(", ")}; правило: {wizardRule.name}; выход: {wizardRule.outbound}.</Typography>
+            <Typography>После сохранения политика останется выключенной. Чтобы направлять трафик, нажмите «Включить» вверху и примените общий черновик.</Typography>
+            <Typography>Для доменов будет создан отдельный DNS-маршрут через выход. Остальной трафик пойдёт как обычно.</Typography>
+            <ExpertDisclosure>
+              <Typography>Дополнительно: адрес DNS и имена автоматических серверов</Typography>
+              <FormGrid>
               <Field label="DNS-сервер (IP)" value={wizardDNSAddress}
                 valid={addressValid(wizardDNSAddress) && !wizardDNSAddress.includes("/")}
                 onChange={setWizardDNSAddress} />
@@ -422,65 +444,124 @@ function TProxyEditor() {
                 onChange={(direct) => setWizardDNSTags((tags) => ({ ...tags, direct }))} />
               <Field label="Тег туннельного DNS" value={wizardDNSTags.tunnel} valid={engineTagValid(wizardDNSTags.tunnel)}
                 onChange={(tunnel) => setWizardDNSTags((tags) => ({ ...tags, tunnel }))} />
-            </FormGrid>
+              </FormGrid>
+            </ExpertDisclosure>
             {!wizardDNSValid && <ErrorNotice error={new Error("Проверьте DNS-теги (латиница, цифры, дефис/подчёркивание), IP, уникальность и наличие доменов или наборов для DNS-правила.")} />}
-          </>}
-          {step === 3 && <>
-            <Typography>Источники: {wizardSources.join(", ")}</Typography>
-            <Typography>Правило: {wizardRule.name}</Typography>
-            <Typography>Домены: {wizardRule.domain_suffix.join(", ") || "нет"}</Typography>
-            <Typography>Наборы правил: {wizardRule.rule_sets.join(", ") || "нет"}</Typography>
-            <Typography>Назначения IPv4: {wizardRule.ip_cidr.join(", ") || "нет"}</Typography>
-            <Typography>Порты: {wizardRule.ports.join(", ") || "нет"}</Typography>
-            <Typography>Выход: {wizardRule.outbound}</Typography>
-            <Typography>DNS: {wizardDNSTags.direct} (direct), {wizardDNSTags.tunnel} (через {wizardRule.outbound}), адрес {wizardDNSAddress}</Typography>
-            <Typography>DNS-правило: {wizardDNSRuleName} → {wizardDNSTags.tunnel}</Typography>
-            <Typography>Конечное действие: direct; TProxy останется выключен в черновике.</Typography>
-            <Typography>Sniff: включится для определения доменов.</Typography>
-            <Typography>Полный предпросмотр sing-box доступен после сохранения черновика.</Typography>
           </>}
           <FormActions>
             {step > 0 && <Button onClick={() => setStep((previous) => previous - 1)}>Назад</Button>}
-            {step < 3 ? <Button disabled={step === 0 ? wizardSources.length === 0 || !wizardRule.outbound || !outboundOptions.includes(wizardRule.outbound) :
-              step === 1 ? !nameValid(wizardRule.name) ||
+            {step < 2 ? <Button disabled={step === 0 ? wizardSources.length === 0 || !wizardRule.outbound || !outboundOptions.includes(wizardRule.outbound) :
+              !nameValid(wizardRule.name) ||
                 ![...wizardRule.domain_suffix, ...wizardRule.ip_cidr,
                   ...wizardRule.rule_sets, ...wizardRule.ports].length ||
                 !wizardRule.domain_suffix.every(domainValid) ||
                 !wizardRule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr)) ||
-                !wizardRule.ports.every(portRangeValid) : !wizardDNSValid || !wizardRuleValid}
-              onClick={() => setStep((previous) => previous + 1)}>Далее</Button>
+                !wizardRule.ports.every(portRangeValid) || !wizardDNSValid || !wizardRuleValid}
+              onClick={() => setStep((previous) => previous + 1)}>{step === 0 ? "Настроить правило" : "Проверить и сохранить"}</Button>
               : <Button disabled={!wizardCanSave} onClick={() => void saveWizard()}>Сохранить черновик</Button>}
           </FormActions>
         </>
-      ) : !editor.isEdit || user?.role === "operator" ? (
+      ) : view === "configure" ? (
         <>
-          {/* Простой view: counters + summary above the existing browse content. */}
-          {view === "simple" && <>
-            <Typography>{countersRow}</Typography>
-            <Typography>{summaryLine}</Typography>
-          </>}
-          <Button disabled={!version || user?.role === "operator"}
-            onClick={() => { clearPreview(); setView("expert"); editor.begin(current); }}>Редактировать</Button>
-          <Card title="Источники"><Typography>{sourcesJoined}</Typography></Card>
-          <Card title="Исключения (всегда обычный маршрут)">
-            {current.bypass.length ? current.bypass.map((row, index) =>
-              <Typography key={index}>{row.name}: {[...row.source_ip_cidr, ...row.ip_cidr, ...row.ports].join(", ")}</Typography>) :
-              <Typography>Исключений нет</Typography>}
+          {!editor.isEdit && wizardFresh && <Card title="Начните настройку">
+            <Typography>Источник → Правила → Включить. Настройка сохранится выключенной, пока вы отдельно не включите и не примените её.</Typography>
+            <Button disabled={!version || user?.role === "operator"} onClick={() => {
+              clearPreview(); editor.begin(current); setQuickstart(true); setStep(0);
+            }}>Выбрать источник</Button>
+          </Card>}
+          {!editor.isEdit && <Button disabled={!version || user?.role === "operator"}
+            onClick={() => { clearPreview(); editor.begin(current); }}>Редактировать</Button>}
+          <Card title="Источник трафика">
+            {editor.isEdit ? <>
+              <RadioGroup aria-label="Источник трафика" value={sourceMode} onChange={(_, mode) => {
+                setSourceMode(mode as "all" | "selected");
+                if (mode === "all") patch({ ingress_interfaces: lanSources.map((source) => source.name) });
+              }}>
+                <FormControlLabel value="all" label="Все устройства (LAN)" control={<Radio />} />
+                <FormControlLabel value="selected" label="Выбранные интерфейсы" control={<Radio />} />
+              </RadioGroup>
+              {sourceMode === "selected" && sources.map((source) => <FormControlLabel key={source.name}
+                label={interfaceLabel(source.name, configuration.interfaces)} control={<Checkbox
+                  checked={current.ingress_interfaces.includes(source.name)} onChange={(_, checked) => patch({
+                    ingress_interfaces: checked ? [...current.ingress_interfaces, source.name] :
+                      current.ingress_interfaces.filter((name) => name !== source.name),
+                  })} />} />)}
+              {sources.length === 0 && <Typography>Доступных LAN-источников нет.</Typography>}
+            </> : <Typography>{sourcesJoined}</Typography>}
           </Card>
-          <Card title="Правила по порядку">
-            <InfoNote>Сверху вниз: первое совпадение определяет действие. Исключения проверяются раньше правил.</InfoNote>
-            {current.rules.map((rule, index) => <Typography key={index}>
-              {index + 1}. {rule.name} · {rule.action} · {matchLabel(rule)} → {actionLabel(rule.action)}
-              {rule.action === "route" ? ` → ${rule.outbound || "не выбран"}` : ""}
-              {rule.action === "route" && outboundIssue(rule.outbound) ? ` — ${outboundIssue(rule.outbound)}` : ""}
-            </Typography>)}
+          <Card title="Правила" action={editor.isEdit ? <Button onClick={() => setAddingRule(true)}>+ Добавить правило</Button> : undefined}>
+            <Typography variant="body2">Первое подходящее правило определяет путь трафика.</Typography>
+            {current.rules.length === 0 && <Typography>Правил пока нет.</Typography>}
+            {current.rules.map((rule, index) => <div key={index} className="rule-row">
+              <Typography>{index + 1}. {rule.name || "Новое правило"}</Typography>
+              <Typography>Что: {matchLabel(rule)} · Куда: {actionLabel(rule.action)}{rule.action === "route" ? ` · ${rule.outbound || "выход не выбран"}` : ""}</Typography>
+              {editor.isEdit && <FormGrid>
+                <Field label="Имя правила" value={rule.name} valid={nameValid(rule.name)}
+                  onChange={(name) => updateRule(index, { name })} />
+                <Field label="Что: домены" multiline value={rule.domain_suffix.join("\n")}
+                  valid={rule.domain_suffix.every(domainValid)} onChange={(value) => updateRule(index, { domain_suffix: lines(value) })} />
+                <Field label="Что: IPv4-сети" multiline value={rule.ip_cidr.join("\n")}
+                  valid={rule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+                  onChange={(value) => updateRule(index, { ip_cidr: lines(value) })} />
+                <Field label="Что: порты" multiline value={rule.ports.join("\n")}
+                  valid={rule.ports.every(portRangeValid)} onChange={(value) => updateRule(index, { ports: lines(value) })} />
+                <Select label="Куда" value={rule.action} options={actionOptions}
+                  onChange={(value) => { const action = value as TProxyRule["action"]; updateRule(index, { action, outbound: action === "route" ? rule.outbound : null }); }} />
+                {rule.action === "route" && <SelectField label="Выход" value={rule.outbound ?? ""}
+                  options={outboundOptions} onChange={(outbound) => updateRule(index, { outbound })} />}
+                {matcherIssue(rule, ruleSetOptions) && <ErrorNotice error={new Error(
+                  `${matcherErrorLabels[matcherIssue(rule, ruleSetOptions)!]} (${matcherIssue(rule, ruleSetOptions)})`,
+                )} />}
+              </FormGrid>}
+              {editor.isEdit && <FormActions>
+                <Button disabled={index === 0} onClick={() => { const rules = [...current.rules];
+                  [rules[index - 1], rules[index]] = [rules[index], rules[index - 1]];
+                  patch({ rules: rules.map((r, order) => ({ ...r, order })) }); }}>Вверх {rule.name}</Button>
+                <DeleteButton label={`Удалить правило ${rule.name || index + 1}`} onClick={() => patch({
+                  rules: current.rules.filter((_, i) => i !== index).map((r, order) => ({ ...r, order })),
+                })} />
+              </FormActions>}
+            </div>)}
+            {editor.isEdit && addingRule && <FormGrid>
+              <Field label="Имя правила" value={guidedRule.name} valid={nameValid(guidedRule.name)}
+                onChange={(name) => setGuidedRule({ ...guidedRule, name })} />
+              <Typography>Что направить — выберите домен сервиса или задайте свои условия.</Typography>
+              <FormActions>
+                <Button variant="outlined" onClick={() => setGuidedRule({ ...guidedRule, domain_suffix: ["youtube.com"] })}>YouTube (youtube.com)</Button>
+                <Button variant="outlined" onClick={() => setGuidedRule({ ...guidedRule, domain_suffix: ["rutube.ru"] })}>RuTube (rutube.ru)</Button>
+              </FormActions>
+              <Field label="Домены" multiline value={guidedRule.domain_suffix.join("\n")}
+                valid={guidedRule.domain_suffix.every(domainValid)} onChange={(value) => setGuidedRule({ ...guidedRule, domain_suffix: lines(value) })} />
+              <Field label="IPv4-сети" multiline value={guidedRule.ip_cidr.join("\n")}
+                valid={guidedRule.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+                onChange={(value) => setGuidedRule({ ...guidedRule, ip_cidr: lines(value) })} />
+              <Field label="Порты" multiline value={guidedRule.ports.join("\n")}
+                valid={guidedRule.ports.every(portRangeValid)} onChange={(value) => setGuidedRule({ ...guidedRule, ports: lines(value) })} />
+              {ruleSetOptions.map((name) => <FormControlLabel key={name} label={name} control={<Checkbox
+                checked={guidedRule.rule_sets.includes(name)} onChange={(_, checked) => setGuidedRule({ ...guidedRule,
+                  rule_sets: checked ? [...guidedRule.rule_sets, name] : guidedRule.rule_sets.filter((item) => item !== name),
+                })} />} />)}
+              <Select label="Куда" value={guidedRule.action} options={actionOptions}
+                onChange={(value) => { const action = value as TProxyRule["action"]; setGuidedRule({ ...guidedRule, action, outbound: action === "route" ? guidedRule.outbound : null }); }} />
+              {guidedRule.action === "route" && <SelectField label="Выход" value={guidedRule.outbound ?? ""}
+                options={outboundOptions} onChange={(outbound) => setGuidedRule({ ...guidedRule, outbound })} />}
+              <FormActions><Button onClick={() => setAddingRule(false)}>Отмена</Button>
+                <Button disabled={!ruleValid(guidedRule, outboundOptions, ruleSetOptions) || current.rules.some((r) => r.name === guidedRule.name)}
+                  onClick={() => { patch({ rules: [...current.rules, { ...guidedRule, order: current.rules.length }] });
+                    setAddingRule(false); setGuidedRule(emptyRule()); }}>Добавить</Button></FormActions>
+            </FormGrid>}
           </Card>
-          <Card title="Выход / конечное действие">
-            <Typography>Если правила не совпали: {actionLabel(current.final)}
-              {current.final === "route" ? ` → ${current.final_outbound || "не выбран"}` : ""}
-              {current.final === "route" && outboundIssue(current.final_outbound) ? ` — ${outboundIssue(current.final_outbound)}` : ""}
-            </Typography>
+          <Card title="Конечное действие">
+            {editor.isEdit ? <FormGrid><Select label="Для несовпавшего трафика" value={current.final}
+              options={actionOptions} onChange={(value) => { const final = value as TProxy["final"]; patch({ final,
+                final_outbound: final === "route" ? current.final_outbound : null }); }} />
+              {current.final === "route" && <SelectField label="Выход по умолчанию" value={current.final_outbound ?? ""}
+                options={outboundOptions} onChange={(final_outbound) => patch({ final_outbound })} />}</FormGrid> :
+              <Typography>{actionLabel(current.final)}{current.final_outbound && current.final === "route" ? ` · ${current.final_outbound}` : ""}</Typography>}
           </Card>
+          <Button onClick={() => setView("expert")}>Дополнительно → Эксперт</Button>
+          {editor.isEdit && <EditorFooter saving={editor.saving} valid={valid && (!current.enabled || !enableIssue)}
+            cancel={editor.cancel} save={() => void save()} />}
           <Button disabled={user?.role !== "admin" || version?.status !== "draft" || preview.isFetching}
             onClick={() => void preview.refetch()}>Предпросмотр сохранённого черновика</Button>
           {preview.data && !editor.isEdit && preview.data.version_id === version?.id && <>
@@ -488,18 +569,26 @@ function TProxyEditor() {
             <pre aria-label="Конфигурация sing-box">{JSON.stringify(preview.data.singbox, null, 2)}</pre>
           </>}
         </>
-      ) : view === "simple" ? (
+      ) : !editor.isEdit || user?.role === "operator" ? (
         <>
-          {/* Простой view in edit: counters + summary + EditorFooter */}
-          <Typography>{countersRow}</Typography>
-          <Typography>{summaryLine}</Typography>
-          <InfoNote>Просмотр без изменений: редактируйте через «Мастер» или «Эксперт».</InfoNote>
-          <Button onClick={editor.cancel}>Отмена</Button>
+          <Button disabled={!version || user?.role === "operator"}
+            onClick={() => { clearPreview(); editor.begin(current); }}>Редактировать</Button>
+          <Card title="Источники"><Typography>{sourcesJoined}</Typography></Card>
+          <Card title="Правила">{current.rules.map((rule, index) => <Typography key={index}>
+            {index + 1}. {rule.name} · {matchLabel(rule)} → {actionLabel(rule.action)}
+            {rule.action === "route" ? ` · ${rule.outbound || "не выбран"}` : ""}
+          </Typography>)}</Card>
+          <Card title="Конечное действие"><Typography>{actionLabel(current.final)}</Typography></Card>
+          <Card title="Исключения"><Typography>{current.bypass.length ? current.bypass.map((row) => row.name).join(", ") : "Исключений нет"}</Typography></Card>
+          <Card title="DNS-политика"><Typography>Серверы: {current.dns.servers.length} · правила: {current.dns.rules.length}</Typography></Card>
+          <Button disabled={user?.role !== "admin" || version?.status !== "draft" || preview.isFetching}
+            onClick={() => void preview.refetch()}>Предпросмотр сохранённого черновика</Button>
+          {preview.data && preview.data.version_id === version?.id && <pre aria-label="Конфигурация sing-box">{JSON.stringify(preview.data.singbox, null, 2)}</pre>}
         </>
       ) : (
         <>
           {/* Expert view in edit: the full editor (today's behavior) */}
-          <Typography variant="h2">Источники трафика</Typography>
+          <Typography variant="h2">Источники</Typography>
           {sources.map((source) => <FormControlLabel
             key={source.name}
             label={interfaceLabel(source.name, configuration.interfaces)}
@@ -508,7 +597,7 @@ function TProxyEditor() {
                 ? [...current.ingress_interfaces, source.name]
                 : current.ingress_interfaces.filter((name) => name !== source.name) })} />}
           />)}
-          <Typography variant="h2">Исключения (всегда обычный маршрут)</Typography>
+          <Typography variant="h2">Исключения</Typography>
           {current.bypass.map((row, index) => <div key={index} className="rule-row">
             <FormGrid>
               <Field label="Имя исключения" value={row.name} valid={nameValid(row.name)}

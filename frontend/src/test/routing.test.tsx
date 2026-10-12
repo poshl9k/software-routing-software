@@ -5,7 +5,10 @@ import { expect, it, vi } from "vitest";
 import Routing from "../pages/Routing";
 import { RouterProvider } from "../state";
 import { emptyConfiguration } from "../fixtures";
-import type { TProxyDNS, TProxyRule } from "../types";
+import type { RuntimeEngine, TProxyDNS, TProxyRule } from "../types";
+
+const engine: RuntimeEngine = { installed: true, version: "1.2.3", running: false, pid: null,
+  clash_api: false, ip_forward: true, nft_tproxy_tables: true };
 
 function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfiguration.proxies,
   tproxy = emptyConfiguration.tproxy, status: "draft" | "confirmed" = "draft") {
@@ -19,6 +22,8 @@ function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfigurat
     Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions"
         ? [{ id: 1, status, configuration }]
+        : path === "/api/runtime/engine"
+          ? engine
         : fail
           ? { code: "validation.failed", message: "Ошибка проверки конфигурации", details: [] }
           : { id: 1, status: "draft", configuration: JSON.parse(String(init?.body)) },
@@ -42,6 +47,7 @@ it("warns about DNS rule references before deleting its server", async () => {
   render(<MemoryRouter><RouterProvider><Routing /></RouterProvider></MemoryRouter>);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "Удалить DNS-сервер resolver" }));
   expect(screen.getByText(/DNS-правило domains/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Удалить" }));
@@ -52,15 +58,16 @@ it("warns about DNS rule references before deleting its server", async () => {
 it("saves disabled TProxy ingress and ordered block rule in draft", async () => {
   const fetch = setup();
   const user = userEvent.setup();
-  expect(await screen.findByText("Выключено в черновике")).toBeVisible();
+  expect(await screen.findByText("Выключено · черновик")).toBeVisible();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   expect(screen.getByRole("switch", { name: "Включить выборочную маршрутизацию" })).toBeDisabled();
   await user.click(screen.getByRole("checkbox", { name: "lan0" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "blocked_site");
   await user.type(screen.getByLabelText("Домены (по строкам)"), "example.org");
   await user.selectOptions(screen.getByLabelText("Действие"), "block");
-  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await user.click(await screen.findByRole("button", { name: "Сохранить" }));
   await waitFor(() => {
     const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
     const sent = JSON.parse(String(init.body));
@@ -72,13 +79,14 @@ it("saves disabled TProxy ingress and ordered block rule in draft", async () => 
       action: "block", outbound: null, order: 0,
     }]);
   });
-  expect(await screen.findByText(/blocked_site · block · домен example.org/)).toBeVisible();
+  expect(await screen.findByText(/blocked_site · домен example.org → Блокировать/)).toBeVisible();
 });
 
 it("confirms enabling only after a valid ingress and rule; saves enabled draft, not applied", async () => {
   const fetch = setup();
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   const toggle = screen.getByRole("switch", { name: "Включить выборочную маршрутизацию" });
   expect(toggle).toBeDisabled();
   expect(screen.getByText(/Выберите хотя бы один источник/)).toBeVisible();
@@ -101,8 +109,8 @@ it("confirms enabling only after a valid ingress and rule; saves enabled draft, 
   await waitFor(() => expect(fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBeTruthy());
   const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
   expect(JSON.parse(String(init.body)).tproxy.enabled).toBe(true);
-  expect(await screen.findByText("Включено в черновике")).toBeVisible();
-  expect(screen.queryByText("Применено: включено")).not.toBeInTheDocument();
+  expect(await screen.findByText("Включено · черновик")).toBeVisible();
+  expect(screen.queryByText("Включено · применено")).not.toBeInTheDocument();
 });
 
 it("blocks enabled route when outbound section is off or reference is missing", async () => {
@@ -111,6 +119,7 @@ it("blocks enabled route when outbound section is off or reference is missing", 
   setup(false, [rule], proxiesWithOutbound, { ...emptyConfiguration.tproxy, ingress_interfaces: ["lan0"] });
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   expect(screen.getByRole("switch", { name: "Включить выборочную маршрутизацию" })).toBeDisabled();
   expect(screen.getByText(/Включите секцию прокси-выходов/)).toBeVisible();
   await user.selectOptions(screen.getByLabelText("Выход"), "");
@@ -122,14 +131,38 @@ it("labels confirmed enabled configuration as applied without claiming live heal
     source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [], action: "direct", outbound: null, order: 0 };
   setup(false, [rule], emptyConfiguration.proxies,
     { ...emptyConfiguration.tproxy, enabled: true, ingress_interfaces: ["lan0"] }, "confirmed");
-  expect(await screen.findByText("Применено: включено")).toBeVisible();
-  expect(screen.getByText(/статус конфигурации не проверяет доступность выхода/)).toBeVisible();
+  expect(await screen.findByText("Включено · применено")).toBeVisible();
+  expect(await screen.findByText(/Движок: остановлен · версия 1.2.3/)).toBeVisible();
+});
+
+it("keeps the header enable action visible and confirms a valid draft change", async () => {
+  const rule: TProxyRule = { name: "allowed", domain_suffix: ["example.org"], ip_cidr: [],
+    source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [], action: "direct", outbound: null, order: 0 };
+  const fetch = setup(false, [rule], emptyConfiguration.proxies,
+    { ...emptyConfiguration.tproxy, ingress_interfaces: ["lan0"] });
+  const user = userEvent.setup();
+  const enable = await screen.findByRole("button", { name: "Включить" });
+  expect(enable).toBeEnabled();
+  expect(await screen.findByText(/Движок: остановлен · версия 1.2.3/)).toBeVisible();
+  await user.click(enable);
+  expect(screen.getByText(/Ошибка в настройках может нарушить подключение/)).toBeVisible();
+  expect(screen.getByText("Выключено · несохранённый черновик")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Включить в черновике" }));
+  expect(screen.getByText("Включено · несохранённый черновик")).toBeVisible();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Сохранить" })).toBeVisible());
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => {
+    const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+    expect(JSON.parse(String(init.body)).tproxy.enabled).toBe(true);
+  });
+  expect(fetch.mock.calls.some(([path]) => path === "/api/apply")).toBe(false);
 });
 
 it("retains unsaved TProxy edits after rejected draft", async () => {
   setup(true);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "retry_rule");
   await user.type(screen.getByLabelText("Домены (по строкам)"), "example.net");
@@ -142,6 +175,7 @@ it("saves daily update window as an alternative to six-hour interval", async () 
   const fetch = setup();
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.selectOptions(screen.getByLabelText("Режим обновления"), "window");
   await user.clear(screen.getByLabelText("Начало окна"));
   await user.type(screen.getByLabelText("Начало окна"), "01:30");
@@ -164,11 +198,11 @@ it("shows configured first-match order and updates it on move", async () => {
       rule_sets: [], protocol: "any", ports: [], action: "direct", outbound: null, order: 10 },
   ]);
   const user = userEvent.setup();
-  await screen.findByText(/first · direct/);
-  expect(screen.getAllByText(/(?:later|first) ·/).map((el) => el.textContent)).toEqual([
-    "1. first · direct · домен first.test → Обычный маршрут",
-    "2. later · block · домен later.test → Блокировать",
-  ]);
+  await screen.findByText(/1\. first/);
+  expect(screen.getByText("1. first")).toBeVisible();
+  expect(screen.getByText("2. later")).toBeVisible();
+  expect(screen.getByText("Что: домен first.test · Куда: Обычный маршрут")).toBeVisible();
+  expect(screen.getByText("Что: домен later.test · Куда: Блокировать")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "Вверх later" }));
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -191,6 +225,7 @@ it("routes a rule to a chosen outbound on save", async () => {
   const fetch = setup(false, [], proxiesWithOutbound);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "via_proxy");
   await user.type(screen.getByLabelText("Домены (по строкам)"), "example.com");
@@ -205,13 +240,14 @@ it("routes a rule to a chosen outbound on save", async () => {
         action: "route", outbound: "proxy_a", order: 0 },
     ]);
   });
-  expect(await screen.findByText(/via_proxy · route · домен example.com → Прокси-выход → proxy_a/)).toBeVisible();
+  expect(await screen.findByText(/via_proxy · домен example.com → Прокси-выход · proxy_a/)).toBeVisible();
 });
 
 it("clears the outbound when a routing rule stops routing", async () => {
   const fetch = setup(false, [], proxiesWithOutbound);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "sw");
   await user.type(screen.getByLabelText("Домены (по строкам)"), "example.com");
@@ -232,6 +268,7 @@ it("saves the policy final action and its outbound", async () => {
   const fetch = setup(false, [], proxiesWithOutbound);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.selectOptions(screen.getByLabelText("Для несовпавшего трафика"), "route");
   await user.selectOptions(await screen.findByLabelText("Выход по умолчанию"), "proxy_a");
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -243,27 +280,100 @@ it("saves the policy final action and its outbound", async () => {
   });
 });
 
-it("shows the Simple overview and reveals expert fields on toggle", async () => {
+it("offers guided setup and keeps expert fields in the expert view", async () => {
   setup();
   const user = userEvent.setup();
-  // Browse defaults to Простой: counters + flow summary.
-  expect(screen.getByText(/Источники: 0/)).toBeVisible();
-  expect(screen.getByText(/→ исключения → правила по порядку →/)).toBeVisible();
-  // Editing opens in Эксперт with the full field editor.
+  expect(await screen.findByRole("tab", { name: "Настроить" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("heading", { name: "Начните настройку" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Выбрать источник" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Включить" })).toBeDisabled();
+  expect(screen.getByText(/Первое подходящее правило определяет путь трафика/)).toBeVisible();
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
+  expect(screen.getByText(/Исключений нет/)).toBeVisible();
+  expect(screen.queryByLabelText("Таймаут UDP, секунд")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  expect(screen.getByRole("heading", { name: "Источники" })).toBeVisible();
+  expect(screen.getByLabelText("Таймаут UDP, секунд")).toBeVisible();
+  await user.click(screen.getByRole("tab", { name: "Настроить" }));
+  expect(screen.queryByLabelText("Таймаут UDP, секунд")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Правила" })).toBeVisible();
+});
+
+it("adds, reorders and deletes guided rules while preserving first-match and final", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
-  expect(await screen.findByText("Источники трафика")).toBeVisible();
-  // Compact mode is read-only, even when draft editing was started.
-  await user.click(screen.getByRole("tab", { name: "Простой" }));
-  await waitFor(() =>
-    expect(screen.queryByText("Источники трафика")).not.toBeInTheDocument());
-  expect(screen.getByText(/→ исключения → правила по порядку →/)).toBeVisible();
-  expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("checkbox", { name: "lan0" }));
+  for (const [name, domain, action] of [["first", "first.test", "direct"], ["second", "second.test", "block"]]) {
+    await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
+    await user.type(screen.getAllByLabelText("Имя правила").at(-1)!, name);
+    await user.type(screen.getByLabelText("Домены"), domain);
+    await user.selectOptions(screen.getAllByLabelText("Куда").at(-1)!, action);
+    await user.click(screen.getByRole("button", { name: "Добавить" }));
+  }
+  expect(screen.getByText("1. first")).toBeVisible();
+  expect(screen.getByText("2. second")).toBeVisible();
+  expect(screen.getByText("Что: домен second.test · Куда: Блокировать")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Вверх second" }));
+  expect(screen.getByText("1. second")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Удалить правило first" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => {
+    const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+    const sent = JSON.parse(String(init.body)).tproxy;
+    expect(sent.rules).toEqual([{ name: "second", domain_suffix: ["second.test"], ip_cidr: [],
+      source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [], action: "block", outbound: null, order: 0 }]);
+    expect(sent.final).toBe("direct");
+    expect(sent.enabled).toBe(false);
+  });
+});
+
+it("shows read-only system rules and reports a failed runtime read honestly", async () => {
+  const fetch = setup();
+  fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+    path === "/api/versions" ? [{ id: 1, status: "draft", configuration: emptyConfiguration }] :
+      path === "/api/runtime/engine" ? { code: "agent.unavailable", message: "Недоступен", details: [] } : {},
+  ), { status: path === "/api/runtime/engine" ? 503 : 200 })));
+  const user = userEvent.setup();
+  expect(await screen.findByText(/Движок: состояние недоступно/)).toBeVisible();
+  expect(screen.queryByText(/Движок: работает/)).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Показать дополнительные настройки" }));
+  expect(screen.getByText(/Системные правила: sniff определяет домен/)).toBeVisible();
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
+  expect(screen.getByRole("heading", { name: "Служебные правила (добавляются автоматически)" })).toBeVisible();
+  expect(screen.getByText(/DNS-запросы \(порт 53\)/)).toBeVisible();
+  expect(screen.getByText(/Локальные адреса IPv4/)).toBeVisible();
+  expect(screen.getByText(/Таймаут UDP/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: /Удалить системное/ })).not.toBeInTheDocument();
+});
+
+it("selects all LAN sources and a service-domain shortcut without enabling traffic", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("radio", { name: "Все устройства (LAN)" }));
+  expect(screen.getByRole("radio", { name: "Выбранные интерфейсы" })).not.toBeChecked();
+  await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
+  await user.type(screen.getByLabelText("Имя правила"), "video");
+  await user.click(screen.getByRole("button", { name: "RuTube (rutube.ru)" }));
+  expect(screen.getByLabelText("Домены")).toHaveValue("rutube.ru");
+  await user.selectOptions(screen.getByLabelText("Куда"), "block");
+  await user.click(screen.getByRole("button", { name: "Добавить" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => {
+    const [, init] = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT")!;
+    const sent = JSON.parse(String(init.body)).tproxy;
+    expect(sent.ingress_interfaces).toEqual(["lan0"]);
+    expect(sent.rules[0]).toMatchObject({ name: "video", domain_suffix: ["rutube.ru"], action: "block" });
+    expect(sent.enabled).toBe(false);
+  });
 });
 
 it("saves a TProxy bypass exclusion in the draft", async () => {
   const fetch = setup();
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить исключение" }));
   await user.type(screen.getByLabelText("Имя исключения"), "corp");
   await user.type(screen.getByLabelText("Назначение IPv4 (bypass)"), "10.9.0.0/16");
@@ -283,6 +393,7 @@ it("saves an expert UDP DNS server and its matching DNS rule", async () => {
   const fetch = setup();
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить DNS-сервер" }));
   await user.type(screen.getByLabelText("Тег DNS-сервера"), "cloudflare");
   await user.type(screen.getByLabelText("Сервер DNS"), "1.1.1.1");
@@ -308,6 +419,7 @@ it("saves expert matchers and engine parameters only to draft", async () => {
   const fetch = setup();
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("switch", { name: "Sniff" }));
   await user.type(screen.getByLabelText("Таймаут UDP, секунд"), "120");
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
@@ -334,6 +446,7 @@ it("rejects conflicting domain matchers and invalid regex with visible backend c
   const fetch = setup();
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "conflict");
   await user.type(screen.getByLabelText("Домены (по строкам)"), "example.org");
@@ -352,6 +465,7 @@ it("saves a single-level logical OR with two distinct child matchers", async () 
   const fetch = setup();
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "combined");
   await user.selectOptions(screen.getByLabelText("Логическая группа"), "or");
@@ -371,42 +485,53 @@ it("saves a single-level logical OR with two distinct child matchers", async () 
 });
 
 it("blocks quickstart when an existing policy would be replaced or proxies are disabled", async () => {
-  setup(false, [], proxiesWithOutbound, { ...emptyConfiguration.tproxy, enabled: true });
-  const user = userEvent.setup();
+  const fetch = setup(false, [], proxiesWithOutbound, { ...emptyConfiguration.tproxy, enabled: true });
   await screen.findByRole("button", { name: "Редактировать" });
-  await user.click(screen.getByRole("tab", { name: "Мастер" }));
-  expect(screen.getByText(/Мастер доступен только для пустой выключенной/)).toBeVisible();
-  expect(screen.getByText(/Включите секцию прокси-выходов/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Выбрать источник" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Правила" })).toBeVisible();
+  expect(screen.getByRole("tab", { name: "Настроить" })).toHaveAttribute("aria-selected", "true");
+  expect(fetch.mock.calls.some(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBe(false);
 });
 
-it("walks quickstart through tunnel, matchers, DNS and summary; saves disabled draft", async () => {
-  const fetch = setup(false, [], { ...proxiesWithOutbound, enabled: true });
+it("blocks quickstart saving when proxy outputs are disabled", async () => {
+  setup(false, [], proxiesWithOutbound);
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Редактировать" });
-  await user.click(screen.getByRole("tab", { name: "Мастер" }));
-  expect(screen.getByText("Туннель")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Далее" })).toBeDisabled();
+  await user.click(await screen.findByRole("button", { name: "Выбрать источник" }));
+  expect(screen.getByText(/Включите секцию прокси-выходов/)).toBeVisible();
   await user.selectOptions(screen.getByLabelText("Выход (мастер)"), "proxy_a");
   await user.click(screen.getByRole("checkbox", { name: "lan0" }));
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  expect(screen.getByText("Что в туннель")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Далее" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "Настроить правило" }));
+  await user.type(screen.getByLabelText("Имя правила (мастер)"), "route_site");
+  await user.type(screen.getByLabelText("Домены (мастер)"), "example.org");
+  await user.click(screen.getByRole("button", { name: "Проверить и сохранить" }));
+  expect(screen.getByRole("button", { name: "Сохранить черновик" })).toBeDisabled();
+});
+
+it("walks quickstart through source, rule and confirmation; saves disabled draft", async () => {
+  const fetch = setup(false, [], { ...proxiesWithOutbound, enabled: true });
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Выбрать источник" }));
+  expect(screen.getByRole("heading", { name: "Источник" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Настроить правило" })).toBeDisabled();
+  await user.selectOptions(screen.getByLabelText("Выход (мастер)"), "proxy_a");
+  await user.click(screen.getByRole("checkbox", { name: "lan0" }));
+  await user.click(screen.getByRole("button", { name: "Настроить правило" }));
+  expect(screen.getByRole("heading", { name: "Правила" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Проверить и сохранить" })).toBeDisabled();
   await user.type(screen.getByLabelText("Имя правила (мастер)"), "tunnel_site");
   await user.type(screen.getByLabelText("Домены (мастер)"), "example.org");
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  expect(screen.getByText("DNS")).toBeVisible();
-  // Engine tags dns-direct/dns-tunnel are valid (hyphens allowed by contract).
-  expect(screen.getByRole("button", { name: "Далее" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "Проверить и сохранить" }));
+  expect(screen.getByRole("heading", { name: "Включить после сохранения" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Сохранить черновик" })).toBeEnabled();
+  await user.click(screen.getAllByRole("button", { name: "Показать дополнительные настройки" }).at(-1)!);
   await user.clear(screen.getByLabelText("Тег прямого DNS"));
   await user.type(screen.getByLabelText("Тег прямого DNS"), "1bad");
-  expect(screen.getByRole("button", { name: "Далее" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Сохранить черновик" })).toBeDisabled();
   await user.clear(screen.getByLabelText("Тег прямого DNS"));
   await user.type(screen.getByLabelText("Тег прямого DNS"), "dns_direct");
   await user.clear(screen.getByLabelText("Тег туннельного DNS"));
   await user.type(screen.getByLabelText("Тег туннельного DNS"), "dns_tunnel");
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  expect(screen.getByText("Применение")).toBeVisible();
-  expect(screen.getByText(/Конечное действие: direct; TProxy останется выключен/)).toBeVisible();
+  expect(screen.getByText(/политика останется выключенной/)).toBeVisible();
   expect(fetch.mock.calls.some(([path]) => String(path).includes("preview"))).toBe(false);
   await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
   await waitFor(() => {
