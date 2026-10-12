@@ -174,6 +174,27 @@ def test_rebinding_private_answer_is_refused(tmp_path):
     assert transport.calls == []
 
 
+def test_address_fallback_after_unreachable_ipv6(tmp_path):
+    v6 = "2606:2800:220:1:248:1893:25c8:1946"
+    spec = user_spec(_updater_only(tmp_path))
+    transport = FakeTransport([OSError(101, "Network is unreachable"), response(200, b"ok")])
+    result = fetch(spec, transport=transport,
+                   resolver=fixed_resolver({"public.example": [v6, PUBLIC]}))
+    assert result.content == "ok"
+    assert [call["connect_ip"] for call in transport.calls] == [v6, PUBLIC]
+    assert all(call["timeout"] == spec.timeout and call["max_bytes"] == spec.max_bytes
+               for call in transport.calls)
+
+
+def test_fallback_checks_all_addresses_before_first_connect(tmp_path):
+    spec = user_spec(_updater_only(tmp_path))
+    transport = FakeTransport([response(200, b"ok")])
+    with pytest.raises(DownloadError, match="forbidden_address"):
+        fetch(spec, transport=transport,
+              resolver=fixed_resolver({"public.example": [PUBLIC, INTERNAL]}))
+    assert not transport.calls
+
+
 # ---------------------------------------------------------------------------
 # Redirect handling
 # ---------------------------------------------------------------------------

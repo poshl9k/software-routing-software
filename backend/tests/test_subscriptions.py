@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 
 import pytest
 from cryptography.fernet import Fernet
@@ -9,6 +10,7 @@ from vs_router.secrets import decrypt_secret
 from vs_router.agent import downloader
 from vs_router.agent.subscription_parse import parse_body, materialize, SubscriptionParseError
 from vs_router.agent.subscriptions import fetch, refresh
+from vs_router.generators.singbox import _render_outbound, _render_group
 
 KEY = Fernet.generate_key()
 LINK = 'vless://uuid@alpha.example:443?security=tls&sni=s.example#Alpha'
@@ -89,6 +91,58 @@ def test_safe_fetch_boundary():
     assert fetch(ProxySubscription(name='demo', url='', inline=True, inline_content=LINK), key=KEY).members
     with pytest.raises(SubscriptionParseError, match='headers_unsupported'):
         fetch(sub.model_copy(update={'headers': ('Authorization: Bearer secret',)}), key=KEY, authorized=True, downloader_fetch=injected)
+
+
+def test_singbox_mixed_groups_transports_endpoints_and_skip():
+    fixture = {'outbounds': [
+        {'type': 'selector', 'tag': 'Select', 'outbounds': ['A']},
+        {'type': 'urltest', 'tag': 'Auto', 'outbounds': ['A']},
+        {'type': 'vless', 'tag': 'A', 'server': 'a.example', 'server_port': 443,
+         'uuid': 'uuid-a', 'transport': {'type': 'httpupgrade', 'path': '/proxy'},
+         'tls': {'enabled': True, 'server_name': 'a.example', 'reality': {'enabled': True, 'public_key': 'abc', 'short_id': '01'}}},
+        {'type': 'vmess', 'tag': 'B', 'server': 'b.example', 'server_port': 443,
+         'uuid': 'uuid-b', 'transport': {'type': 'ws', 'path': '/ws'}},
+        {'type': 'trojan', 'tag': 'C', 'server': 'c.example', 'server_port': 443,
+         'password': 'pass-c', 'transport': {'type': 'grpc', 'service_name': 'service'}},
+        {'type': 'wireguard', 'tag': 'unsupported', 'server': 'd.example'},
+    ], 'endpoints': [
+        {'type': 'hysteria2', 'tag': 'E', 'server': 'e.example', 'server_port': 443, 'password': 'pass-e'},
+        {'type': 'naive', 'tag': 'N', 'server': 'n.example', 'server_port': 443, 'username': 'user', 'password': 'pass-n'},
+        {'type': 'mieru', 'tag': 'M', 'server': 'm.example', 'server_port': 443, 'username': 'user', 'password': 'pass-m'},
+    ]}
+    body = json.dumps(fixture)
+    parsed = parse_body(body, key=KEY)
+    assert len(parsed.members) == 6
+    assert parsed.skipped == ({'line': 1, 'reason': 'non_server'},
+                              {'line': 2, 'reason': 'non_server'},
+                              {'line': 6, 'reason': 'subscription.unsupported_protocol'})
+    assert parsed.members[0].tag == parse_body(body, key=KEY).members[0].tag
+    assert decrypt_secret(parsed.members[0].secret, KEY) == 'uuid-a'
+    sub = ProxySubscription(name='owner_sub', url='', inline=True, inline_content=body)
+    outs, groups = materialize(sub, parsed.members)
+    assert len(outs) == 6 and len(groups) == 1
+    assert _render_group(groups[0])['tag'] == 'owner_sub'
+    assert _render_group(groups[0])['outbounds'] == [o.tag for o in outs]
+    assert [_render_outbound(o).get('transport', {}).get('type') for o in outs[:3]] == ['httpupgrade', 'ws', 'grpc']
+    assert _render_outbound(outs[0])['tls']['reality']['public_key'] == 'abc'
+    auto = sub.model_copy(update={'mode': 'urltest', 'url_test': 'https://example.com/204'})
+    assert _render_group(materialize(auto, parsed.members)[1][0])['type'] == 'urltest'
+
+
+@pytest.mark.skipif(not os.getenv('VS_ROUTER_TEST_SUBSCRIPTION_URL'), reason='live subscription URL unset')
+def test_live_owner_subscription():
+    sub = ProxySubscription(name='owner_live', url=os.environ['VS_ROUTER_TEST_SUBSCRIPTION_URL'])
+    try:
+        parsed = fetch(sub, key=KEY, authorized=True)
+    except downloader.DownloadError as exc:
+        if exc.code in {'download.resolve_failed', 'download.timeout', 'download.transport_failed'}:
+            pytest.skip('network unavailable')
+        raise
+    outs, groups = materialize(sub, parsed.members)
+    assert len(parsed.members) >= 1
+    assert len(parsed.skipped) >= 1 or len(groups) >= 1
+    assert len(outs) == len(parsed.members) and groups[0].tag == sub.name
+    print(f'owner subscription: members={len(parsed.members)} skipped={len(parsed.skipped)} groups={len(groups)}')
 
 
 def test_downloader_rejects_private_and_redirect():
