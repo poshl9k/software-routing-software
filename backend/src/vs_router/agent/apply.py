@@ -64,6 +64,11 @@ class LocalFileSystem:
         fd, name = tempfile.mkstemp(dir=path.parent)
         try:
             with os.fdopen(fd, 'w') as stream:
+                if path.name == 'singbox.json':
+                    # Pending, applied and confirmed copies contain live credentials.
+                    # Fail closed if the agent lacks root privileges.
+                    os.fchmod(stream.fileno(), 0o600)
+                    os.fchown(stream.fileno(), 0, 0)
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -497,7 +502,8 @@ class ApplyEngine:
             contents["caddy"] = serialize_caddy(generate_caddy_bundle(version, management))
             # Phase order: guards, then engine/readiness; no capture artifact is
             # generated while the gate is closed (see agent/tproxy_apply.py).
-            contents.update(tproxy_apply.build_artifacts(version))
+            contents.update(tproxy_apply.build_artifacts(
+                version, key=os.environ.get('VS_ROUTER_SECRET_KEY', '').encode()))
             if doh_files:
                 contents['dnscrypt'] = generate_dnscrypt(version)
             self._install(contents, marker, apply_validators, files=apply_files,

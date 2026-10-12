@@ -488,6 +488,10 @@ class ProxyOutbound(Model):
     reality_public_key: str | None = None
     reality_short_id: str | None = None
     username: str | None = None
+    flow: str | None = Field(default=None, pattern=r"^xtls-rprx-vision$")
+    tls_utls_fingerprint: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    obfs_type: str | None = Field(default=None, pattern=r"^salamander$")
+    obfs_password: EncryptedSecret | None = None
     # Optional local administrative endpoint. A non-loopback bind is an open
     # administrative inbound and is rejected by validators by default.
     admin_listen: str | None = None
@@ -500,6 +504,16 @@ class ProxyOutbound(Model):
             return self
         if not self.server or self.port is None:
             raise ValueError("proxy.outbound_server_required")
+        if self.flow is not None and self.type != "vless":
+            raise ValueError("proxy.outbound_flow_invalid")
+        if (self.reality_public_key or self.tls_utls_fingerprint) and not self.tls:
+            raise ValueError("proxy.outbound_tls_required")
+        if self.reality_short_id and not self.reality_public_key:
+            raise ValueError("proxy.outbound_reality_key_required")
+        if (self.obfs_type or self.obfs_password) and (
+            self.type != "hysteria2" or not self.obfs_type or not self.obfs_password
+        ):
+            raise ValueError("proxy.outbound_obfs_invalid")
         return self
 
 

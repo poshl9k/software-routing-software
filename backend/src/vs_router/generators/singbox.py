@@ -6,15 +6,14 @@ direct/block plus contract proxy types) and ``outbounds`` groups (selector /
 urltest) *only when* ``proxies.enabled`` is true; a disabled or empty section
 produces the exact legacy output.
 
-Secrets are never decrypted here: generators must stay deterministic and free of
-I/O, and the contract stores every ``secret`` encrypted (``EncryptedSecret``).
-Secret-bearing sing-box fields therefore carry a fixed, non-secret placeholder.
-Real secret injection belongs to a future apply path (not implemented) and must
-go through ``secrets.decrypt_secret``; nothing in this module reads a key.
+Generators stay I/O-free and never read a key. Without an injected provider,
+secret-bearing fields carry fixed placeholders (safe for previews). The agent
+injects decrypted credentials only when staging the apply artifact.
 """
 from ipaddress import ip_address
+from typing import Callable
 
-from vs_router.schema import ConfigurationVersion
+from vs_router.schema import ConfigurationVersion, ProxyOutbound
 
 # Fixed, non-secret stand-ins so a preview is structurally valid for
 # ``sing-box check`` without ever exposing encrypted material. They are not
@@ -37,41 +36,47 @@ def _tls_block(outbound):
         tls["server_name"] = outbound.tls_server_name
     if outbound.tls_insecure:
         tls["insecure"] = True
+    if outbound.tls_utls_fingerprint:
+        tls["utls"] = {"enabled": True, "fingerprint": outbound.tls_utls_fingerprint}
     if outbound.reality_public_key:
         tls["reality"] = {"enabled": True, "public_key": outbound.reality_public_key,
                           "short_id": outbound.reality_short_id or ""}
     return tls
 
 
-def _render_outbound(outbound):
-    """Map one contract :class:`ProxyOutbound` to a sing-box outbound dict.
-
-    Deterministic and key-ordered by construction; carries no secret material.
-    """
+def _render_outbound(outbound: ProxyOutbound,
+                     secret_provider: Callable[[ProxyOutbound], dict] | None = None):
+    """Map a proxy to sing-box; credentials come only from an explicit provider."""
     rendered = {"type": outbound.type, "tag": outbound.tag}
     if outbound.type in ("direct", "block"):
         return rendered
+    credentials = secret_provider(outbound) if secret_provider is not None else {}
     rendered["server"] = outbound.server
     rendered["server_port"] = outbound.port
     if outbound.type == "shadowsocks":
-        rendered["method"] = outbound.method or PLACEHOLDER_SHADOWSOCKS_METHOD
-        rendered["password"] = PLACEHOLDER_PASSWORD
+        rendered["method"] = credentials.get("method", outbound.method or PLACEHOLDER_SHADOWSOCKS_METHOD)
+        rendered["password"] = credentials.get("password", PLACEHOLDER_PASSWORD)
     elif outbound.type == "vmess":
-        rendered["uuid"] = PLACEHOLDER_UUID
+        rendered["uuid"] = credentials.get("uuid", PLACEHOLDER_UUID)
         rendered["security"] = "auto"
         rendered["alter_id"] = 0
     elif outbound.type == "vless":
-        rendered["uuid"] = PLACEHOLDER_UUID
+        rendered["uuid"] = credentials.get("uuid", PLACEHOLDER_UUID)
+        if outbound.flow:
+            rendered["flow"] = outbound.flow
     elif outbound.type == "trojan":
-        rendered["password"] = PLACEHOLDER_PASSWORD
+        rendered["password"] = credentials.get("password", PLACEHOLDER_PASSWORD)
     elif outbound.type == "hysteria2":
-        rendered["password"] = PLACEHOLDER_PASSWORD
+        rendered["password"] = credentials.get("password", PLACEHOLDER_PASSWORD)
+        if outbound.obfs_type:
+            rendered["obfs"] = {"type": outbound.obfs_type,
+                                "password": credentials.get("obfs_password", PLACEHOLDER_PASSWORD)}
     elif outbound.type == "tuic":
-        rendered["uuid"] = PLACEHOLDER_UUID
-        rendered["password"] = PLACEHOLDER_PASSWORD
+        rendered["uuid"] = credentials.get("uuid", PLACEHOLDER_UUID)
+        rendered["password"] = credentials.get("password", PLACEHOLDER_PASSWORD)
     elif outbound.type in ("naive", "mieru"):
-        rendered["username"] = outbound.username or "redacted"
-        rendered["password"] = PLACEHOLDER_PASSWORD
+        rendered["username"] = credentials.get("username", outbound.username or "redacted")
+        rendered["password"] = credentials.get("password", PLACEHOLDER_PASSWORD)
     tls = _tls_block(outbound)
     if tls is not None:
         rendered["tls"] = tls
@@ -144,8 +149,9 @@ def _render_rule_match(rule):
     return _rule_matchers(rule)
 
 
-def generate_singbox(version: ConfigurationVersion) -> dict:
-    """Render the offline sing-box policy (inbounds, outbounds, route).
+def generate_singbox(version: ConfigurationVersion,
+                     secret_provider: Callable[[ProxyOutbound], dict] | None = None) -> dict:
+    """Render sing-box policy. No provider means redacted preview; provider means apply only.
 
     A guarded-off TProxy configuration is still rendered for preview. The
     ``proxies`` section is only expanded while it is enabled; this function does
@@ -199,7 +205,7 @@ def generate_singbox(version: ConfigurationVersion) -> dict:
     outbounds = [{"type": "direct", "tag": IMPLICIT_DIRECT_TAG}]
     final = IMPLICIT_DIRECT_TAG
     if proxies.enabled:
-        outbounds.extend(_render_outbound(o) for o in sorted(proxies.outbounds, key=lambda o: o.tag))
+        outbounds.extend(_render_outbound(o, secret_provider) for o in sorted(proxies.outbounds, key=lambda o: o.tag))
         outbounds.extend(_render_group(g) for g in sorted(proxies.groups, key=lambda g: g.tag))
     # TProxy final action overrides the default outbound selection
     tproxy = configuration.tproxy
