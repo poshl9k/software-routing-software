@@ -28,5 +28,6 @@ export const queryKeys = {
   serviceStatus: () => ["status", "services"] as const,
   tproxyPreview: (versionId: number | null) =>
     ["tproxy", "preview", versionId] as const,
+  presetCatalog: () => ["presets", "catalog"] as const,
   rulesets: () => ["rulesets"] as const,
 };

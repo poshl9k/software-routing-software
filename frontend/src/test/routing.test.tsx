@@ -22,6 +22,13 @@ function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfigurat
     Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions"
         ? [{ id: 1, status, configuration }]
+        : path === "/api/presets/catalog"
+          ? { categories: [{ key: "media", title: "Медиа", count: 1 }], services: [{
+            id: "video", name: "Видео", category: "media", icon_slug: "video", notice: "",
+            covers: [], dns_domains: ["video.example"], rule_sets: [
+              { tag: "video-set", url: "https://example.org/video.srs", format: "srs" }],
+            action: "route", declared: false,
+          }] }
         : path === "/api/runtime/engine"
           ? engine
         : fail
@@ -32,6 +39,52 @@ function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfigurat
   render(<MemoryRouter><RouterProvider><Routing /></RouterProvider></MemoryRouter>);
   return fetch;
 }
+
+it("creates a guided rule with catalog rule-set declarations in the draft only", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByText("Выключено · черновик");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "+ Добавить правило" }));
+  await user.click(screen.getByRole("button", { name: "Выбрать из каталога" }));
+  await user.click(await screen.findByRole("checkbox", { name: "Видео" }));
+  await user.click(screen.getByRole("button", { name: "Выбрать (1)" }));
+  expect(screen.getByText(/Добавлено наборов в черновик: 1/)).toBeVisible();
+  await waitFor(() => expect(document.querySelector(".MuiModal-root")).toBeNull());
+  await waitFor(() => expect(getComputedStyle(screen.getByRole("button", { name: /^Добавить$/ })).pointerEvents).not.toBe("none"));
+  await user.click(screen.getByRole("button", { name: /^Добавить$/ }));
+  expect(screen.getAllByText(/Из каталога: Видео/).length).toBeGreaterThan(0);
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const [, init] = fetch.mock.calls.find(([path, req]) => path === "/api/draft" && req?.method === "PUT")!;
+  const sent = JSON.parse(String(init.body));
+  expect(sent.rule_sets).toContainEqual({ name: "video-set", format: "srs", url: "https://example.org/video.srs",
+    max_records: 100_000, max_bytes: 5_000_000 });
+  expect(sent.tproxy.rules[0].rule_sets).toEqual(["video-set"]);
+  expect(sent.tproxy.rules[0].action).toBe("direct");
+  expect(fetch.mock.calls.some(([path]) => path === "https://example.org/video.srs" || path === "/api/apply")).toBe(false);
+});
+
+it("reports duplicate catalog sets in expert view without declaring twice", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByText("Выключено · черновик");
+  await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
+  await user.click(screen.getByRole("button", { name: "Из каталога" }));
+  await user.click(await screen.findByRole("checkbox", { name: "Видео" }));
+  await user.click(screen.getByRole("button", { name: "Выбрать (1)" }));
+  await waitFor(() => expect(document.querySelector(".MuiModal-root")).toBeNull());
+  await user.click(screen.getByRole("button", { name: "Из каталога" }));
+  await user.click(await screen.findByRole("checkbox", { name: "Видео" }));
+  await user.click(screen.getByRole("button", { name: "Выбрать (1)" }));
+  expect(screen.getByText(/Уже добавлено в черновик: video-set/)).toBeVisible();
+  await waitFor(() => expect(document.querySelector(".MuiModal-root")).toBeNull());
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const [, init] = fetch.mock.calls.find(([path, req]) => path === "/api/draft" && req?.method === "PUT")!;
+  expect(JSON.parse(String(init.body)).rule_sets.filter((set: { name: string }) => set.name === "video-set")).toHaveLength(1);
+});
 
 it("warns about DNS rule references before deleting its server", async () => {
   const configuration = emptyConfiguration.tproxy;
