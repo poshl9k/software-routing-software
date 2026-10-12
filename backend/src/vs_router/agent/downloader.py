@@ -66,6 +66,7 @@ from typing import Callable, Protocol
 from urllib.parse import urljoin, urlsplit
 
 from .apply import ApplyError, LocalFileSystem
+from . import bootstrap_dns
 from .source_schedule import SourceSchedule, is_due, next_run, state_from_history
 
 # ---------------------------------------------------------------------------
@@ -142,13 +143,14 @@ def ip_is_forbidden(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> b
 def default_resolver(host: str) -> list[str]:
     """Resolve ``host`` to a sorted, de-duplicated list of address strings.
 
-    The system resolver is the only I/O here; tests always inject a fake.
+    Bootstrap fallback lives in resolve_public; this only calls the OS resolver.
     """
     infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     return sorted({str(info[4][0]) for info in infos})
 
 
-def resolve_public(host: str, resolver: Callable[[str], list[str]]) -> list[str]:
+def resolve_public(host: str, resolver: Callable[[str], list[str]], *,
+                   bootstrap_resolver: Callable[[str], list[str]] | None = None) -> list[str]:
     """Resolve ``host`` and reject if any address is forbidden.
 
     Returns the validated address strings (the caller pins each attempted IP). An IP
@@ -166,7 +168,14 @@ def resolve_public(host: str, resolver: Callable[[str], list[str]]) -> list[str]
         try:
             resolved = resolver(host)
         except (OSError, ValueError) as exc:
-            raise DownloadError('download.resolve_failed', str(exc)) from exc
+            if bootstrap_resolver is None:
+                raise DownloadError('download.resolve_failed', str(exc)) from exc
+            resolved = []
+        if not resolved and bootstrap_resolver is not None:
+            try:
+                resolved = bootstrap_resolver(host)
+            except (OSError, ValueError) as exc:
+                raise DownloadError('download.resolve_failed', str(exc)) from exc
         try:
             candidates = [ipaddress.ip_address(address) for address in resolved]
         except ValueError as exc:
@@ -355,7 +364,8 @@ class UrllibTransport:
 # ---------------------------------------------------------------------------
 
 def fetch(spec: SourceSpec, *, transport: Transport, resolver: Callable[[str], list[str]],
-          allow_plaintext: bool = False) -> FetchResult:
+          allow_plaintext: bool = False,
+          bootstrap_resolver: Callable[[str], list[str]] | None = None) -> FetchResult:
     """Fetch ``spec.url`` under SSRF rules; returns the final body.
 
     Every hop: scheme check -> host validation -> host authorization -> resolve
@@ -374,7 +384,7 @@ def fetch(spec: SourceSpec, *, transport: Transport, resolver: Callable[[str], l
                                 else 'download.host_not_authorized')
         # Validate the entire DNS answer before connecting to *any* address.
         # Pin each attempt; never re-resolve between validation and connection.
-        addresses = resolve_public(host, resolver)
+        addresses = resolve_public(host, resolver, bootstrap_resolver=bootstrap_resolver)
         last_error: OSError | None = None
         for connect_ip in addresses:
             try:
@@ -692,12 +702,15 @@ class SourceUpdater:
 
     def __init__(self, *, store: SourceStore | None = None, transport: Transport | None = None,
                  resolver: Callable[[str], list[str]] | None = None,
+                 bootstrap_resolver: Callable[[str], list[str]] | None = None,
                  builtin_sources: dict[str, BuiltinSource] | None = None,
                  config_validator: Callable[[dict], object] | None = None,
                  allow_plaintext: bool = False, clock: Callable[[], float] = time.time):
         self.store = store or SourceStore(clock=clock)
         self.transport = transport or UrllibTransport()
         self.resolver = resolver or default_resolver
+        self.bootstrap_resolver = (bootstrap_resolver if bootstrap_resolver is not None
+                                   else bootstrap_dns.resolve if resolver is None else None)
         self.builtin_sources = BUILTIN_SOURCES if builtin_sources is None else builtin_sources
         self.config_validator = config_validator
         self.allow_plaintext = allow_plaintext
@@ -747,6 +760,7 @@ class SourceUpdater:
                                    timeout=timeout, etag=etag, last_modified=last_modified)
         try:
             result = fetch(spec, transport=self.transport, resolver=self.resolver,
+                           bootstrap_resolver=self.bootstrap_resolver,
                            allow_plaintext=self.allow_plaintext)
             if result.not_modified:
                 # Keep the active set and the previous content; refresh only the
