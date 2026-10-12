@@ -42,6 +42,8 @@ const OUTBOUND_TYPES: ProxyOutbound["type"][] = [
   "trojan",
   "hysteria2",
   "tuic",
+  "naive",
+  "mieru",
 ];
 /** Local outbounds carry no server/port/secret (backend forbids the fields). */
 const LOCAL_TYPES: ProxyOutbound["type"][] = ["direct", "block"];
@@ -106,19 +108,94 @@ const groupValid = (g: ProxyGroup, allTags: string[]) =>
   optionalRange(g.tolerance_ms, 0, 5000);
 
 function localCleared(type: ProxyOutbound["type"]): Partial<ProxyOutbound> {
+  const cleared: Partial<ProxyOutbound> = {
+    type, secret: null, uuid: undefined, transport: null, flow: null,
+    security: undefined, alter_id: undefined, tls_utls_fingerprint: null,
+    reality_public_key: null, reality_short_id: null, username: null,
+    method: null, plugin: undefined, plugin_opts: undefined,
+    obfs_type: null, obfs_password: null,
+  };
   return LOCAL_TYPES.includes(type)
     ? {
-        type,
+        ...cleared,
         server: null,
         port: null,
-        secret: null,
         tls: false,
         tls_server_name: null,
         tls_insecure: false,
         admin_listen: null,
       }
-    : { type };
+    : cleared;
 }
+
+const transportTypes = ["none", "http", "ws", "grpc", "httpupgrade"] as const;
+
+function OutboundProtocolFields({ outbound: o, update, redactIncoming = false }: { outbound: ProxyOutbound; update: (v: Partial<ProxyOutbound>) => void; redactIncoming?: boolean }) {
+  const transport = o.transport;
+  const type = o.type;
+  const tlsType = ["vless", "vmess", "trojan", "hysteria2", "tuic", "naive"].includes(type);
+  return <>
+    <SecretField label={type === "vless" || type === "vmess" ? "UUID" : type === "shadowsocks" ? "Секрет (пароль / UUID)" : "Пароль"}
+      value={redactIncoming && o.secret && "plaintext" in o.secret ? { redacted: true } : o.secret} change={(secret) => update({ secret })} />
+    {type === "tuic" && <SecretField label="UUID TUIC" value={redactIncoming && o.uuid && "plaintext" in o.uuid ? { redacted: true } : o.uuid ?? null} change={(uuid) => update({ uuid })} />}
+    {(type === "naive" || type === "mieru") && <Field label="Пользователь" value={o.username ?? ""}
+      onChange={(username) => update({ username: username || null })} />}
+    {type === "shadowsocks" && <>
+      <Field label="Метод шифрования" value={o.method ?? ""} onChange={(method) => update({ method: method || null })} />
+      <Field label="Плагин" value={o.plugin ?? ""} onChange={(plugin) => update({ plugin: plugin || null })} />
+      <Field label="Опции плагина" value={o.plugin_opts ?? ""} onChange={(plugin_opts) => update({ plugin_opts: plugin_opts || null })} />
+    </>}
+    {type === "vless" && <Field label="Flow" value={o.flow ?? ""} onChange={(flow) => update({ flow: flow || null })} />}
+    {type === "vmess" && <>
+      <Field label="Security VMess" value={o.security ?? "auto"} onChange={(security) => update({ security: security || null })} />
+      <Field label="Alter ID" type="number" value={o.alter_id ?? 0} valid={optionalRange(o.alter_id, 0, 65535)}
+        onChange={(value) => update({ alter_id: value === "" ? null : Number(value) })} />
+    </>}
+    {type === "hysteria2" && <>
+      <Field label="Обфускация (тип)" value={o.obfs_type ?? ""}
+        onChange={(obfs_type) => update({ obfs_type: obfs_type || null })} />
+      {o.obfs_type && <SecretField label="Пароль обфускации" value={redactIncoming && o.obfs_password && "plaintext" in o.obfs_password ? { redacted: true } : o.obfs_password ?? null}
+        change={(obfs_password) => update({ obfs_password })} />}
+    </>}
+    {(type === "vless" || type === "vmess") && <>
+      <Select label="Транспорт" value={transport?.type ?? "none"} options={transportTypes.map((value) => ({ value, label: value === "none" ? "Нет" : value }))}
+        onChange={(value) => update({ transport: value === "none" ? null : { type: value as NonNullable<ProxyOutbound["transport"]>["type"] } })} />
+      {transport && <>
+        {transport.type !== "grpc" && <Field label="Путь транспорта" value={transport.path ?? ""}
+          onChange={(path) => update({ transport: { ...transport, path } })} />}
+        {transport.type !== "grpc" && <Field label="Host транспорта" value={Array.isArray(transport.host) ? transport.host.join(", ") : transport.host ?? ""}
+          onChange={(host) => update({ transport: { ...transport, host } })} />}
+        {transport.type === "grpc" && <Field label="Service name gRPC" value={transport.service_name ?? ""}
+          onChange={(service_name) => update({ transport: { ...transport, service_name } })} />}
+      </>}
+    </>}
+    {tlsType && <>
+      <Toggle label="TLS" value={o.tls} onChange={(tls) => update({ tls })} />
+      {o.tls && <>
+        <Field label="TLS имя сервера (SNI)" value={o.tls_server_name ?? ""} valid={!o.tls_server_name || hostValid(o.tls_server_name)}
+          onChange={(v) => update({ tls_server_name: v || null })} />
+        <Toggle label="Не проверять сертификат" value={o.tls_insecure} onChange={(tls_insecure) => update({ tls_insecure })} />
+        {o.tls_insecure && <InfoNote>Отключение проверки сертификата снижает защиту от подмены сервера.</InfoNote>}
+        {(type === "vless" || type === "vmess") && <Field label="Fingerprint uTLS" value={o.tls_utls_fingerprint ?? ""}
+          onChange={(tls_utls_fingerprint) => update({ tls_utls_fingerprint: tls_utls_fingerprint || null })} />}
+        {type === "vless" && <>
+          <Field label="Reality public key" value={o.reality_public_key ?? ""}
+            onChange={(reality_public_key) => update({ reality_public_key: reality_public_key || null })} />
+          <Field label="Reality short ID" value={o.reality_short_id ?? ""}
+            onChange={(reality_short_id) => update({ reality_short_id: reality_short_id || null })} />
+        </>}
+      </>}
+    </>}
+    <Field label="Локальный admin_listen" value={o.admin_listen ?? ""} hint="Только loopback: 127.0.0.1[:port]"
+      valid={!o.admin_listen || loopbackValid(o.admin_listen)} onChange={(v) => update({ admin_listen: v || null })} />
+  </>;
+}
+
+const outboundDescription = (o: ProxyOutbound) => [
+  o.server ? `${o.server}:${o.port ?? "—"}` : "—",
+  o.transport?.type,
+  o.tls_server_name ? `SNI ${o.tls_server_name}` : undefined,
+].filter(Boolean).join(" · ");
 
 function SubscriptionCard({ subscription, editable, canFetch = true, onChange, onProposal }: {
   subscription: ProxySubscription;
@@ -128,6 +205,7 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
   onProposal?: (outbounds: ProxyOutbound[], groups: ProxyGroup[]) => void;
 }) {
   const [result, setResult] = useState<SubscriptionPreview | SubscriptionRefresh | null>(null);
+  const [appliedSkipped, setAppliedSkipped] = useState<{ line: number; reason: string }[]>([]);
   const [resultSource, setResultSource] = useState("");
   const proposal = resultSource === JSON.stringify(subscription) ? result : null;
   const [error, setError] = useState<unknown>(null);
@@ -148,6 +226,7 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
         ? await api.subscriptionPreview(subscription)
         : await api.refreshSubscription(subscription.name);
       setResult(data);
+      setAppliedSkipped([]);
       setLastError(null);
       setResultSource(source);
       setStatus(action === "preview" ? "Просмотр выполнен; черновик не изменён" : "Получено предложение обновления; движок не обновлён");
@@ -199,10 +278,11 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
       <Button disabled={busy || !canFetch || !subscription.name} onClick={() => void run("refresh")}>Обновить сейчас</Button>
       <Button disabled={busy || !subscription.name} onClick={() => void loadMembers()}>Участники</Button>
       <Button disabled={busy || !members.length} onClick={() => void checkAll()}>Проверить всё</Button>
-      {editable && proposal && <Button onClick={() => { onProposal?.(proposal.outbounds, proposal.groups); setStatus("Предложение добавлено в черновик; сохраните черновик и примените конфигурацию отдельно"); }}>Применить предложение</Button>}
+      {editable && proposal && <Button onClick={() => { onProposal?.(proposal.outbounds, proposal.groups); setAppliedSkipped(proposal.skipped); setStatus("Предложение добавлено в черновик; сохраните черновик и примените конфигурацию отдельно"); }}>Применить предложение</Button>}
     </FormActions>
     {proposal && "added" in proposal && <InfoNote>Изменения: добавлено {proposal.added.length}, обновлено {proposal.updated.length}, без изменений {proposal.unchanged.length}, сирот {proposal.orphans.length}.</InfoNote>}
     {proposal && proposal.skipped.length > 0 && <InfoNote>Пропущено: {proposal.skipped.length}. {proposal.skipped.map((row) => `Строка ${row.line}: ${row.reason}`).join("; ")}</InfoNote>}
+    {!proposal && appliedSkipped.length > 0 && <InfoNote>Пропущено при последнем предложении: {appliedSkipped.map((row) => `Строка ${row.line}: ${row.reason}`).join("; ")}</InfoNote>}
     {proposal && "orphans" in proposal && proposal.orphans.length > 0 &&
       <InfoNote>Сироты: {proposal.orphans.length}. Они сохранены в предложении; не удаляются автоматически.</InfoNote>}
     {members.length > 0 && <>
@@ -244,7 +324,7 @@ function ProxiesView({ settings, readonly, onEdit }: { settings: ProxySettings; 
           rows={settings.outbounds.map((o) => [
             o.tag,
             <Badge>{o.type}</Badge>,
-            o.server ?? "—",
+            outboundDescription(o),
             <Button disabled={readonly} onClick={onEdit}>Изменить</Button>,
           ])}
           empty={
@@ -295,6 +375,8 @@ export function ProxiesEditor() {
   const [importError, setImportError] = useState<Error | null>(null);
   const [importCount, setImportCount] = useState(0);
   const [selected, setSelected] = useState<number[]>([]);
+  const [focusedOutbound, setFocusedOutbound] = useState<number | null>(null);
+  const [incomingSecrets, setIncomingSecrets] = useState<string[]>([]);
   const [editedHeaders, setEditedHeaders] = useState<number[]>([]);
   const [editedInline, setEditedInline] = useState<number[]>([]);
   const [editedUrls, setEditedUrls] = useState<number[]>([]);
@@ -334,6 +416,7 @@ export function ProxiesEditor() {
       outbounds.push({ ...outbound, tag });
     }
     if (outbounds.length) {
+      setIncomingSecrets((tags) => [...tags, ...outbounds.map((o) => o.tag)]);
       patch({ outbounds: [...current.outbounds, ...outbounds] });
       setImportText("");
     }
@@ -458,6 +541,13 @@ export function ProxiesEditor() {
       ) : (
         <>
           <Card title="Прокси-выходы">
+            <DataTable heads={["Тег", "Тип", "Сервер", "Действия"]}
+              rows={current.outbounds.map((o, index) => [o.tag || "Новый выход", <Badge>{o.type}</Badge>,
+                outboundDescription(o), <Button aria-label={`Изменить выход ${o.tag || index + 1}`}
+                  onClick={() => { setFocusedOutbound(index); document.getElementById(`outbound-editor-${index}`)?.querySelector<HTMLInputElement>("input")?.focus(); }}>Изменить</Button>])}
+              empty={<EmptyState title="Нет прокси-выходов">Добавьте выход или примените предложение подписки.</EmptyState>} />
+            {focusedOutbound !== null && current.outbounds[focusedOutbound] &&
+              <InlineStatus tone="blue" text={`Редактор выхода: ${current.outbounds[focusedOutbound].tag || "новый"}`} />}
             <FormGrid>
               <FormWide>
                 <FormControlLabel
@@ -485,7 +575,7 @@ export function ProxiesEditor() {
                   ),
                 });
               return (
-                <div key={index} className="rule-row">
+                <div key={index} id={`outbound-editor-${index}`} className="rule-row">
                   <FormGrid>
                     <FormWide>
                       <Checkbox
@@ -529,57 +619,7 @@ export function ProxiesEditor() {
                             update({ port: v === "" ? null : Number(v) })
                           }
                         />
-                        <SecretField
-                          label="Секрет (пароль / UUID)"
-                          value={o.secret}
-                          change={(secret) => update({ secret })}
-                        />
-                        {o.type === "shadowsocks" && (
-                          <Field
-                            label="Метод шифрования"
-                            value={o.method ?? ""}
-                            onChange={(method) => update({ method: method || null })}
-                          />
-                        )}
-                        <Toggle
-                          label="TLS"
-                          value={o.tls}
-                          onChange={(tls) => update({ tls })}
-                        />
-                        {o.tls && (
-                          <>
-                            <Field
-                              label="TLS имя сервера (SNI)"
-                              value={o.tls_server_name ?? ""}
-                              valid={
-                                !o.tls_server_name ||
-                                hostValid(o.tls_server_name)
-                              }
-                              onChange={(v) =>
-                                update({ tls_server_name: v || null })
-                              }
-                            />
-                            <Toggle
-                              label="Не проверять сертификат"
-                              value={o.tls_insecure}
-                              onChange={(tls_insecure) =>
-                                update({ tls_insecure })
-                              }
-                            />
-                            {o.tls_insecure && <InfoNote>Отключение проверки сертификата снижает защиту от подмены сервера.</InfoNote>}
-                          </>
-                        )}
-                        <Field
-                          label="Локальный admin_listen"
-                          value={o.admin_listen ?? ""}
-                          hint="Только loopback: 127.0.0.1[:port]"
-                          valid={
-                            !o.admin_listen || loopbackValid(o.admin_listen)
-                          }
-                          onChange={(v) =>
-                            update({ admin_listen: v || null })
-                          }
-                        />
+                        <OutboundProtocolFields outbound={o} update={update} redactIncoming={incomingSecrets.includes(o.tag)} />
                       </>
                     )}
                     <FormActions>
@@ -670,6 +710,7 @@ export function ProxiesEditor() {
                         return;
                       }
                       const replacing = new Set(outbounds.map((o) => o.tag));
+                      setIncomingSecrets((tags) => [...tags, ...replacing]);
                       patch({
                         enabled: true,
                         subscriptions: current.subscriptions.map((row, i) => i === index ? { ...row, enabled: true } : row),
