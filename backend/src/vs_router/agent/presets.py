@@ -120,8 +120,8 @@ def selection_to_rule_sets(ids: Iterable[str]) -> tuple[RuleSetSource, ...]:
     seen = set()
     for preset in _selected(ids):
         for source in preset.rule_sets:
-            if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,30}", source.tag):
-                raise ValueError(f"preset.invalid_rule_set_tag: {source.tag}; RuleSetSource.name allows letters, digits and underscores only")
+            if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,30}", source.tag):
+                raise ValueError(f"preset.invalid_rule_set_tag: {source.tag}; RuleSetSource.name allows letters, digits, hyphen and underscore only")
             if source.tag in seen:
                 continue
             result.append(RuleSetSource(name=source.tag, format=service_rule_set_format(source.url), url=source.url))

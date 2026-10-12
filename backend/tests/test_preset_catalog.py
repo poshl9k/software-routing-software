@@ -40,15 +40,27 @@ def test_catalog_is_verbatim_and_typed():
     assert 'anthropic' in meta['category-ai']
 
 
-def test_helpers_are_stable_and_fail_honestly_on_schema_conflict():
+def test_helpers_are_stable_and_accept_hyphen_tags(monkeypatch):
     ids = ('anthropic', 'anthropic')
     assert selection_to_domains(ids) == ('anthropic.com', 'claude.ai', 'claude.com')
     assert selection_to_domains(ids) == selection_to_domains(ids)
-    with pytest.raises(ValueError, match='preset.invalid_rule_set_tag'):
-        selection_to_rule_sets(ids)
+    # Engine tags may contain hyphens (sing-box convention, e.g. geosite-anthropic).
+    rules = selection_to_rule_sets(ids)
+    assert len(rules) == 1
+    assert rules[0].name == 'geosite-anthropic' and rules[0].format == 'srs'
     with pytest.raises(ValueError, match='preset.unknown_service'):
         selection_to_domains(('does-not-exist',))
     assert selection_to_rule_sets(()) == ()
+
+    bad = CatalogPreset(
+        id='bad', name='Bad', icon_slug='bad', category='ai', origin='', notice=None,
+        covers=(), dns_domains=('example.org',),
+        rule_sets=(CatalogRuleSet(tag='bad tag', url='https://example.org/x.srs'),),
+        action='tunnel',
+    )
+    monkeypatch.setattr(presets_module, 'load_catalog', lambda: (bad,))
+    with pytest.raises(ValueError, match='preset.invalid_rule_set_tag'):
+        selection_to_rule_sets(('bad',))
 
 
 def test_helper_success_for_schema_compatible_tags(monkeypatch):

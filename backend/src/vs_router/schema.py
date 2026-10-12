@@ -286,7 +286,7 @@ class TProxyRule(Model):
     inbound: tuple[str, ...] = ()
     ip_is_private: StrictBool | None = None
     network: Literal["tcp", "udp"] | None = None
-    rule_sets: tuple[Name, ...] = ()
+    rule_sets: tuple[EngineTag, ...] = ()
     protocol: Literal["any", "tcp", "udp"] = "any"
     ports: tuple[str, ...] = ()
     logical_mode: Literal["and", "or"] | None = None
@@ -404,7 +404,7 @@ class TProxyDNSServer(Model):
 class TProxyDNSRule(Model):
     name: EngineTag
     domain_suffix: tuple[str, ...] = ()
-    rule_sets: tuple[Name, ...] = ()
+    rule_sets: tuple[EngineTag, ...] = ()
     server: EngineTag
 
     @model_validator(mode="after")
@@ -565,7 +565,7 @@ class RuleSetSource(Model):
     which sources exist, with strict validation at the boundary so a malformed
     declaration is rejected before any fetch is considered.
     """
-    name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,30}$")
+    name: EngineTag
     format: Literal["text-domain", "text-cidr", "json", "geosite", "geoip", "srs"]
     url: str
     max_records: int = Field(default=200_000, ge=1, le=5_000_000)
