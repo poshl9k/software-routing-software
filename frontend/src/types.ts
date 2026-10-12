@@ -315,6 +315,24 @@ export interface RuleSetUpdate {
   max_bytes?: number;
   timeout?: number;
 }
+/** Read-only service catalog returned by the panel; URLs are declarations, not browser downloads. */
+export interface CatalogService {
+  id: string;
+  name: string;
+  category: string;
+  icon_slug: string;
+  notice: string | null;
+  covers: string[];
+  dns_domains: string[];
+  rule_sets: { tag: string; url: string; format: RuleSetSource["format"] }[];
+  action: string;
+  declared: boolean;
+}
+export interface CatalogResponse {
+  categories: { key: string; title: string; count: number }[];
+  services: CatalogService[];
+}
+
 export interface TProxyPreview {
   version_id: number;
   singbox: Record<string, unknown>;

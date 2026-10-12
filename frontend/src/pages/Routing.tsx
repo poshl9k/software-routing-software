@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { queryKeys } from "../query";
-import type { TProxy, TProxyBypass, TProxyDNSServer, TProxyDNSRule, TProxyRule } from "../types";
+import type { CatalogService, RuleSetSource, TProxy, TProxyBypass, TProxyDNSServer, TProxyDNSRule, TProxyRule } from "../types";
 import { addressValid, engineTagValid, lines, nameValid, portValid } from "../components/validators";
 import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter } from "../components/EditorShell";
@@ -24,6 +24,11 @@ import { Select, SelectField, interfaceLabel } from "../components/Select";
 import { ValueTabs } from "../components/Tabs";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { ProxiesEditor, RuleSets } from "./RoutingProxy";
+import { ServiceCatalog } from "../components/ServiceCatalog";
+
+const catalogSources = (services: CatalogService[]): RuleSetSource[] => services.flatMap((service) =>
+  service.rule_sets.map((set) => ({ name: set.tag, format: set.format, url: set.url,
+    max_records: 100_000, max_bytes: 5_000_000 })));
 
 const domainValid = (domain: string) => /^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$/.test(domain);
 const portRangeValid = (value: string) => {
@@ -178,6 +183,13 @@ function TProxyEditor() {
   const [quickstart, setQuickstart] = useState(false);
   const [addingRule, setAddingRule] = useState(false);
   const [guidedRule, setGuidedRule] = useState<TProxyRule>(emptyRule);
+  const [catalogContext, setCatalogContext] = useState<"rule" | "expert" | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogMessage, setCatalogMessage] = useState<string | null>(null);
+  const [pendingSets, setPendingSets] = useState<RuleSetSource[]>([]);
+  const [catalogNames, setCatalogNames] = useState<Record<string, string>>({});
+  const catalog = useQuery({ queryKey: queryKeys.presetCatalog(), queryFn: api.presetCatalog,
+    enabled: catalogContext !== null });
   const [sourceMode, setSourceMode] = useState<"all" | "selected">("selected");
   const runtime = useQuery({ queryKey: ["runtime", "engine"], queryFn: api.runtimeEngine, retry: false, refetchInterval: 15000 });
   const [step, setStep] = useState(0);
@@ -210,7 +222,11 @@ function TProxyEditor() {
       ...(rule.domain_keyword ?? []).map((v) => `слово в домене ${v}`),
       ...(rule.domain_regex ?? []).map((v) => `шаблон домена ${v}`),
       ...rule.ip_cidr.map((v) => `сеть ${v}`),
-      ...rule.rule_sets.map((v) => `список ${v}`),
+      ...rule.rule_sets.map((v) => {
+        const name = catalogNames[v] ?? catalog.data?.services.find((service) =>
+          service.rule_sets.some((set) => set.tag === v))?.name;
+        return name ? `Из каталога: ${name}` : `Набор: ${v}`;
+      }),
       ...rule.ports.map((v) => `порт ${v}`),
       ...(rule.inbound ?? []).map((v) => `вход ${v}`),
       ...(rule.ip_is_private == null ? [] : [rule.ip_is_private ? "частный IP" : "публичный IP"]),
@@ -227,7 +243,44 @@ function TProxyEditor() {
     ...configuration.proxies.outbounds.map((o) => o.tag),
     ...configuration.proxies.groups.map((g) => g.tag),
   ];
-  const ruleSetOptions = configuration.rule_sets.map((s) => s.name);
+  const ruleSetOptions = [...configuration.rule_sets.map((s) => s.name), ...pendingSets.map((s) => s.name)];
+  const selectCatalog = (ids: string[]) => {
+    const services = (catalog.data?.services ?? []).filter((service) => ids.includes(service.id));
+    const selected = catalogSources(services);
+    const configuredTags = new Set(configuration.rule_sets.map((set) => set.name));
+    const stagedTags = new Set(pendingSets.map((set) => set.name));
+    const existing = new Set(ruleSetOptions);
+    const duplicates = selected.filter((set) => configuredTags.has(set.name)).map((set) => set.name);
+    const alreadyStaged = selected.filter((set) => stagedTags.has(set.name)).map((set) => set.name);
+    const fresh = selected.filter((set) => {
+      if (existing.has(set.name)) return false;
+      existing.add(set.name);
+      return true;
+    });
+    if (catalogContext === "rule" && selected.length === 0) {
+      setCatalogError("У выбранных сервисов нет наборов правил. Задайте домены вручную.");
+      setCatalogContext(null);
+      return;
+    }
+    setPendingSets((previous) => [...previous, ...fresh]);
+    setCatalogNames((previous) => ({ ...previous,
+      ...Object.fromEntries(services.flatMap((service) => service.rule_sets.map((set) => [set.tag, service.name]))),
+    }));
+    if (catalogContext === "rule") {
+      setGuidedRule((previous) => ({ ...previous,
+        name: previous.name || (nameValid(services[0]?.name ?? "") ? services[0].name :
+          selected[0]?.name.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 31) ?? ""),
+        rule_sets: [...new Set([...previous.rule_sets, ...selected.map((set) => set.name)])],
+      }));
+    }
+    setCatalogMessage([
+      duplicates.length ? `Уже есть в конфиге: ${[...new Set(duplicates)].join(", ")}.` : "",
+      alreadyStaged.length ? `Уже добавлено в черновик: ${[...new Set(alreadyStaged)].join(", ")}.` : "",
+      fresh.length ? `Добавлено наборов в черновик: ${fresh.length}.` : "",
+    ].filter(Boolean).join(" ") || "Новых наборов нет.");
+    setCatalogError(null);
+    setCatalogContext(null);
+  };
   const dnsTags = current.dns.servers.map((server) => server.tag);
   const patch = (value: Partial<TProxy>) => editor.setValue({ ...current, ...value });
   const updateDNSServer = (index: number, value: Partial<TProxyDNSServer>) =>
@@ -282,10 +335,12 @@ function TProxyEditor() {
     if (!enabled) { setPendingEnable(false); patch({ enabled: false }); }
     else if (!enableIssue) setPendingEnable(true);
   };
+  const cancel = () => { editor.cancel(); setPendingSets([]); setCatalogMessage(null); setCatalogError(null); };
   const save = async () => {
     if (user?.role === "operator" || !valid || (current.enabled && enableIssue)) return;
     clearPreview();
-    await editor.save((tproxy) => ({ ...configuration, tproxy }));
+    await editor.save((tproxy) => ({ ...configuration, tproxy,
+      rule_sets: [...configuration.rule_sets, ...pendingSets] }));
   };
   const wizardFresh = !current.enabled && current.rules.length === 0 &&
     current.dns.rules.length === 0 && current.dns.servers.length === 0;
@@ -327,8 +382,15 @@ function TProxyEditor() {
       setView("configure");
     }
   }, [wizardSubmitted, editor.isEdit, editor.saving]);
+  useEffect(() => {
+    if (!editor.isEdit && !editor.saving) setPendingSets([]);
+  }, [editor.isEdit, editor.saving]);
   return (
     <>
+      <ServiceCatalog open={catalogContext !== null} onClose={() => setCatalogContext(null)}
+        onSelect={selectCatalog} declaredTags={ruleSetOptions} />
+      <ErrorNotice error={catalogError ? new Error(catalogError) : null} />
+      {catalogMessage && <InfoNote>{catalogMessage}</InfoNote>}
       <PageSection title="Выборочная маршрутизация (TProxy)"
         subtitle="Трафик выбранных устройств идёт через выбранный выход, остальной — как обычно."
         action={<Button variant="contained" disabled={!version || user?.role === "operator" || editor.saving ||
@@ -367,6 +429,11 @@ function TProxyEditor() {
         }} />
       <ValueTabs value={view} change={setView}
         tabs={[{ value: "configure", label: "Настроить" }, { value: "expert", label: "Эксперт" }]} />
+      {view === "expert" && <Card title="Наборы правил"
+        action={editor.isEdit && user?.role !== "operator" ? <Button onClick={() => setCatalogContext("expert")}>Из каталога</Button> : undefined}>
+        <Typography variant="body2">Объявленные: {configuration.rule_sets.map((set) => set.name).join(", ") || "нет"}</Typography>
+        {pendingSets.length > 0 && <Typography variant="body2">Добавятся в черновик: {pendingSets.map((set) => set.name).join(", ")}</Typography>}
+      </Card>}
       {view === "expert" && <Card title="Служебные правила (добавляются автоматически)">
         <Typography variant="body2">Только просмотр: их порядок и условия задаёт движок, а не список ваших правил.</Typography>
         <Typography>1. Определение домена (sniff) — {current.sniff ? "включено" : "выключено"}</Typography>
@@ -495,6 +562,12 @@ function TProxyEditor() {
             {current.rules.map((rule, index) => <div key={index} className="rule-row">
               <Typography>{index + 1}. {rule.name || "Новое правило"}</Typography>
               <Typography>Что: {matchLabel(rule)} · Куда: {actionLabel(rule.action)}{rule.action === "route" ? ` · ${rule.outbound || "выход не выбран"}` : ""}</Typography>
+              <Typography variant="body2">Источник: {rule.rule_sets.length ? rule.rule_sets.map((tag) => {
+                const name = catalogNames[tag] ?? catalog.data?.services.find((service) =>
+                  service.rule_sets.some((set) => set.tag === tag))?.name;
+                return name ? `Из каталога: ${name}` : `Набор: ${tag}`;
+              }).join(", ") : rule.domain_suffix.length ? `Домены: ${rule.domain_suffix.join(", ")}` : matchLabel(rule)}
+              </Typography>
               {editor.isEdit && <FormGrid>
                 <Field label="Имя правила" value={rule.name} valid={nameValid(rule.name)}
                   onChange={(name) => updateRule(index, { name })} />
@@ -525,8 +598,9 @@ function TProxyEditor() {
             {editor.isEdit && addingRule && <FormGrid>
               <Field label="Имя правила" value={guidedRule.name} valid={nameValid(guidedRule.name)}
                 onChange={(name) => setGuidedRule({ ...guidedRule, name })} />
-              <Typography>Что направить — выберите домен сервиса или задайте свои условия.</Typography>
+              <Typography>Что направить — выберите сервис из каталога или задайте свои условия.</Typography>
               <FormActions>
+                <Button variant="outlined" onClick={() => setCatalogContext("rule")}>Выбрать из каталога</Button>
                 <Button variant="outlined" onClick={() => setGuidedRule({ ...guidedRule, domain_suffix: ["youtube.com"] })}>YouTube (youtube.com)</Button>
                 <Button variant="outlined" onClick={() => setGuidedRule({ ...guidedRule, domain_suffix: ["rutube.ru"] })}>RuTube (rutube.ru)</Button>
               </FormActions>
@@ -561,7 +635,7 @@ function TProxyEditor() {
           </Card>
           <Button onClick={() => setView("expert")}>Дополнительно → Эксперт</Button>
           {editor.isEdit && <EditorFooter saving={editor.saving} valid={valid && (!current.enabled || !enableIssue)}
-            cancel={editor.cancel} save={() => void save()} />}
+            cancel={cancel} save={() => void save()} />}
           <Button disabled={user?.role !== "admin" || version?.status !== "draft" || preview.isFetching}
             onClick={() => void preview.refetch()}>Предпросмотр сохранённого черновика</Button>
           {preview.data && !editor.isEdit && preview.data.version_id === version?.id && <>
@@ -811,7 +885,7 @@ function TProxyEditor() {
               </>
             )}
           </FormGrid>
-          <EditorFooter saving={editor.saving} valid={valid && (!current.enabled || !enableIssue)} cancel={editor.cancel}
+          <EditorFooter saving={editor.saving} valid={valid && (!current.enabled || !enableIssue)} cancel={cancel}
             save={() => void save()} />
         </>
       )}

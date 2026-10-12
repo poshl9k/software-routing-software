@@ -11,7 +11,7 @@ import type {
   User,
   TProxyPreview,
   Alias, DHCPLease, ImportPreview, PingResult,
-  RuleSetStatus, RuleSetUpdate,
+  RuleSetStatus, RuleSetUpdate, CatalogResponse,
   UpdateStatus, UpdateStart, ServiceStatusResponse,
   ProxySubscription, SubscriptionPreview, SubscriptionRefresh, SubscriptionMember,
   RuntimeEngine, RuntimeConnections, RuntimeLogEntry, RuntimeProxies, RuntimeProxyDelay,
@@ -119,6 +119,8 @@ export const api = {
   ping: (body: { host: string; count: number; source_interface?: string }) => post<PingResult>("/api/diag/ping", body),
   traceroute: (host: string) => post<string[]>("/api/diag/traceroute", { host }),
   rulesCounters: () => request<Record<string, { packets: number; bytes: number }>>("/api/diag/rules-counters"),
+  // Service catalog is panel metadata only; rule-set URLs are never fetched here.
+  presetCatalog: () => request<CatalogResponse>("/api/presets/catalog"),
   rulesets: () => request<RuleSetStatus[]>("/api/rulesets"),
   updateRuleset: (body: RuleSetUpdate) =>
     post<Record<string, unknown>>("/api/rulesets/update", {
