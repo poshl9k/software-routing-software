@@ -218,7 +218,9 @@ export interface ProxyOutbound {
     | "vless"
     | "trojan"
     | "hysteria2"
-    | "tuic";
+    | "tuic"
+    | "naive"
+    | "mieru";
   server: string | null;
   port: number | null;
   secret: Secret | null;
@@ -226,6 +228,20 @@ export interface ProxyOutbound {
   tls: boolean;
   tls_server_name: string | null;
   tls_insecure: boolean;
+  transport?: { type: "http" | "ws" | "grpc" | "httpupgrade"; path?: string; host?: string | string[]; service_name?: string } | null;
+  reality_public_key?: string | null;
+  reality_short_id?: string | null;
+  username?: string | null;
+  flow?: string | null;
+  tls_utls_fingerprint?: string | null;
+  security?: string | null;
+  alter_id?: number | null;
+  password?: Secret | null;
+  uuid?: Secret | null;
+  plugin?: string | null;
+  plugin_opts?: string | null;
+  obfs_type?: string | null;
+  obfs_password?: Secret | null;
   admin_listen: string | null;
 }
 // Subscription runtime (agent proposals; no implicit draft write).
