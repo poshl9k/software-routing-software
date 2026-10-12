@@ -52,7 +52,7 @@ it("offers the outbound editor from an empty TProxy page", async () => {
   expect(await screen.findByText("Прокси-выходы не настроены")).toBeVisible();
   expect(screen.getByText(/Нет прокси-выходов. Добавьте выход/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Открыть прокси-выходы" }));
-  expect(screen.getByRole("tab", { name: "Прокси-выходы" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getAllByRole("tab", { name: "Прокси-выходы" })[0]).toHaveAttribute("aria-selected", "true");
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   expect(screen.getByRole("button", { name: "+ Добавить выход" })).toBeVisible();
 });

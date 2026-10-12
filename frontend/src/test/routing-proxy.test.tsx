@@ -17,6 +17,8 @@ function setup(options?: {
   role?: Role;
   rulesets?: RuleSetStatus[];
   updateFails?: boolean;
+  preview?: unknown;
+  refresh?: unknown;
 }) {
   const configuration = {
     ...emptyConfiguration,
@@ -48,6 +50,10 @@ function setup(options?: {
         );
       return Promise.resolve(new Response(JSON.stringify({ status: "ok", name: "geo" })));
     }
+    if (path === "/api/proxy/subscriptions/preview")
+      return Promise.resolve(new Response(JSON.stringify(options?.preview ?? { members: [], skipped: [], outbounds: [], groups: [] })));
+    if (path === "/api/proxy/subscriptions/sub1/refresh")
+      return Promise.resolve(new Response(JSON.stringify(options?.refresh ?? { added: [], updated: [], unchanged: [], orphans: [], skipped: [], outbounds: [], groups: [] })));
     if (options?.fail)
       return Promise.resolve(
         new Response(
@@ -111,7 +117,7 @@ it("saves proxy outbound, subscription and group as a draft with a write-only se
   await user.type(screen.getByLabelText("Порт"), "8388");
   await user.type(screen.getByLabelText("Секрет (пароль / UUID)"), "topsecret");
 
-  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
   await user.type(screen.getByLabelText("Имя подписки"), "sub1");
   await user.type(screen.getByLabelText("URL подписки"), "https://sub.example.com/list");
   await user.selectOptions(screen.getByLabelText("Формат"), "clash");
@@ -250,7 +256,7 @@ it("blocks saving an outbound without a server/port and a non-https subscription
   expect(saveButton()).toBeDisabled();
   await user.clear(screen.getByLabelText("Порт"));
   await user.type(screen.getByLabelText("Порт"), "8388");
-  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
   await user.type(screen.getByLabelText("Имя подписки"), "sub1");
   await user.type(screen.getByLabelText("URL подписки"), "http://not-secure.example.com");
   expect(saveButton()).toBeDisabled();
@@ -265,7 +271,7 @@ it("validates inline subscription content and header and filter syntax", async (
   await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
-  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
   await user.type(screen.getByLabelText("Имя подписки"), "sub1");
   await user.click(screen.getByLabelText("Список вручную (inline)"));
   expect(screen.queryByLabelText("URL подписки")).not.toBeInTheDocument();
@@ -294,7 +300,7 @@ it("saves subscription selection, URL test, filters and member fields", async ()
   await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
-  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
   await user.type(screen.getByLabelText("Имя подписки"), "sub1");
   await user.type(screen.getByLabelText("URL подписки"), "https://sub.example.com/list");
   await user.selectOptions(screen.getByLabelText("Режим выбора"), "urltest");
@@ -349,7 +355,7 @@ it("saves inline content without requiring a subscription URL", async () => {
   await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
-  await user.click(screen.getByRole("button", { name: "+ Добавить подписку" }));
+  await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
   await user.type(screen.getByLabelText("Имя подписки"), "manual");
   await user.click(screen.getByLabelText("Список вручную (inline)"));
   await user.type(screen.getByLabelText("Список вручную"), "vless://node");
@@ -418,8 +424,9 @@ it("shows empty-state prompts for every proxy collection and the rule-set list",
   await openTab(user, "Прокси-выходы");
   expect(screen.getByText(/TProxy настраивается отдельно и меняет трафик только после общего применения/)).toBeVisible();
   expect(screen.getByText("Нет прокси-выходов")).toBeVisible();
-  expect(screen.getByText("Нет подписок")).toBeVisible();
   expect(screen.getByText("Нет групп")).toBeVisible();
+  await user.click(screen.getByRole("tab", { name: "Подписки" }));
+  expect(screen.getByText("Нет подписок")).toBeVisible();
   await openTab(user, "Источники списков");
   expect(screen.getByText("Rule-set не подключены")).toBeVisible();
   expect(screen.getByRole("table")).toBeVisible();
@@ -451,6 +458,75 @@ it("keeps proxy exits read-only for an operator", async () => {
     expect(screen.getByRole("button", { name: "Редактировать" })).toBeDisabled(),
   );
   expect(fetch.mock.calls.filter(([, init]) => (init as RequestInit)?.method)).toHaveLength(0);
+});
+
+const SUB_OUT: ProxyOutbound = { tag: "sub_node", type: "vless", server: "exit.example.org", port: 443,
+  secret: { plaintext: "uuid-secret" }, method: null, tls: true, tls_server_name: "front.example.org",
+  tls_insecure: false, admin_listen: null };
+const SUB_GROUP = { tag: "sub1", type: "selector" as const, outbounds: ["sub_node"],
+  url: null, interval_minutes: null, tolerance_ms: null };
+const SUB = { name: "sub1", url: "https://provider.example.org/feed?token=hidden", format: "auto" as const,
+  interval_hours: 24, enabled: false, mode: "selector" as const, inline: false, inline_content: null };
+const MEMBER = { tag: "sub_node", label: "Узел Европа", protocol: "vless", server: "exit.example.org",
+  port: 443, transport: "grpc", sni: "front.example.org", security: "tls" };
+
+it("previews URL on agent with authorization and shows server details", async () => {
+  const fetch = setup({ proxies: { ...emptyConfiguration.proxies, subscriptions: [SUB] },
+    preview: { members: [MEMBER], skipped: [], outbounds: [SUB_OUT], groups: [SUB_GROUP] } });
+  const user = userEvent.setup();
+  await openTab(user, "Прокси-выходы");
+  await user.click(await screen.findByRole("tab", { name: "Подписки" }));
+  await user.click(screen.getByRole("button", { name: "Просмотр" }));
+  expect(await screen.findByText("Узел Европа")).toBeVisible();
+  expect(screen.getByText("grpc")).toBeVisible();
+  expect(screen.getByText("front.example.org / tls")).toBeVisible();
+  const call = fetch.mock.calls.find(([path]) => path === "/api/proxy/subscriptions/preview")!;
+  expect(JSON.parse(String((call[1] as RequestInit).body))).toMatchObject({ authorized: true, subscription: { url: SUB.url } });
+  expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(false);
+});
+
+it("applies preview outbounds and selector group into enabled draft without applying engine", async () => {
+  const fetch = setup({ proxies: { ...emptyConfiguration.proxies, subscriptions: [SUB] },
+    preview: { members: [MEMBER], skipped: [], outbounds: [SUB_OUT], groups: [SUB_GROUP] } });
+  const user = userEvent.setup();
+  await openTab(user, "Прокси-выходы");
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "Просмотр" }));
+  await screen.findAllByText("Узел Европа");
+  await user.click(screen.getByRole("button", { name: "Применить предложение" }));
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch).groups).toHaveLength(1));
+  expect(sentProxies(fetch)).toMatchObject({ enabled: true, outbounds: [SUB_OUT], groups: [SUB_GROUP],
+    subscriptions: [expect.objectContaining({ enabled: true, url: SUB.url })] });
+  expect(fetch.mock.calls.some(([path]) => path === "/api/apply")).toBe(false);
+});
+
+it("keeps URL masked and intact after inline toggle cycle", async () => {
+  const fetch = setup({ proxies: { ...emptyConfiguration.proxies, subscriptions: [SUB] } });
+  const user = userEvent.setup();
+  await openTab(user, "Прокси-выходы");
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByLabelText("Список вручную (inline)"));
+  await user.type(screen.getByLabelText("Список вручную"), "vless://node");
+  await user.click(screen.getByLabelText("Список вручную (inline)"));
+  expect(screen.getByText(/URL подписки: https:\/\/•••/)).toBeVisible();
+  expect(screen.queryByDisplayValue(SUB.url)).not.toBeInTheDocument();
+  await user.click(saveButton());
+  await waitFor(() => expect(sentProxies(fetch).subscriptions[0].url).toBe(SUB.url));
+});
+
+it("refresh shows diff and orphan warning without deleting anything", async () => {
+  const fetch = setup({ proxies: { ...emptyConfiguration.proxies, subscriptions: [SUB] },
+    refresh: { added: [MEMBER], updated: [], unchanged: [], orphans: [{ ...MEMBER, tag: "sub_old", label: "Сирота" }],
+      skipped: [{ line: 3, reason: "vmess.unsupported" }], outbounds: [SUB_OUT], groups: [SUB_GROUP] } });
+  const user = userEvent.setup();
+  await openTab(user, "Прокси-выходы");
+  await user.click(await screen.findByRole("tab", { name: "Подписки" }));
+  await user.click(screen.getByRole("button", { name: "Обновить сейчас" }));
+  expect(await screen.findByText(/Изменения: добавлено 1, обновлено 0, без изменений 0, сирот 1/)).toBeVisible();
+  expect(screen.getByText(/Пропущено: 1/)).toBeVisible();
+  expect(screen.getByText(/не удаляются автоматически/)).toBeVisible();
+  expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(false);
 });
 
 const GEO: RuleSetStatus = {

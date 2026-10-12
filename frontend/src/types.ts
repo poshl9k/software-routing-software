@@ -235,6 +235,9 @@ export interface SubscriptionMember {
   protocol: string;
   server: string;
   port: number;
+  sni?: string | null;
+  transport?: string | null;
+  security?: string | null;
   excluded?: boolean;
 }
 export interface SubscriptionPreview {
