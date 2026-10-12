@@ -153,3 +153,21 @@ def test_downloader_rejects_private_and_redirect():
         fetch(sub, key=KEY, authorized=True, transport=transport, resolver=lambda _: ['127.0.0.1'])
     with pytest.raises(downloader.DownloadError, match='host_not_authorized'):
         fetch(sub, key=KEY, authorized=True, transport=transport, resolver=lambda _: ['8.8.8.8'])
+
+
+def test_subscription_fetch_threads_bootstrap_resolver():
+    """Bootstrap resolver reaches the injected downloader fetch unchanged."""
+    from vs_router.agent import subscriptions
+
+    sub = ProxySubscription(name='demo', url='https://example.org/token')
+    boot = lambda _host: ['93.184.216.34']  # noqa: E731 - injected callable
+    seen = {}
+
+    def injected(spec, *, transport, resolver, bootstrap_resolver=None):
+        seen['bootstrap'] = bootstrap_resolver
+        return downloader.FetchResult(url=spec.url, content=LINK, sha256='x', size=len(LINK))
+
+    result = subscriptions.fetch(sub, key=KEY, authorized=True,
+                                 downloader_fetch=injected, bootstrap_resolver=boot)
+    assert result.members
+    assert seen['bootstrap'] is boot

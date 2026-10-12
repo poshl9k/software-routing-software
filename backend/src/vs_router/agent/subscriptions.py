@@ -34,7 +34,8 @@ def refresh(current: Parsed, fetched: Parsed) -> Diff:
 
 def fetch(subscription: ProxySubscription, *, key: bytes, authorized: bool = False,
           downloader_fetch: Callable = downloader.fetch, transport: downloader.Transport | None = None,
-          resolver: Callable[[str], list[str]] | None = None) -> Parsed:
+          resolver: Callable[[str], list[str]] | None = None,
+          bootstrap_resolver: Callable[[str], list[str]] | None = None) -> Parsed:
     """Caller must authorize URL from confirmed config. Inject safe downloader.fetch.
 
     Headers are NOT forwarded: existing pinned HTTPS transport has no custom
@@ -61,8 +62,12 @@ def fetch(subscription: ProxySubscription, *, key: bytes, authorized: bool = Fal
                               kind='subscription', format=subscription.format,
                               authorized=True, max_bytes=downloader.DEFAULT_MAX_BYTES,
                               timeout=downloader.DEFAULT_TIMEOUT)
-    result = downloader_fetch(spec, transport=transport or downloader.UrllibTransport(),
-                              resolver=resolver or downloader.default_resolver)
+    options = {'transport': transport or downloader.UrllibTransport(),
+               'resolver': resolver or downloader.default_resolver}
+    if bootstrap_resolver is not None or downloader_fetch is downloader.fetch:
+        options['bootstrap_resolver'] = (bootstrap_resolver if bootstrap_resolver is not None
+                                         else downloader.bootstrap_dns.resolve if resolver is None else None)
+    result = downloader_fetch(spec, **options)
     if result.not_modified:
         raise SubscriptionParseError('subscription.not_modified_requires_previous')
     return parse_body(result.content, key=key)
@@ -71,10 +76,12 @@ def fetch(subscription: ProxySubscription, *, key: bytes, authorized: bool = Fal
 def preview(subscription: ProxySubscription, *, key: bytes, authorized: bool = False,
             downloader_fetch: Callable = downloader.fetch,
             transport: downloader.Transport | None = None,
-            resolver: Callable[[str], list[str]] | None = None) -> tuple[Parsed, list, list]:
+            resolver: Callable[[str], list[str]] | None = None,
+            bootstrap_resolver: Callable[[str], list[str]] | None = None) -> tuple[Parsed, list, list]:
     """Thin orchestrator; caller persists returned members/outbounds/groups."""
     from .subscription_parse import materialize
     parsed = fetch(subscription, key=key, authorized=authorized,
-                   downloader_fetch=downloader_fetch, transport=transport, resolver=resolver)
+                   downloader_fetch=downloader_fetch, transport=transport, resolver=resolver,
+                   bootstrap_resolver=bootstrap_resolver)
     outbounds, groups = materialize(subscription, parsed.members)
     return parsed, outbounds, groups

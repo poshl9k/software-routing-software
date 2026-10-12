@@ -20,7 +20,7 @@ from test_agent_apply import FakeFS
 from vs_router.agent import daemon
 from vs_router.agent.downloader import (BuiltinSource, DownloadError, FetchResponse,
                                         SourceStore, SourceUpdater, fetch, ip_is_forbidden,
-                                        validate_content)
+                                        resolve_public, validate_content)
 from vs_router.agent.rpc import build_request
 
 PUBLIC = "93.184.216.34"          # documentation-grade public unicast
@@ -590,3 +590,174 @@ def test_validators_are_keyed_to_the_configured_url_across_redirect(tmp_path):
     record = updater.update(name="geo", url="https://public.example/rules.json")
     assert record["status"] == "not_modified"
     assert transport.calls[2]["etag"] == '"cdn-v1"'
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap DNS fallback (system resolver down/empty -> injected bootstrap)
+# ---------------------------------------------------------------------------
+#
+# ``resolve_public``/``fetch``/``SourceUpdater`` take an optional keyword-only
+# ``bootstrap_resolver``: a ``Callable[[str], list[str]]`` candidate source used
+# *only* when the ordinary ``resolver`` returns no records or raises ``OSError``.
+# It is an injected callable just like ``resolver`` — these tests never open a
+# socket. The bootstrap answer is put through the exact same address policy, so
+# a private/mixed answer is rejected *before* the transport is ever touched.
+
+class FakeBootstrap:
+    """Recording fake bootstrap DNS client; returns a fixed answer or raises."""
+
+    def __init__(self, answer=None, error=None):
+        self.answer = list(answer) if answer is not None else []
+        self.error = error
+        self.calls = []
+
+    def __call__(self, host):
+        self.calls.append(host)
+        if self.error is not None:
+            raise self.error
+        return list(self.answer)
+
+
+def dead_resolver(_host):
+    """System resolver with no working upstream (raises ``OSError``)."""
+    raise socket.gaierror(socket.EAI_AGAIN, "temporary failure in name resolution")
+
+
+def empty_resolver(_host):
+    return []
+
+
+# -- resolve_public --------------------------------------------------------
+
+def test_system_resolver_oserror_falls_back_to_bootstrap():
+    boot = FakeBootstrap(answer=[PUBLIC])
+    assert resolve_public("fallback.example", dead_resolver,
+                          bootstrap_resolver=boot) == [PUBLIC]
+    assert boot.calls == ["fallback.example"]
+
+
+def test_system_resolver_empty_answer_falls_back_to_bootstrap():
+    boot = FakeBootstrap(answer=[PUBLIC])
+    assert resolve_public("fallback.example", empty_resolver,
+                          bootstrap_resolver=boot) == [PUBLIC]
+    assert boot.calls == ["fallback.example"]
+
+
+def test_healthy_system_answer_never_calls_bootstrap():
+    boot = FakeBootstrap(answer=[INTERNAL])  # would be forbidden if reached
+    assert resolve_public("public.example", lambda _h: [PUBLIC],
+                          bootstrap_resolver=boot) == [PUBLIC]
+    assert boot.calls == []
+
+
+def test_ip_literal_host_never_calls_bootstrap():
+    boot = FakeBootstrap(answer=[INTERNAL])
+    assert resolve_public(PUBLIC, dead_resolver, bootstrap_resolver=boot) == [PUBLIC]
+    assert boot.calls == []
+
+
+def test_bootstrap_private_answer_is_forbidden():
+    boot = FakeBootstrap(answer=[INTERNAL])
+    with pytest.raises(DownloadError) as exc:
+        resolve_public("fallback.example", dead_resolver, bootstrap_resolver=boot)
+    assert exc.value.code == "download.forbidden_address"
+    assert boot.calls == ["fallback.example"]
+
+
+def test_bootstrap_mixed_answer_is_forbidden():
+    # A split-horizon bootstrap answer cannot sneak an internal record past a
+    # public one: the whole host is refused.
+    boot = FakeBootstrap(answer=[PUBLIC, INTERNAL])
+    with pytest.raises(DownloadError) as exc:
+        resolve_public("fallback.example", empty_resolver, bootstrap_resolver=boot)
+    assert exc.value.code == "download.forbidden_address"
+
+
+def test_bootstrap_empty_answer_is_a_resolve_failure():
+    boot = FakeBootstrap(answer=[])
+    with pytest.raises(DownloadError) as exc:
+        resolve_public("fallback.example", dead_resolver, bootstrap_resolver=boot)
+    assert exc.value.code == "download.resolve_empty"
+
+
+def test_bootstrap_failure_is_a_typed_download_error():
+    boot = FakeBootstrap(error=OSError("bootstrap nameserver unreachable"))
+    with pytest.raises(DownloadError) as exc:
+        resolve_public("fallback.example", dead_resolver, bootstrap_resolver=boot)
+    # Typed, stable ``download.*`` token; never a raw OSError escaping.
+    assert exc.value.code.startswith("download.")
+    assert boot.calls == ["fallback.example"]
+
+
+def test_without_bootstrap_an_oserror_stays_resolve_failed():
+    # Regression: the fallback is opt-in; without it the old behaviour holds.
+    with pytest.raises(DownloadError) as exc:
+        resolve_public("fallback.example", dead_resolver)
+    assert exc.value.code == "download.resolve_failed"
+
+
+def test_without_bootstrap_an_empty_answer_stays_resolve_empty():
+    with pytest.raises(DownloadError) as exc:
+        resolve_public("fallback.example", empty_resolver)
+    assert exc.value.code == "download.resolve_empty"
+
+
+# -- fetch -----------------------------------------------------------------
+
+def test_fetch_pins_the_bootstrap_address_when_system_dns_is_down(tmp_path):
+    spec = user_spec(_updater_only(tmp_path), url="https://fallback.example/x")
+    boot = FakeBootstrap(answer=[PUBLIC])
+    transport = FakeTransport([response(200, b"ok")])
+    result = fetch(spec, transport=transport, resolver=dead_resolver,
+                   bootstrap_resolver=boot)
+    assert result.content == "ok"
+    # The bootstrap-resolved address is what the transport dialled (pinned).
+    assert [call["connect_ip"] for call in transport.calls] == [PUBLIC]
+    assert boot.calls == ["fallback.example"]
+
+
+def test_fetch_refuses_bootstrap_private_answer_before_transport(tmp_path):
+    spec = user_spec(_updater_only(tmp_path), url="https://fallback.example/x")
+    boot = FakeBootstrap(answer=["127.0.0.1"])
+    transport = FakeTransport([response(200, b"ok")])
+    with pytest.raises(DownloadError) as exc:
+        fetch(spec, transport=transport, resolver=empty_resolver,
+              bootstrap_resolver=boot)
+    assert exc.value.code == "download.forbidden_address"
+    assert transport.calls == []  # rejected before any connection
+    assert boot.calls == ["fallback.example"]
+
+
+def test_fetch_with_healthy_dns_does_not_call_bootstrap(tmp_path):
+    spec = user_spec(_updater_only(tmp_path))
+    boot = FakeBootstrap(answer=[INTERNAL])
+    transport = FakeTransport([response(200, b"ok")])
+    result = fetch(spec, transport=transport, resolver=lambda _h: [PUBLIC],
+                   bootstrap_resolver=boot)
+    assert result.content == "ok"
+    assert boot.calls == []
+
+
+# -- SourceUpdater wiring --------------------------------------------------
+
+def test_updater_threads_bootstrap_resolver(tmp_path):
+    boot = FakeBootstrap(answer=[PUBLIC])
+    store = SourceStore(base=tmp_path / "sources", filesystem=FakeFS(), clock=lambda: 100.0)
+    transport = FakeTransport([response(200, b'{"outbounds": []}')])
+    updater = SourceUpdater(store=store, transport=transport, resolver=dead_resolver,
+                            builtin_sources={}, bootstrap_resolver=boot)
+    record = updater.update(name="sub1", url="https://fallback.example/x", authorized=True)
+    assert record["status"] == "ok"
+    assert transport.calls[0]["connect_ip"] == PUBLIC
+    assert boot.calls == ["fallback.example"]
+
+
+def test_updater_does_not_call_bootstrap_for_a_healthy_answer(tmp_path):
+    boot = FakeBootstrap(answer=[PUBLIC])
+    updater, _, transport = make_updater(
+        tmp_path, responses=[response(200, b'{"outbounds": []}')],
+        mapping={"public.example": [PUBLIC]}, bootstrap_resolver=boot)
+    record = updater.update(name="sub1", url="https://public.example/x", authorized=True)
+    assert record["status"] == "ok"
+    assert boot.calls == []
+    assert transport.calls[0]["connect_ip"] == PUBLIC
