@@ -151,7 +151,7 @@ def default_resolver(host: str) -> list[str]:
 def resolve_public(host: str, resolver: Callable[[str], list[str]]) -> list[str]:
     """Resolve ``host`` and reject if any address is forbidden.
 
-    Returns the validated address strings (the caller pins the first one). An IP
+    Returns the validated address strings (the caller pins each attempted IP). An IP
     literal is used directly; a hostname goes through ``resolver``. Any forbidden
     address fails the whole host — a split-horizon answer cannot sneak one
     internal record past a public one.
@@ -372,16 +372,21 @@ def fetch(spec: SourceSpec, *, transport: Transport, resolver: Callable[[str], l
         if host not in spec.allowed_hosts:
             raise DownloadError('download.host_not_allowed' if spec.builtin
                                 else 'download.host_not_authorized')
+        # Validate the entire DNS answer before connecting to *any* address.
+        # Pin each attempt; never re-resolve between validation and connection.
         addresses = resolve_public(host, resolver)
-        connect_ip = addresses[0]
-        try:
-            response = transport.fetch(url=url, connect_ip=connect_ip,
-                                       timeout=spec.timeout, max_bytes=spec.max_bytes,
-                                       etag=spec.etag, last_modified=spec.last_modified)
-        except (socket.timeout, TimeoutError) as exc:
-            raise DownloadError('download.timeout', str(exc)) from exc
-        except (OSError, ssl.SSLError) as exc:
-            raise DownloadError('download.transport_failed', str(exc)) from exc
+        last_error: OSError | None = None
+        for connect_ip in addresses:
+            try:
+                response = transport.fetch(url=url, connect_ip=connect_ip,
+                                           timeout=spec.timeout, max_bytes=spec.max_bytes,
+                                           etag=spec.etag, last_modified=spec.last_modified)
+                break
+            except (OSError, ssl.SSLError) as exc:
+                last_error = exc
+        else:
+            code = 'download.timeout' if isinstance(last_error, (socket.timeout, TimeoutError)) else 'download.transport_failed'
+            raise DownloadError(code, str(last_error)) from last_error
         headers = {key.lower(): value for key, value in (response.headers or {}).items()}
         if response.status in _REDIRECTS:
             if hop >= MAX_REDIRECTS:

@@ -474,7 +474,7 @@ class ProxyOutbound(Model):
     returned redacted, never in plaintext — a raw string is rejected."""
     tag: Name
     type: Literal["direct", "block", "shadowsocks", "vmess", "vless",
-                  "trojan", "hysteria2", "tuic"]
+                  "trojan", "hysteria2", "tuic", "naive", "mieru"]
     server: str | None = None
     port: Port | None = None
     secret: EncryptedSecret | None = None
@@ -484,6 +484,10 @@ class ProxyOutbound(Model):
     tls: bool = False
     tls_server_name: str | None = None
     tls_insecure: bool = False
+    transport: dict | None = None
+    reality_public_key: str | None = None
+    reality_short_id: str | None = None
+    username: str | None = None
     # Optional local administrative endpoint. A non-loopback bind is an open
     # administrative inbound and is rejected by validators by default.
     admin_listen: str | None = None

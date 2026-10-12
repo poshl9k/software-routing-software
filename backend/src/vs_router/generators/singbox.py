@@ -32,11 +32,14 @@ IMPLICIT_BLOCK_TAG = "block"
 def _tls_block(outbound):
     if not outbound.tls:
         return None
-    tls = {"enabled": True}
+    tls: dict[str, object] = {"enabled": True}
     if outbound.tls_server_name:
         tls["server_name"] = outbound.tls_server_name
     if outbound.tls_insecure:
         tls["insecure"] = True
+    if outbound.reality_public_key:
+        tls["reality"] = {"enabled": True, "public_key": outbound.reality_public_key,
+                          "short_id": outbound.reality_short_id or ""}
     return tls
 
 
@@ -66,9 +69,14 @@ def _render_outbound(outbound):
     elif outbound.type == "tuic":
         rendered["uuid"] = PLACEHOLDER_UUID
         rendered["password"] = PLACEHOLDER_PASSWORD
+    elif outbound.type in ("naive", "mieru"):
+        rendered["username"] = outbound.username or "redacted"
+        rendered["password"] = PLACEHOLDER_PASSWORD
     tls = _tls_block(outbound)
     if tls is not None:
         rendered["tls"] = tls
+    if outbound.transport:
+        rendered["transport"] = outbound.transport
     return rendered
 
 

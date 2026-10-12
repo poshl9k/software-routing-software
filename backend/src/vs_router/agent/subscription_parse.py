@@ -40,6 +40,10 @@ class Member:
     secret: EncryptedSecret
     method: str | None = None
     tls_insecure: bool = False
+    transport_options: dict | None = None
+    reality_public_key: str | None = None
+    reality_short_id: str | None = None
+    username: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,8 +65,10 @@ def _b64(text: str) -> str:
 def _member(protocol: str, server: str, port: object, password: str, label: str,
             *, key: bytes, sni: str | None = None, transport: str = 'tcp',
             security: str = 'none', method: str | None = None,
-            tls_insecure: bool = False, line: int | None = None) -> Member:
-    if protocol not in {'vless', 'trojan', 'shadowsocks', 'hysteria2', 'tuic'}:
+            tls_insecure: bool = False, line: int | None = None,
+            transport_options: dict | None = None, reality_public_key: str | None = None,
+            reality_short_id: str | None = None, username: str | None = None) -> Member:
+    if protocol not in {'vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria2', 'tuic', 'naive', 'mieru'}:
         raise SubscriptionParseError('subscription.unsupported_protocol', line)
     if not isinstance(server, str) or not re.fullmatch(r'[A-Za-z0-9_.:\[\]-]{1,253}', server) or not isinstance(password, str) or not password or len(password) > 8192:
         raise SubscriptionParseError('subscription.invalid_member', line)
@@ -72,14 +78,20 @@ def _member(protocol: str, server: str, port: object, password: str, label: str,
         raise SubscriptionParseError('subscription.invalid_port', line) from exc
     if not 1 <= port_number <= 65535 or isinstance(port, bool):
         raise SubscriptionParseError('subscription.invalid_port', line)
-    if transport != 'tcp' or security not in {'none', 'tls'}:
+    if transport not in {'tcp', 'ws', 'grpc', 'http', 'httpupgrade'} or security not in {'none', 'tls'}:
         raise SubscriptionParseError('subscription.unsupported_transport', line)
     if protocol == 'shadowsocks' and not method:
         raise SubscriptionParseError('subscription.invalid_member', line)
-    identity = json.dumps([protocol, server.lower(), port_number, password, method], separators=(',', ':'), ensure_ascii=False)
+    if protocol in {'naive', 'mieru'} and not isinstance(username, str):
+        raise SubscriptionParseError('subscription.invalid_member', line)
+    identity_parts = [protocol, server.lower(), port_number, password, method]
+    if username is not None:
+        identity_parts.append(username)
+    identity = json.dumps(identity_parts, separators=(',', ':'), ensure_ascii=False)
     tag = 'sub_' + hashlib.sha256(identity.encode()).hexdigest()[:24]
     return Member(tag, str(label or server)[:256], protocol, server, port_number,
-                  sni, transport, security, encrypt_secret(password, key), method, tls_insecure)
+                  sni, transport, security, encrypt_secret(password, key), method, tls_insecure,
+                  transport_options, reality_public_key, reality_short_id, username)
 
 
 def _share(raw: str, key: bytes, line: int) -> Member:
@@ -129,23 +141,43 @@ def _share(raw: str, key: bytes, line: int) -> Member:
 
 def _object(row: dict, key: bytes, line: int | None = None) -> Member:
     protocol = row.get('type') or row.get('protocol')
+    if not isinstance(protocol, str):
+        raise SubscriptionParseError('subscription.invalid_member', line)
     protocol = {'ss': 'shadowsocks'}.get(protocol, protocol)
     tls = row.get('tls', False)
+    reality = None
     if isinstance(tls, dict):
         sni = tls.get('server_name') or row.get('sni')
         insecure = bool(tls.get('insecure', False))
-        tls = True
+        reality = tls.get('reality')
+        tls = tls.get('enabled', True)
     else:
         sni = row.get('sni') or row.get('servername') or row.get('tls_server_name')
         insecure = False
-    transport = row.get('transport', 'tcp')
-    if isinstance(transport, dict):
-        transport = transport.get('type', 'tcp')
+    if reality is not None and (not isinstance(reality, dict) or not reality.get('public_key')):
+        raise SubscriptionParseError('subscription.invalid_member', line)
+    raw_transport = row.get('transport', 'tcp')
+    transport = raw_transport.get('type', 'tcp') if isinstance(raw_transport, dict) else raw_transport
+    if not isinstance(transport, str):
+        raise SubscriptionParseError('subscription.unsupported_transport', line)
+    options = None
+    if isinstance(raw_transport, dict) and transport in {'ws', 'grpc', 'http', 'httpupgrade'}:
+        # Only fields understood by sing-box are forwarded to materialization.
+        allowed = {'ws': ('path', 'headers', 'max_early_data', 'early_data_header_name'),
+                   'grpc': ('service_name', 'idle_timeout', 'ping_timeout', 'permit_without_stream'),
+                   'http': ('host', 'path', 'method', 'headers'),
+                   'httpupgrade': ('host', 'path', 'headers')}
+        options = {'type': transport, **{k: raw_transport[k] for k in allowed[transport] if k in raw_transport}}
+    username = row.get('username') if protocol in {'naive', 'mieru'} else None
     return _member(protocol, row.get('server') or row.get('add'),
                    row.get('server_port', row.get('port')), row.get('password') or row.get('uuid') or row.get('id') or '',
                    row.get('name') or row.get('tag') or row.get('ps'), key=key,
                    sni=sni, transport=transport, security='tls' if tls else 'none',
-                   method=row.get('method') or row.get('cipher'), tls_insecure=insecure, line=line)
+                   method=row.get('method') or row.get('cipher'), tls_insecure=insecure, line=line,
+                   transport_options=options,
+                   reality_public_key=reality.get('public_key') if reality else None,
+                   reality_short_id=reality.get('short_id') if reality else None,
+                   username=username)
 
 
 def _clash(content: str) -> list[tuple[int, dict]]:
@@ -178,6 +210,30 @@ def _clash(content: str) -> list[tuple[int, dict]]:
     return rows
 
 
+def _json_member(row: dict, key: bytes, index: int) -> Member:
+    if row.get('type') in {'direct', 'block', 'selector', 'urltest'}:
+        raise SubscriptionParseError('non_server', index)
+    # Xray/V2Ray: outbound protocol + settings.vnext/servers.
+    settings = row.get('settings')
+    if isinstance(settings, dict):
+        targets = settings.get('vnext') or settings.get('servers')
+        if isinstance(targets, list) and targets and isinstance(targets[0], dict):
+            target = targets[0]
+            users = target.get('users') or [{}]
+            user = users[0] if isinstance(users, list) and users and isinstance(users[0], dict) else {}
+            stream = row.get('streamSettings') or {}
+            if not isinstance(stream, dict):
+                raise SubscriptionParseError('subscription.invalid_member', index)
+            tls = stream.get('tlsSettings') or {}
+            row = {'type': row.get('protocol'), 'server': target.get('address') or target.get('server'),
+                   'port': target.get('port'), 'password': target.get('password') or user.get('id') or user.get('password'),
+                   'name': row.get('tag'), 'method': target.get('method'),
+                   'tls': stream.get('security') == 'tls',
+                   'sni': tls.get('serverName') if isinstance(tls, dict) else None,
+                   'transport': stream.get('network', 'tcp')}
+    return _object(row, key, index)
+
+
 def parse_body(content: str, *, key: bytes) -> Parsed:
     """Parse bounded body; key is caller-owned Fernet key, never returned."""
     if not isinstance(content, str) or len(content.encode('utf-8')) > DEFAULT_MAX_BYTES:
@@ -198,8 +254,12 @@ def parse_body(content: str, *, key: bytes) -> Parsed:
         except ValueError as exc:
             raise SubscriptionParseError('subscription.invalid_json') from exc
         if isinstance(data, dict):
-            if isinstance(data.get('outbounds'), list):
-                rows = data['outbounds']
+            if isinstance(data.get('outbounds'), list) or isinstance(data.get('endpoints'), list):
+                rows = []
+                for field in ('outbounds', 'endpoints'):
+                    value = data.get(field)
+                    if isinstance(value, list):
+                        rows.extend(value)
             elif isinstance(data.get('servers'), list):
                 rows = data['servers']
             elif isinstance(data.get('vnext'), list):
@@ -215,35 +275,18 @@ def parse_body(content: str, *, key: bytes) -> Parsed:
             raise SubscriptionParseError('subscription.too_many_members')
         for index, row in enumerate(rows, 1):
             if not isinstance(row, dict):
-                raise SubscriptionParseError('subscription.invalid_member', index)
-            # Xray/V2Ray: outbound protocol + settings.vnext/servers.
-            settings = row.get('settings')
-            if isinstance(settings, dict):
-                targets = settings.get('vnext') or settings.get('servers')
-                if isinstance(targets, list) and targets and isinstance(targets[0], dict):
-                    target = targets[0]
-                    users = target.get('users') or [{}]
-                    user = users[0] if isinstance(users, list) and users and isinstance(users[0], dict) else {}
-                    stream = row.get('streamSettings') or {}
-                    if not isinstance(stream, dict):
-                        raise SubscriptionParseError('subscription.invalid_member', index)
-                    tls = stream.get('tlsSettings') or {}
-                    row = {'type': row.get('protocol'), 'server': target.get('address') or target.get('server'),
-                           'port': target.get('port'), 'password': target.get('password') or user.get('id') or user.get('password'),
-                           'name': row.get('tag'), 'method': target.get('method'),
-                           'tls': stream.get('security') == 'tls',
-                           'sni': tls.get('serverName') if isinstance(tls, dict) else None,
-                           'transport': stream.get('network', 'tcp')}
-            if row.get('type') in {'direct', 'block', 'selector', 'urltest', 'vmess'}:
-                skipped.append({'line': index, 'reason': 'vmess_unsupported' if row.get('type') == 'vmess' else 'non_server'})
+                skipped.append({'line': index, 'reason': 'subscription.invalid_member'})
                 continue
-            members.append(_object(row, key, index))
+            try:
+                members.append(_json_member(row, key, index))
+            except SubscriptionParseError as exc:
+                skipped.append({'line': index, 'reason': exc.code})
     elif re.search(r'^proxies:\s*$', text, re.M):
         for line, row in _clash(text):
-            if row.get('type') == 'vmess':
-                skipped.append({'line': line, 'reason': 'vmess_unsupported'})
-                continue
-            members.append(_object(row, key, line))
+            try:
+                members.append(_object(row, key, line))
+            except SubscriptionParseError as exc:
+                skipped.append({'line': line, 'reason': exc.code})
     else:
         for line, raw in enumerate(text.splitlines(), 1):
             raw = raw.strip()
@@ -282,7 +325,10 @@ def materialize(subscription: ProxySubscription, members: tuple[Member, ...] | l
                 and (exclude is None or not exclude.search(m.label))]
     outbounds = [ProxyOutbound(tag=m.tag, type=m.protocol, server=m.server, port=m.port,
                                secret=m.secret, method=m.method, tls=m.security == 'tls',
-                               tls_server_name=m.sni, tls_insecure=m.tls_insecure) for m in selected]
+                               tls_server_name=m.sni, tls_insecure=m.tls_insecure,
+                               transport=m.transport_options or ({'type': m.transport} if m.transport != 'tcp' else None),
+                               reality_public_key=m.reality_public_key,
+                               reality_short_id=m.reality_short_id, username=m.username) for m in selected]
     if not outbounds:
         return outbounds, []
     tags = [o.tag for o in outbounds]
