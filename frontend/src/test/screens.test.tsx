@@ -589,6 +589,31 @@ describe("screens", () => {
     expect(fetch.mock.calls.filter(([path]) => path === "/api/setup")).toHaveLength(1);
     expect(fetch.mock.calls.some(([path]) => path === "/api/auth/login")).toBe(true);
   });
+  it("onboarding reuses an existing draft (draft.exists)", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string, init?: RequestInit) =>
+      Promise.resolve(new Response(JSON.stringify(
+        path === "/api/setup"
+          ? { code: "setup.completed", message: "setup.completed", details: [] }
+          : (path === "/api/draft" && init?.method === "POST")
+            ? { code: "draft.exists", message: "draft.exists", details: [] }
+          : path === "/api/host/interfaces" ? [
+              { name: "enp2s0", kind: "physical", mac: "52:54:00:00:00:02" },
+            ] : path === "/api/versions" ? [] : {},
+      ), { status: path === "/api/setup" ? 409
+        : (path === "/api/draft" && init?.method === "POST") ? 409 : 200 })));
+    const user = userEvent.setup();
+    open("/onboarding");
+    await user.type(screen.getByLabelText("Пароль", { exact: false }), "strong-password");
+    await user.click(screen.getByRole("button", { name: "Продолжить →" }));
+    await screen.findByRole("heading", { name: "Базовая сеть" });
+    await user.selectOptions(screen.getByRole("combobox"), "enp2s0");
+    await user.click(screen.getByRole("button", { name: "Продолжить →" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить" }));
+    expect(
+      await screen.findByRole("heading", { name: "Первичная настройка готова" }),
+    ).toBeVisible();
+  });
   it("onboarding blocks draft creation while host inventory is unavailable", async () => {
     const fetch = mockApi();
     fetch.mockImplementation((path: string) => Promise.resolve(new Response(

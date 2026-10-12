@@ -71,22 +71,28 @@ export default function Onboarding() {
         if (!physicalNics.some((i) => i.name === lan)) {
           throw new Error("Выберите LAN-интерфейс из списка портов системы");
         }
-        await api.createDraft({
-          ...emptyConfiguration,
-          interfaces: [
-            {
-              name: lan,
-              type: "physical",
-              zone: "lan",
-              description: null,
-              addressing: "static",
-              addresses: [address],
-              parent: null,
-              vlan_id: null,
-              members: [],
-            },
-          ],
-        });
+        try {
+          await api.createDraft({
+            ...emptyConfiguration,
+            interfaces: [
+              {
+                name: lan,
+                type: "physical",
+                zone: "lan",
+                description: null,
+                addressing: "static",
+                addresses: [address],
+                parent: null,
+                vlan_id: null,
+                members: [],
+              },
+            ],
+          });
+        } catch (err) {
+          // A draft may already exist (e.g. created out-of-band or by a resumed
+          // first run). Reuse it instead of failing the wizard.
+          if (!(err instanceof ApiError) || err.code !== "draft.exists") throw err;
+        }
         savePreferences(preferences);
         await refresh();
         setStep(3);
