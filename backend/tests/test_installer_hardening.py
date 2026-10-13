@@ -130,6 +130,34 @@ def test_debian_installer_sources_are_snapshot_pinned():
         assert 'deb.debian.org' not in preseed
 
 
+def test_console_menu_replaces_tty1_getty_without_assigning_lan():
+    unit = (PACKAGING / 'vs-router-console.service').read_text()
+    install = (PACKAGING / 'install.sh').read_text()
+    bootstrap = (PACKAGING / 'bootstrap.sh').read_text()
+    iso = (ROOT / 'installer/make-iso.sh').read_text()
+
+    assert 'ExecStart=/usr/bin/python3 -m vs_router.agent.console_menu' in unit
+    for setting in ('User=root', 'StandardInput=tty', 'TTYPath=/dev/tty1',
+                    'TTYReset=yes', 'WantedBy=multi-user.target'):
+        assert setting in unit
+    assert 'After=vs-router-bootstrap-firstboot.service' in unit
+    assert 'Conflicts=getty@tty1.service' in unit
+    assert 'install -m 0644 "$packaging_dir"/*.service' in install
+    assert 'systemctl mask getty@tty1.service' in install
+    assert 'systemctl enable vs-router-console.service' in install
+    assert 'systemctl mask --now getty@tty1.service' not in install
+    assert install.index('systemctl mask getty@tty1.service') > install.index('install -m 0644 "$packaging_dir"/*.service')
+    assert 'console menu on tty1' in bootstrap
+    assert '192.168.10.1' not in bootstrap
+    for name in ('preseed.cfg', 'preseed-semiauto.cfg'):
+        preseed = (ROOT / 'installer' / name).read_text()
+        assert '192.168.10.1' not in preseed
+        assert 'netcfg/get_ipaddress' not in preseed
+    assert 'VS_ROUTER_UNATTENDED_LAB' in iso
+    assert 'VS_ROUTER_STATIC_NET' in iso
+    assert 'requires VS_ROUTER_UNATTENDED_LAB=1' in iso
+
+
 def test_no_production_credentials_or_open_ssh():
     production = (ROOT / 'installer/preseed-semiauto.cfg').read_text()
     assert 'vsr-install' not in production

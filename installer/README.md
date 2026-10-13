@@ -1,11 +1,25 @@
 # vs-router installer ISO
 
 Production installs are semi-automatic: the operator chooses the OS password and
-confirms partitioning. Sudo requires that password. SSH is masked, and an initial
-nftables input/forward deny policy permits loopback, established replies and DHCPv4.
-Use the local console. **Software installation does not yet provide initial LAN
-HTTPS access:** console LAN assignment, certificates and first-apply guards remain
-unimplemented. Do not treat this image as ready for production deployment.
+confirms partitioning. Sudo requires that password. SSH service/socket are masked
+at install; access remains subject to the existing interface-scoped rules. An
+initial nftables input/forward deny policy permits loopback, established replies
+and DHCPv4. Use the local console. Target first access (like pfSense): reboot/boot
+→ menu on `tty1` → assign separate physical WAN/LAN ports → set a static LAN IP
+and prefix of your choice → Save and apply → open `https://<chosen-LAN-IP>/` from
+a workstation on that LAN (set a temporary static address in the same subnet).
+Do not use the installer uplink as LAN. DHCP serving is not enabled before the
+first apply. Check the console CA fingerprint before trusting the certificate;
+verify access from LAN and denial from WAN separately.
+
+This is the design in `docs/console-menu.md` in the main repository, **not a
+verified install path**: a `vs-router-console.service` unit is prepared for
+`tty1`, but its `vs_router.agent.console_menu` module is not present yet. No
+end-to-end VM check of reboot → menu → LAN HTTPS has been done. Do not treat this
+image as ready for production deployment. The tty1 replacement is reversible
+from a separate root session: `systemctl disable --now vs-router-console.service`,
+`systemctl unmask getty@tty1.service`, then `systemctl enable --now getty@tty1.service`.
+This does not change SSH units.
 
 Build with `xorriso` and `isolinux` already installed:
 
@@ -98,7 +112,8 @@ install; the current checks do not yet establish that.
 New tests exercise shell failure propagation, retry behavior and network-manager
 handoff with isolated files/fake commands. They do not prove DHCP continuity or
 firewall behavior on real hosts. Rebuild/boot the ISO on a disposable Debian 13 VM
-and test failures, reboot and rerun before deployment. Historical lab reports do
-not validate this revision. LAN-only HTTPS, identity checks at every boot, safe
-management endpoint transitions, UI-controlled SSH and WAN brute-force protection
-remain separate unfinished work. One-port panel provisioning is not provided.
+and test failures, reboot, console menu, LAN/WAN reachability and rerun before
+deployment. Historical lab reports do not validate this revision. LAN-only HTTPS,
+identity checks at every boot, safe management endpoint transitions and SSH
+interface rules need end-to-end VM verification; the console menu itself is still
+unimplemented. One-port panel provisioning is not provided.
