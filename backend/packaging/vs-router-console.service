@@ -6,6 +6,7 @@ Conflicts=getty@tty1.service
 [Service]
 Type=simple
 User=root
+Environment=VS_ROUTER_DATABASE_URL=sqlite:////var/lib/vs-router/vs-router.db
 ExecStart=/usr/bin/python3 -m vs_router.agent.console_menu
 StandardInput=tty
 StandardOutput=tty

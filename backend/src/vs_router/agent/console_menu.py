@@ -122,8 +122,11 @@ class Menu:
         self.runner = runner or self.run
         self.sysnet = sysnet
         self.console = console
+        # The panel/agent store their database at an absolute product path;
+        # fall back to it (not a cwd-relative file) so the console sees the real
+        # configuration even without an inherited environment.
         self.database = database or create_engine(os.environ.get(
-            'VS_ROUTER_DATABASE_URL', 'sqlite:///vs-router.db'))
+            'VS_ROUTER_DATABASE_URL', 'sqlite:////var/lib/vs-router/vs-router.db'))
         self.apply_fn = apply_fn or self.apply_rpc
         self.selection = Selection()
 
@@ -216,9 +219,14 @@ class Menu:
         self.print('Пароль обновлён.')
 
     def status(self):
-        with Session(self.database) as db:
-            row = db.scalar(select(ConfigurationRow).where(
-                ConfigurationRow.status == 'confirmed').order_by(ConfigurationRow.id.desc()))
+        row = None
+        try:
+            with Session(self.database) as db:
+                row = db.scalar(select(ConfigurationRow).where(
+                    ConfigurationRow.status == 'confirmed').order_by(ConfigurationRow.id.desc()))
+        except Exception:
+            # A not-yet-created/empty database must not crash the console.
+            self.print('Конфигурация пока недоступна (база не инициализирована).')
         state = read_management((self.console.path(STATE_DIR) if self.console else STATE_DIR)
                                 / 'management.json')
         if state:
@@ -227,7 +235,7 @@ class Menu:
         fingerprint = (x509.load_pem_x509_certificate(ca_path.read_bytes()).fingerprint(
             hashes.SHA256()).hex(':') if ca_path.exists() else None)
         services = {}
-        for name in ('vs-router-agent', 'vs-router-web', 'caddy', 'sing-box'):
+        for name in ('vs-router-agent', 'vs-router-web', 'caddy', 'vs-router-singbox'):
             result = self.runner(['systemctl', 'is-active', name])
             services[name] = 'active' if result.returncode == 0 else 'inactive'
         displayed = Selection(dict(self.selection.roles), dict(self.selection.addresses))
@@ -318,12 +326,15 @@ class Menu:
                 if choice not in actions:
                     raise ValueError('console.invalid_option')
                 actions[choice]()
+            except (EOFError, KeyboardInterrupt):
+                return 0
             except (ValueError, APIError, OSError, subprocess.SubprocessError) as exc:
                 code = exc.code if isinstance(exc, APIError) else str(exc)
                 self.print(code if re.fullmatch(r'[a-z0-9]+(?:\.[a-z0-9_]+)+', code)
                            else 'console.operation_failed')
-            except (EOFError, KeyboardInterrupt):
-                return 0
+            except Exception:
+                # Never leak a traceback to the physical console.
+                self.print('console.operation_failed')
 
 
 def main():
