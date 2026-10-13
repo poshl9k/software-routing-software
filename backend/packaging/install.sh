@@ -221,6 +221,11 @@ printf '{"commit":"%s","semver":"%s","installed_at":"%s","source":"%s"}\n' \
     > /etc/vs-router/version.json
 chmod 0644 /etc/vs-router/version.json
 systemctl enable vs-router-bootrestore.service vs-router-tproxy-postboot.service vs-router-pppoe-postboot.service
+# Replace the physical tty1 login on the next boot, not the active installer
+# session: stopping getty here would kill an operator running bootstrap on tty1.
+# SSH units are managed separately; this only affects the local VGA console.
+systemctl mask getty@tty1.service
+systemctl enable vs-router-console.service
 systemctl daemon-reload
 systemctl restart vs-router-agent.service vs-router-web.service
 systemctl is-active --quiet vs-router-agent.service

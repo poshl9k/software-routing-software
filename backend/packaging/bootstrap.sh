@@ -378,7 +378,7 @@ stage_summary() {
         status=$(systemctl is-active "$service" 2>/dev/null || true)
         log "Service ${service}: ${status:-unknown}"
     done
-    log 'Software installed; panel readiness is NOT established. From the local root console run: python3 -m vs_router.agent.management_console --mac <LAN-MAC> [--address 192.168.10.1/24]. Then verify access from LAN and denial from WAN.'
+    log 'Software installed; panel readiness is NOT established. Reboot to open the console menu on tty1; assign WAN/LAN, choose the LAN address, then save/apply. Verify HTTPS from LAN and denial from WAN. No LAN address is assigned automatically.'
 }
 
 main() {
