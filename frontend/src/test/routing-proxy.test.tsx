@@ -97,6 +97,10 @@ function setup(options?: {
 const openTab = async (user: ReturnType<typeof userEvent.setup>, name: string) =>
   user.click(screen.getByRole("tab", { name }));
 const saveButton = () => screen.getByRole("button", { name: "Сохранить" });
+// Editor fields now live inside a modal dialog; close it before touching page-level
+// controls (add buttons, other dialogs, the page footer).
+const closeDialog = async (user: ReturnType<typeof userEvent.setup>) =>
+  user.click(screen.getByRole("button", { name: "Отмена" }));
 const sentProxies = (fetch: ReturnType<typeof setup>) => {
   const call = fetch.mock.calls.find(
     ([path, init]) => path === "/api/draft" && (init as RequestInit)?.method === "PUT",
@@ -116,15 +120,18 @@ it("saves proxy outbound, subscription and group as a draft with a write-only se
   await user.type(screen.getByLabelText("Сервер"), "exit.example.com");
   await user.type(screen.getByLabelText("Порт"), "8388");
   await user.type(screen.getByLabelText("Секрет (пароль / UUID)"), "topsecret");
+  await closeDialog(user);
 
   await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
   await user.type(screen.getByLabelText("Имя подписки"), "sub1");
   await user.type(screen.getByLabelText("URL подписки"), "https://sub.example.com/list");
   await user.selectOptions(screen.getByLabelText("Формат"), "clash");
+  await closeDialog(user);
 
   await user.click(screen.getByRole("button", { name: "+ Добавить группу" }));
   await user.type(screen.getByLabelText("Тег группы"), "grp");
   await user.click(screen.getByRole("checkbox", { name: "ss1" }));
+  await closeDialog(user);
 
   await user.click(saveButton());
   await waitFor(() => expect(sentProxies(fetch)).toBeTruthy());
@@ -187,6 +194,7 @@ it("warns about policy and group references before deleting an outbound", async 
   const user = userEvent.setup();
   await openTab(user, "Прокси-выходы");
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "Изменить выход exit_a" }));
   await user.click(screen.getByRole("button", { name: "Удалить выход exit_a" }));
   expect(screen.getByText(/правило sites, конечное действие, группа pool/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Отмена" }));
@@ -256,6 +264,7 @@ it("blocks saving an outbound without a server/port and a non-https subscription
   expect(saveButton()).toBeDisabled();
   await user.clear(screen.getByLabelText("Порт"));
   await user.type(screen.getByLabelText("Порт"), "8388");
+  await closeDialog(user);
   await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
   await user.type(screen.getByLabelText("Имя подписки"), "sub1");
   await user.type(screen.getByLabelText("URL подписки"), "http://not-secure.example.com");
@@ -342,6 +351,7 @@ it("hides stored subscription headers and preserves them unless replaced", async
   await openTab(user, "Прокси-выходы");
   expect(screen.queryByText(/private-token/)).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "Изменить" }));
   expect(screen.getByLabelText("Заголовки (Name: value, по одному на строку)")).toHaveValue("");
   expect(screen.queryByDisplayValue(/private-token/)).not.toBeInTheDocument();
   await user.click(saveButton());
@@ -373,6 +383,7 @@ it("shows group tolerance only for urltest and enforces the 0..5000 ms bounds", 
   await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
   await user.type(screen.getByLabelText("Тег выхода"), "exit1");
   await user.selectOptions(screen.getByLabelText("Тип"), "direct");
+  await closeDialog(user);
   await user.click(screen.getByRole("button", { name: "+ Добавить группу" }));
   await user.type(screen.getByLabelText("Тег группы"), "pool");
   await user.click(screen.getByRole("checkbox", { name: "exit1" }));
@@ -401,19 +412,19 @@ it("rejects duplicate outbound tags and a reserved direct tag", async () => {
   await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
-  for (const [tag, server, port] of [
-    ["dup", "a.example.com", "8388"],
-    ["dup", "b.example.com", "8389"],
-  ]) {
-    await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
-    await user.type(screen.getAllByLabelText("Тег выхода").at(-1)!, tag);
-    await user.type(screen.getAllByLabelText("Сервер").at(-1)!, server);
-    await user.type(screen.getAllByLabelText("Порт").at(-1)!, port);
-  }
+  await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
+  await user.type(screen.getByLabelText("Тег выхода"), "dup");
+  await user.type(screen.getByLabelText("Сервер"), "a.example.com");
+  await user.type(screen.getByLabelText("Порт"), "8388");
+  await closeDialog(user);
+  await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
+  await user.type(screen.getByLabelText("Тег выхода"), "dup");
+  await user.type(screen.getByLabelText("Сервер"), "b.example.com");
+  await user.type(screen.getByLabelText("Порт"), "8389");
   // Both exits are otherwise valid, so only the duplicate tag keeps save off.
   expect(saveButton()).toBeDisabled();
-  await user.clear(screen.getAllByLabelText("Тег выхода")[1]);
-  await user.type(screen.getAllByLabelText("Тег выхода")[1], "direct");
+  await user.clear(screen.getByLabelText("Тег выхода"));
+  await user.type(screen.getByLabelText("Тег выхода"), "direct");
   expect(saveButton()).toBeDisabled();
 });
 
@@ -491,6 +502,7 @@ it("applies preview outbounds and selector group into enabled draft without appl
   const user = userEvent.setup();
   await openTab(user, "Прокси-выходы");
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "Изменить" }));
   await user.click(screen.getByRole("button", { name: "Просмотр" }));
   await screen.findAllByText("Узел Европа");
   await user.click(screen.getByRole("button", { name: "Применить предложение" }));
@@ -506,6 +518,7 @@ it("keeps URL masked and intact after inline toggle cycle", async () => {
   const user = userEvent.setup();
   await openTab(user, "Прокси-выходы");
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("button", { name: "Изменить" }));
   await user.click(screen.getByLabelText("Список вручную (inline)"));
   await user.type(screen.getByLabelText("Список вручную"), "vless://node");
   await user.click(screen.getByLabelText("Список вручную (inline)"));

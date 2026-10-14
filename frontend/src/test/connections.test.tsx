@@ -44,22 +44,45 @@ async function choose(role: "client" | "server", protocol: "wg" | "awg" = "wg") 
   await userEvent.click(screen.getByRole("button", { name: "Продолжить" }));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новый туннель" })).not.toBeInTheDocument());
 }
-it("shows one tunnel card with honest status; opens one editor with role locked and secret hidden", async () => {
+it("shows one tunnel card with honest status; opens one dialog with role locked and secret hidden", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
   expect(screen.getByText("vpn · AmneziaWG · Сервер")).toBeVisible();
   expect(within(screen.getByText("Пиров").closest("dl")!).getByText("1")).toBeVisible();
   expect(await screen.findByText("Статус недоступен")).toBeVisible();
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
   await openTunnel();
-  expect(screen.getByLabelText("Роль")).toHaveAttribute("readonly");
-  await userEvent.click(screen.getByRole("tab", { name: "Ключи" }));
-  expect(screen.getByLabelText("Приватный ключ")).toHaveValue("");
-  expect(screen.getByText(/Повторная генерация ключей разорвёт/)).toBeVisible();
-  await userEvent.click(screen.getByRole("tab", { name: "Пиры" }));
-  expect(screen.getByLabelText("Preshared key")).toHaveValue("");
-  expect(screen.getByText("phone")).toBeVisible();
-  await userEvent.click(screen.getByRole("tab", { name: "Дополнительно" }));
-  expect(screen.getByLabelText("Jc")).toHaveValue(4);
+  const dialog = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
+  expect(within(dialog).queryByRole("tab")).not.toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Роль")).toHaveAttribute("readonly");
+  expect(within(dialog).getByLabelText("Приватный ключ")).toHaveValue("");
+  expect(within(dialog).getByText(/Повторная генерация ключей разорвёт/)).toBeVisible();
+  expect(within(dialog).getByLabelText("Preshared key")).toHaveValue("");
+  expect(within(dialog).getByText("phone")).toBeVisible();
+  await userEvent.click(within(dialog).getByText("Показать дополнительные настройки"));
+  expect(within(dialog).getByLabelText("Jc")).toHaveValue(4);
+});
+it("opens the tunnel editor as one dialog with connection, keys and peers visible at once", async () => {
+  await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
+  await openTunnel();
+  const dialog = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
+  for (const section of ["Идентификация", "Подключение", "Ключи", "Пиры", "Дополнительно"]) {
+    expect(within(dialog).getByRole("heading", { name: section })).toBeVisible();
+  }
+  expect(within(dialog).getByLabelText("Порт")).toBeVisible();
+  expect(within(dialog).getByLabelText("Приватный ключ")).toBeVisible();
+  expect(within(dialog).getByLabelText("Preshared key")).toBeVisible();
+  expect(within(dialog).getByRole("button", { name: "Отмена" })).toBeVisible();
+  expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeVisible();
+});
+it("keeps peer and key fields off the page until the editor dialog opens", async () => {
+  await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Preshared key")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Приватный ключ")).not.toBeInTheDocument();
+  await openTunnel();
+  expect(screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" })).toBeVisible();
+  expect(screen.getByLabelText("Preshared key")).toBeInTheDocument();
+  expect(screen.getByLabelText("Приватный ключ")).toBeInTheDocument();
 });
 it("shows two server clients as a number in the read-only facts", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, peers: [...server.peers, { ...server.peers[0], name: "laptop" }] }] });
@@ -74,12 +97,12 @@ it("says no clients instead of zero on an empty server card", async () => {
   expect(within(facts).getByText("нет пиров")).toBeVisible();
   expect(within(facts).queryByText("0")).not.toBeInTheDocument();
 });
-it("shows one empty state on the server peers tab without duplicating the add action", async () => {
+it("shows one empty state in the server peers section without duplicating the add action", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, peers: [] }] });
   await openTunnel();
-  await userEvent.click(screen.getByRole("tab", { name: "Пиры" }));
-  expect(screen.getAllByText("Пиров нет.")).toHaveLength(1);
-  expect(screen.getAllByRole("button", { name: "+ Добавить пира" })).toHaveLength(1);
+  const dialog = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
+  expect(within(dialog).getAllByText("Пиров нет.")).toHaveLength(1);
+  expect(within(dialog).getAllByRole("button", { name: "+ Добавить пира" })).toHaveLength(1);
 });
 it("shows client endpoint in read-only facts", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, role: "client", peers: [], endpoint: "vpn.example.net:51820" }] });
@@ -116,12 +139,10 @@ it("selects client and protocol before keygen; saves one draft without opening W
   expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(1);
   fill("Имя туннеля", "client");
   expect(screen.getByLabelText("Роль")).toHaveValue("клиент");
-  await userEvent.click(screen.getByRole("tab", { name: "Подключение" }));
   fill("Endpoint", "vpn.example.org:51820");
   fill("AllowedIPs", "0.0.0.0/0");
-  await userEvent.click(screen.getByRole("tab", { name: "Ключи" }));
   fill("Публичный ключ сервера", "public");
-  expect(screen.getByText(/Сохранение создаёт только черновик/)).toBeVisible();
+  expect(within(screen.getByRole("dialog", { name: /Туннель:/ })).getByText(/Сохранение создаёт только черновик/)).toBeVisible();
   await userEvent.click(save());
   await waitFor(() => expect(fetch.mock.calls.some(([p]) => p === "/api/draft")).toBe(true));
   expect(draft(fetch).tunnels[0]).toMatchObject({ name: "client", role: "client", protocol: "awg", open_port: false,
@@ -134,7 +155,6 @@ it("creates server with WAN port closed and previews save effects", async () => 
   await choose("server");
   fill("Имя туннеля", "vpn");
   expect(screen.getByText(/WAN UDP-порт не открывается/)).toBeVisible();
-  await userEvent.click(screen.getByRole("tab", { name: "Подключение" }));
   expect(screen.getByRole("switch", { name: "Открыть порт на WAN" })).not.toBeChecked();
   await userEvent.click(save());
   expect(draft(fetch).tunnels[0]).toMatchObject({ name: "vpn", role: "server", listen_port: 51820, open_port: false });
@@ -163,7 +183,6 @@ it("imports client conf with recognized fields and preserves Address; rejects PS
 it("retains secret and only edits selected tunnel; delete requires confirmation", async () => {
   const fetch = await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
   await openTunnel();
-  await userEvent.click(screen.getByRole("tab", { name: "Подключение" }));
   fill("Порт", "51821");
   await userEvent.click(save());
   expect(draft(fetch).tunnels[0].private_key).toEqual({ redacted: true });
@@ -179,17 +198,17 @@ it("confirmation removes tunnel and auto interface only from draft", async () =>
   expect(fetch.mock.calls.filter(([p]) => p === "/api/draft")).toHaveLength(0);
   await userEvent.click(within(dialog).getByRole("button", { name: "Удалить из черновика" }));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Удалить туннель?" })).not.toBeInTheDocument());
-  await userEvent.click(save());
+  // Removing the last tunnel may close the editor dialog; save only if its footer is still mounted.
+  if (screen.queryByRole("button", { name: "Сохранить" })) await userEvent.click(save());
+  await waitFor(() => expect(fetch.mock.calls.some(([p]) => p === "/api/draft")).toBe(true));
   expect(draft(fetch).tunnels).toEqual([]);
   expect(draft(fetch).interfaces).toEqual([]);
 });
 it("surfaces keygen failure and keeps save error in editor", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true, async () => new Response(JSON.stringify({ message: "Генерация не удалась" }), { status: 500 }));
   await openTunnel();
-  await userEvent.click(screen.getByRole("tab", { name: "Ключи" }));
   await userEvent.click(screen.getByRole("button", { name: "Сгенерировать ключи" }));
   expect((await screen.findAllByRole("alert")).some((alert) => alert.textContent?.includes("Генерация не удалась"))).toBe(true);
-  await userEvent.click(screen.getByRole("tab", { name: "Подключение" }));
   fill("Порт", "51821");
   await userEvent.click(save());
   await waitFor(() => expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("Ошибка API"))).toBe(true));
@@ -205,7 +224,7 @@ it("saves passthrough site without certificate secrets", async () => {
 });
 it.each(["cloudflare", "rfc2136"])("saves %s DDNS", async (provider) => {
   const fetch = await mount(<DDNS />, wan);
-  await userEvent.click(screen.getByRole("button", { name: "+ Добавить DDNS" }));
+  await userEvent.click(screen.getByRole("button", { name: "+ Добавить домен" }));
   fill("Имя DDNS", "home"); fill("Hostname DDNS", "home.example.org"); fill("Провайдер", provider);
   if (provider === "cloudflare") fill("Zone", "example.org");
   else { fill("Сервер DNS", "192.0.2.53"); fill("Key name", "home_key"); }

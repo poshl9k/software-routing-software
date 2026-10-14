@@ -60,12 +60,21 @@ async function open(page: React.ReactNode) {
 }
 const saveButton = () =>
   screen.getByRole("button", { name: "Сохранить" });
+const ruleDialog = () => screen.getByRole("dialog", { name: "Правило: Новое правило" });
 
 it("shows one add action and an empty Firewall rules state", async () => {
   mockApi(emptyConfiguration);
   await open(<Firewall />);
   expect(screen.getByText("Нет правил.")).toBeVisible();
   expect(screen.getAllByRole("button", { name: "Добавить правило" })).toHaveLength(1);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Имя")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Добавить правило" }));
+  const dialog = ruleDialog();
+  for (const section of ["Идентификация", "Условие", "Решение"]) {
+    expect(within(dialog).getByText(section)).toBeVisible();
+  }
+  expect(within(dialog).getByLabelText("Имя")).toBeVisible();
 });
 
 it("removes a newly added Firewall rule by its name", async () => {
@@ -73,10 +82,14 @@ it("removes a newly added Firewall rule by its name", async () => {
   const user = userEvent.setup();
   await open(<Firewall />);
   await user.click(screen.getByRole("button", { name: "Добавить правило" }));
-  await user.type(screen.getByLabelText("Имя"), "first");
+  const dialog = ruleDialog();
+  await user.type(within(dialog).getByLabelText("Имя"), "first");
+  await user.click(within(dialog).getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   const deleteRule = within(screen.getByRole("table")).getByRole("button", { name: "Удалить правило first" });
   await user.click(deleteRule);
   expect(screen.queryByRole("button", { name: "Удалить правило first" })).not.toBeInTheDocument();
+  expect(screen.getByText("Нет правил.")).toBeVisible();
 });
 
 it("validates and cancels a new Firewall rule locally", async () => {
@@ -84,14 +97,15 @@ it("validates and cancels a new Firewall rule locally", async () => {
   const user = userEvent.setup();
   await open(<Firewall />);
   await user.click(screen.getByRole("button", { name: "Добавить правило" }));
-  await user.type(screen.getByLabelText("Имя"), "правило");
-  expect(saveButton()).toBeDisabled();
-  await user.clear(screen.getByLabelText("Имя"));
-  await user.type(screen.getByLabelText("Имя"), "first");
-  await user.clear(screen.getByLabelText("Откуда"));
-  await user.type(screen.getByLabelText("Откуда"), "999.1.1.1");
-  expect(saveButton()).toBeDisabled();
-  await user.click(screen.getByRole("button", { name: "Отмена" }));
+  const dialog = ruleDialog();
+  await user.type(within(dialog).getByLabelText("Имя"), "правило");
+  expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await user.clear(within(dialog).getByLabelText("Имя"));
+  await user.type(within(dialog).getByLabelText("Имя"), "first");
+  await user.clear(within(dialog).getByLabelText("Откуда"));
+  await user.type(within(dialog).getByLabelText("Откуда"), "999.1.1.1");
+  expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await user.click(within(dialog).getByRole("button", { name: "Отмена" }));
   expect(fetch.mock.calls.filter(([, init]) => init?.method)).toHaveLength(0);
 });
 
@@ -100,10 +114,11 @@ it("saves a new Firewall rule with unchanged API values", async () => {
   const user = userEvent.setup();
   await open(<Firewall />);
   await user.click(screen.getByRole("button", { name: "Добавить правило" }));
-  await user.type(screen.getByLabelText("Имя"), "allow_web");
-  await user.selectOptions(screen.getByLabelText("Протокол"), "tcp_udp");
-  await user.selectOptions(screen.getByLabelText("Действие"), "pass");
-  await user.click(saveButton());
+  const dialog = ruleDialog();
+  await user.type(within(dialog).getByLabelText("Имя"), "allow_web");
+  await user.selectOptions(within(dialog).getByLabelText("Протокол"), "tcp_udp");
+  await user.selectOptions(within(dialog).getByLabelText("Действие"), "pass");
+  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(true));
   const saved = JSON.parse(fetch.mock.calls.find(([path]) => path === "/api/draft")![1].body);
   expect(saved.firewall_rules[0]).toMatchObject({ name: "allow_web", protocol: "tcp_udp", action: "pass", ingress_zone: "wan" });
@@ -118,6 +133,7 @@ it("validates DHCP lease seconds and saves them through the same draft", async (
   render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
   await user.click(await screen.findByRole("tab", { name: "Подсети и диапазоны" }));
   await user.click(screen.getByRole("button", { name: "Настроить" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Подсети DHCP" })).getByRole("button", { name: "Изменить" }));
   const field = screen.getByLabelText("Срок аренды, с");
   expect(field).toHaveValue(3600);
   expect(field).toHaveAttribute("min", "1");
@@ -155,13 +171,16 @@ it("saves a device reservation in its selected subnet and DNS lists through the 
   await user.click(await screen.findByRole("button", { name: "Добавить имя" }));
   await user.type(screen.getByLabelText("Имя DNS-записи"), "nas.home.lan");
   await user.type(screen.getByLabelText("Значение записи"), "192.168.1.20");
-  await user.click(screen.getByRole("button", { name: "+ Добавить переадресацию" }));
+  await user.click(saveButton());
+  await waitFor(() => expect(dnsFetch.mock.calls.filter(([path]) => path === "/api/draft")).toHaveLength(1));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await user.click(screen.getByRole("button", { name: "Добавить домен" }));
   await user.type(screen.getByLabelText("Домен переадресации"), "corp.test");
-  await user.click(screen.getAllByRole("button", { name: "Добавить DNS-сервер" })[0]);
+  await user.click(screen.getByRole("button", { name: "Добавить DNS-сервер" }));
   await user.type(screen.getByLabelText("Адрес DNS-сервера"), "10.0.0.53");
   await user.click(saveButton());
-  await waitFor(() => expect(dnsFetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(true));
-  const dnsSaved = JSON.parse(dnsFetch.mock.calls.find(([path]) => path === "/api/draft")![1].body);
+  await waitFor(() => expect(dnsFetch.mock.calls.filter(([path]) => path === "/api/draft")).toHaveLength(2));
+  const dnsSaved = JSON.parse(dnsFetch.mock.calls.filter(([path]) => path === "/api/draft")[1][1].body);
   expect(dnsSaved.dns.records[0]).toMatchObject({ name: "nas.home.lan", value: "192.168.1.20" });
   expect(dnsSaved.dns.forwards[0]).toMatchObject({ domain: "corp.test", upstreams: [{ address: "10.0.0.53" }] });
   expect(dnsSaved.dhcp_subnets).toEqual(saved.dhcp_subnets);
@@ -172,11 +191,12 @@ it("renders an API save error and retains local edits for retry", async () => {
   const user = userEvent.setup();
   await open(<Firewall />);
   await user.click(screen.getByRole("button", { name: "Добавить правило" }));
-  await user.type(screen.getByLabelText("Имя"), "keep_me");
-  await user.click(saveButton());
+  const dialog = ruleDialog();
+  await user.type(within(dialog).getByLabelText("Имя"), "keep_me");
+  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
   expect(await screen.findByText(/Ошибка проверки конфигурации/)).toBeVisible();
-  expect(screen.getByLabelText("Имя")).toHaveValue("keep_me");
-  expect(saveButton()).toBeEnabled();
+  expect(within(dialog).getByLabelText("Имя")).toHaveValue("keep_me");
+  expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeEnabled();
 });
 
 it("shows DoT tls_name and DoH doh_server fields and requires them", async () => {
@@ -184,26 +204,18 @@ it("shows DoT tls_name and DoH doh_server fields and requires them", async () =>
   const user = userEvent.setup();
   render(<MemoryRouter><RouterProvider><DNS /></RouterProvider></MemoryRouter>);
   await user.click(await screen.findByRole("button", { name: "Настроить" }));
-  await user.click(screen.getAllByRole("button", { name: "Добавить DNS-сервер" })[0]);
-  await user.click(screen.getAllByRole("button", { name: "Добавить DNS-сервер" })[1]);
+  await user.click(screen.getByRole("button", { name: "Добавить DNS-сервер" }));
   const tlsLabel = "Имя TLS (DoT)";
   const dohLabel = "Сервер DoH (dnscrypt-proxy)";
-  // First row: switch to DoT
-  await user.selectOptions(
-    screen.getAllByLabelText("Протокол DNS-сервера")[0],
-    "tls",
-  );
-  expect(screen.queryAllByLabelText(tlsLabel).length).toBe(1);
-  await user.type(screen.getAllByLabelText(tlsLabel)[0], "dot.example.com");
-  await user.type(screen.getAllByLabelText("Адрес DNS-сервера")[0], "1.1.1.1");
-  // Second row: switch to DoH
-  await user.selectOptions(
-    screen.getAllByLabelText("Протокол DNS-сервера")[1],
-    "https",
-  );
-  expect(screen.queryAllByLabelText(dohLabel).length).toBe(1);
-  expect(screen.queryAllByLabelText(tlsLabel).length).toBe(1);
-  await user.type(screen.getAllByLabelText(dohLabel)[0], "doh.example.com");
+  await user.selectOptions(screen.getByLabelText("Протокол DNS-сервера"), "tls");
+  await user.type(screen.getByLabelText(tlsLabel), "dot.example.com");
+  await user.type(screen.getByLabelText("Адрес DNS-сервера"), "1.1.1.1");
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.getByRole("dialog", { name: "Режим и привязка DNS" })).toBeVisible());
+  await user.click(screen.getByRole("button", { name: "Добавить DNS-сервер" }));
+  await user.selectOptions(screen.getByLabelText("Протокол DNS-сервера"), "https");
+  expect(screen.getByLabelText(dohLabel)).toBeVisible();
+  await user.type(screen.getByLabelText(dohLabel), "doh.example.com");
   await user.click(saveButton());
   await waitFor(() =>
     expect(

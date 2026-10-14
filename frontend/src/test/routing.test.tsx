@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
@@ -118,7 +118,41 @@ it("shows one empty bypass notice and keeps one add action in expert edit mode",
   expect(screen.getAllByRole("button", { name: "+ Добавить исключение" })).toHaveLength(1);
   await user.click(screen.getByRole("button", { name: "+ Добавить исключение" }));
   expect(screen.queryByText("Исключений нет.")).not.toBeInTheDocument();
+  expect(within(screen.getByRole("dialog", { name: "Исключение: Новое исключение" })).getByLabelText("Имя исключения")).toBeVisible();
+  await user.click(within(screen.getByRole("dialog", { name: "Исключение: Новое исключение" })).getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /Исключение:/ })).not.toBeInTheDocument());
   expect(screen.getAllByRole("button", { name: "+ Добавить исключение" })).toHaveLength(1);
+});
+
+it("opens a bypass window on add, keeps its fields out of the page when closed, and reopens it", async () => {
+  setup();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
+  expect(screen.queryByLabelText("Имя исключения")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Источник IP (bypass)")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "+ Добавить исключение" }));
+  const dialog = screen.getByRole("dialog", { name: "Исключение: Новое исключение" });
+  expect(within(dialog).getByRole("heading", { name: "Идентификация" })).toBeVisible();
+  expect(within(dialog).getByRole("heading", { name: "Условие" })).toBeVisible();
+  for (const label of ["Имя исключения", "Источник IP (bypass)", "Назначение IPv4 (bypass)", "Порты (bypass)", "Протокол (bypass)"]) {
+    expect(within(dialog).getByLabelText(label)).toBeVisible();
+  }
+  expect(within(dialog).getByRole("button", { name: "Отмена" })).toBeVisible();
+  expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  expect(within(dialog).getByRole("button", { name: "Удалить исключение 1" })).toBeVisible();
+  await user.click(within(dialog).getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /Исключение:/ })).not.toBeInTheDocument());
+  expect(screen.queryByLabelText("Имя исключения")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Порты (bypass)")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Удалить исключение 1" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Изменить" }));
+  const reopened = screen.getByRole("dialog", { name: "Исключение: Новое исключение" });
+  expect(reopened).toBeVisible();
+  await user.click(within(reopened).getByRole("button", { name: "Удалить исключение 1" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /Исключение:/ })).not.toBeInTheDocument());
+  expect(screen.getByText("Исключений нет.")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Удалить исключение 1" })).not.toBeInTheDocument();
 });
 
 it("adds a direct target rule with no proxy outbounds", async () => {
@@ -128,9 +162,12 @@ it("adds a direct target rule with no proxy outbounds", async () => {
   await user.click(screen.getByRole("button", { name: "+ Правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "direct_site");
   await user.type(screen.getByLabelText("Домены (по строкам)"), "direct.example");
+  expect(screen.getByLabelText("Имя правила")).toHaveValue("direct_site");
+  expect(screen.getByLabelText("Домены (по строкам)")).toHaveValue("direct.example");
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: /^Добавить$/ }));
+  await user.click(within(screen.getByRole("dialog", { name: "Новое правило" })).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новое правило" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBe(true));
   expect(savedDraft(fetch).tproxy.rules).toContainEqual(expect.objectContaining({
@@ -146,10 +183,11 @@ it("declares a catalog rule-set and adds its direct rule with no outbounds", asy
   await user.click(screen.getByRole("button", { name: "Из каталога" }));
   await user.click(await screen.findByRole("checkbox", { name: "Видео" }));
   await user.click(screen.getByRole("button", { name: "Выбрать (1)" }));
-  await waitFor(() => expect(document.querySelector(".MuiModal-root")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Каталог сервисов" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: /^Добавить$/ }));
+  await user.click(within(screen.getByRole("dialog", { name: "Новое правило" })).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новое правило" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBe(true));
   const draft = savedDraft(fetch);
@@ -164,14 +202,22 @@ it("declares a manual HTTPS rule-set in the draft and rejects HTTP", async () =>
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
-  await user.click(screen.getByRole("button", { name: "+ Набор" }));
-  await user.type(screen.getByLabelText("Тег"), "manual-set");
-  await user.type(screen.getByLabelText("URL источника"), "http://example.org/list.srs");
-  expect(screen.getByRole("button", { name: "Добавить в черновик" })).toBeDisabled();
-  await user.clear(screen.getByLabelText("URL источника"));
-  await user.type(screen.getByLabelText("URL источника"), "https://example.org/list.srs");
-  await user.selectOptions(screen.getByLabelText("Формат"), "srs");
-  await user.click(screen.getByRole("button", { name: "Добавить в черновик" }));
+  expect(screen.queryByLabelText("URL источника")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Добавить набор" }));
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getByRole("heading", { name: "Новый набор" })).toBeVisible();
+  expect(within(dialog).getByRole("heading", { name: "Идентификация" })).toBeVisible();
+  expect(within(dialog).getByRole("heading", { name: "Содержимое" })).toBeVisible();
+  expect(within(dialog).getByRole("button", { name: "Отмена" })).toBeVisible();
+  await user.type(within(dialog).getByLabelText("Тег"), "manual-set");
+  await user.type(within(dialog).getByLabelText("URL источника"), "http://example.org/list.srs");
+  expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await user.clear(within(dialog).getByLabelText("URL источника"));
+  await user.type(within(dialog).getByLabelText("URL источника"), "https://example.org/list.srs");
+  await user.selectOptions(within(dialog).getByLabelText("Формат"), "srs");
+  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новый набор" })).not.toBeInTheDocument());
+  expect(screen.queryByLabelText("URL источника")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBe(true));
   expect(savedDraft(fetch).rule_sets).toContainEqual({
@@ -189,10 +235,11 @@ it("creates a guided rule with catalog rule-set declarations in the draft only",
   await user.click(screen.getByRole("button", { name: "Из каталога" }));
   await user.click(await screen.findByRole("checkbox", { name: "Видео" }));
   await user.click(screen.getByRole("button", { name: "Выбрать (1)" }));
-  await waitFor(() => expect(document.querySelector(".MuiModal-root")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Каталог сервисов" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: /^Добавить$/ }));
+  await user.click(within(screen.getByRole("dialog", { name: "Новое правило" })).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новое правило" })).not.toBeInTheDocument());
   expect(screen.getAllByText(/Из каталога: Видео/).length).toBeGreaterThan(0);
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBe(true));
@@ -214,12 +261,12 @@ it("reports duplicate catalog sets in expert view without declaring twice", asyn
   await user.click(screen.getByRole("button", { name: "Из каталога" }));
   await user.click(await screen.findByRole("checkbox", { name: "Видео" }));
   await user.click(screen.getByRole("button", { name: "Выбрать (1)" }));
-  await waitFor(() => expect(document.querySelector(".MuiModal-root")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Каталог сервисов" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", { name: "Из каталога" }));
   await user.click(await screen.findByRole("checkbox", { name: "Видео" }));
   await user.click(screen.getByRole("button", { name: "Выбрать (1)" }));
   expect(screen.getByText(/Уже добавлено в черновик: video-set/)).toBeVisible();
-  await waitFor(() => expect(document.querySelector(".MuiModal-root")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Каталог сервисов" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([path, init]) => path === "/api/draft" && init?.method === "PUT")).toBe(true));
   const [, init] = fetch.mock.calls.find(([path, req]) => path === "/api/draft" && req?.method === "PUT")!;
@@ -258,7 +305,7 @@ it("saves disabled ingress and an ordered block rule in the draft", async () => 
   expect(screen.getByRole("button", { name: "Включить" })).toBeDisabled();
   await user.click(screen.getByRole("checkbox", { name: "lan0" }));
   await user.click(screen.getByRole("button", { name: "+ Правило" }));
-  expect(screen.getByText("Шаг 1 из 3: условия")).toBeVisible();
+  expect(within(screen.getByRole("dialog")).getByText("Шаг 1 из 3: условия")).toBeVisible();
   await user.type(screen.getByLabelText("Имя правила"), "blocked_site");
   await user.type(screen.getByLabelText("Домены (по строкам)"), "example.org");
   await user.click(screen.getByRole("button", { name: "Далее" }));
@@ -266,7 +313,8 @@ it("saves disabled ingress and an ordered block rule in the draft", async () => 
   await user.selectOptions(screen.getByLabelText("Куда направить"), "block");
   await user.click(screen.getByRole("button", { name: "Далее" }));
   expect(screen.getByText("Шаг 3 из 3: проверка")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Добавить" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Новое правило" })).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новое правило" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(savedDraft(fetch).tproxy).toMatchObject({
     enabled: false, ingress_interfaces: ["lan0"], rules: [expect.objectContaining({
@@ -290,7 +338,8 @@ it("confirms enabling a valid rule in the draft without applying it", async () =
   await user.type(screen.getByLabelText("Домены (по строкам)"), "example.org");
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Добавить" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Новое правило" })).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новое правило" })).not.toBeInTheDocument());
   expect(enable).toBeEnabled();
   await user.click(enable);
   expect(screen.getByText(/Ошибка в настройках может нарушить подключение/)).toBeVisible();
@@ -417,7 +466,8 @@ async function openNewExpertRule(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("Домены (по строкам)"), "initial.test");
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Добавить" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Новое правило" })).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новое правило" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.clear(screen.getByLabelText("Имя правила"));
@@ -495,7 +545,7 @@ it("shows the simple rule flow and keeps engine fields in expert view", async ()
   await user.click(screen.getByRole("tab", { name: "Простой" }));
   expect(screen.queryByLabelText("Таймаут UDP, секунд")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "+ Правило" }));
-  expect(screen.getByText("Шаг 1 из 3: условия")).toBeVisible();
+  expect(within(screen.getByRole("dialog")).getByText("Шаг 1 из 3: условия")).toBeVisible();
 });
 
 it("adds, reorders and deletes rules while preserving first-match and final", async () => {
@@ -510,7 +560,8 @@ it("adds, reorders and deletes rules while preserving first-match and final", as
     await user.click(screen.getByRole("button", { name: "Далее" }));
     await user.selectOptions(screen.getByLabelText("Куда направить"), action);
     await user.click(screen.getByRole("button", { name: "Далее" }));
-    await user.click(screen.getByRole("button", { name: "Добавить" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Новое правило" })).getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новое правило" })).not.toBeInTheDocument());
   }
   expect(screen.getByRole("cell", { name: /first: домен first.test/ })).toBeVisible();
   expect(screen.getByRole("cell", { name: /second: домен second.test/ })).toBeVisible();
@@ -552,7 +603,8 @@ it("selects all LAN sources and saves a domain block without enabling traffic", 
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.selectOptions(screen.getByLabelText("Куда направить"), "block");
   await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Добавить" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Новое правило" })).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новое правило" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(savedDraft(fetch).tproxy).toMatchObject({
     ingress_interfaces: ["lan0"], enabled: false,
@@ -566,9 +618,13 @@ it("saves a TProxy bypass exclusion in the draft", async () => {
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить исключение" }));
-  await user.type(screen.getByLabelText("Имя исключения"), "corp");
-  await user.type(screen.getByLabelText("Назначение IPv4 (bypass)"), "10.9.0.0/16");
-  await user.selectOptions(screen.getByLabelText("Протокол (bypass)"), "tcp");
+  const dialog = screen.getByRole("dialog", { name: "Исключение: Новое исключение" });
+  await user.type(within(dialog).getByLabelText("Имя исключения"), "corp");
+  await user.type(within(dialog).getByLabelText("Назначение IPv4 (bypass)"), "10.9.0.0/16");
+  await user.selectOptions(within(dialog).getByLabelText("Протокол (bypass)"), "tcp");
+  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /Исключение:/ })).not.toBeInTheDocument());
+  expect(screen.queryByLabelText("Имя исключения")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => {
     const [, init] = fetch.mock.calls.find(
@@ -586,12 +642,18 @@ it("saves an expert UDP DNS server and its matching DNS rule", async () => {
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Сервер" }));
-  await user.type(screen.getByLabelText("Тег DNS-сервера"), "cloudflare");
-  await user.type(screen.getByLabelText("Сервер DNS"), "1.1.1.1");
+  const serverDialog = screen.getByRole("dialog");
+  await user.type(within(serverDialog).getByLabelText("Тег DNS-сервера"), "cloudflare");
+  await user.type(within(serverDialog).getByLabelText("Сервер DNS"), "1.1.1.1");
+  await user.click(within(serverDialog).getByRole("button", { name: /Сохранить|Готово/ }));
+  await waitFor(() => expect(document.querySelector(".MuiModal-root")).toBeNull());
   await user.click(screen.getByRole("button", { name: "+ DNS-правило" }));
-  await user.type(screen.getByLabelText("Имя DNS-правила"), "example_dns");
-  await user.type(screen.getByLabelText("Домены DNS-правила"), "example.org");
-  await user.selectOptions(screen.getByLabelText("DNS-сервер правила"), "cloudflare");
+  const ruleDialog = screen.getByRole("dialog");
+  await user.type(within(ruleDialog).getByLabelText("Имя DNS-правила"), "example_dns");
+  await user.type(within(ruleDialog).getByLabelText("Домены DNS-правила"), "example.org");
+  await user.selectOptions(within(ruleDialog).getByLabelText("DNS-сервер правила"), "cloudflare");
+  await user.click(within(ruleDialog).getByRole("button", { name: /Сохранить|Готово/ }));
+  await waitFor(() => expect(document.querySelector(".MuiModal-root")).toBeNull());
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   const expected: TProxyDNS = {
     servers: [{ tag: "cloudflare", type: "udp", server: "1.1.1.1", server_port: null,
@@ -708,7 +770,8 @@ it("saves a three-step outbound route without replacing DNS policy", async () =>
   await user.selectOptions(screen.getByLabelText("Выход"), "proxy_a");
   await user.click(screen.getByRole("button", { name: "Далее" }));
   expect(screen.getByText("Шаг 3 из 3: проверка")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Добавить" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Новое правило" })).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новое правило" })).not.toBeInTheDocument());
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(savedDraft(fetch).tproxy).toMatchObject({
     enabled: false, ingress_interfaces: ["lan0"], final: "direct", dns,

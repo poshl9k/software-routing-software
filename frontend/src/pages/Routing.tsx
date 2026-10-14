@@ -20,7 +20,7 @@ import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter } from "../components/EditorShell";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { Field } from "../components/Field";
-import { FormActions, FormGrid } from "../components/Form";
+import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
 import { Select, SelectField, interfaceLabel } from "../components/Select";
 import { ValueTabs } from "../components/Tabs";
@@ -186,6 +186,7 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
   const [manualSetOpen, setManualSetOpen] = useState(false);
   const [manualSet, setManualSet] = useState<RuleSetSource>({ name: "", format: "text-domain", url: "", max_records: 100_000, max_bytes: 5_000_000 });
   const [dnsEditor, setDnsEditor] = useState<{ kind: "server" | "rule"; index: number } | null>(null);
+  const [bypassEditor, setBypassEditor] = useState<number | null>(null);
   const [catalogNames, setCatalogNames] = useState<Record<string, string>>({});
   const catalog = useQuery({ queryKey: queryKeys.presetCatalog(), queryFn: api.presetCatalog,
     enabled: catalogContext !== null });
@@ -460,16 +461,11 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
         </Card>}
         <InfoNote>Если ни одно правило не подошло: {actionLabel(current.final)}{current.final_outbound ? ` · ${current.final_outbound}` : ""}.</InfoNote>
       </Card>}
-      {view === "expert" && <Card title="Наборы правил" action={editor.isEdit && user?.role !== "operator" ? <Button onClick={() => setManualSetOpen(true)}>+ Набор</Button> : undefined}>
+      {view === "expert" && <Card title="Наборы правил" action={editor.isEdit && user?.role !== "operator" ? <Button onClick={() => setManualSetOpen(true)}>Добавить набор</Button> : undefined}>
         <DataTable heads={["Тег", "Формат", "Источник", "Через", "Действия"]} rows={[...configuration.rule_sets, ...pendingSets].map((set, index) => [
           set.name, set.format, set.url, "Прямое подключение",
           index >= configuration.rule_sets.length && editor.isEdit ? <DeleteButton label={`Удалить набор ${set.name}`} onClick={() => setPendingSets((items) => items.filter((item) => item.name !== set.name))} /> : "—",
         ])} empty={<EmptyState>Наборы правил не объявлены.</EmptyState>} />
-        {manualSetOpen && <Card title="Новый набор"><FormGrid>
-          <Field label="Тег" value={manualSet.name} valid={engineTagValid(manualSet.name) && !ruleSetOptions.includes(manualSet.name)} onChange={(name) => setManualSet({ ...manualSet, name })} />
-          <SelectField label="Формат" value={manualSet.format} options={["text-domain", "text-cidr", "json", "geosite", "geoip", "srs"]} onChange={(format) => setManualSet({ ...manualSet, format })} />
-          <Field label="URL источника" value={manualSet.url} valid={manualSetValid || !manualSet.url} onChange={(url) => setManualSet({ ...manualSet, url })} />
-        </FormGrid><FormActions><Button onClick={() => setManualSetOpen(false)}>Отмена</Button><Button disabled={!manualSetValid} onClick={() => { setPendingSets((items) => [...items, manualSet]); setManualSetOpen(false); setManualSet({ name: "", format: "text-domain", url: "", max_records: 100_000, max_bytes: 5_000_000 }); }}>Добавить в черновик</Button></FormActions></Card>}
         {editor.isEdit && <Button onClick={() => setCatalogContext("expert")}>Из каталога</Button>}
         {catalogError && <ErrorNotice error={new Error(catalogError)} />}
       </Card>}
@@ -488,63 +484,6 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
         ] })} /></FormActions> : "—"])} empty={<EmptyState>DNS-серверов нет.</EmptyState>} />
         <DataTable heads={["Правило", "Условия", "Сервер", "Действия"]} rows={current.dns.rules.map((row, index) => [row.name, [...row.domain_suffix, ...row.rule_sets].join(", "), row.server, editor.isEdit ? <FormActions><Button onClick={() => setDnsEditor({ kind: "rule", index })}>Редактировать</Button><DeleteButton label={`Удалить DNS-правило ${row.name || index + 1}`} onClick={() => patch({ dns: { ...current.dns, rules: current.dns.rules.filter((_, i) => i !== index) } })} /></FormActions> : "—"])} empty={<EmptyState>DNS-правил нет.</EmptyState>} />
         {editor.isEdit && <Button onClick={() => { const index = current.dns.rules.length; patch({ dns: { ...current.dns, rules: [...current.dns.rules, { name: "", domain_suffix: [], rule_sets: [], server: "" }] } }); setDnsEditor({ kind: "rule", index }); }}>+ DNS-правило</Button>}
-          {current.dns.servers.map((row, index) => dnsEditor?.kind === "server" && dnsEditor.index === index && <div key={index} className="rule-row">
-            <FormGrid>
-              <Field label="Тег DNS-сервера" value={row.tag}
-                valid={engineTagValid(row.tag) && dnsTags.indexOf(row.tag) === index}
-                onChange={(tag) => updateDNSServer(index, { tag })} />
-              <SelectField label="Тип DNS-сервера" value={row.type}
-                options={["udp", "tls", "https"]}
-                onChange={(type) => updateDNSServer(index, { type })} />
-              <Field label="Сервер DNS" value={row.server} valid={!!row.server.trim()}
-                onChange={(server) => updateDNSServer(index, { server })} />
-              <Field label="Порт DNS" type="number" value={row.server_port ?? ""}
-                inputProps={{ min: 1, max: 65535 }}
-                valid={row.server_port === null || portValid(row.server_port)}
-                onChange={(value) => updateDNSServer(index, {
-                  server_port: value === "" ? null : Number(value),
-                })} />
-              {(row.type === "tls" || row.type === "https") &&
-                <Field label="TLS-имя DNS" value={row.tls_name ?? ""}
-                  valid={row.type !== "tls" || !!row.tls_name?.trim()}
-                  onChange={(value) => updateDNSServer(index, { tls_name: value || null })} />}
-              {row.type === "https" &&
-                <Field label="Путь DNS" value={row.path ?? ""}
-                  hint="Пусто — /dns-query по умолчанию"
-                  onChange={(value) => updateDNSServer(index, { path: value || null })} />}
-              <Select label="Резолвер DNS" value={row.domain_resolver ?? ""}
-                placeholder={{ label: "Без резолвера" }}
-                options={dnsTags.filter((tag, i) => i !== index && !!tag)
-                  .map((tag) => ({ value: tag, label: tag }))}
-                onChange={(value) => updateDNSServer(index, { domain_resolver: value || null })} />
-              {row.domain_resolver && !dnsTags.includes(row.domain_resolver) && <InfoNote>ссылка сломана: {row.domain_resolver}</InfoNote>}
-              <Field label="Detour DNS" value={row.detour ?? ""}
-                onChange={(value) => updateDNSServer(index, { detour: value || null })} />
-            </FormGrid>
-          </div>)}
-          {current.dns.rules.map((row, index) => dnsEditor?.kind === "rule" && dnsEditor.index === index && <div key={index} className="rule-row">
-            <FormGrid>
-              <Field label="Имя DNS-правила" value={row.name}
-                valid={engineTagValid(row.name) && current.dns.rules.findIndex((r) => r.name === row.name) === index}
-                onChange={(name) => updateDNSRule(index, { name })} />
-              <Field label="Домены DNS-правила" multiline value={row.domain_suffix.join("\n")}
-                valid={row.domain_suffix.every(domainValid) &&
-                  (row.domain_suffix.length > 0 || row.rule_sets.length > 0)}
-                onChange={(text) => updateDNSRule(index, { domain_suffix: lines(text) })} />
-              <SelectField label="DNS-сервер правила" value={row.server} required
-                options={dnsTags.filter(Boolean)}
-                onChange={(server) => updateDNSRule(index, { server })} />
-              {row.server && !dnsTags.includes(row.server) && <InfoNote>ссылка сломана: {row.server}</InfoNote>}
-            </FormGrid>
-            {ruleSetOptions.length > 0 && <>
-              <Typography>Наборы правил DNS</Typography>
-              {ruleSetOptions.map((name) => <FormControlLabel key={name} label={name}
-                control={<Checkbox checked={row.rule_sets.includes(name)}
-                  onChange={(_, checked) => updateDNSRule(index, { rule_sets: checked
-                    ? [...row.rule_sets, name]
-                    : row.rule_sets.filter((selected) => selected !== name) })} />} />)}
-            </>}
-          </div>)}
         <InfoNote>DNS final и strategy не поддерживаются текущей моделью конфигурации.</InfoNote>
       </Card>}
       {view === "expert" && <Card title="Конечное действие">
@@ -610,34 +549,6 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
               {matcherIssue(current.rules[editingRule], ruleSetOptions) && <ErrorNotice error={new Error(matcherErrorLabels[matcherIssue(current.rules[editingRule], ruleSetOptions)!])} />}
               <Button onClick={() => setEditingRule(null)}>Готово</Button>
             </Card>}
-            {editor.isEdit && addingRule && <Card title="Новое правило">
-              <Typography>Шаг {ruleStep + 1} из 3: {ruleStep === 0 ? "условия" : ruleStep === 1 ? "назначение" : "проверка"}</Typography>
-              {ruleStep === 0 && <FormGrid>
-                <Field label="Имя правила" value={guidedRule.name} valid={nameValid(guidedRule.name)}
-                  onChange={(name) => setGuidedRule((rule) => ({ ...rule, name }))} />
-                <FormActions><Button onClick={() => setCatalogContext("rule")}>Из каталога</Button></FormActions>
-                {catalogError && <ErrorNotice error={new Error(catalogError)} />}
-                <RuleMatchers rule={guidedRule} ruleSets={ruleSetOptions}
-                  change={(change) => setGuidedRule((rule) => ({ ...rule, ...change }))} />
-              </FormGrid>}
-              {ruleStep === 1 && <FormGrid>
-                <Select label="Куда направить" value={guidedRule.action} options={actionOptions}
-                  onChange={(value) => { const action = value as TProxyRule["action"]; setGuidedRule((rule) => ({ ...rule, action, outbound: action === "route" ? rule.outbound : null })); }} />
-                {guidedRule.action === "route" && <Select label="Выход" value={guidedRule.outbound ?? ""}
-                  placeholder={{ label: "Выберите выход" }} options={outboundOptions.map((tag) => ({ value: tag, label: tag }))}
-                  onChange={(outbound) => setGuidedRule((rule) => ({ ...rule, outbound }))} />}
-                {guidedRule.action === "route" && outboundOptions.length === 0 && <InfoNote>Сначала добавьте прокси-выход.</InfoNote>}
-              </FormGrid>}
-              {ruleStep === 2 && <InfoNote>{guidedRule.name}: {matchLabel(guidedRule)} → {actionLabel(guidedRule.action)}{guidedRule.outbound ? ` · ${guidedRule.outbound}` : ""}. Правило добавится в локальный черновик; затем сохраните страницу.</InfoNote>}
-              <FormActions>
-                <Button onClick={() => { setAddingRule(false); setRuleStep(0); }}>Отмена</Button>
-                {ruleStep > 0 && <Button onClick={() => setRuleStep((step) => step - 1)}>Назад</Button>}
-                {ruleStep < 2 ? <Button disabled={ruleStep === 0 && (!nameValid(guidedRule.name) || !!matcherIssue(guidedRule, ruleSetOptions))}
-                  onClick={() => setRuleStep((step) => step + 1)}>Далее</Button> :
-                  <Button disabled={!ruleValid(guidedRule, outboundOptions, ruleSetOptions) || current.rules.some((rule) => rule.name === guidedRule.name)}
-                    onClick={() => { patch({ rules: [...current.rules, { ...guidedRule, order: current.rules.length }] }); setAddingRule(false); setGuidedRule(emptyRule()); setRuleStep(0); }}>Добавить</Button>}
-              </FormActions>
-            </Card>}
           </Card>
           <Card title="Конечное действие">
             {editor.isEdit ? <FormGrid><Select label="Для несовпавшего трафика" value={current.final}
@@ -682,30 +593,17 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
           />)}
           <Typography variant="h2">Исключения</Typography>
           {current.bypass.map((row, index) => <div key={index} className="rule-row">
-            <FormGrid>
-              <Field label="Имя исключения" value={row.name} valid={nameValid(row.name)}
-                onChange={(name) => updateBypass(index, { name })} />
-              <Field label="Источник IP (bypass)" multiline value={row.source_ip_cidr.join("\n")}
-                valid={row.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
-                onChange={(text) => updateBypass(index, { source_ip_cidr: lines(text) })} />
-              <Field label="Назначение IPv4 (bypass)" multiline value={row.ip_cidr.join("\n")}
-                valid={row.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
-                onChange={(text) => updateBypass(index, { ip_cidr: lines(text) })} />
-              <Field label="Порты (bypass)" multiline value={row.ports.join("\n")}
-                valid={row.ports.every(portRangeValid)}
-                onChange={(text) => updateBypass(index, { ports: lines(text) })} />
-              <SelectField label="Протокол (bypass)" value={row.protocol} options={["any", "tcp", "udp"]}
-                onChange={(protocol) => updateBypass(index, { protocol })} />
-              <FormActions>
-                <DeleteButton label={`Удалить исключение ${row.name || index + 1}`}
-                  onClick={() => patch({ bypass: current.bypass.filter((_, i) => i !== index) })} />
-              </FormActions>
-            </FormGrid>
+            <Typography>{row.name || "Новое исключение"}</Typography>
+            <Button onClick={() => setBypassEditor(index)}>Изменить</Button>
           </div>)}
           {current.bypass.length === 0 && <EmptyState>Исключений нет.</EmptyState>}
-          <Button onClick={() => patch({ bypass: [...current.bypass, {
-            name: "", source_ip_cidr: [], ip_cidr: [], ports: [], protocol: "any",
-          }] })}>+ Добавить исключение</Button>
+          <Button onClick={() => {
+            const index = current.bypass.length;
+            patch({ bypass: [...current.bypass, {
+              name: "", source_ip_cidr: [], ip_cidr: [], ports: [], protocol: "any",
+            }] });
+            setBypassEditor(index);
+          }}>+ Добавить исключение</Button>
           <Typography variant="h2">Обновление списков (после запуска TProxy)</Typography>
           <FormGrid>
             <SelectField label="Режим обновления" value={schedule.mode}
@@ -731,6 +629,126 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
             save={() => void save()} />
         </>
       )}
+      <Dialog open={bypassEditor !== null && editor.isEdit && !!current.bypass[bypassEditor]} onClose={() => setBypassEditor(null)} fullWidth maxWidth="md" aria-labelledby="bypass-editor-title">
+        <DialogTitle id="bypass-editor-heading" sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span id="bypass-editor-title">Исключение: {bypassEditor !== null ? current.bypass[bypassEditor]?.name || "Новое исключение" : "Новое исключение"}</span>
+          {bypassEditor !== null && current.bypass[bypassEditor] && <DeleteButton label={`Удалить исключение ${current.bypass[bypassEditor].name || bypassEditor + 1}`}
+            onClick={() => {
+              patch({ bypass: current.bypass.filter((_, i) => i !== bypassEditor) });
+              setBypassEditor(null);
+            }} />}
+        </DialogTitle>
+        <DialogContent>
+          {bypassEditor !== null && current.bypass[bypassEditor] && (() => {
+            const index = bypassEditor;
+            const row = current.bypass[index];
+            return <>
+              <PageSection title="Идентификация"><FormGrid>
+                <Field label="Имя исключения" value={row.name} valid={nameValid(row.name)}
+                  onChange={(name) => updateBypass(index, { name })} />
+              </FormGrid></PageSection>
+              <PageSection title="Условие"><FormGrid>
+                <Field label="Источник IP (bypass)" multiline value={row.source_ip_cidr.join("\n")}
+                  valid={row.source_ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+                  onChange={(text) => updateBypass(index, { source_ip_cidr: lines(text) })} />
+                <Field label="Назначение IPv4 (bypass)" multiline value={row.ip_cidr.join("\n")}
+                  valid={row.ip_cidr.every((cidr) => !cidr.includes(":") && addressValid(cidr))}
+                  onChange={(text) => updateBypass(index, { ip_cidr: lines(text) })} />
+                <Field label="Порты (bypass)" multiline value={row.ports.join("\n")}
+                  valid={row.ports.every(portRangeValid)}
+                  onChange={(text) => updateBypass(index, { ports: lines(text) })} />
+                <SelectField label="Протокол (bypass)" value={row.protocol} options={["any", "tcp", "udp"]}
+                  onChange={(protocol) => updateBypass(index, { protocol })} />
+              </FormGrid></PageSection>
+              <EditorFooter saving={editor.saving} valid={bypassValid(row) && current.bypass.findIndex((item) => item.name === row.name) === index}
+                cancel={() => setBypassEditor(null)} save={() => setBypassEditor(null)} />
+            </>;
+          })()}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={manualSetOpen && editor.isEdit} onClose={() => setManualSetOpen(false)} fullWidth maxWidth="md" aria-labelledby="manual-set-title">
+        <DialogTitle id="manual-set-title">Новый набор</DialogTitle>
+        <DialogContent>
+          <PageSection title="Идентификация"><FormGrid>
+            <Field label="Тег" value={manualSet.name} valid={engineTagValid(manualSet.name) && !ruleSetOptions.includes(manualSet.name)} onChange={(name) => setManualSet({ ...manualSet, name })} />
+          </FormGrid></PageSection>
+          <PageSection title="Содержимое"><FormGrid>
+            <SelectField label="Формат" value={manualSet.format} options={["text-domain", "text-cidr", "json", "geosite", "geoip", "srs"]} onChange={(format) => setManualSet({ ...manualSet, format })} />
+            <Field label="URL источника" value={manualSet.url} valid={manualSetValid || !manualSet.url} onChange={(url) => setManualSet({ ...manualSet, url })} />
+          </FormGrid></PageSection>
+          <EditorFooter saving={false} valid={manualSetValid} cancel={() => setManualSetOpen(false)} save={() => { setPendingSets((items) => [...items, manualSet]); setManualSetOpen(false); setManualSet({ name: "", format: "text-domain", url: "", max_records: 100_000, max_bytes: 5_000_000 }); }} />
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!dnsEditor && editor.isEdit} onClose={() => setDnsEditor(null)} fullWidth maxWidth="md" aria-labelledby="dns-editor-title">
+        <DialogTitle id="dns-editor-title">{dnsEditor?.kind === "server" ? `DNS-сервер: ${current.dns.servers[dnsEditor.index]?.tag || "Новый сервер"}` : `DNS-правило: ${dnsEditor ? current.dns.rules[dnsEditor.index]?.name || "Новое правило" : ""}`}</DialogTitle>
+        <DialogContent>
+          {dnsEditor?.kind === "server" && current.dns.servers[dnsEditor.index] && (() => {
+            const index = dnsEditor.index;
+            const row = current.dns.servers[index];
+            return <>
+              <PageSection title="Идентификация"><FormGrid>
+                <Field label="Тег DNS-сервера" value={row.tag} valid={engineTagValid(row.tag) && dnsTags.indexOf(row.tag) === index} onChange={(tag) => updateDNSServer(index, { tag })} />
+                <Field label="Сервер DNS" value={row.server} valid={!!row.server.trim()} onChange={(server) => updateDNSServer(index, { server })} />
+              </FormGrid></PageSection>
+              <PageSection title="Транспорт"><FormGrid>
+                <SelectField label="Тип DNS-сервера" value={row.type} options={["udp", "tls", "https"]} onChange={(type) => updateDNSServer(index, { type })} />
+                <Field label="Порт DNS" type="number" value={row.server_port ?? ""} inputProps={{ min: 1, max: 65535 }} valid={row.server_port === null || portValid(row.server_port)} onChange={(value) => updateDNSServer(index, { server_port: value === "" ? null : Number(value) })} />
+                {(row.type === "tls" || row.type === "https") && <Field label="TLS-имя DNS" value={row.tls_name ?? ""} valid={row.type !== "tls" || !!row.tls_name?.trim()} onChange={(value) => updateDNSServer(index, { tls_name: value || null })} />}
+                {row.type === "https" && <Field label="Путь DNS" value={row.path ?? ""} hint="Пусто — /dns-query по умолчанию" onChange={(value) => updateDNSServer(index, { path: value || null })} />}
+                <Select label="Резолвер DNS" value={row.domain_resolver ?? ""} placeholder={{ label: "Без резолвера" }} options={dnsTags.filter((tag, i) => i !== index && !!tag).map((tag) => ({ value: tag, label: tag }))} onChange={(value) => updateDNSServer(index, { domain_resolver: value || null })} />
+                {row.domain_resolver && !dnsTags.includes(row.domain_resolver) && <InfoNote>ссылка сломана: {row.domain_resolver}</InfoNote>}
+                <Field label="Detour DNS" value={row.detour ?? ""} onChange={(value) => updateDNSServer(index, { detour: value || null })} />
+              </FormGrid></PageSection>
+              <EditorFooter saving={editor.saving} valid={dnsServerValid(row, dnsTags) && dnsTags.indexOf(row.tag) === index} cancel={() => setDnsEditor(null)} save={() => setDnsEditor(null)} />
+            </>;
+          })()}
+          {dnsEditor?.kind === "rule" && current.dns.rules[dnsEditor.index] && (() => {
+            const index = dnsEditor.index;
+            const row = current.dns.rules[index];
+            return <>
+              <PageSection title="Условие"><FormGrid>
+                <Field label="Имя DNS-правила" value={row.name} valid={engineTagValid(row.name) && current.dns.rules.findIndex((r) => r.name === row.name) === index} onChange={(name) => updateDNSRule(index, { name })} />
+                <Field label="Домены DNS-правила" multiline value={row.domain_suffix.join("\n")} valid={row.domain_suffix.every(domainValid) && (row.domain_suffix.length > 0 || row.rule_sets.length > 0)} onChange={(text) => updateDNSRule(index, { domain_suffix: lines(text) })} />
+                {ruleSetOptions.length > 0 && <FormWide><Typography>Наборы правил DNS</Typography>
+                  {ruleSetOptions.map((name) => <FormControlLabel key={name} label={name} control={<Checkbox checked={row.rule_sets.includes(name)} onChange={(_, checked) => updateDNSRule(index, { rule_sets: checked ? [...row.rule_sets, name] : row.rule_sets.filter((selected) => selected !== name) })} />} />)}
+                </FormWide>}
+              </FormGrid></PageSection>
+              <PageSection title="Решение"><FormGrid>
+                <SelectField label="DNS-сервер правила" value={row.server} required options={dnsTags.filter(Boolean)} onChange={(server) => updateDNSRule(index, { server })} />
+                {row.server && !dnsTags.includes(row.server) && <InfoNote>ссылка сломана: {row.server}</InfoNote>}
+              </FormGrid></PageSection>
+              <EditorFooter saving={editor.saving} valid={dnsRuleValid(row, dnsTags, ruleSetOptions) && current.dns.rules.findIndex((r) => r.name === row.name) === index} cancel={() => setDnsEditor(null)} save={() => setDnsEditor(null)} />
+            </>;
+          })()}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={addingRule && editor.isEdit} onClose={() => { setAddingRule(false); setRuleStep(0); }} fullWidth maxWidth="md" aria-labelledby="rule-wizard-title">
+        <DialogTitle id="rule-wizard-title">Новое правило</DialogTitle>
+        <DialogContent>
+          <PageSection title={ruleStep === 0 ? "Условие" : ruleStep === 1 ? "Решение" : "Проверка"}>
+            <Typography>Шаг {ruleStep + 1} из 3: {ruleStep === 0 ? "условия" : ruleStep === 1 ? "назначение" : "проверка"}</Typography>
+            {ruleStep === 0 && <FormGrid>
+              <Field label="Имя правила" value={guidedRule.name} valid={nameValid(guidedRule.name)} onChange={(name) => setGuidedRule((rule) => ({ ...rule, name }))} />
+              <FormActions><Button onClick={() => setCatalogContext("rule")}>Из каталога</Button></FormActions>
+              {catalogError && <ErrorNotice error={new Error(catalogError)} />}
+              <FormWide><RuleMatchers rule={guidedRule} ruleSets={ruleSetOptions} change={(change) => setGuidedRule((rule) => ({ ...rule, ...change }))} /></FormWide>
+            </FormGrid>}
+            {ruleStep === 1 && <FormGrid>
+              <Select label="Куда направить" value={guidedRule.action} options={actionOptions} onChange={(value) => { const action = value as TProxyRule["action"]; setGuidedRule((rule) => ({ ...rule, action, outbound: action === "route" ? rule.outbound : null })); }} />
+              {guidedRule.action === "route" && <Select label="Выход" value={guidedRule.outbound ?? ""} placeholder={{ label: "Выберите выход" }} options={outboundOptions.map((tag) => ({ value: tag, label: tag }))} onChange={(outbound) => setGuidedRule((rule) => ({ ...rule, outbound }))} />}
+              {guidedRule.action === "route" && outboundOptions.length === 0 && <InfoNote>Сначала добавьте прокси-выход.</InfoNote>}
+            </FormGrid>}
+            {ruleStep === 2 && <InfoNote>{guidedRule.name}: {matchLabel(guidedRule)} → {actionLabel(guidedRule.action)}{guidedRule.outbound ? ` · ${guidedRule.outbound}` : ""}. Правило добавится в локальный черновик; затем сохраните страницу.</InfoNote>}
+          </PageSection>
+          <div className="footer-actions">
+            <Button onClick={() => { setAddingRule(false); setRuleStep(0); }}>Отмена</Button>
+            <span className="spacer" />
+            {ruleStep > 0 && <Button onClick={() => setRuleStep((step) => step - 1)}>Назад</Button>}
+            {ruleStep < 2 ? <Button variant="contained" disabled={ruleStep === 0 && (!nameValid(guidedRule.name) || !!matcherIssue(guidedRule, ruleSetOptions))} onClick={() => setRuleStep((step) => step + 1)}>Далее</Button> :
+              <Button variant="contained" disabled={!ruleValid(guidedRule, outboundOptions, ruleSetOptions) || current.rules.some((rule) => rule.name === guidedRule.name)} onClick={() => { patch({ rules: [...current.rules, { ...guidedRule, order: current.rules.length }] }); setAddingRule(false); setGuidedRule(emptyRule()); setRuleStep(0); }}>Сохранить</Button>}
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

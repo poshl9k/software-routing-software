@@ -1,4 +1,4 @@
-import { Button } from "@mui/material";
+import { Button, Dialog, DialogContent, DialogTitle } from "@mui/material";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useConfiguration } from "../state";
@@ -20,6 +20,8 @@ import { ValueTabs } from "../components/Tabs";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { PageHeader } from "../components/PageHeader";
+import { PageSection } from "../components/PageSection";
+import { ExpertDisclosure } from "../components/ExpertDisclosure";
 import { Field } from "../components/Field";
 import { Select, InterfaceSelect, type SelectOption } from "../components/Select";
 import { Toggle } from "../components/Toggle";
@@ -135,8 +137,10 @@ export default function Network() {
   const { configuration: c, version, draftDirty } = useConfiguration();
   const editor = useDraftEditor<Editable[]>();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [detailTab, setDetailTab] = useState("general");
   const [deleteKey, setDeleteKey] = useState<string | null>(null);
+  const [virtualOpen, setVirtualOpen] = useState(false);
+  const [virtualType, setVirtualType] = useState<"vlan" | "bridge">("vlan");
+  const [virtualParent, setVirtualParent] = useState("");
   const [quickOpen, setQuickOpen] = useState(false);
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "interfaces";
@@ -156,7 +160,6 @@ export default function Network() {
   const open = (key: string) => {
     if (!editor.isEdit) editor.begin(rows);
     setSelectedKey(key);
-    setDetailTab("general");
   };
   const cancel = () => { editor.cancel(); setSelectedKey(null); };
 
@@ -206,7 +209,6 @@ export default function Network() {
     if (editor.isEdit) editor.setValue(next);
     else editor.begin(next);
     setSelectedKey(key);
-    setDetailTab("general");
   };
 
   const addQuick = (entry: Interface, references: string[]) => {
@@ -220,7 +222,6 @@ export default function Network() {
     if (editor.isEdit) editor.setValue(next);
     else editor.begin(next);
     setSelectedKey(key);
-    setDetailTab("general");
   };
 
   const addRow = () => {
@@ -229,7 +230,6 @@ export default function Network() {
     if (editor.isEdit) editor.setValue(next);
     else editor.begin(next);
     setSelectedKey(key);
-    setDetailTab("general");
   };
   const removeRow = (i: Editable) => {
     try {
@@ -301,8 +301,8 @@ export default function Network() {
 
       {knownTab === "interfaces" && <>
         <ErrorNotice error={editor.error} /><ErrorNotice error={hostError} />
-        <Card title="Интерфейсы и зоны" action={<FormActions><Button onClick={() => setQuickOpen(true)}>Быстро подключить</Button>{rows.length > 0 && <><Button onClick={addRow}>Добавить интерфейс</Button>{physicalNics.map((p) => <Button key={p.name} onClick={() => addVirtual("vlan", p.name)}>+ VLAN на {p.name}</Button>)}<Button onClick={() => addVirtual("bridge")}>+ Мост</Button></>}</FormActions>}>
-          {!rows.length && <EmptyState action={<Button onClick={addRow}>Добавить интерфейс</Button>}>Нет назначенных интерфейсов</EmptyState>}
+        <Card title="Интерфейсы и зоны" action={<FormActions><Button onClick={() => setQuickOpen(true)}>Быстро подключить</Button><Button onClick={addRow}>Добавить интерфейс</Button><Button onClick={() => setVirtualOpen(true)}>+ Виртуальный интерфейс</Button></FormActions>}>
+          {!rows.length && <EmptyState>Нет назначенных интерфейсов</EmptyState>}
           {!!rows.length && <DataTable heads={["Название", "Системное имя", "Роль", "IP", "Конфигурация", "Состояние"]}
             rows={rows.map((i) => {
               const host = allRealNics.find((h) => h.name === i.name);
@@ -317,38 +317,58 @@ export default function Network() {
               ];
             })} />}
         </Card>
-        {(selected || isEditMode && selectedKey) && <Card title={`Интерфейс: ${selected?.description?.trim() || selected?.name || "удалён"}`} action={selected && <DeleteButton label={`Удалить интерфейс ${selected.name || "без имени"}`} onClick={() => setDeleteKey(selected.key)} />}>
-          {selected && <ValueTabs value={detailTab} change={setDetailTab} tabs={[
-            {value:"general",label:"Общие"},{value:"ip",label:"IP"},{value:"connection",label:"Подключение"},{value:"advanced",label:"Дополнительно"}
-          ]} />}
-          {selected && detailTab === "general" && <FormGrid>
-            <Field label="Дружественное имя" value={selected.description ?? ""} placeholder="напр. «оптика провайдера»" maxLength={64} onChange={(v) => setField(selected.key,{description:v || null})} />
-            <Select label="Системное имя" value={selected.name} error={!!selected.name && !validName(selected)} placeholder={{label:"— выберите интерфейс —"}} options={nameOptions(selected)} onChange={(name) => setField(selected.key,{name})} />
-            <Field label="Описание" value={selected.description ?? ""} readOnly hint="Хранится как дружественное имя интерфейса." />
-            <Select label="Тип" value={selected.type} options={[{value:"physical",label:"Физический"},{value:"bridge",label:"Мост"},{value:"vlan",label:"VLAN"}]} onChange={(v) => setField(selected.key,{type:v as Interface["type"], ...(selected.addressing === "pppoe" && v !== "physical" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
-            <Select label="Роль / зона" value={selected.zone ?? ""} placeholder={{label:"Не назначен — транзит запрещён"}} options={ZONES.map((z) => ({value:z,label:z === "wan" ? "Интернет (WAN)" : z === "lan" ? "Домашняя сеть (LAN)" : z.toUpperCase()}))} onChange={(v) => setField(selected.key,{zone:v || null, ...(selected.addressing === "pppoe" && v !== "wan" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
-            <Field label="MAC хоста" value={allRealNics.find((h) => h.name === selected.name)?.mac ?? "Данные недоступны"} readOnly />
-            <FormWide><InfoNote>Без зоны транзит запрещён. Изменения вступят в силу только после применения черновика.</InfoNote></FormWide>
-          </FormGrid>}
-          {selected && detailTab === "ip" && <FormGrid>
-            <Select label="Режим адресации" value={selected.addressing} options={[{value:"static",label:"Статический IP"},{value:"dhcp",label:"DHCP"},...(selected.type === "physical" && selected.zone === "wan" ? [{value:"pppoe",label:"PPPoE"}] : [])]} onChange={(v) => setField(selected.key,v === "pppoe" ? {addressing:"pppoe",addresses:[],parent:null,members:[]} : v === "dhcp" ? {addressing:"dhcp",addresses:[],pppoe_username:undefined,pppoe_password:undefined} : {addressing:"static",pppoe_username:undefined,pppoe_password:undefined})} />
-            {selected.addressing === "pppoe" ? <>
-              <Field label="Логин" value={selected.pppoe_username ?? ""} valid={!!selected.pppoe_username?.trim()} onChange={(v) => setField(selected.key,{pppoe_username:v})} />
-              <SecretField key={selected.key} label="Пароль" value={selected.pppoe_password ?? null} change={(pppoe_password) => setField(selected.key,{pppoe_password})} />
-            </> : <Field label="Основной адрес (CIDR)" value={selected.addressing === "dhcp" ? "" : selected.addresses[0] ?? ""} disabled={selected.addressing === "dhcp"} placeholder={selected.addressing === "dhcp" ? "адрес по DHCP" : "192.168.10.1/24"} valid={selected.addressing === "dhcp" || !selected.addresses.length || (selected.addresses[0].includes("/") && addressValid(selected.addresses[0]) && staticAddresses.filter((a) => a === selected.addresses[0].trim().toLowerCase()).length === 1)} hint="/24 = маска 255.255.255.0. Первый WAN-адрес основной для исходящего трафика." onChange={(v) => setField(selected.key,{addresses:[v,...selected.addresses.slice(1)]})} />}
-            {selected.addressing === "static" && <FormWide>{selected.addresses.slice(1).map((address,index) => <FormActions key={index}><Field ariaLabel={`Дополнительный адрес ${index + 1} (CIDR)`} value={address} valid={address.includes("/") && addressValid(address) && staticAddresses.filter((a) => a === address.trim().toLowerCase()).length === 1} hint="Укажите уникальный IP/CIDR" onChange={(v) => setField(selected.key,{addresses:selected.addresses.map((a,n) => n === index + 1 ? v : a)})} /><DeleteButton label={`Удалить дополнительный адрес ${index + 1}`} onClick={() => setField(selected.key,{addresses:selected.addresses.filter((_,n) => n !== index + 1)})} /></FormActions>)}<Button onClick={() => setField(selected.key,{addresses:[...(selected.addresses.length ? selected.addresses : [""]),""]})}>Добавить адрес</Button></FormWide>}
-            <FormWide><InfoNote>{selected.addressing === "dhcp" ? hostAddresses.isPending ? "Полученный адрес: загрузка…" : hostAddresses.isError ? "Полученный адрес: состояние недоступно" : `Полученный адрес: ${(liveAddresses[selected.name] ?? []).join(", ") || "адрес не получен"}` : selected.addressing === "pppoe" ? "PPPoE: запуск подключения после применения черновика." : "Статические адреса показаны из конфигурации."}</InfoNote></FormWide>
-          </FormGrid>}
-          {selected && detailTab === "connection" && <FormGrid>
-            {selected.type === "vlan" && <><Select label="Родительский интерфейс" value={selected.parent ?? ""} placeholder={{label:"— выберите —"}} options={candidates(selected,physicalNics).filter((name) => name === selected.parent || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{parent:v || null})} /><Field label="VLAN ID" type="number" value={selected.vlan_id ?? ""} onChange={(v) => setField(selected.key,{vlan_id:Number(v) || null})} /></>}
-            {selected.type === "bridge" && <FormWide>{selected.members.map((m,index) => <FormActions key={`${m}-${index}`}><Select ariaLabel={`Участник ${selected.key} ${index}`} value={m} error={!m || !rows.some((r) => r.key !== selected.key && r.name === m && r.zone)} placeholder={{label:"— выберите —"}} options={candidates(selected,allRealNics).filter((name) => selected.members.includes(name) || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{members:selected.members.map((row,r) => r === index ? v : row)})} /><DeleteButton label={`Удалить участника ${m}`} onClick={() => setField(selected.key,{members:selected.members.filter((_,r) => r !== index)})} /></FormActions>)}
-              {candidates(selected,allRealNics).some((name) => !selected.members.includes(name) && !usedByOtherRows(selected).has(name)) && <Button onClick={() => {const free=candidates(selected,allRealNics).find((name) => !selected.members.includes(name) && !usedByOtherRows(selected).has(name));if(free)setField(selected.key,{members:[...selected.members,free]});}}>+ участник</Button>}
-            </FormWide>}
-            {selected.type === "physical" && <FormWide><InfoNote>Физический порт выбран на вкладке «Общие».</InfoNote></FormWide>}
-          </FormGrid>}
-          {selected && detailTab === "advanced" && <FormGrid><Field label="Родитель" value={selected.parent ?? "—"} readOnly /><Field label="Участники" value={selected.members.join(", ") || "—"} readOnly /><Field label="VLAN ID" value={selected.vlan_id ?? "—"} readOnly /><Field label="Состояние хоста" value={hostInterfaces.isPending ? "Загрузка…" : hostInterfaces.isError ? "Состояние недоступно" : allRealNics.find((h) => h.name === selected.name)?.operstate ?? "Данные недоступны"} readOnly /><FormWide><InfoNote>Первичный LAN и адрес панели не определяются по этой конфигурации. Проверьте доступ перед применением.</InfoNote></FormWide></FormGrid>}
-          <EditorFooter saving={editor.saving} valid={allValid} cancel={cancel} save={() => void save()} />
-        </Card>}
+        <Dialog open={selectedKey !== null && selected !== null} onClose={cancel} fullWidth maxWidth="md" aria-labelledby="interface-editor-title">
+          {selected && <>
+            <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span id="interface-editor-title">{`Интерфейс: ${selected.description?.trim() || selected.name || "без имени"}`}</span>
+              <DeleteButton label={`Удалить интерфейс ${selected.name || "без имени"}`} onClick={() => setDeleteKey(selected.key)} />
+            </DialogTitle>
+            <DialogContent dividers>
+              <PageSection title="Идентификация"><FormGrid>
+                <Field label="Системное имя" value={selected.name || "Не выбрано"} readOnly />
+                <Field label="MAC" value={allRealNics.find((h) => h.name === selected.name)?.mac ?? "Данные недоступны"} readOnly />
+                <Field label="Состояние кабеля/хоста" value={(() => {
+                  const host = allRealNics.find((h) => h.name === selected.name);
+                  return hostInterfaces.isPending ? "Состояние хоста: загрузка" : hostInterfaces.isError || !host ? "Состояние хоста недоступно" : host.kind !== "physical" ? `Состояние ${host.operstate}; данные о кабеле недоступны` : `Кабель: ${host.operstate === "UP" ? "подключён" : host.operstate === "DOWN" ? "отключён" : host.operstate}`;
+                })()} readOnly />
+                <Field label="Дружественное имя" value={selected.description ?? ""} placeholder="напр. «оптика провайдера»" maxLength={64} onChange={(v) => setField(selected.key,{description:v || null})} />
+              </FormGrid></PageSection>
+              <PageSection title="Роль"><FormGrid>
+                <Select label="Роль / зона" value={selected.zone ?? ""} placeholder={{label:"Не назначен — транзит запрещён"}} options={ZONES.map((z) => ({value:z,label:z === "wan" ? "Интернет (WAN)" : z === "lan" ? "Домашняя сеть (LAN)" : z.toUpperCase()}))} onChange={(v) => setField(selected.key,{zone:v || null, ...(selected.addressing === "pppoe" && v !== "wan" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
+                <FormWide><InfoNote>Без зоны транзит запрещён. Изменения вступят в силу только после применения черновика.</InfoNote></FormWide>
+              </FormGrid></PageSection>
+              <PageSection title="Адресация"><FormGrid>
+                <Select label="Режим адресации" value={selected.addressing} options={[{value:"static",label:"Статический IP"},{value:"dhcp",label:"DHCP"},...(selected.type === "physical" && selected.zone === "wan" ? [{value:"pppoe",label:"PPPoE"}] : [])]} onChange={(v) => setField(selected.key,v === "pppoe" ? {addressing:"pppoe",addresses:[],parent:null,members:[]} : v === "dhcp" ? {addressing:"dhcp",addresses:[],pppoe_username:undefined,pppoe_password:undefined} : {addressing:"static",pppoe_username:undefined,pppoe_password:undefined})} />
+                {selected.addressing === "pppoe" ? <>
+                  <Field label="Логин" value={selected.pppoe_username ?? ""} valid={!!selected.pppoe_username?.trim()} onChange={(v) => setField(selected.key,{pppoe_username:v})} />
+                  <SecretField key={selected.key} label="Пароль" value={selected.pppoe_password ?? null} change={(pppoe_password) => setField(selected.key,{pppoe_password})} />
+                </> : <Field label="Основной адрес (CIDR)" value={selected.addressing === "dhcp" ? "" : selected.addresses[0] ?? ""} disabled={selected.addressing === "dhcp"} placeholder={selected.addressing === "dhcp" ? "адрес по DHCP" : "192.168.10.1/24"} valid={selected.addressing === "dhcp" || !selected.addresses.length || (selected.addresses[0].includes("/") && addressValid(selected.addresses[0]) && staticAddresses.filter((a) => a === selected.addresses[0].trim().toLowerCase()).length === 1)} hint="/24 = маска 255.255.255.0. Первый WAN-адрес основной для исходящего трафика." onChange={(v) => setField(selected.key,{addresses:[v,...selected.addresses.slice(1)]})} />}
+                {selected.addressing === "static" && <FormWide>{selected.addresses.slice(1).map((address,index) => <FormActions key={index}><Field ariaLabel={`Дополнительный адрес ${index + 1} (CIDR)`} value={address} valid={address.includes("/") && addressValid(address) && staticAddresses.filter((a) => a === address.trim().toLowerCase()).length === 1} hint="Укажите уникальный IP/CIDR" onChange={(v) => setField(selected.key,{addresses:selected.addresses.map((a,n) => n === index + 1 ? v : a)})} /><DeleteButton label={`Удалить дополнительный адрес ${index + 1}`} onClick={() => setField(selected.key,{addresses:selected.addresses.filter((_,n) => n !== index + 1)})} /></FormActions>)}<Button onClick={() => setField(selected.key,{addresses:[...(selected.addresses.length ? selected.addresses : [""]),""]})}>Добавить адрес</Button></FormWide>}
+                <FormWide><InfoNote>{selected.addressing === "dhcp" ? hostAddresses.isPending ? "Полученный адрес: загрузка…" : hostAddresses.isError ? "Полученный адрес: состояние недоступно" : `Полученный адрес: ${(liveAddresses[selected.name] ?? []).join(", ") || "адрес не получен"}` : selected.addressing === "pppoe" ? "PPPoE: запуск подключения после применения черновика." : "Статические адреса показаны из конфигурации."}</InfoNote></FormWide>
+              </FormGrid></PageSection>
+              <PageSection title="Тип и подключение"><FormGrid>
+                <Select label="Тип" value={selected.type} options={[{value:"physical",label:"Физический"},{value:"bridge",label:"Мост"},{value:"vlan",label:"VLAN"}]} onChange={(v) => setField(selected.key,{type:v as Interface["type"], ...(selected.addressing === "pppoe" && v !== "physical" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
+                {selected.type === "physical" && !selected.name && <Select label="Выбрать системное имя" value={selected.name} error={!!selected.name && !validName(selected)} placeholder={{label:"— выберите интерфейс —"}} options={nameOptions(selected)} onChange={(name) => setField(selected.key,{name})} />}
+                {selected.type === "vlan" && <><Select label="Родительский интерфейс" value={selected.parent ?? ""} placeholder={{label:"— выберите —"}} options={candidates(selected,physicalNics).filter((name) => name === selected.parent || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{parent:v || null})} /><Field label="VLAN ID" type="number" value={selected.vlan_id ?? ""} onChange={(v) => setField(selected.key,{vlan_id:Number(v) || null})} /></>}
+                {selected.type === "bridge" && <FormWide>{selected.members.map((m,index) => <FormActions key={`${m}-${index}`}><Select ariaLabel={`Участник ${selected.key} ${index}`} value={m} error={!m || !rows.some((r) => r.key !== selected.key && r.name === m && r.zone)} placeholder={{label:"— выберите —"}} options={candidates(selected,allRealNics).filter((name) => selected.members.includes(name) || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{members:selected.members.map((row,r) => r === index ? v : row)})} /><DeleteButton label={`Удалить участника ${m}`} onClick={() => setField(selected.key,{members:selected.members.filter((_,r) => r !== index)})} /></FormActions>)}
+                  {candidates(selected,allRealNics).some((name) => !selected.members.includes(name) && !usedByOtherRows(selected).has(name)) && <Button onClick={() => {const free=candidates(selected,allRealNics).find((name) => !selected.members.includes(name) && !usedByOtherRows(selected).has(name));if(free)setField(selected.key,{members:[...selected.members,free]});}}>+ участник</Button>}
+                </FormWide>}
+              </FormGrid></PageSection>
+              <PageSection title="Дополнительно"><ExpertDisclosure><FormGrid>
+                <Field label="Родитель" value={selected.parent ?? "—"} readOnly /><Field label="Участники" value={selected.members.join(", ") || "—"} readOnly /><Field label="VLAN ID" value={selected.vlan_id ?? "—"} readOnly /><Field label="Состояние хоста" value={hostInterfaces.isPending ? "Загрузка…" : hostInterfaces.isError ? "Состояние недоступно" : allRealNics.find((h) => h.name === selected.name)?.operstate ?? "Данные недоступны"} readOnly /><FormWide><InfoNote>Первичный LAN и адрес панели не определяются по этой конфигурации. Проверьте доступ перед применением.</InfoNote></FormWide>
+              </FormGrid></ExpertDisclosure></PageSection>
+              <EditorFooter saving={editor.saving} valid={allValid} cancel={cancel} save={() => void save()} />
+            </DialogContent>
+          </>}
+        </Dialog>
+        <Dialog open={virtualOpen} onClose={() => setVirtualOpen(false)} fullWidth maxWidth="sm" aria-labelledby="virtual-interface-title">
+          <DialogTitle id="virtual-interface-title">Виртуальный интерфейс</DialogTitle>
+          <DialogContent><FormGrid>
+            <Select label="Тип виртуального интерфейса" value={virtualType} options={[{value:"vlan",label:"VLAN"},{value:"bridge",label:"Мост"}]} onChange={(v) => setVirtualType(v as "vlan" | "bridge")} />
+            {virtualType === "vlan" && <Select label="Родительский порт" value={virtualParent} placeholder={{label:"— выберите порт —"}} options={physicalNics.map((p) => ({value:p.name,label:p.name}))} onChange={setVirtualParent} />}
+            <FormWide><FormActions><Button onClick={() => setVirtualOpen(false)}>Отмена</Button><Button variant="contained" disabled={virtualType === "vlan" && !physicalNics.some((p) => p.name === virtualParent)} onClick={() => { setVirtualOpen(false); addVirtual(virtualType, virtualType === "vlan" ? virtualParent : null); }}>Создать</Button></FormActions></FormWide>
+          </FormGrid></DialogContent>
+        </Dialog>
         {draftDirty && version?.status === "draft" && <p className="sub">Черновик изменён и ожидает применения (экран «Применение»).</p>}
         <QuickConnectDialog open={quickOpen} onClose={() => setQuickOpen(false)} onAdd={addQuick}
           ports={allRealNics} existing={rows} loading={hostInterfaces.isPending} unavailable={hostInterfaces.isError} />

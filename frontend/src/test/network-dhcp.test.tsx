@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
@@ -30,6 +30,32 @@ function mockDhcp(leaseResponse: (path: string) => Response) {
   vi.stubGlobal("fetch", fetch);
   return fetch;
 }
+
+it("opens a DHCP subnet in a grouped dialog and leaves no subnet form in the page flow", async () => {
+  const subnet = { id: 1, interface: "lan0", subnet: "192.168.1.0/24", pools: [{ start: "192.168.1.100", end: "192.168.1.200" }], reservations: [], routers: ["192.168.1.1"], dns_servers: [], valid_lifetime: 3600 };
+  const configuration = { ...emptyConfiguration, interfaces: [{ name: "lan0", type: "physical" as const, zone: "lan", description: null, addressing: "static" as const, addresses: ["192.168.1.1/24"], parent: null, vlan_id: null, members: [] }], dhcp_subnets: [subnet] };
+  vi.stubGlobal("fetch", vi.fn((path: string) => Promise.resolve(new Response(JSON.stringify(
+    path === "/api/versions" ? [{ id: 1, status: "draft", configuration }] : { generated_at: "2026-10-14T10:00:00Z", services: [] },
+  )))));
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("tab", { name: "Подсети и диапазоны" }));
+  expect(screen.queryByLabelText("Срок аренды, с")).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Настроить" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Подсети DHCP" })).getByRole("button", { name: "Изменить" }));
+  const dialog = screen.getByRole("dialog", { name: /Подсеть 192\.168\.1\.0\/24/ });
+  for (const section of ["Идентификация", "Диапазон", "Параметры", "Резервирования"]) {
+    expect(within(dialog).getByRole("heading", { name: section })).toBeVisible();
+  }
+  expect(within(dialog).getByLabelText("Подсеть CIDR")).toHaveAttribute("readonly");
+  expect(within(dialog).getByRole("button", { name: "Отмена" })).toBeVisible();
+  expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeVisible();
+  await user.click(within(dialog).getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(screen.queryByLabelText("Срок аренды, с")).not.toBeInTheDocument();
+  expect(screen.getByText("192.168.1.0/24")).toBeVisible();
+});
 
 it("shows an empty state when DHCP subnets are not configured", async () => {
   mockDhcp(() => new Response("[]"));
@@ -113,7 +139,6 @@ it("clears a previously entered static address when the interface is switched to
   const user = userEvent.setup();
   render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
   await user.click(await screen.findByRole("button", { name: "Без названия" }));
-  await user.click(screen.getByRole("tab", { name: "IP" }));
   const mode = screen.getByLabelText("Режим адресации");
   await user.selectOptions(mode, "DHCP");
 
@@ -157,8 +182,8 @@ it("quick DHCP adds to local draft only and saves through the editor", async () 
   expect(screen.getByLabelText("Адресация")).toHaveValue("DHCP");
   expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
   await user.click(screen.getByRole("button", { name: "Добавить в черновик" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(screen.getByRole("button", { name: "Провайдер" })).toBeVisible();
+  expect(await screen.findByRole("dialog", { name: /Интерфейс: Провайдер/ })).toBeVisible();
+  expect(screen.getByText("Провайдер", { selector: "button" })).toBeInTheDocument();
   expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
@@ -209,7 +234,6 @@ it("saves PPPoE credentials through one draft and clears them on mode change", a
   const user = userEvent.setup();
   render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
   await user.click(await screen.findByRole("button", { name: "Без названия" }));
-  await user.click(screen.getByRole("tab", { name: "IP" }));
   await user.selectOptions(screen.getByLabelText("Режим адресации"), "pppoe");
   expect(screen.queryByLabelText("Основной адрес (CIDR)")).toBeNull();
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
@@ -221,7 +245,6 @@ it("saves PPPoE credentials through one draft and clears them on mode change", a
   const saved = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === "PUT")![1].body));
   expect(saved.interfaces[0]).toEqual(expect.objectContaining({ addressing: "pppoe", addresses: [], pppoe_username: "subscriber", pppoe_password: { plaintext: "private-pass" } }));
   await user.click(await screen.findByRole("button", { name: "Без названия" }));
-  await user.click(screen.getByRole("tab", { name: "IP" }));
   await user.selectOptions(screen.getByLabelText("Режим адресации"), "dhcp");
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(2));

@@ -8,8 +8,9 @@ import { emptyConfiguration } from "../fixtures";
 import type { Configuration } from "../types";
 
 it("selects OS links, creates a VLAN and saves bridge members with draft references", async () => {
+  let configuration: Configuration = emptyConfiguration;
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
-    const configuration = init?.body ? JSON.parse(String(init.body)) : emptyConfiguration;
+    if (init?.method === "PUT") configuration = JSON.parse(String(init.body));
     const version = { id: 1, status: "draft", configuration };
     return Promise.resolve(new Response(JSON.stringify(
       path === "/api/versions" ? [version] : path === "/api/host/interfaces" ? [
@@ -23,26 +24,37 @@ it("selects OS links, creates a VLAN and saves bridge members with draft referen
   const user = userEvent.setup();
   render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
   await user.click(await screen.findByRole("button", { name: "Добавить интерфейс" }));
-  await user.selectOptions(screen.getByLabelText("Системное имя"), "eth0");
-  await user.click(screen.getByRole("button", { name: "+ VLAN на eth0" }));
-  await user.click(screen.getByRole("tab", { name: "Подключение" }));
-  const parent = screen.getByLabelText("Родительский интерфейс");
+  const physicalEditor = screen.getByRole("dialog", { name: /Интерфейс:/ });
+  expect(within(physicalEditor).getByLabelText("Системное имя")).toHaveAttribute("readonly");
+  await user.selectOptions(within(physicalEditor).getByLabelText("Выбрать системное имя"), "eth0");
+  await user.click(within(physicalEditor).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await user.click(screen.getByRole("button", { name: "+ Виртуальный интерфейс" }));
+  const createVlan = screen.getByRole("dialog", { name: "Виртуальный интерфейс" });
+  await user.selectOptions(within(createVlan).getByLabelText("Тип виртуального интерфейса"), "vlan");
+  await user.selectOptions(within(createVlan).getByLabelText("Родительский порт"), "eth1");
+  await user.click(within(createVlan).getByRole("button", { name: "Создать" }));
+  const vlanEditor = screen.getByRole("dialog", { name: /Интерфейс: vlan1/ });
+  const parent = within(vlanEditor).getByLabelText("Родительский интерфейс");
   expect(within(parent).getByRole("option", { name: "eth1" })).toBeVisible();
   expect(within(parent).queryByRole("option", { name: "bond0" })).toBeNull();
-  await user.selectOptions(parent, "eth1");
-  await user.click(screen.getByRole("tab", { name: "Общие" }));
   await user.type(
-    screen.getByPlaceholderText("напр. «оптика провайдера»"),
+    within(vlanEditor).getByPlaceholderText("напр. «оптика провайдера»"),
     "гостевая сеть",
   );
-  await user.click(screen.getByRole("button", { name: "+ Мост" }));
-  await user.click(screen.getByRole("tab", { name: "Подключение" }));
-  await user.click(screen.getByRole("button", { name: "+ участник" }));
-  const member = screen.getByLabelText(/Участник new-/);
+  await user.click(within(vlanEditor).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await user.click(screen.getByRole("button", { name: "+ Виртуальный интерфейс" }));
+  const createBridge = screen.getByRole("dialog", { name: "Виртуальный интерфейс" });
+  await user.selectOptions(within(createBridge).getByLabelText("Тип виртуального интерфейса"), "bridge");
+  await user.click(within(createBridge).getByRole("button", { name: "Создать" }));
+  const bridgeEditor = screen.getByRole("dialog", { name: /Интерфейс: br1/ });
+  await user.click(within(bridgeEditor).getByRole("button", { name: "+ участник" }));
+  const member = within(bridgeEditor).getByLabelText(/Участник new-/);
   await user.selectOptions(member, "bond0");
-  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await user.click(within(bridgeEditor).getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
-  const saved = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === "PUT")![1].body));
+  const saved = JSON.parse(String(fetch.mock.calls.filter(([, init]) => init?.method === "PUT").at(-1)![1].body));
   expect(saved.interfaces).toEqual(expect.arrayContaining([
     expect.objectContaining({ name: "vlan1", type: "vlan", parent: "eth1", vlan_id: 1,
       description: "гостевая сеть" }),
@@ -50,6 +62,31 @@ it("selects OS links, creates a VLAN and saves bridge members with draft referen
     expect.objectContaining({ name: "eth1", zone: null }),
     expect.objectContaining({ name: "bond0", zone: null }),
   ]));
+});
+
+it("opens the interface editor from a row and keeps role fields inside the dialog", async () => {
+  const configuration = { ...emptyConfiguration, interfaces: [{
+    name: "eth0", type: "physical" as const, zone: "lan", description: "Дом",
+    addressing: "static" as const, addresses: [], parent: null, vlan_id: null, members: [],
+  }] };
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string) => Promise.resolve(
+    new Response(JSON.stringify(path === "/api/versions"
+      ? [{ id: 1, status: "draft", configuration }]
+      : path === "/api/host/interfaces"
+        ? [{ name: "eth0", kind: "physical", parent: null, operstate: "UP" }]
+        : { id: 1, status: "draft", configuration })),
+  )));
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+  expect(screen.queryByLabelText("Роль / зона")).toBeNull();
+  await user.click(await screen.findByRole("button", { name: "Дом" }));
+  const dialog = screen.getByRole("dialog", { name: /Интерфейс: Дом/ });
+  expect(within(dialog).getByLabelText("Роль / зона")).toBeVisible();
+  expect(within(dialog).getByLabelText("Режим адресации")).toBeInTheDocument();
+  expect(within(dialog).getByLabelText("Системное имя")).toHaveAttribute("readonly");
+  await user.click(within(dialog).getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.queryByLabelText("Роль / зона")).toBeNull();
 });
 
 it("creates, edits and deletes static routes only through the single draft", async () => {
@@ -105,8 +142,10 @@ it("creates, edits and deletes static routes only through the single draft", asy
 });
 
 it("quick VLAN and bridge stage complete references without a partial write", async () => {
+  let configuration: Configuration = emptyConfiguration;
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
-    const version = { id: 1, status: "draft", configuration: init?.body ? JSON.parse(String(init.body)) : emptyConfiguration };
+    if (init?.method === "PUT") configuration = JSON.parse(String(init.body));
+    const version = { id: 1, status: "draft", configuration };
     return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] : path === "/api/host/interfaces" ? [
       { name: "eth0", kind: "physical", parent: null, mac: "00:00:00:00:00:01", operstate: "UP" },
       { name: "eth1", kind: "physical", parent: null, mac: "00:00:00:00:00:02", operstate: "DOWN" },
@@ -125,6 +164,8 @@ it("quick VLAN and bridge stage complete references without a partial write", as
   await user.click(screen.getByRole("button", { name: "Далее" }));
   expect(screen.getByLabelText("Родитель и VLAN ID")).toHaveValue("eth0 · 42");
   await user.click(screen.getByRole("button", { name: "Добавить в черновик" }));
+  await screen.findByRole("dialog", { name: /Интерфейс: vlan42/ });
+  await user.click(within(screen.getByRole("dialog", { name: /Интерфейс: vlan42/ })).getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await user.click(screen.getByRole("button", { name: "Быстро подключить" }));
   await user.selectOptions(screen.getByLabelText("Сценарий подключения"), "bridge");
@@ -135,11 +176,11 @@ it("quick VLAN and bridge stage complete references without a partial write", as
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.click(screen.getByRole("button", { name: "Добавить в черновик" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
-  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  const bridgeEditor = await screen.findByRole("dialog", { name: /Интерфейс: br42/ });
+  expect(fetch.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1);
+  await user.click(within(bridgeEditor).getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
-  const saved = JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === "PUT")![1].body));
+  const saved = JSON.parse(String(fetch.mock.calls.filter(([, init]) => init?.method === "PUT").at(-1)![1].body));
   expect(saved.interfaces).toEqual(expect.arrayContaining([
     expect.objectContaining({ name: "vlan42", type: "vlan", parent: "eth0", vlan_id: 42 }),
     expect.objectContaining({ name: "br42", type: "bridge", members: ["eth0", "eth1"] }),

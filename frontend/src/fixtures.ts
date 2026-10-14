@@ -40,7 +40,7 @@ export const emptyConfiguration: Configuration = {
 export const sampleConfiguration: Configuration = {
   ...emptyConfiguration,
   tunnels: [{
-    name: "wg-office",
+    name: "wg_office",
     interface: "wg-office",
     role: "server",
     protocol: "wg",
@@ -53,7 +53,7 @@ export const sampleConfiguration: Configuration = {
     obfuscation: {},
     open_port: true,
     peers: [{
-      name: "alina-laptop",
+      name: "alina_laptop",
       public_key: "hSDwCYkwp1R0i33ctD73Wg2/Og0mOBr066SpjqqbTmo=",
       preshared_key: null,
       allowed_ips: ["10.8.0.2/32"],

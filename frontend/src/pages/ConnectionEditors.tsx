@@ -18,11 +18,12 @@ import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { EditorShell } from "../components/EditorShell";
+import { ExpertDisclosure } from "../components/ExpertDisclosure";
+import { PageSection } from "../components/PageSection";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InlineStatus } from "../components/InlineStatus";
 import { InfoNote } from "../components/InfoNote";
 import { EmptyState } from "../components/EmptyState";
-import { PageTabs } from "../components/Tabs";
 import { Field } from "../components/Field";
 import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { PageHeader } from "../components/PageHeader";
@@ -264,7 +265,7 @@ function Collection<T extends Row>({
   create?: (rows: T[], role: Tunnel["role"], protocol: Tunnel["protocol"]) => Promise<T>;
   valid: (v: T) => boolean;
   clean?: (v: T) => T;
-  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean, setError: (error: unknown) => void, tab: number, importedAddresses: Record<string, string>) => ReactNode;
+  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean, setError: (error: unknown) => void, importedAddresses: Record<string, string>) => ReactNode;
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
   /** Extra configuration derived from the edited rows (e.g. auto-created
@@ -286,7 +287,6 @@ function Collection<T extends Row>({
   const [protocol, setProtocol] = useState<Tunnel["protocol"]>("wg");
   const [selected, setSelected] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
-  const [tab, setTab] = useState(0);
   const creatingRef = useRef(false);
   const editEpoch = useRef(0);
   const currentEditing = useRef<EditableRow<T>[] | null>(null);
@@ -329,7 +329,6 @@ function Collection<T extends Row>({
       if (epoch === editEpoch.current && latest) {
         editor.setValue([...latest, { id, created: true, row }]);
         setSelected(id);
-        setTab(0);
         setNext(id + 1);
         setScenario(null);
       }
@@ -364,7 +363,6 @@ function Collection<T extends Row>({
     const id = rows.reduce((max, item) => Math.max(max, item.id + 1), 0);
     if (result.address && "interface" in result.row) setImportAddresses((old) => ({ ...old, [String((result.row as Tunnel).interface)]: result.address! }));
     setSelected(id);
-    setTab(0);
     if (!isEdit) {
       editEpoch.current += 1;
       editor.begin([...rows, { id, created: true, row: result.row }]);
@@ -374,9 +372,49 @@ function Collection<T extends Row>({
     setNext(id + 1);
     closeImport();
   };
+  const cancel = () => {
+    editEpoch.current += 1;
+    editor.cancel();
+    setSelected(null);
+  };
+  const renderEdit = () => editing ? (
+    <>
+      {editing.filter(({ id }) => id === selected).map(({ id, row, created }) => (
+        kind === "tunnels" ? (
+          <div key={id}>
+            {form(row, (patch) => {
+              const latest = currentEditing.current;
+              if (!latest?.some((v) => v.id === id)) return;
+              const updated = latest.map((v) => v.id === id ? { ...v, row: { ...v.row, ...patch } } : v);
+              currentEditing.current = updated;
+              editor.setValue(updated);
+            }, created, noConfiguration, editor.setError, importAddresses)}
+          </div>
+        ) : (
+          <div key={id}>
+            {form(row, (patch) => {
+              const latest = currentEditing.current;
+              if (!latest?.some((v) => v.id === id)) return;
+              const updated = latest.map((v) => v.id === id ? { ...v, row: { ...v.row, ...patch } } : v);
+              currentEditing.current = updated;
+              editor.setValue(updated);
+            }, created, noConfiguration, editor.setError, importAddresses)}
+          </div>
+        )
+      ))}
+      {kind === "tunnels" && (() => {
+        const tunnel = editing.find((item) => item.id === selected)?.row as Tunnel | undefined;
+        if (!tunnel) return <InfoNote>Сохранение удалит выбранный туннель только из черновика. Изменения вступят в силу после применения.</InfoNote>;
+        const address = importAddresses[tunnel.interface] ?? c.interfaces.find((i) => i.name === tunnel.interface)?.addresses[0] ?? tunnelAddress(tunnel, editing.map((v) => v.row as Tunnel));
+        return <InfoNote>При сохранении: {tunnel.name || "новый туннель"} · {tunnel.role === "server" ? "сервер" : "клиент"} · {tunnel.protocol === "awg" ? "AmneziaWG" : "WireGuard"}; интерфейс {tunnel.interface} ({c.interfaces.some((i) => i.name === tunnel.interface) ? "существующий" : "будет создан"}, зона LAN), адрес {address}; WAN UDP-порт {tunnel.role === "server" && tunnel.open_port ? `${tunnel.listen_port} будет открыт после применения` : "не открывается"}. Сохранение создаёт только черновик.</InfoNote>;
+      })()}
+      {!allValid && <p role="status">Проверьте обязательные поля, формат значений и уникальность имён.</p>}
+    </>
+  ) : null;
+  const selectedTunnel = kind === "tunnels" ? editing?.find((item) => item.id === selected)?.row as Tunnel | undefined : undefined;
   return (
     <>
-      <ErrorNotice error={editor.error} />
+      {kind !== "tunnels" && <ErrorNotice error={editor.error} />}
       <Card
         title={title}
         action={
@@ -387,6 +425,15 @@ function Collection<T extends Row>({
               </Button>
             )}
             {kind === "tunnels" && !isEdit && <Button disabled={!version} onClick={() => setScenario("client")}>{addLabel}</Button>}
+            {kind !== "tunnels" && <Button disabled={!version || creating} onClick={() => {
+              if (isEdit) { void add(); return; }
+              const rows = collection.map((row, id) => ({ id, created: false, row }));
+              const id = rows.length;
+              editEpoch.current += 1;
+              editor.begin([...rows, { id, created: true, row: empty(collection) }]);
+              setSelected(id);
+              setNext(id + 1);
+            }}>{addLabel}</Button>}
             {!isEdit && kind !== "tunnels" && (
               <Button
                 disabled={!version}
@@ -402,23 +449,14 @@ function Collection<T extends Row>({
           </div>
         }
       >
-        <EditorShell
-          isEdit={isEdit}
-          saving={editor.saving}
-          valid={!!allValid && !!version && !creating}
-          onCancel={() => {
-            editEpoch.current += 1;
-            editor.cancel();
-          }}
-          onSave={() => void save()}
-          view={kind === "tunnels" ? (
+        {kind === "tunnels" ? (
             collection.length ? collection.map((row, id) => {
               const tunnel = row as Tunnel;
               const service = tunnelStatus?.services.find((item) => item.name === `tunnel:${tunnel.interface}`);
               return <Card key={id} title={`${tunnel.name} · ${tunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"} · ${tunnel.role === "server" ? "Сервер" : "Клиент"}`}
                 action={<Button disabled={!version} onClick={() => {
                   editor.begin(collection.map((item, index) => ({ id: index, created: false, row: item })));
-                  setNext(collection.length); setSelected(id); setTab(0);
+                  setNext(collection.length); setSelected(id);
                 }}>Открыть</Button>}>
                 <dl className="kv">
                   <dt>Интерфейс</dt><dd>{tunnel.interface}</dd>
@@ -436,83 +474,62 @@ function Collection<T extends Row>({
             }) : <EmptyState title="Туннелей пока нет">Добавьте туннель или импортируйте клиентский .conf.</EmptyState>
           ) : (
             <DataTable
-              heads={kind === "sites"
-                ? ["Имя", "Hostname", "Upstream", "Сертификат", "Статус"]
-                : ["Имя", "Провайдер", "Hostname", "Статус"]}
-              empty={<EmptyState>{kind === "sites" ? "Сайтов нет. Добавьте сайт." : "Доменов DDNS нет. Добавьте домен."}</EmptyState>}
-              rows={collection.map((row) => {
-                const cells = summary(row);
-                if (rowActions) cells.push(noConfiguration ? null : rowActions(row));
-                return cells;
-              })}
-            />
-          )}
-          edit={() =>
-            editing ? (
-              <>
-                {kind === "tunnels" && <PageTabs values={((editing.find((v) => v.id === selected)?.row as Tunnel | undefined)?.role === "server")
-                  ? ["Общие", "Подключение", "Ключи", "Пиры", "Дополнительно"]
-                  : ["Общие", "Подключение", "Ключи", "Дополнительно"]} value={tab} change={setTab} />}
-                {editing.filter(({ id }) => kind !== "tunnels" || id === selected).map(({ id, row, created }) => (
-                  <Card
-                    key={id}
-                    title={row.name || "Новая запись"}
-                    action={
-                      <DeleteButton
-                        label={`Удалить ${row.name || "запись"}`}
-                        onClick={() => kind === "tunnels" ? setDeleteTarget(id) : editor.setValue(editing.filter((v) => v.id !== id))}
-                      />
+                heads={kind === "sites"
+                  ? ["Имя", "Hostname", "Upstream", "Сертификат", "Статус"]
+                  : ["Имя", "Провайдер", "Hostname", "Статус"]}
+                empty={<EmptyState>{kind === "sites" ? "Сайтов нет. Добавьте сайт." : "Доменов DDNS нет. Добавьте домен."}</EmptyState>}
+                rows={collection.map((row, id) => {
+                  const cells = summary(row);
+                  cells[0] = <Button variant="text" disabled={!version} onClick={() => {
+                    if (!isEdit) {
+                      editEpoch.current += 1;
+                      editor.begin(collection.map((item, index) => ({ id: index, created: false, row: item })));
+                      setNext(collection.length);
                     }
-                  >
-                    {form(
-                      row,
-                      (patch) => {
-                        const latest = currentEditing.current;
-                        if (!latest?.some((v) => v.id === id)) return;
-                        const updated = latest.map((v) =>
-                          v.id === id
-                            ? { ...v, row: { ...v.row, ...patch } }
-                            : v,
-                        );
-                        currentEditing.current = updated;
-                        editor.setValue(updated);
-                      },
-                      created,
-                      noConfiguration,
-                      editor.setError,
-                      tab,
-                      importAddresses,
-                    )}
-                  </Card>
-                ))}
-                {kind !== "tunnels" && <FormActions>
-                  <Button disabled={creating} onClick={() => void add()}>
-                    {addLabel}
-                  </Button>
-                </FormActions>}
-                {kind === "tunnels" && (() => {
-                  const tunnel = editing.find((item) => item.id === selected)?.row as Tunnel | undefined;
-                  if (!tunnel) return <InfoNote>Сохранение удалит выбранный туннель только из черновика. Изменения вступят в силу после применения.</InfoNote>;
-                  const address = importAddresses[tunnel.interface] ?? c.interfaces.find((i) => i.name === tunnel.interface)?.addresses[0] ?? tunnelAddress(tunnel, editing.map((v) => v.row as Tunnel));
-                  return <InfoNote>При сохранении: {tunnel.name || "новый туннель"} · {tunnel.role === "server" ? "сервер" : "клиент"} · {tunnel.protocol === "awg" ? "AmneziaWG" : "WireGuard"}; интерфейс {tunnel.interface} ({c.interfaces.some((i) => i.name === tunnel.interface) ? "существующий" : "будет создан"}, зона LAN), адрес {address}; WAN UDP-порт {tunnel.role === "server" && tunnel.open_port ? `${tunnel.listen_port} будет открыт после применения` : "не открывается"}. Сохранение создаёт только черновик.</InfoNote>;
-                })()}
-                {!allValid && (
-                  <p role="status">
-                    Проверьте обязательные поля, формат значений и уникальность
-                    имён.
-                  </p>
-                )}
-              </>
-            ) : null
-          }
-        />
+                    setSelected(id);
+                  }}>{row.name}</Button>;
+                  if (rowActions) cells.push(noConfiguration ? null : rowActions(row));
+                  return cells;
+                })}
+              />
+          )}
       </Card>
+      {kind !== "tunnels" && <Dialog open={isEdit && selected !== null} onClose={editor.saving ? undefined : cancel}
+        fullWidth maxWidth="md">
+        <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>{kind === "sites" ? "Сайт" : "DDNS"}: {editing?.find((item) => item.id === selected)?.row.name || "Новая запись"}</span>
+          {editing?.some((item) => item.id === selected) && <DeleteButton
+            label={`Удалить ${editing.find((item) => item.id === selected)!.row.name || "запись"}`}
+            onClick={() => {
+              const remaining = (currentEditing.current ?? []).filter((item) => item.id !== selected);
+              currentEditing.current = remaining;
+              editor.setValue(remaining);
+            }} />}
+        </DialogTitle>
+        <DialogContent>
+          <ErrorNotice error={editor.error} />
+          <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating}
+            onCancel={cancel} onSave={() => void save()} view={null} edit={renderEdit} />
+        </DialogContent>
+      </Dialog>}
+      {kind === "tunnels" && <Dialog open={isEdit && selected !== null} onClose={editor.saving ? undefined : cancel}
+        fullWidth maxWidth="md" aria-labelledby="tunnel-editor-title">
+        <DialogTitle id="tunnel-editor-title">{selectedTunnel
+          ? `Туннель: ${selectedTunnel.name || "Новый туннель"} · ${selectedTunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"} · ${selectedTunnel.role === "server" ? "Сервер" : "Клиент"}`
+          : "Туннель удалён из черновика"}</DialogTitle>
+        <DialogContent>
+          <ErrorNotice error={editor.error} />
+          {selectedTunnel && <FormActions><DeleteButton label={`Удалить ${selectedTunnel.name || "запись"}`} onClick={() => setDeleteTarget(selected!)} /></FormActions>}
+          <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating}
+            onCancel={cancel} onSave={() => void save()} view={null} edit={renderEdit} />
+        </DialogContent>
+      </Dialog>}
       {kind === "tunnels" && <ConfirmDialog open={deleteTarget !== null} title="Удалить туннель?"
         body="Туннель, его клиенты и автоматически созданный интерфейс будут удалены из черновика. Проверьте зависимости перед применением."
         confirmLabel="Удалить из черновика" cancelLabel="Отмена" danger
         onCancel={() => setDeleteTarget(null)} onConfirm={() => {
           const remaining = (currentEditing.current ?? []).filter((v) => v.id !== deleteTarget);
-          currentEditing.current = remaining; editor.setValue(remaining); setSelected(null); setDeleteTarget(null);
+          currentEditing.current = remaining; editor.setValue(remaining); setDeleteTarget(null);
         }} />}
       {kind === "tunnels" && <Dialog open={scenario !== null} onClose={() => setScenario(null)} fullWidth aria-labelledby="scenario-title">
         <DialogTitle id="scenario-title">Новый туннель</DialogTitle>
@@ -677,14 +694,16 @@ export function Tunnels() {
           <Badge>{t.role === "server" ? "сервер" : "клиент"}</Badge>,
           t.protocol,
         ]}
-        form={(t, patch, created, disabled, setError, tab, importedAddresses) => (
+        form={(t, patch, created, disabled, setError, importedAddresses) => (
+          <>
+          <PageSection title="Идентификация">
           <FormGrid>
-            {tab === 0 && <>
             {created ? (
               <Field
                 label="Имя туннеля"
                 value={t.name}
                 valid={nameValid(t.name)}
+                hint="Латиница, цифры, «_»; до 31 символа"
                 onChange={(name) => patch({ name })}
               />
             ) : (
@@ -695,83 +714,16 @@ export function Tunnels() {
                 hint="Имя сохраняет привязку секретов"
               />
             )}
-            <div>
-              <InterfaceSelect
-                label="Интерфейс"
-                value={t.interface}
-                interfaces={(() => {
-                  const declared = c.interfaces.some((i) => i.name === t.interface);
-                  const free = nextTunnelInterface([
-                    ...c.interfaces.map((i) => i.name),
-                    t.interface,
-                  ]);
-                  return [
-                    ...c.interfaces,
-                    ...(t.interface && !declared
-                      ? [pendingInterface(t.interface, tunnelDescription(t) ?? "создастся автоматически")]
-                      : []),
-                    ...(free === t.interface
-                      ? []
-                      : [pendingInterface(free, "создать новый интерфейс")]),
-                  ];
-                })()}
-                emptyLabel="Выберите интерфейс"
-                error={!t.interface}
-                helperText={!t.interface ? "Выберите значение" : undefined}
-                onChange={(v) => patch({ interface: v })}
-              />
-              <p className="sub">
-                Устройство создаётся автоматически (зона LAN) и появится на
-                странице «Сеть». Не используйте имя физического NIC — выберите
-                «создать новый интерфейс».
-              </p>
-            </div>
+            <Field label="Интерфейс" value={t.interface} readOnly />
+            <FormWide><p className="sub">Устройство создаётся автоматически (зона LAN) и появится на странице «Сеть». Не используйте имя физического NIC — выберите «создать новый интерфейс».</p></FormWide>
             <Field label="Роль" value={t.role === "server" ? "сервер" : "клиент"} readOnly hint="Роль выбирается при создании и затем не меняется" />
-            <SelectField
-              label="Протокол"
-              value={t.protocol}
-              options={["wg", "awg"]}
-              onChange={(protocol) => {
-                patch({ protocol });
-                if (protocol === "awg" && awgRequired.some((key) => !Number.isInteger(t.obfuscation[key]))) {
-                  void api.keygenTunnel("awg")
-                    .then((keys) => {
-                      if (awgRequired.some((key) => !Number.isInteger(keys.obfuscation?.[key]))) {
-                        throw new Error("Сервер не вернул параметры обфускации AWG");
-                      }
-                      patch({ obfuscation: { ...keys.obfuscation, ...t.obfuscation } });
-                    })
-                    .catch(setError);
-                }
-              }}
-            />
+            <Field label="Протокол" value={t.protocol === "wg" ? "WireGuard" : "AmneziaWG"} readOnly />
             <Field label="Адрес туннеля" value={importedAddresses[t.interface] ?? c.interfaces.find((i) => i.name === t.interface)?.addresses[0] ?? tunnelAddress(t, [...c.tunnels.filter((item) => item.name !== t.name), t])} readOnly hint="Адрес интерфейса; импортированный Address сохраняется при записи черновика" />
-            </>}
-            {tab === 2 && <>
-            <FormWide><InfoNote severity="warning">Повторная генерация ключей разорвёт соединение клиентов. Обновите конфигурации другой стороны.</InfoNote></FormWide>
-            {t.role === "client" && <Field label="Публичный ключ сервера" value={t.server_public_key ?? ""} valid={!!t.server_public_key?.trim()} onChange={(server_public_key) => patch({ server_public_key })} />}
-            <div>
-              <SecretField
-                label="Приватный ключ"
-                value={t.private_key}
-                change={(v) => patch({ private_key: v ?? { plaintext: "" } })}
-              />
-              <FormActions>
-                <Button disabled={disabled} onClick={() => void api.keygenTunnel(t.protocol)
-                  .then((keys) => patch({
-                    private_key: { plaintext: keys.private_key },
-                    ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}),
-                  }))
-                  .catch(setError)}>Сгенерировать ключи</Button>
-              </FormActions>
-            </div>
-            {t.private_key && !("plaintext" in t.private_key) && (
-              <FormWide>
-                <p className="sub">Публичный ключ этого туннеля для удалённых клиентов не отображается: он выводится из приватного на хосте при применении.</p>
-              </FormWide>
-            )}
-            </>}
-            {tab === 1 && t.role === "server" && <>
+            <Field label="Публичный ключ" value="Не отображается" readOnly hint="Выводится из приватного ключа на хосте при применении" />
+          </FormGrid>
+          </PageSection>
+          <PageSection title="Подключение"><FormGrid>
+            {t.role === "server" && <>
                 <Field
                   label="Порт"
                   type="number"
@@ -791,7 +743,27 @@ export function Tunnels() {
                   onChange={(open_port) => patch({ open_port })}
                 />
             </>}
-            {tab === 3 && t.role === "server" && <>
+            {t.role === "client" && <>
+                <Field label="Endpoint" value={t.endpoint ?? ""} valid={!!t.endpoint?.trim()} onChange={(endpoint) => patch({ endpoint })} />
+                <Field label="AllowedIPs" value={t.allowed_ips.join(",")} valid={ipsValid(t.allowed_ips)} hint="AllowedIPs ≠ маршрут" onChange={(v) => patch({ allowed_ips: split(v) })} />
+                <Field label="Keepalive, с" type="number" value={t.keepalive}
+                  valid={Number.isInteger(t.keepalive) && t.keepalive >= 0 && t.keepalive <= 65535}
+                  onChange={(v) => patch({ keepalive: Number(v) })} />
+            </>}
+          </FormGrid></PageSection>
+          <PageSection title="Ключи"><FormGrid>
+            <FormWide><InfoNote severity="warning">Повторная генерация ключей разорвёт соединение клиентов. Обновите конфигурации другой стороны.</InfoNote></FormWide>
+            {t.role === "client" && <Field label="Публичный ключ сервера" value={t.server_public_key ?? ""} valid={!!t.server_public_key?.trim()} onChange={(server_public_key) => patch({ server_public_key })} />}
+            <div>
+              <SecretField label="Приватный ключ" value={t.private_key} change={(v) => patch({ private_key: v ?? { plaintext: "" } })} />
+              <FormActions><Button disabled={disabled} onClick={() => void api.keygenTunnel(t.protocol)
+                .then((keys) => patch({ private_key: { plaintext: keys.private_key },
+                  ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}) }))
+                .catch(setError)}>Сгенерировать ключи</Button></FormActions>
+            </div>
+            {t.private_key && !("plaintext" in t.private_key) && <FormWide><p className="sub">Публичный ключ этого туннеля для удалённых клиентов не отображается: он выводится из приватного на хосте при применении.</p></FormWide>}
+          </FormGrid></PageSection>
+          {t.role === "server" && <PageSection title="Пиры"><FormGrid>
                 {t.peers.length === 0 && <FormWide><EmptyState>Пиров нет.</EmptyState></FormWide>}
                 {t.peers.map((p, index) => {
                   const update = (v: Partial<typeof p>) =>
@@ -828,6 +800,7 @@ export function Tunnels() {
                               label="Имя пира"
                               value={p.name}
                               valid={nameValid(p.name)}
+                              hint="Латиница, цифры, «_»; до 31 символа"
                               onChange={(name) => update({ name })}
                             />
                           )}
@@ -886,36 +859,10 @@ export function Tunnels() {
                     + Добавить пира
                   </Button>
                 </FormActions>
-            </>}
-            {tab === 1 && t.role === "client" && <>
-                <Field
-                  label="Endpoint"
-                  value={t.endpoint ?? ""}
-                  valid={!!t.endpoint?.trim()}
-                  onChange={(endpoint) => patch({ endpoint })}
-                />
-                <Field
-                  label="AllowedIPs"
-                  value={t.allowed_ips.join(",")}
-                  valid={ipsValid(t.allowed_ips)}
-                  hint="AllowedIPs ≠ маршрут"
-                  onChange={(v) => patch({ allowed_ips: split(v) })}
-                />
-                <Field
-                  label="Keepalive, с"
-                  type="number"
-                  value={t.keepalive}
-                  valid={
-                    Number.isInteger(t.keepalive) &&
-                    t.keepalive >= 0 &&
-                    t.keepalive <= 65535
-                  }
-                  onChange={(v) => patch({ keepalive: Number(v) })}
-                />
-            </>}
-            {t.protocol === "awg" && tab === (t.role === "server" ? 4 : 3) && (
-              <FormWide>
-                <Card title="Обфускация">
+          </FormGrid></PageSection>}
+          <PageSection title="Дополнительно"><ExpertDisclosure>
+            {t.protocol === "awg" && (
+              <Card title="Обфускация">
                   <FormGrid>
                     {awgFields.map((k) => (
                       <Field
@@ -938,9 +885,9 @@ export function Tunnels() {
                     ))}
                   </FormGrid>
                 </Card>
-              </FormWide>
             )}
-          </FormGrid>
+          </ExpertDisclosure></PageSection>
+          </>
         )}
       />
       <Dialog open={!!qr} onClose={()=>{if(qr)URL.revokeObjectURL(qr.url);setQr(null);}}>
@@ -990,7 +937,8 @@ export function Sites() {
         s.certificate_mode === "passthrough" ? "TLS не завершается" : "Статус недоступен",
       ]}
       form={(s, patch, created) => (
-        <FormGrid>
+        <>
+        <PageSection title="Идентификация"><FormGrid>
           {created ? (
             <Field
               label="Имя сайта"
@@ -1006,6 +954,8 @@ export function Sites() {
               hint="Имя сохраняет привязку секретов"
             />
           )}
+        </FormGrid></PageSection>
+        <PageSection title="Подключение"><FormGrid>
           <Field
             label="Hostname сайта"
             value={s.hostname}
@@ -1019,12 +969,6 @@ export function Sites() {
             onChange={(upstream) => patch({ upstream })}
           />
           <Select
-            label="Режим сертификата"
-            value={s.certificate_mode}
-            options={Object.entries(certificateModeLabels).map(([value, label]) => ({ value, label }))}
-            onChange={(certificate_mode) => patch({ certificate_mode: certificate_mode as CaddySite["certificate_mode"] })}
-          />
-          <Select
             label="WAN-адрес"
             value={s.wan_address ?? ""}
             placeholder={{ label: "Автоматически" }}
@@ -1035,6 +979,14 @@ export function Sites() {
               ]),
             ).map((a) => ({ value: a, label: a }))}
             onChange={(v) => patch({ wan_address: v || null })}
+          />
+        </FormGrid></PageSection>
+        <PageSection title="Сертификат"><FormGrid>
+          <Select
+            label="Режим сертификата"
+            value={s.certificate_mode}
+            options={Object.entries(certificateModeLabels).map(([value, label]) => ({ value, label }))}
+            onChange={(certificate_mode) => patch({ certificate_mode: certificate_mode as CaddySite["certificate_mode"] })}
           />
           {s.certificate_mode === "manual" && (
             <>
@@ -1074,7 +1026,8 @@ export function Sites() {
                 </p>
               </FormWide>
             )}
-        </FormGrid>
+        </FormGrid></PageSection>
+        </>
       )}
     />
     <p className="sub">
@@ -1091,7 +1044,7 @@ export function DDNS() {
       <Collection<DDNSUpdate>
         kind="ddns"
         title="DDNS"
-        addLabel="+ Добавить DDNS"
+        addLabel="+ Добавить домен"
         empty={() => ({
           name: "",
           provider: "cloudflare",
@@ -1113,7 +1066,8 @@ export function DDNS() {
         }
         summary={(d) => [d.name, d.provider, d.hostname, "Статус недоступен"]}
         form={(d, patch, created) => (
-          <FormGrid>
+          <>
+          <PageSection title="Идентификация"><FormGrid>
             {created ? (
               <Field
                 label="Имя DDNS"
@@ -1129,6 +1083,8 @@ export function DDNS() {
                 hint="Имя сохраняет привязку секретов"
               />
             )}
+          </FormGrid></PageSection>
+          <PageSection title="Подключение"><FormGrid>
             <SelectField
               label="Провайдер"
               value={d.provider}
@@ -1164,11 +1120,6 @@ export function DDNS() {
                 />
               </>
             )}
-            <SecretField
-              label="API token / TSIG key"
-              value={d.api_token}
-              change={(v) => patch({ api_token: v ?? { plaintext: "" } })}
-            />
             <InterfaceSelect
               label="WAN-интерфейс"
               value={d.wan_interface}
@@ -1178,7 +1129,15 @@ export function DDNS() {
               helperText={!d.wan_interface ? "Выберите значение" : undefined}
               onChange={(wan_interface) => patch({ wan_interface })}
             />
-          </FormGrid>
+          </FormGrid></PageSection>
+          <PageSection title="Секрет"><FormGrid>
+            <SecretField
+              label="API token / TSIG key"
+              value={d.api_token}
+              change={(v) => patch({ api_token: v ?? { plaintext: "" } })}
+            />
+          </FormGrid></PageSection>
+          </>
         )}
       />
       <p className="sub">

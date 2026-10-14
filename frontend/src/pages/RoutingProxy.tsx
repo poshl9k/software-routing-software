@@ -1,4 +1,4 @@
-import { Button, Checkbox, FormControlLabel, Typography } from "@mui/material";
+import { Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, Typography } from "@mui/material";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useConfiguration } from "../state";
@@ -18,6 +18,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter } from "../components/EditorShell";
+import { ExpertDisclosure } from "../components/ExpertDisclosure";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { Field } from "../components/Field";
@@ -268,7 +269,7 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
     try { setStored(await api.subscriptionMembers(subscription.name)); }
     catch (err) { setError(err); }
   };
-  return <Card title={subscription.name || "Новая подписка"}>
+  return <Card title={editable ? "Участники подписки" : subscription.name || "Новая подписка"}>
     <InlineStatus tone={lastError ? "red" : proposal ? "green" : "unknown"}
       text={`${subscription.enabled ? "Включена" : "Выключена"} · ${result && !proposal ? "Настройки изменены — выполните просмотр снова" : status} · Серверов: ${members.length} · Активный: ${subscription.active_member || "не выбран"}${lastError ? ` · Ошибка: ${lastError}` : ""}`} />
     <ErrorNotice error={error} />
@@ -305,7 +306,7 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
   </Card>;
 }
 
-function ProxiesView({ settings, readonly, onEdit }: { settings: ProxySettings; readonly: boolean; onEdit: () => void }) {
+function ProxiesView({ settings, readonly }: { settings: ProxySettings; readonly: boolean }) {
   const [tab, setTab] = useState<"outbounds" | "subscriptions">("outbounds");
   return (
     <>
@@ -324,7 +325,7 @@ function ProxiesView({ settings, readonly, onEdit }: { settings: ProxySettings; 
             o.tag,
             <Badge>{o.type}</Badge>,
             outboundDescription(o),
-            <Button disabled={readonly} onClick={onEdit}>Изменить</Button>,
+            "—",
           ])}
           empty={
             <EmptyState title="Нет прокси-выходов">
@@ -374,7 +375,8 @@ export function ProxiesEditor() {
   const [importError, setImportError] = useState<Error | null>(null);
   const [importCount, setImportCount] = useState(0);
   const [selected, setSelected] = useState<number[]>([]);
-  const [focusedOutbound, setFocusedOutbound] = useState<number | null>(null);
+  const [activeEditor, setActiveEditor] = useState<{ kind: "outbound" | "subscription" | "group"; index: number } | null>(null);
+  const closeEditor = () => setActiveEditor(null);
   const [incomingSecrets, setIncomingSecrets] = useState<string[]>([]);
   const [editedHeaders, setEditedHeaders] = useState<number[]>([]);
   const [editedInline, setEditedInline] = useState<number[]>([]);
@@ -482,6 +484,7 @@ export function ProxiesEditor() {
     setEditedInline([]);
     setEditedUrls([]);
     setSelected([]);
+    closeEditor();
     setImportText("");
     setImportError(null);
     setImportCount(0);
@@ -523,6 +526,7 @@ export function ProxiesEditor() {
           } else if (pendingDelete) {
             patch({ groups: current.groups.filter((_, i) => !pendingDelete.indices.includes(i)) });
           }
+          closeEditor();
           setPendingDelete(null);
         }} />
       {!editor.isEdit ? (
@@ -535,18 +539,18 @@ export function ProxiesEditor() {
           {readonly && (
             <InfoNote>Режим оператора: прокси-выходы только для просмотра.</InfoNote>
           )}
-          <ProxiesView settings={current} readonly={readonly} onEdit={begin} />
+          <ProxiesView settings={current} readonly={readonly} />
         </>
       ) : (
         <>
           <Card title="Прокси-выходы">
             <DataTable heads={["Тег", "Тип", "Сервер", "Действия"]}
               rows={current.outbounds.map((o, index) => [o.tag || "Новый выход", <Badge>{o.type}</Badge>,
-                outboundDescription(o), <Button aria-label={`Изменить выход ${o.tag || index + 1}`}
-                  onClick={() => { setFocusedOutbound(index); document.getElementById(`outbound-editor-${index}`)?.querySelector<HTMLInputElement>("input")?.focus(); }}>Изменить</Button>])}
+                outboundDescription(o), <><Checkbox inputProps={{ "aria-label": `Выбрать выход ${o.tag}` }}
+                  checked={selected.includes(index)} onChange={(_, checked) => setSelected(checked ? [...selected, index] : selected.filter((i) => i !== index))} />
+                  <Button aria-label={`Изменить выход ${o.tag || index + 1}`}
+                    onClick={() => setActiveEditor({ kind: "outbound", index })}>Изменить</Button></>])}
               empty={<EmptyState title="Нет прокси-выходов">Добавьте выход или примените предложение подписки.</EmptyState>} />
-            {focusedOutbound !== null && current.outbounds[focusedOutbound] &&
-              <InlineStatus tone="blue" text={`Редактор выхода: ${current.outbounds[focusedOutbound].tag || "новый"}`} />}
             <FormGrid>
               <FormWide>
                 <FormControlLabel
@@ -567,6 +571,7 @@ export function ProxiesEditor() {
               </FormActions>
             </FormGrid>
             {current.outbounds.map((o, index) => {
+              if (activeEditor?.kind !== "outbound" || activeEditor.index !== index) return null;
               const update = (v: Partial<ProxyOutbound>) =>
                 patch({
                   outbounds: current.outbounds.map((row, i) =>
@@ -574,15 +579,14 @@ export function ProxiesEditor() {
                   ),
                 });
               return (
-                <div key={index} id={`outbound-editor-${index}`} className="rule-row">
-                  <FormGrid>
-                    <FormWide>
-                      <Checkbox
-                        inputProps={{ "aria-label": `Выбрать выход ${o.tag}` }}
-                        checked={selected.includes(index)}
-                        onChange={(_, checked) => setSelected(checked ? [...selected, index] : selected.filter((i) => i !== index))}
-                      />
-                    </FormWide>
+                <Dialog key={index} open onClose={editor.saving ? undefined : closeEditor} fullWidth maxWidth="md" id={`outbound-editor-${index}`} aria-labelledby="outbound-editor-title">
+                  <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span id="outbound-editor-title">Прокси-выход: {o.tag || "Новый выход"}</span>
+                    <DeleteButton label={`Удалить выход ${o.tag || index + 1}`}
+                      onClick={() => requestDelete([index], "outbound")} />
+                  </DialogTitle>
+                  <DialogContent>
+                  <PageSection title="Идентификация"><FormGrid>
                     <Field
                       label="Тег выхода"
                       value={o.tag}
@@ -594,6 +598,8 @@ export function ProxiesEditor() {
                       }
                       onChange={(tag) => update({ tag })}
                     />
+                  </FormGrid></PageSection>
+                  <PageSection title="Подключение"><FormGrid>
                     <SelectField
                       label="Тип"
                       value={o.type}
@@ -618,22 +624,21 @@ export function ProxiesEditor() {
                             update({ port: v === "" ? null : Number(v) })
                           }
                         />
-                        <OutboundProtocolFields outbound={o} update={update} redactIncoming={incomingSecrets.includes(o.tag)} />
                       </>
                     )}
-                    <FormActions>
-                      <DeleteButton
-                        label={`Удалить выход ${o.tag || index + 1}`}
-                        onClick={() => requestDelete([index], "outbound")}
-                      />
-                    </FormActions>
-                  </FormGrid>
-                </div>
+                  </FormGrid></PageSection>
+                  <PageSection title="Правила"><FormGrid>
+                    {!LOCAL_TYPES.includes(o.type) && <OutboundProtocolFields outbound={o} update={update} redactIncoming={incomingSecrets.includes(o.tag)} />}
+                  </FormGrid></PageSection>
+                  <EditorFooter saving={editor.saving} valid={valid} cancel={closeEditor} save={() => void save()} />
+                  </DialogContent>
+                </Dialog>
               );
             })}
             <FormActions>
               <Button
-                onClick={() =>
+                onClick={() => {
+                  setActiveEditor({ kind: "outbound", index: current.outbounds.length });
                   patch({
                     outbounds: [
                       ...current.outbounds,
@@ -650,8 +655,8 @@ export function ProxiesEditor() {
                         admin_listen: null,
                       },
                     ],
-                  })
-                }
+                  });
+                }}
               >
                 + Добавить выход
               </Button>
@@ -680,7 +685,13 @@ export function ProxiesEditor() {
 
           <Card title="Подписки">
             <InfoNote>Предпросмотр и обновление возвращают предложение. Сохранение и применение — отдельные действия. Заголовки пока не принимаются безопасным загрузчиком.</InfoNote>
+            {current.subscriptions.map((s, index) =>
+              <Card key={index} title={s.name || "Новая подписка"}
+                action={<Button onClick={() => setActiveEditor({ kind: "subscription", index })}>Изменить</Button>}>
+                <InlineStatus tone={s.enabled ? "green" : "unknown"} text={s.enabled ? "Включена" : "Выключена"} />
+              </Card>)}
             {current.subscriptions.map((s, index) => {
+              if (activeEditor?.kind !== "subscription" || activeEditor.index !== index) return null;
               const update = (v: Partial<ProxySubscription>) => {
                 const group = current.groups.find((g) => g.tag === s.name);
                 const selected = v.active_member;
@@ -701,29 +712,26 @@ export function ProxiesEditor() {
                 });
               };
               return (
-                <div key={index} className="rule-row">
-                  <SubscriptionCard subscription={s} editable onChange={update}
-                    onProposal={(outbounds, groups) => {
-                      if (!outbounds.length || !groups.some((g) => g.tag === s.name && g.outbounds.length)) {
-                        editor.setError(new Error("Нет доступных серверов: предложение не содержит группу выхода."));
-                        return;
-                      }
-                      const replacing = new Set(outbounds.map((o) => o.tag));
-                      setIncomingSecrets((tags) => [...tags, ...replacing]);
-                      patch({
-                        enabled: true,
-                        subscriptions: current.subscriptions.map((row, i) => i === index ? { ...row, enabled: true } : row),
-                        outbounds: [...current.outbounds.filter((o) => !replacing.has(o.tag)), ...outbounds],
-                        groups: [...current.groups.filter((g) => !groups.some((incoming) => incoming.tag === g.tag)), ...groups],
-                      });
+                <Dialog key={index} open onClose={editor.saving ? undefined : closeEditor} fullWidth maxWidth="md" aria-labelledby="subscription-editor-title">
+                  <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span id="subscription-editor-title">Подписка: {s.name || "Новая подписка"}</span>
+                    <DeleteButton label={`Удалить подписку ${s.name || index + 1}`} onClick={() => {
+                      setEditedHeaders((indices) => indices.filter((i) => i !== index).map((i) => i > index ? i - 1 : i));
+                      setEditedInline((indices) => indices.filter((i) => i !== index).map((i) => i > index ? i - 1 : i));
+                      patch({ subscriptions: current.subscriptions.filter((_, i) => i !== index) });
+                      closeEditor();
                     }} />
-                  <FormGrid>
+                  </DialogTitle>
+                  <DialogContent>
+                  <PageSection title="Идентификация"><FormGrid>
                     <Field
                       label="Имя подписки"
                       value={s.name}
                       valid={nameValid(s.name)}
                       onChange={(name) => update({ name })}
                     />
+                  </FormGrid></PageSection>
+                  <PageSection title="Обновление"><FormGrid>
                     <Toggle
                       label="Список вручную (inline)"
                       value={s.inline ?? false}
@@ -776,6 +784,8 @@ export function ProxiesEditor() {
                         update({ interval_hours: Number(v) })
                       }
                     />
+                  </FormGrid></PageSection>
+                  <PageSection title="Параметры"><FormGrid>
                     <Select
                       label="Режим выбора"
                       value={s.mode ?? "selector"}
@@ -810,6 +820,7 @@ export function ProxiesEditor() {
                         />
                       </>
                     )}
+                    <FormWide><ExpertDisclosure><FormGrid>
                     <FormWide>
                       <Field
                         label="Заголовки (Name: value, по одному на строку)"
@@ -848,32 +859,37 @@ export function ProxiesEditor() {
                         onChange={(v) => update({ excluded_members: lines(v) })}
                       />
                     </FormWide>
+                    </FormGrid></ExpertDisclosure></FormWide>
                     <Toggle
                       label="Включена"
                       value={s.enabled}
                       onChange={(enabled) => update({ enabled })}
                     />
-                    <FormActions>
-                      <DeleteButton
-                        label={`Удалить подписку ${s.name || index + 1}`}
-                        onClick={() => {
-                          setEditedHeaders((indices) => indices.filter((i) => i !== index).map((i) => i > index ? i - 1 : i));
-                          setEditedInline((indices) => indices.filter((i) => i !== index).map((i) => i > index ? i - 1 : i));
-                          patch({
-                            subscriptions: current.subscriptions.filter(
-                              (_, i) => i !== index,
-                            ),
-                          });
-                        }}
-                      />
-                    </FormActions>
-                  </FormGrid>
-                </div>
+                  </FormGrid></PageSection>
+                  <SubscriptionCard subscription={s} editable onChange={update}
+                    onProposal={(outbounds, groups) => {
+                      if (!outbounds.length || !groups.some((g) => g.tag === s.name && g.outbounds.length)) {
+                        editor.setError(new Error("Нет доступных серверов: предложение не содержит группу выхода."));
+                        return;
+                      }
+                      const replacing = new Set(outbounds.map((o) => o.tag));
+                      setIncomingSecrets((tags) => [...tags, ...replacing]);
+                      patch({
+                        enabled: true,
+                        subscriptions: current.subscriptions.map((row, i) => i === index ? { ...row, enabled: true } : row),
+                        outbounds: [...current.outbounds.filter((o) => !replacing.has(o.tag)), ...outbounds],
+                        groups: [...current.groups.filter((g) => !groups.some((incoming) => incoming.tag === g.tag)), ...groups],
+                      });
+                    }} />
+                  </DialogContent>
+                  <DialogActions><EditorFooter saving={editor.saving} valid={valid} cancel={closeEditor} save={() => void save()} /></DialogActions>
+                </Dialog>
               );
             })}
             <FormActions>
               <Button
-                onClick={() =>
+                onClick={() => {
+                  setActiveEditor({ kind: "subscription", index: current.subscriptions.length });
                   patch({
                     subscriptions: [
                       ...current.subscriptions,
@@ -896,8 +912,8 @@ export function ProxiesEditor() {
                         inline_content: null,
                       },
                     ],
-                  })
-                }
+                  });
+                }}
               >
                 + Подписка по URL
               </Button>
@@ -905,7 +921,13 @@ export function ProxiesEditor() {
           </Card>
 
           <Card title="Группы выходов">
+            {current.groups.map((g, index) =>
+              <Card key={index} title={g.tag || "Новая группа"}
+                action={<Button onClick={() => setActiveEditor({ kind: "group", index })}>Изменить</Button>}>
+                <Typography>{g.type} · {g.outbounds.join(", ") || "Нет выходов"}</Typography>
+              </Card>)}
             {current.groups.map((g, index) => {
+              if (activeEditor?.kind !== "group" || activeEditor.index !== index) return null;
               const update = (v: Partial<ProxyGroup>) =>
                 patch({
                   groups: current.groups.map((row, i) =>
@@ -914,14 +936,22 @@ export function ProxiesEditor() {
                 });
               const refs = groupRefs(g.tag);
               return (
-                <div key={index} className="rule-row">
-                  <FormGrid>
+                <Dialog key={index} open onClose={editor.saving ? undefined : closeEditor} fullWidth maxWidth="md" aria-labelledby="group-editor-title">
+                  <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span id="group-editor-title">Группа выходов: {g.tag || "Новая группа"}</span>
+                    <DeleteButton label={`Удалить группу ${g.tag || index + 1}`}
+                      onClick={() => requestDelete([index], "group")} />
+                  </DialogTitle>
+                  <DialogContent>
+                  <PageSection title="Идентификация"><FormGrid>
                     <Field
                       label="Тег группы"
                       value={g.tag}
                       valid={nameValid(g.tag) && g.tag !== RESERVED_TAG}
                       onChange={(tag) => update({ tag })}
                     />
+                  </FormGrid></PageSection>
+                  <PageSection title="Состав"><FormGrid>
                     <SelectField
                       label="Тип группы"
                       value={g.type}
@@ -983,19 +1013,16 @@ export function ProxiesEditor() {
                         />
                       </>
                     )}
-                    <FormActions>
-                      <DeleteButton
-                        label={`Удалить группу ${g.tag || index + 1}`}
-                        onClick={() => requestDelete([index], "group")}
-                      />
-                    </FormActions>
-                  </FormGrid>
-                </div>
+                  </FormGrid></PageSection>
+                  <EditorFooter saving={editor.saving} valid={valid} cancel={closeEditor} save={() => void save()} />
+                  </DialogContent>
+                </Dialog>
               );
             })}
             <FormActions>
               <Button
-                onClick={() =>
+                onClick={() => {
+                  setActiveEditor({ kind: "group", index: current.groups.length });
                   patch({
                     groups: [
                       ...current.groups,
@@ -1008,8 +1035,8 @@ export function ProxiesEditor() {
                         tolerance_ms: null,
                       },
                     ],
-                  })
-                }
+                  });
+                }}
               >
                 + Добавить группу
               </Button>

@@ -38,6 +38,13 @@ async function editProxies(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
 }
 
+// Outbound/subscription fields now live inside modal dialogs: open the matching
+// dialog first, and close it before reaching page-level controls.
+const openOutbound = (user: ReturnType<typeof userEvent.setup>, tag: string) =>
+  user.click(screen.getByRole("button", { name: `Изменить выход ${tag}` }));
+const closeDialog = (user: ReturnType<typeof userEvent.setup>) =>
+  user.click(screen.getByRole("button", { name: "Отмена" }));
+
 function sentProxies(fetch: ReturnType<typeof setup>): ProxySettings {
   const call = fetch.mock.calls.find(([path, init]) =>
     path === "/api/draft" && (init as RequestInit)?.method === "PUT");
@@ -57,6 +64,7 @@ it("saves edited VLESS transport, TLS and Reality fields in the draft payload", 
   const fetch = setup({ ...emptyConfiguration.proxies, outbounds: [materialized] });
   const user = userEvent.setup();
   await editProxies(user);
+  await openOutbound(user, "sub_node");
   fireEvent.change(screen.getByDisplayValue("/old"), { target: { value: "/edge" } });
   fireEvent.change(screen.getByDisplayValue("front.example.org"),
     { target: { value: "sni.example.org" } });
@@ -81,6 +89,7 @@ it("shows VMess transport controls and saves VMess-only fields", async () => {
   const fetch = setup({ ...emptyConfiguration.proxies, outbounds: [outbound] });
   const user = userEvent.setup();
   await editProxies(user);
+  await openOutbound(user, "vmess_node");
   expect(screen.getByLabelText("Service name gRPC")).toHaveValue("old-service");
   expect(screen.queryByLabelText("Reality public key")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Service name gRPC"),
@@ -98,6 +107,7 @@ it("keeps a materialized subscription outbound editable and saves its protocol d
   const fetch = setup({ ...emptyConfiguration.proxies, outbounds: [materialized] });
   const user = userEvent.setup();
   await editProxies(user);
+  await openOutbound(user, "sub_node");
   expect(screen.getByDisplayValue("/old")).toBeVisible();
   fireEvent.change(screen.getByDisplayValue("/old"), { target: { value: "/new" } });
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -122,6 +132,7 @@ for (const [type, label] of [
     const fetch = setup({ ...emptyConfiguration.proxies, outbounds: [outbound] });
     const user = userEvent.setup();
     await editProxies(user);
+    await openOutbound(user, `${type}_node`);
     expect(screen.getByLabelText(label)).toBeVisible();
     expect(screen.queryByDisplayValue("private-stored-secret")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -151,10 +162,13 @@ it("materializes a preview proposal for editing without exposing its secret", as
   );
   const user = userEvent.setup();
   await editProxies(user);
+  await user.click(screen.getByRole("button", { name: "Изменить" }));
   await user.click(screen.getByRole("button", { name: "Просмотр" }));
   await screen.findAllByText("Узел Европа");
   await user.click(screen.getByRole("button", { name: "Применить предложение" }));
   expect(screen.getByText(/Строка 2: Неподдерживаемый протокол/)).toBeVisible();
+  await closeDialog(user);
+  await openOutbound(user, "sub_node");
   expect(screen.getByDisplayValue("sub_node")).toBeVisible();
   expect(screen.queryByText("uuid-private")).not.toBeInTheDocument();
   expect(screen.queryByDisplayValue("uuid-private")).not.toBeInTheDocument();

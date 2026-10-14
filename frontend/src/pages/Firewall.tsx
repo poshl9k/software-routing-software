@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button } from "@mui/material";
+import { Alert, Button, Dialog, DialogContent, DialogTitle } from "@mui/material";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import type { ImportPreview } from "../types";
@@ -13,6 +13,7 @@ import { ValueTabs } from "../components/Tabs";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
+import { PageSection } from "../components/PageSection";
 import { Field } from "../components/Field";
 import { Select, SelectField, InterfaceSelect } from "../components/Select";
 import { Toggle } from "../components/Toggle";
@@ -179,7 +180,7 @@ export default function Firewall() {
       )}
       <ValueTabs
         value={tab}
-        change={setTab}
+        change={(value) => { setTab(value); setComposerIndex(null); }}
         tabs={[...zones, "Port Forward", "Outbound NAT", "Псевдонимы"].map((z) => ({
           value: z,
           label: z,
@@ -238,33 +239,6 @@ export default function Firewall() {
                 enabled: false, log: false, counters: { states: 0, packets: 0, bytes: 0 },
               }] }); setComposerIndex(next);
             }}>Добавить правило</Button>}
-            {isEditMode && composerIndex !== null && rows.firewall_rules[composerIndex]?.ingress_zone === tab && (() => {
-              const r = rows.firewall_rules[composerIndex];
-              const position = rules.findIndex(item => item.index === composerIndex);
-              return <Card title={r.name || "Новое правило"}>
-                <InfoNote>Правила выше проверяются раньше. Новое правило выключено до включения вручную.</InfoNote>
-                <FormGrid>
-                  <Field label="Имя" value={r.name} valid={uniqueName(r.name, rows.firewall_rules)} onChange={name => updateRule(composerIndex, { name })} />
-                  <Field label="Откуда" value={r.src} valid={endpointValid(r.src)} hint="any, IP/CIDR, @алиас, zone:lan" onChange={src => updateRule(composerIndex, { src })} />
-                  <Field label="Куда" value={r.dst} valid={endpointValid(r.dst)} hint="any, IP/CIDR, @алиас, zone:lan" onChange={dst => updateRule(composerIndex, { dst })} />
-                  <Select label="Протокол" value={r.protocol} options={protocols} onChange={protocol => updateRule(composerIndex, { protocol: protocol as FirewallRule["protocol"] })} />
-                  <Field label="Порт / @алиас" value={r.destination_ports ?? ""} onChange={destination_ports => updateRule(composerIndex, { destination_ports: destination_ports || null })} />
-                  <Select label="Действие" value={r.action} options={ruleActions} onChange={action => updateRule(composerIndex, { action: action as FirewallRule["action"] })} />
-                  <Select label="Позиция" value={String(position)} options={rules.map((_, i) => ({ value: String(i), label: `${i + 1}` }))} onChange={value => {
-                    const ordered = rules.map(({ index: _index, ...rule }) => rule);
-                    const [moving] = ordered.splice(position, 1);
-                    ordered.splice(Number(value), 0, moving);
-                    setZoneRules(ordered); setComposerIndex(null);
-                  }} />
-                  <Toggle label="Включено" value={r.enabled} onChange={enabled => updateRule(composerIndex, { enabled })} />
-                  <Toggle label="Записывать совпадения" value={r.log} onChange={log => updateRule(composerIndex, { log })} />
-                </FormGrid>
-                {remove(() => {
-                  setZoneRules(rules.filter(item => item.index !== composerIndex).map(({ index: _index, ...rule }) => rule));
-                  setComposerIndex(null);
-                }, `Удалить правило ${r.name || `#${composerIndex + 1}`}`)}
-              </Card>;
-            })()}
             <Badge>
               Anti-lockout: доступ к панели с lan —{" "}
               {c.anti_lockout ? "вкл" : "выкл"}
@@ -618,7 +592,41 @@ export default function Firewall() {
           </Card>
         )}
       </EditorFieldset>
-      {isEditMode && (
+      {isEditMode && composerIndex !== null && rows.firewall_rules[composerIndex]?.ingress_zone === tab && (() => {
+        const r = rows.firewall_rules[composerIndex];
+        const position = rules.findIndex(item => item.index === composerIndex);
+        return <Dialog open onClose={editor.saving ? undefined : () => setComposerIndex(null)} fullWidth maxWidth="md" aria-labelledby="firewall-rule-editor-title">
+          <DialogTitle id="firewall-rule-editor-title">Правило: {r.name || "Новое правило"}</DialogTitle>
+          <DialogContent>
+            <EditorFieldset disabled={editor.saving}>
+              <PageSection title="Идентификация"><FormGrid>
+                <Field label="Имя" value={r.name} valid={uniqueName(r.name, rows.firewall_rules)} onChange={name => updateRule(composerIndex, { name })} />
+                <Toggle label="Включено" value={r.enabled} onChange={enabled => updateRule(composerIndex, { enabled })} />
+              </FormGrid></PageSection>
+              <PageSection title="Условие"><FormGrid>
+                <Field label="Откуда" value={r.src} valid={endpointValid(r.src)} hint="any, IP/CIDR, @алиас, zone:lan" onChange={src => updateRule(composerIndex, { src })} />
+                <Field label="Куда" value={r.dst} valid={endpointValid(r.dst)} hint="any, IP/CIDR, @алиас, zone:lan" onChange={dst => updateRule(composerIndex, { dst })} />
+                <Select label="Протокол" value={r.protocol} options={protocols} onChange={protocol => updateRule(composerIndex, { protocol: protocol as FirewallRule["protocol"] })} />
+                <Field label="Порт / @алиас" value={r.destination_ports ?? ""} onChange={destination_ports => updateRule(composerIndex, { destination_ports: destination_ports || null })} />
+              </FormGrid></PageSection>
+              <PageSection title="Решение"><FormGrid>
+                <Select label="Действие" value={r.action} options={ruleActions} onChange={action => updateRule(composerIndex, { action: action as FirewallRule["action"] })} />
+                <Select label="Позиция" value={String(position)} options={rules.map((_, i) => ({ value: String(i), label: `${i + 1}` }))} onChange={value => {
+                  const ordered = rules.map(({ index: _index, ...rule }) => rule);
+                  const [moving] = ordered.splice(position, 1);
+                  ordered.splice(Number(value), 0, moving);
+                  setZoneRules(ordered); setComposerIndex(null);
+                }} />
+                <Toggle label="Записывать совпадения" value={r.log} onChange={log => updateRule(composerIndex, { log })} />
+              </FormGrid></PageSection>
+              <InfoNote>Правила выше проверяются раньше. Новое правило выключено до включения вручную.</InfoNote>
+            </EditorFieldset>
+            <EditorFooter saving={editor.saving} valid={allValid && !!version}
+              cancel={() => setComposerIndex(null)} save={() => void save()} />
+          </DialogContent>
+        </Dialog>;
+      })()}
+      {isEditMode && composerIndex === null && (
         <EditorFooter
           saving={editor.saving}
           valid={allValid && !!version}
