@@ -47,7 +47,7 @@ async function choose(role: "client" | "server", protocol: "wg" | "awg" = "wg") 
 it("shows one tunnel card with honest status; opens one editor with role locked and secret hidden", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
   expect(screen.getByText("vpn · AmneziaWG · Сервер")).toBeVisible();
-  expect(screen.getByText("Клиентов: 1")).toBeVisible();
+  expect(within(screen.getByText("Пиров").closest("dl")!).getByText("1")).toBeVisible();
   expect(await screen.findByText("Статус недоступен")).toBeVisible();
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
   await openTunnel();
@@ -55,11 +55,37 @@ it("shows one tunnel card with honest status; opens one editor with role locked 
   await userEvent.click(screen.getByRole("tab", { name: "Ключи" }));
   expect(screen.getByLabelText("Приватный ключ")).toHaveValue("");
   expect(screen.getByText(/Повторная генерация ключей разорвёт/)).toBeVisible();
-  await userEvent.click(screen.getByRole("tab", { name: "Клиенты" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Пиры" }));
   expect(screen.getByLabelText("Preshared key")).toHaveValue("");
   expect(screen.getByText("phone")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Дополнительно" }));
   expect(screen.getByLabelText("Jc")).toHaveValue(4);
+});
+it("shows two server clients as a number in the read-only facts", async () => {
+  await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, peers: [...server.peers, { ...server.peers[0], name: "laptop" }] }] });
+  const facts = screen.getByText("Пиров").closest("dl")!;
+  expect(within(facts).getByText("Интерфейс")).toBeVisible();
+  expect(within(facts).getByText("tun0")).toBeVisible();
+  expect(within(facts).getByText("2")).toBeVisible();
+});
+it("says no clients instead of zero on an empty server card", async () => {
+  await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, peers: [] }] });
+  const facts = screen.getByText("Пиров").closest("dl")!;
+  expect(within(facts).getByText("нет пиров")).toBeVisible();
+  expect(within(facts).queryByText("0")).not.toBeInTheDocument();
+});
+it("shows one empty state on the server peers tab without duplicating the add action", async () => {
+  await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, peers: [] }] });
+  await openTunnel();
+  await userEvent.click(screen.getByRole("tab", { name: "Пиры" }));
+  expect(screen.getAllByText("Пиров нет.")).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "+ Добавить пира" })).toHaveLength(1);
+});
+it("shows client endpoint in read-only facts", async () => {
+  await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, role: "client", peers: [], endpoint: "vpn.example.net:51820" }] });
+  const facts = screen.getByText("Endpoint").closest("dl")!;
+  expect(within(facts).getByText("vpn.example.net:51820")).toBeVisible();
+  expect(within(facts).queryByText("Пиров")).not.toBeInTheDocument();
 });
 it.each([
   ["running", "Работает"], ["stopped", "Остановлена"], ["unknown", "Состояние неизвестно"],

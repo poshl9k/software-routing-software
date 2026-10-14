@@ -436,7 +436,7 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
               setEditingRule(null);
             }} />
           </FormActions> : "—",
-        ])} />
+        ])} empty={<EmptyState>Пользовательских правил нет — выбранный трафик идёт к конечному действию.</EmptyState>} />
         {editor.isEdit && editingRule !== null && current.rules[editingRule] && <Card title={`Правило ${current.rules[editingRule].name || editingRule + 1}`}>
           <FormGrid>
             <Field label="Имя правила" value={current.rules[editingRule].name} valid={nameValid(current.rules[editingRule].name)} onChange={(name) => updateRule(editingRule, { name })} />
@@ -464,7 +464,7 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
         <DataTable heads={["Тег", "Формат", "Источник", "Через", "Действия"]} rows={[...configuration.rule_sets, ...pendingSets].map((set, index) => [
           set.name, set.format, set.url, "Прямое подключение",
           index >= configuration.rule_sets.length && editor.isEdit ? <DeleteButton label={`Удалить набор ${set.name}`} onClick={() => setPendingSets((items) => items.filter((item) => item.name !== set.name))} /> : "—",
-        ])} />
+        ])} empty={<EmptyState>Наборы правил не объявлены.</EmptyState>} />
         {manualSetOpen && <Card title="Новый набор"><FormGrid>
           <Field label="Тег" value={manualSet.name} valid={engineTagValid(manualSet.name) && !ruleSetOptions.includes(manualSet.name)} onChange={(name) => setManualSet({ ...manualSet, name })} />
           <SelectField label="Формат" value={manualSet.format} options={["text-domain", "text-cidr", "json", "geosite", "geoip", "srs"]} onChange={(format) => setManualSet({ ...manualSet, format })} />
@@ -478,15 +478,15 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
           ...configuration.proxies.outbounds.map((outbound) => [outbound.tag, outbound.type, outbound.server, <Button onClick={onOpenProxies}>Открыть</Button>]),
           ...pendingOutbounds.map((outbound) => [outbound.tag, outbound.type, outbound.server, <DeleteButton label={`Удалить выход ${outbound.tag}`} onClick={() => setPendingOutbounds((items) => items.filter((item) => item.tag !== outbound.tag))} />]),
           ...configuration.proxies.groups.map((group) => [group.tag, "Группа", "—", <Button onClick={onOpenProxies}>Открыть</Button>]),
-        ]} />
+        ]} empty={<EmptyState>Прокси-выходов нет.</EmptyState>} />
         <Button onClick={onOpenProxies}>Открыть редактор выходов</Button>
       </Card>}
       {view === "expert" && <Card title="DNS-серверы и правила" action={editor.isEdit ? <Button onClick={() => { const index = current.dns.servers.length; patch({ dns: { ...current.dns, servers: [...current.dns.servers, { tag: "", type: "udp", server: "", server_port: null, tls_name: null, path: null, domain_resolver: null, detour: null }] } }); setDnsEditor({ kind: "server", index }); }}>+ Сервер</Button> : undefined}>
         <DataTable heads={["Тег", "Тип", "Сервер", "Через", "Действия"]} rows={current.dns.servers.map((row, index) => [row.tag, row.type, row.server, row.detour ?? "direct", editor.isEdit ? <FormActions><Button onClick={() => setDnsEditor({ kind: "server", index })}>Редактировать</Button><DeleteButton label={`Удалить DNS-сервер ${row.tag || index + 1}`} onClick={() => setPendingDNSDelete({ tag: row.tag, index, refs: [
           ...current.dns.rules.filter((rule) => rule.server === row.tag).map((rule) => `DNS-правило ${rule.name}`),
           ...current.dns.servers.filter((server) => server !== row && server.domain_resolver === row.tag).map((server) => `DNS-резолвер ${server.tag}`),
-        ] })} /></FormActions> : "—"])} />
-        <DataTable heads={["Правило", "Условия", "Сервер", "Действия"]} rows={current.dns.rules.map((row, index) => [row.name, [...row.domain_suffix, ...row.rule_sets].join(", "), row.server, editor.isEdit ? <FormActions><Button onClick={() => setDnsEditor({ kind: "rule", index })}>Редактировать</Button><DeleteButton label={`Удалить DNS-правило ${row.name || index + 1}`} onClick={() => patch({ dns: { ...current.dns, rules: current.dns.rules.filter((_, i) => i !== index) } })} /></FormActions> : "—"])} />
+        ] })} /></FormActions> : "—"])} empty={<EmptyState>DNS-серверов нет.</EmptyState>} />
+        <DataTable heads={["Правило", "Условия", "Сервер", "Действия"]} rows={current.dns.rules.map((row, index) => [row.name, [...row.domain_suffix, ...row.rule_sets].join(", "), row.server, editor.isEdit ? <FormActions><Button onClick={() => setDnsEditor({ kind: "rule", index })}>Редактировать</Button><DeleteButton label={`Удалить DNS-правило ${row.name || index + 1}`} onClick={() => patch({ dns: { ...current.dns, rules: current.dns.rules.filter((_, i) => i !== index) } })} /></FormActions> : "—"])} empty={<EmptyState>DNS-правил нет.</EmptyState>} />
         {editor.isEdit && <Button onClick={() => { const index = current.dns.rules.length; patch({ dns: { ...current.dns, rules: [...current.dns.rules, { name: "", domain_suffix: [], rule_sets: [], server: "" }] } }); setDnsEditor({ kind: "rule", index }); }}>+ DNS-правило</Button>}
           {current.dns.servers.map((row, index) => dnsEditor?.kind === "server" && dnsEditor.index === index && <div key={index} className="rule-row">
             <FormGrid>
@@ -702,6 +702,7 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
               </FormActions>
             </FormGrid>
           </div>)}
+          {current.bypass.length === 0 && <EmptyState>Исключений нет.</EmptyState>}
           <Button onClick={() => patch({ bypass: [...current.bypass, {
             name: "", source_ip_cidr: [], ip_cidr: [], ports: [], protocol: "any",
           }] })}>+ Добавить исключение</Button>

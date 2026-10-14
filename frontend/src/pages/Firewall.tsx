@@ -8,6 +8,7 @@ import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
+import { EmptyState } from "../components/EmptyState";
 import { ValueTabs } from "../components/Tabs";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { InfoNote } from "../components/InfoNote";
@@ -198,14 +199,37 @@ export default function Firewall() {
                   .join("; ")}
               </InfoNote>
             )}
-            <DataTable heads={["Правило по порядку", "Состояние", "Действия"]} rows={[
-              ...rules.map((r, position) => [
-                `${position + 1}. ${ruleActionLabel(r.action)} · ${endpointLabel(r.src)} → ${endpointLabel(r.dst)} · ${r.protocol.toUpperCase()}${r.destination_ports ? `/${r.destination_ports}` : ""} · ${r.name || "Без имени"}`,
-                r.enabled ? (r.log ? "Включено · журнал" : "Включено") : "Выключено",
-                isEditMode ? <Button onClick={() => setComposerIndex(r.index)}>Изменить</Button> : "",
-              ]),
-              ["По умолчанию: запретить", "После всех правил", ""],
-            ]} />
+            {rules.length === 0 ? (
+              <EmptyState title="Нет правил.">
+                Действует только неявное правило: запретить всё остальное.
+              </EmptyState>
+            ) : (
+              <div className="table-wide">
+                <DataTable
+                  heads={["№", "Имя", "Действие", "Протокол", "Откуда", "Куда", "Порт", "Состояние", "Действия"]}
+                  rows={[
+                  ...rules.map((r, position) => [
+                    position + 1,
+                    r.name || "Без имени",
+                    ruleActionLabel(r.action),
+                    r.protocol.toUpperCase(),
+                    endpointLabel(r.src),
+                    endpointLabel(r.dst),
+                    r.destination_ports,
+                    r.enabled ? (r.log ? "Включено · журнал" : "Включено") : "Выключено",
+                    isEditMode ? <>
+                      <Button onClick={() => setComposerIndex(r.index)}>Изменить</Button>
+                      {remove(() => {
+                        setZoneRules(rules.filter(item => item.index !== r.index).map(({ index: _index, ...rule }) => rule));
+                        if (composerIndex === r.index) setComposerIndex(null);
+                      }, `Удалить правило ${r.name || `#${position + 1}`}`)}
+                    </> : null,
+                  ]),
+                  [null, null, "Запретить (по умолчанию)", null, null, null, null, null, null],
+                ]}
+                />
+              </div>
+            )}
             {isEditMode && <Button onClick={() => {
               const next = rows.firewall_rules.length;
               patch({ firewall_rules: [...rows.firewall_rules, { name: "", ingress_zone: tab,

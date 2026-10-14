@@ -4,7 +4,82 @@ import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import { RouterProvider } from "../state";
 import Network from "../pages/Network";
+import { DHCP } from "../pages/Services";
+import { fmtRemaining } from "../components/format";
 import { emptyConfiguration } from "../fixtures";
+
+it.each([
+  [0, "истекла"],
+  [-1, "истекла"],
+  [59, "менее минуты"],
+  [3600, "1 ч"],
+  [2740, "45 мин"],
+  [9900, "2 ч 45 мин"],
+])("formats %i remaining lease seconds as %s", (seconds, expected) => {
+  expect(fmtRemaining(seconds)).toBe(expected);
+});
+
+function mockDhcp(leaseResponse: (path: string) => Response) {
+  const fetch = vi.fn().mockImplementation((path: string) => Promise.resolve(
+    path === "/api/versions"
+      ? new Response(JSON.stringify([{ id: 1, status: "draft", configuration: emptyConfiguration }]))
+      : path.startsWith("/api/dhcp/leases")
+        ? leaseResponse(path)
+        : new Response(JSON.stringify({ generated_at: "2026-10-14T10:00:00Z", services: [] })),
+  ));
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+
+it("shows an empty state when DHCP subnets are not configured", async () => {
+  mockDhcp(() => new Response("[]"));
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("tab", { name: "Подсети и диапазоны" }));
+  expect(screen.getByText("Подсети DHCP не настроены.")).toBeVisible();
+});
+
+it("applies lease search and restores the full list on reset", async () => {
+  const lease = (ip: string, hostname: string) => ({
+    ip, hostname, mac: "aa:bb:cc:dd:ee:ff", subnet: "192.168.1.0/24",
+    cltt: 0, valid_lft: 3600, expires_in: 3600,
+  });
+  const full = [lease("192.168.1.10", "printer"), lease("192.168.1.11", "laptop")];
+  const fetch = mockDhcp((path) => new Response(JSON.stringify(
+    path === "/api/dhcp/leases/search?q=printer" ? [full[0]] : full,
+  )));
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("tab", { name: "Аренды" }));
+  expect(await screen.findByText("192.168.1.11")).toBeVisible();
+  await user.type(screen.getByRole("textbox", { name: "Поиск: MAC, IP, hostname" }), "printer");
+  await user.click(screen.getByRole("button", { name: "Найти" }));
+  await waitFor(() => expect(screen.queryByText("192.168.1.11")).toBeNull());
+  expect(screen.getByText("192.168.1.10")).toBeVisible();
+  expect(screen.getByText(/Показаны результаты по запросу «printer»/)).toBeVisible();
+  expect(fetch.mock.calls.some(([path]) => path === "/api/dhcp/leases/search?q=printer")).toBe(true);
+  await user.click(screen.getByRole("button", { name: "Сбросить" }));
+  expect(await screen.findByText("192.168.1.11")).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "Поиск: MAC, IP, hostname" })).toHaveValue("");
+});
+
+it("shows an empty leases table when the API returns no leases", async () => {
+  mockDhcp(() => new Response("[]"));
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("tab", { name: "Аренды" }));
+  expect(await screen.findByText("Аренд пока нет")).toBeVisible();
+});
+
+it("shows an unavailable status when the lease service fails", async () => {
+  mockDhcp(() => new Response(JSON.stringify({ code: "kea.unavailable", message: "Kea недоступен", details: [] }), { status: 503 }));
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("tab", { name: "Аренды" }));
+  expect(await screen.findByText("Kea ctrl-agent недоступен — аренды не прочитаны", {}, { timeout: 12000 })).toBeVisible();
+  expect(screen.queryByText("Загрузка аренд…")).toBeNull();
+  expect(screen.queryByText("Kea недоступен")).toBeNull();
+});
 
 it("clears a previously entered static address when the interface is switched to DHCP", async () => {
   const draft = {

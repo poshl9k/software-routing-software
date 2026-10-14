@@ -88,6 +88,39 @@ it("shows system rows and first-match rule columns in both views", async () => {
   expect(screen.getByText(/Если ни одно правило не подошло/)).toBeVisible();
 });
 
+it("explains fallback when expert has no user rules", async () => {
+  setup();
+  const user = userEvent.setup();
+  await screen.findByText("Выключено · черновик");
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
+  expect(screen.getByText("Пользовательских правил нет — выбранный трафик идёт к конечному действию.")).toBeVisible();
+  expect(screen.queryByText("Нет записей")).not.toBeInTheDocument();
+});
+
+it("names empty expert rule sets, outbounds and both DNS lists", async () => {
+  setup();
+  const user = userEvent.setup();
+  await screen.findByText("Выключено · черновик");
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
+  for (const text of ["Наборы правил не объявлены.", "Прокси-выходов нет.",
+    "DNS-серверов нет.", "DNS-правил нет."]) {
+    expect(screen.getByText(text)).toBeVisible();
+  }
+  expect(screen.queryByText("Нет записей")).not.toBeInTheDocument();
+});
+
+it("shows one empty bypass notice and keeps one add action in expert edit mode", async () => {
+  setup();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Редактировать" }));
+  await user.click(screen.getByRole("tab", { name: "Эксперт" }));
+  expect(screen.getAllByText("Исключений нет.")).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "+ Добавить исключение" })).toHaveLength(1);
+  await user.click(screen.getByRole("button", { name: "+ Добавить исключение" }));
+  expect(screen.queryByText("Исключений нет.")).not.toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "+ Добавить исключение" })).toHaveLength(1);
+});
+
 it("adds a direct target rule with no proxy outbounds", async () => {
   const fetch = setup();
   const user = userEvent.setup();

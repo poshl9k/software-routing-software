@@ -77,5 +77,5 @@ it("mobile drawer preserves grouped navigation, configuration, keyboard escape a
 it("labels the events page and explains that its journal is unavailable", async () => {
   open("/events");
   expect(await screen.findByRole("heading", { name: "Журнал событий", level: 1 })).toBeVisible();
-  expect(screen.getByText("Журнал пока недоступен")).toBeVisible();
+  expect(screen.getByText("Просмотр событий пока не подключён к API.")).toBeVisible();
 });

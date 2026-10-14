@@ -86,6 +86,12 @@ allowed imports there are `Alert`, `Button`, `Checkbox`, `Dialog*`,
   (`Удалить правило ${r.name || \`#${r.index + 1}\`}`) — never a shared "Удалить".
 - Adding columns is a redesign, not a tweak: check the widest case visually
   before committing (the delete column must never be pushed off-screen).
+- A **wide read-only list** (many columns, e.g. the firewall rules table) must not
+  shrink into per-character word breaks — wrap it in `.table-wide` (`styles.css`)
+  so it scrolls horizontally instead. The delete-column rule above governs
+  **editable** table editors, where every cell holds an input; a read-only list
+  may scroll. → **Check:** `search_files` for `table-wide` before adding a tenth
+  column to a read-only table.
 
 ## 4. Actions and buttons
 

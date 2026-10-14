@@ -11,3 +11,14 @@ export function fmtDateTime(iso?: string | null): string {
     minute: "2-digit",
   });
 }
+
+/** Remaining DHCP lease lifetime, in seconds. */
+export function fmtRemaining(seconds: number): string {
+  if (seconds <= 0) return "истекла";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes === 0) return "менее минуты";
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (hours === 0) return `${minutes} мин`;
+  return `${hours} ч${remainder ? ` ${remainder} мин` : ""}`;
+}

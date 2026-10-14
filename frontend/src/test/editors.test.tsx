@@ -1,4 +1,4 @@
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
@@ -60,6 +60,24 @@ async function open(page: React.ReactNode) {
 }
 const saveButton = () =>
   screen.getByRole("button", { name: "Сохранить" });
+
+it("shows one add action and an empty Firewall rules state", async () => {
+  mockApi(emptyConfiguration);
+  await open(<Firewall />);
+  expect(screen.getByText("Нет правил.")).toBeVisible();
+  expect(screen.getAllByRole("button", { name: "Добавить правило" })).toHaveLength(1);
+});
+
+it("removes a newly added Firewall rule by its name", async () => {
+  mockApi(emptyConfiguration);
+  const user = userEvent.setup();
+  await open(<Firewall />);
+  await user.click(screen.getByRole("button", { name: "Добавить правило" }));
+  await user.type(screen.getByLabelText("Имя"), "first");
+  const deleteRule = within(screen.getByRole("table")).getByRole("button", { name: "Удалить правило first" });
+  await user.click(deleteRule);
+  expect(screen.queryByRole("button", { name: "Удалить правило first" })).not.toBeInTheDocument();
+});
 
 it("validates and cancels a new Firewall rule locally", async () => {
   const fetch = mockApi();
@@ -222,5 +240,5 @@ it("shows DNS list actions and honest logging visibility", async () => {
   expect(await screen.findByRole("button", { name: "Добавить имя" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Добавить домен" })).toBeEnabled();
   expect(screen.getByText("Через указанные DNS-серверы")).toBeVisible();
-  expect(screen.getByText("Просмотр DNS-запросов здесь пока недоступен.")).toBeVisible();
+  expect(screen.getByText("Просмотр DNS-запросов пока не подключён к API.")).toBeVisible();
 });

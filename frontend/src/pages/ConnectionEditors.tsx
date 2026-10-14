@@ -420,8 +420,12 @@ function Collection<T extends Row>({
                   editor.begin(collection.map((item, index) => ({ id: index, created: false, row: item })));
                   setNext(collection.length); setSelected(id); setTab(0);
                 }}>Открыть</Button>}>
-                <p>Интерфейс: {tunnel.interface}</p>
-                <p>{tunnel.role === "server" ? `Клиентов: ${tunnel.peers.length}` : `Endpoint: ${tunnel.endpoint ?? "не задан"}`}</p>
+                <dl className="kv">
+                  <dt>Интерфейс</dt><dd>{tunnel.interface}</dd>
+                  {tunnel.role === "server"
+                    ? <><dt>Пиров</dt><dd>{tunnel.peers.length || "нет пиров"}</dd></>
+                    : <><dt>Endpoint</dt><dd>{tunnel.endpoint ?? "не задан"}</dd></>}
+                </dl>
                 {version?.status === "draft" && <Badge tone="blue">Черновик</Badge>}
                 {service ? <InlineStatus
                   tone={service.state === "running" ? "green" : service.state === "stopped" ? "amber" : "unknown"}
@@ -435,6 +439,7 @@ function Collection<T extends Row>({
               heads={kind === "sites"
                 ? ["Имя", "Hostname", "Upstream", "Сертификат", "Статус"]
                 : ["Имя", "Провайдер", "Hostname", "Статус"]}
+              empty={<EmptyState>{kind === "sites" ? "Сайтов нет. Добавьте сайт." : "Доменов DDNS нет. Добавьте домен."}</EmptyState>}
               rows={collection.map((row) => {
                 const cells = summary(row);
                 if (rowActions) cells.push(noConfiguration ? null : rowActions(row));
@@ -446,7 +451,7 @@ function Collection<T extends Row>({
             editing ? (
               <>
                 {kind === "tunnels" && <PageTabs values={((editing.find((v) => v.id === selected)?.row as Tunnel | undefined)?.role === "server")
-                  ? ["Общие", "Подключение", "Ключи", "Клиенты", "Дополнительно"]
+                  ? ["Общие", "Подключение", "Ключи", "Пиры", "Дополнительно"]
                   : ["Общие", "Подключение", "Ключи", "Дополнительно"]} value={tab} change={setTab} />}
                 {editing.filter(({ id }) => kind !== "tunnels" || id === selected).map(({ id, row, created }) => (
                   <Card
@@ -787,6 +792,7 @@ export function Tunnels() {
                 />
             </>}
             {tab === 3 && t.role === "server" && <>
+                {t.peers.length === 0 && <FormWide><EmptyState>Пиров нет.</EmptyState></FormWide>}
                 {t.peers.map((p, index) => {
                   const update = (v: Partial<typeof p>) =>
                     patch({
@@ -951,6 +957,7 @@ export function Sites() {
     .filter((i) => i.zone === "wan")
     .flatMap((i) => i.addresses.map((a) => a.split("/")[0]));
   return (
+    <>
     <Collection<CaddySite>
       kind="sites"
       title="Входящие сайты"
@@ -1070,6 +1077,10 @@ export function Sites() {
         </FormGrid>
       )}
     />
+    <p className="sub">
+      Состояние сертификата на устройстве панель пока не читает: колонка «Статус» показывает только известное ей — выпуск произойдёт при применении.
+    </p>
+    </>
   );
 }
 export function DDNS() {

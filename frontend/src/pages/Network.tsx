@@ -303,7 +303,7 @@ export default function Network() {
         <ErrorNotice error={editor.error} /><ErrorNotice error={hostError} />
         <Card title="Интерфейсы и зоны" action={<FormActions><Button onClick={() => setQuickOpen(true)}>Быстро подключить</Button>{rows.length > 0 && <><Button onClick={addRow}>Добавить интерфейс</Button>{physicalNics.map((p) => <Button key={p.name} onClick={() => addVirtual("vlan", p.name)}>+ VLAN на {p.name}</Button>)}<Button onClick={() => addVirtual("bridge")}>+ Мост</Button></>}</FormActions>}>
           {!rows.length && <EmptyState action={<Button onClick={addRow}>Добавить интерфейс</Button>}>Нет назначенных интерфейсов</EmptyState>}
-          {!!rows.length && <DataTable heads={["Название", "Системное имя", "Роль", "IP", "Черновик", "Состояние"]}
+          {!!rows.length && <DataTable heads={["Название", "Системное имя", "Роль", "IP", "Конфигурация", "Состояние"]}
             rows={rows.map((i) => {
               const host = allRealNics.find((h) => h.name === i.name);
               const live = liveAddresses[i.name] ?? [];
@@ -373,6 +373,7 @@ export default function Network() {
                       ? "Firewall, port forward, outbound NAT"
                       : "default исходящий трафик, masquerade",
                   ])}
+                  empty={<EmptyState>У этого интерфейса нет адресов.</EmptyState>}
                 />
                 <p className="sub">
                   Дополнительные адреса — обычные адреса интерфейса. Все адреса

@@ -433,6 +433,12 @@ pre {
   margin-left: 0;
 }
 
+/* Wide multi-column tables (firewall rules) scroll horizontally instead of
+   squeezing cells until words break per character on narrow windows. */
+.table-wide table {
+  min-width: 1040px;
+}
+
 /* Table editors: controls fill their column so rows stay aligned. */
 .MuiTableCell-root .MuiFormControl-root {
   width: 100%;
@@ -466,11 +472,19 @@ pre {
 }
 
 /* Responsive */
+/* The dashboard grid needs ~1300 px of viewport for two columns: each card is
+   then at least as wide as its widest table (measured preferred width ~460 px
+   plus card padding). Below that the same `wordBreak: break-word` splits table
+   headers per character (НАЗВАНИ/Е), which is worse than a taller page. */
+@media (max-width: 1320px) {
+  .dash-grid {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 1100px) {
   .status-strip {
     grid-template-columns: repeat(2, 1fr);
   }
-  .dash-grid,
   .grid-2 {
     grid-template-columns: 1fr;
   }

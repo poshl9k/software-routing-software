@@ -1,3 +1,5 @@
+import { Button } from "@mui/material";
+import { Link } from "react-router-dom";
 import { useConfiguration, statusLabels } from "../state";
 import { Badge } from "../components/Badge";
 import { StatusHero } from "../components/StatusHero";
@@ -14,10 +16,7 @@ export function Events({ standalone = true }: { standalone?: boolean }) {
     <>
       {standalone && <PageHeader>Журнал событий</PageHeader>}
       <Card title="Последние события">
-        <InfoNote>Просмотр событий пока не подключён к API.</InfoNote>
-        <EmptyState title="Журнал пока недоступен">
-          События появятся после подключения журнала к панели.
-        </EmptyState>
+        <EmptyState>Просмотр событий пока не подключён к API.</EmptyState>
       </Card>
     </>
   );
@@ -31,13 +30,18 @@ export default function Dashboard() {
     <>
       <PageHeader>Обзор сети</PageHeader>
       <Card title="Службы · текущее состояние">
-        <div className="stats">
-          {([ ["DHCP", "kea"], ["DNS", "unbound"], ["Caddy", "caddy"], ["DDNS", "ddns"] ] as const).map(([label, name]) =>
-            <div key={name}>{label}: <RuntimeServiceInline name={name} telemetry={telemetry} /></div>)}
-        </div>
+        <DataTable
+          heads={["Служба", "Состояние"]}
+          rows={([ ["DHCP", "kea"], ["DNS", "unbound"], ["Caddy", "caddy"], ["DDNS", "ddns"] ] as const).map(([label, name]) => [
+            label,
+            <RuntimeServiceInline name={name} telemetry={telemetry} />,
+          ])}
+          empty={<EmptyState>Службы не настроены.</EmptyState>}
+        />
       </Card>
       <StatusHero title="Интернет · состояние соединения" tone="unknown" primary={null}
-        facts={[{ label: "Источник", value: "Телеметрия не подключена" }, { label: "WAN и адрес сейчас", value: "Нет данных" }]} />
+        facts={[{ label: "Источник", value: "Телеметрия не подключена" }, { label: "WAN и адрес сейчас", value: "Нет данных" }]}
+        action={<Button component={Link} to="/network" variant="outlined">Подключения и адреса</Button>} />
       <div className="dash-grid">
         <StatTile label="Скорость WAN" value={null} hint="Нет данных от агента" />
         <StatTile label="Время работы" value={null} hint="Нет телеметрии" />
@@ -61,6 +65,7 @@ export default function Dashboard() {
                   c.dns.upstreams.map((u) => u.address).join(", "),
                   "—",
                 ])}
+              empty={<EmptyState>Интерфейсы WAN не настроены.</EmptyState>}
             />
           </Card>
           <Card title="DHCP" to="/dhcp">
@@ -89,6 +94,7 @@ export default function Dashboard() {
                 "—",
                 "—",
               ])}
+              empty={<EmptyState>Подсети DHCP не настроены.</EmptyState>}
             />
           </Card>
           <Card title="Интерфейсы и VLAN" to="/network">
@@ -101,6 +107,7 @@ export default function Dashboard() {
                 i.addresses.join(", "),
                 "—",
               ])}
+              empty={<EmptyState>Интерфейсы не настроены.</EmptyState>}
             />
           </Card>
         </div>
@@ -111,10 +118,11 @@ export default function Dashboard() {
               rows={c.tunnels.map((t) => [
                 t.name,
                 t.protocol === "wg" ? "WireGuard" : "AmneziaWG",
-                <RuntimeServiceInline name={`tunnel:${t.interface}`} telemetry={telemetry} />,
+                <RuntimeServiceInline name={`tunnel:${t.interface}`} telemetry={telemetry} showAsOf={false} />,
                 t.role === "server" ? t.peers.length : "клиент",
                 "—",
               ])}
+              empty={<EmptyState>Туннели не настроены.</EmptyState>}
             />
           </Card>
           <Card title="Прокси (Caddy)" to="/proxy">
@@ -126,6 +134,7 @@ export default function Dashboard() {
                 s.certificate_mode,
                 "—",
               ])}
+              empty={<EmptyState>Сайты не настроены.</EmptyState>}
             />
           </Card>
           <Events standalone={false} />
