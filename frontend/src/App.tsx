@@ -42,16 +42,16 @@ import {
 } from "./state";
 import { useApplyStatus } from "./hooks/useApplyStatus";
 import { ApplyStatusRail, type ApplyStatusRailProps } from "./components/ApplyStatusRail";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Badge } from "./components/Badge";
 import { ErrorNotice } from "./components/ErrorNotice";
 import { Icon, type IconName } from "./components/Icon";
 import { InfoNote } from "./components/InfoNote";
 
 function ApplyTopButton({ checking }: { checking: boolean }) {
-  const { noConfiguration } = useConfiguration();
-  const { uncertain, busy, user } = useRouterState();
-  const { pending, active, seconds, command } = useApplyCommands();
-  if (noConfiguration || user?.role !== "admin") return null;
+  const { uncertain, busy } = useRouterState();
+  const { draft, confirmed, preferences, timeoutValid, pending, active, seconds, command } = useApplyCommands();
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const mmss =
     seconds === null
       ? null
@@ -81,13 +81,34 @@ function ApplyTopButton({ checking }: { checking: boolean }) {
         }
       >
         <span>
-          <Button variant="contained" component={Link} to="/apply">
-            Выполняется…
-          </Button>
+          <Button variant="contained" disabled>Выполняется…</Button>
         </span>
       </Tooltip>
     );
-  return null;
+  if (!draft) return null;
+  return (
+    <>
+      <Button variant="contained" disabled={busy || checking || !timeoutValid} onClick={() => setConfirmOpen(true)}>
+        Применить v{draft.id}
+      </Button>
+      <ConfirmDialog
+        open={confirmOpen}
+        title={`Применить черновик v${draft.id}?`}
+        body={!confirmed
+          ? "Стабильной версии нет: это первое применение, откатывать будет некуда"
+          : preferences.safe
+            ? `Через ${preferences.timeout} с потребуется подтверждение, иначе автоматический откат к стабильной версии`
+            : "Безопасный режим отключён: автоматического отката не будет"}
+        confirmLabel="Применить"
+        cancelLabel="Отмена"
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          void command("apply", draft.id);
+        }}
+      />
+    </>
+  );
 }
 type NavigationItem = { to: string; label: string; icon: IconName };
 export const navigation: { group: string; items: NavigationItem[] }[] = [
@@ -177,12 +198,10 @@ function Layout() {
       </Box>
     );
   });
-  const configurationRail = (mobile: boolean) => (
+  const configurationRail = () => (
     <Box className="configuration-rail">
       <Box component="h2" sx={{ px: 2, fontSize: 12, color: "text.secondary" }}>Конфигурация</Box>
-      <ApplyStatusRail {...rail} action={user?.role === "admin" ?
-        (mobile ? <Button component={Link} to="/apply" onClick={() => setDrawerOpen(false)} variant="outlined">Проверить изменения</Button> : undefined) :
-        <Button component={Link} to="/apply" onClick={mobile ? () => setDrawerOpen(false) : undefined}>Открыть</Button>} />
+      <ApplyStatusRail {...rail} action={null} />
     </Box>
   );
   return (
@@ -192,7 +211,7 @@ function Layout() {
         <Box component="nav" className="nav" aria-label="Разделы панели" sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           {navContents(false)}
         </Box>
-        {configurationRail(false)}
+        {configurationRail()}
       </Box>
       <Drawer anchor="left" open={drawerOpen} onClose={() => setDrawerOpen(false)}
         transitionDuration={reducedMotion ? 0 : { enter: 160, exit: 120 }}
@@ -203,7 +222,7 @@ function Layout() {
         <Box component="nav" className="nav" aria-label="Разделы панели" sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           {navContents(true)}
         </Box>
-        {configurationRail(true)}
+        {configurationRail()}
       </Drawer>
       <main className="main">
         <header className="topbar">
@@ -223,7 +242,6 @@ function Layout() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <ApplyTopButton checking={checking} />
           <Button className="mobile-status" component={Link} to="/apply" variant="outlined" aria-label={`Конфигурация: ${rail.state === "pending" ? "ожидается подтверждение" : rail.state === "running" ? "применение выполняется" : rail.state === "draft" ? "черновик" : rail.state === "applied" ? "подтверждена" : rail.state === "error" ? "ошибка применения" : "состояние неизвестно"}. Открыть применение`}>
             Конфигурация{rail.state === "pending" ? " · подтвердить" : rail.state === "error" ? " · ошибка" : ""}
           </Button>
@@ -248,6 +266,12 @@ function Layout() {
             Обновить
           </Button>
         </header>
+        {!noConfiguration && user?.role === "admin" && (
+          <Box className="page-actions">
+            <ApplyTopButton checking={checking} />
+            <Button component={Link} to="/apply" variant="outlined">Проверить изменения</Button>
+          </Box>
+        )}
         <ErrorNotice error={applyError} />
         {loading && <LinearProgress aria-label="Загрузка конфигурации" />}
         <ErrorNotice error={error} />

@@ -33,7 +33,7 @@ export function ApplyStatusRail(props: ApplyStatusRailProps) {
         <Box aria-live="polite" aria-atomic="true"><InlineStatus tone={tone} text={text} /></Box>
         {detail && <Typography variant="caption" display="block" sx={{ color: tokens.textTertiary, mt: 0.5 }}>{detail}</Typography>}
       </Box>
-      {props.action ?? <Button component={Link} to="/apply" variant="outlined">Проверить изменения</Button>}
+      {props.action === undefined ? <Button component={Link} to="/apply" variant="outlined">Проверить изменения</Button> : props.action}
     </Paper>
   );
 }

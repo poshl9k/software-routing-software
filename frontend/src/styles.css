@@ -164,6 +164,19 @@ a:hover {
   border-bottom: 1px solid var(--vs-border-subtle);
   font-size: 13px;
 }
+.page-actions {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 0;
+  margin-bottom: 16px;
+  background: var(--vs-bg);
+  border-bottom: 1px solid var(--vs-border-subtle);
+}
 .breadcrumbs {
   color: var(--vs-text-tertiary);
   font-weight: 500;

@@ -347,7 +347,7 @@ describe("screens", () => {
     ), { status: path === "/api/apply/status" ? 503 : 200 })));
     open("/");
     await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/apply/status")).toBe(true));
-    expect(await screen.findByRole("link", { name: "Выполняется…" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Выполняется…" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Применить" })).not.toBeInTheDocument();
   });
   it("does not infer a safe state when the agent marker is unavailable", async () => {

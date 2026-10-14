@@ -55,6 +55,8 @@ describe("shared P1 primitives", () => {
     expect(screen.getByText("Стабильная v7")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Проверить изменения" })).toHaveAttribute("href", "/apply");
     const wrap = (props: Parameters<typeof ApplyStatusRail>[0]) => rerender(<MemoryRouter><ApplyStatusRail {...props} /></MemoryRouter>);
+    wrap({ state: "draft", draftVersion: 8, stableVersion: 7, action: null });
+    expect(screen.queryByRole("link", { name: "Проверить изменения" })).not.toBeInTheDocument();
     wrap({ state: "pending", seconds: 65 });
     expect(screen.getByText("Осталось 01:05")).toBeInTheDocument();
     expect(screen.getByText("Ожидается подтверждение").closest('[aria-live="polite"]')).toBeInTheDocument();

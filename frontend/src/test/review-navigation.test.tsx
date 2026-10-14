@@ -11,9 +11,9 @@ const versions = [
   { id: 1, status: "confirmed", configuration: emptyConfiguration },
 ];
 
-function open(path: string) {
+function open(path: string, rows = versions) {
   const fetch = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(
-    url === "/api/versions" ? versions :
+    url === "/api/versions" ? rows :
     url === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
     url === "/api/apply/status" ? null :
     url === "/api/host/interfaces" ? [] :
@@ -30,6 +30,44 @@ it("opens review from the topbar without applying a draft", async () => {
   const review = await screen.findByRole("link", { name: "Проверить изменения" });
   await userEvent.click(review);
   expect(await screen.findByRole("heading", { name: "Применение изменений", level: 1 })).toBeVisible();
+  expect(fetch.mock.calls.some(([url]) => url === "/api/apply")).toBe(false);
+});
+
+it("applies from the action strip only after dialog confirmation, without navigating", async () => {
+  localStorage.setItem("vs-router.preferences", JSON.stringify({ safe: true, timeout: 180 }));
+  const fetch = open("/");
+  const apply = await screen.findByRole("button", { name: "Применить v3" });
+  const strip = document.querySelector(".page-actions")!;
+  const rail = document.querySelector(".sidebar .configuration-rail")!;
+  await waitFor(() => expect(apply).toBeEnabled());
+  expect(within(strip as HTMLElement).getByRole("link", { name: "Проверить изменения" })).toHaveAttribute("href", "/apply");
+  expect(within(rail as HTMLElement).getByText("Черновик v3 не применён")).toBeVisible();
+  expect(within(rail as HTMLElement).getByText("Стабильная v1")).toBeVisible();
+  expect(within(rail as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
+  expect(within(rail as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
+  await userEvent.click(apply);
+  let dialog = screen.getByRole("dialog", { name: "Применить черновик v3?" });
+  expect(within(dialog).getByText(/Через 180 с потребуется подтверждение/)).toBeVisible();
+  expect(fetch.mock.calls.some(([url]) => url === "/api/apply")).toBe(false);
+  expect(screen.queryByRole("heading", { name: "Применение изменений" })).not.toBeInTheDocument();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
+  expect(fetch.mock.calls.some(([url]) => url === "/api/apply")).toBe(false);
+  await userEvent.click(apply);
+  dialog = screen.getByRole("dialog", { name: "Применить черновик v3?" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "Применить" }));
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/apply", expect.objectContaining({
+    method: "POST", body: expect.stringContaining('"version_id":3'),
+  })));
+  expect(screen.queryByRole("heading", { name: "Применение изменений" })).not.toBeInTheDocument();
+});
+
+it("warns that the first apply has no rollback target", async () => {
+  const fetch = open("/", [versions[0]]);
+  const apply = await screen.findByRole("button", { name: "Применить v3" });
+  await waitFor(() => expect(apply).toBeEnabled());
+  await userEvent.click(apply);
+  expect(within(screen.getByRole("dialog", { name: "Применить черновик v3?" }))
+    .getByText("Стабильной версии нет: это первое применение, откатывать будет некуда")).toBeVisible();
   expect(fetch.mock.calls.some(([url]) => url === "/api/apply")).toBe(false);
 });
 
@@ -64,7 +102,8 @@ it("mobile drawer preserves grouped navigation, configuration, keyboard escape a
   expect(within(drawer).getByRole("navigation", { name: "Разделы панели" })).toBeVisible();
   expect(within(drawer).getByRole("region", { name: "Интернет" })).toBeVisible();
   expect(within(drawer).getByRole("complementary", { name: "Состояние конфигурации" })).toBeVisible();
-  expect(within(drawer).getByRole("link", { name: "Проверить изменения" })).toHaveAttribute("href", "/apply");
+  expect(within(drawer).queryByRole("link", { name: "Проверить изменения" })).not.toBeInTheDocument();
+  expect(document.querySelector('.page-actions a[href="/apply"]')).toHaveTextContent("Проверить изменения");
   await userEvent.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(menu).toHaveFocus();
