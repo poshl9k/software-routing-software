@@ -167,9 +167,55 @@ allowed imports there are `Alert`, `Button`, `Checkbox`, `Dialog*`,
   `ADR-0011` in the same change — plus `AGENTS.md` if the rule is load-bearing.
 - Commit/push only when the task asks for it.
 
+## 9. Structure of a configuration surface (Keenetic-derived)
+
+The reference for this section is `docs/ui-refs/keenetic/` (synthesis:
+`00-KEENETIC-UX-LOGIC.md`). These rules exist because the panel's biggest structural
+defects are not styling but shape: one object smeared across tabs, the same value
+printed twice, and actions multiplied per list row.
+
+- **One object = one form.** Do not split one object's properties across tabs
+  (`Общие / IP / Подключение / Дополнительно`). Edit the object in a single form,
+  group it into sections (headings via `PageSection`), and push genuinely optional
+  detail behind `ExpertDisclosure` («Показать дополнительные настройки»).
+  → **Why:** tabs force the operator to hunt for the field and hide the fact that
+  the fields belong to one editable object; Keenetic edits a connection in one
+  grouped form. → **Check:** a detail surface with a `ValueTabs`/`PageTabs` strip
+  whose tabs edit the *same* object is a defect; tabs are for *different lists*
+  (sites vs DDNS) or *different modes*, never for one object's fields.
+- **Identity is shown once, read-only.** A port/interface/device identity
+  (system name, MAC, host state) appears once as read-only information
+  (`Field readOnly`), never twice, and never as a second editable twin of a field
+  that already exists. → **Check:** grep the surface for two controls bound to the
+  same value; a read-only field mirroring an editable one above it is duplication.
+- **Creation actions live in one place and do not scale with the list.** One add
+  action per surface (card `action` or `.toolbar-actions`); variants belong in one
+  dialog/menu, never one button per existing item (`+ VLAN на enp1s0`, `+ VLAN на
+  enp2s0`, …). → **Why:** with six NICs the header becomes a wall of buttons and
+  the primary action is lost. → **Check:** a header action set that grows with the
+  object count is a defect.
+- **An editor of a list item opens in its own window.** Clicking a row (or its own control)
+  opens a modal `Dialog` titled with that object, containing the grouped form and ending in
+  `EditorFooter` («Отмена / Сохранить»). The page keeps the list; the row is the only way in.
+  → **Why:** Keenetic edits a connection, rule, port-forward, DNS server or client card in a
+  separate form window — an inline panel under the list pushes the list away, reads as a
+  second page, and mixes the list with the editor in one scroll. → **Check:** an editor
+  rendered as a `Card` beneath the list, or a form that appears in the page flow when a row
+  is selected, is a defect. (Page-level settings that are not a list item — a service mode,
+  engine parameters, backup — stay on the page.)
+- **A status is never a bare number or colour.** Distinguish administrative state
+  from link state, and "not configured" from "switched off"; unknown/unread is its
+  own state with its own text.
+- **One state, one message.** A loading/error/empty condition is stated once, in
+  the place the user is looking — not simultaneously as a receipt, a badge, a page
+  notice and a table cell.
+
 ## Pre-flight checklist
 
 - [ ] Gate green (`tsc --noUnusedLocals`, `vitest`, `build`, no 500 kB warning)
+- [ ] One object edited in one form, not smeared across tabs (§9)
+- [ ] Every value appears once; identity is read-only, never an editable twin (§9)
+- [ ] Creation actions in one place, not one button per existing item (§9)
 - [ ] Reused the library primitive for every control; no raw MUI inputs in pages
 - [ ] `label` XOR `ariaLabel` on every control
 - [ ] Removals are `DeleteButton` with a per-row label; edit toggle top-right

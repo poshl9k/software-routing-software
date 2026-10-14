@@ -300,3 +300,22 @@ churn):
 - `/onboarding` — `WizardProgress` with four steps and explicit first-apply warnings, matching the
   reference's wizard shape;
 - `/events` — shares the journal card fixed in step 2, so it is already a single honest message.
+
+## Series 2 (steps 10–17): every list-item editor becomes its own window
+
+The first series fixed what the pages *said*; the second fixed how they *behaved* when you edit.
+`docs/ui-rules.md` §9 now states the rule («one object = one form», «an editor of a list item opens
+in its own window», identity shown once read-only, creation actions in one place), and every
+surface was brought under it. Work list, evidence and the standing audit commands live in
+`docs/ui-conformance.md`.
+
+Converted from an inline form in the page flow into a modal window over the list, with a grouped
+form (`PageSection` sections) and `EditorFooter` inside the dialog: interface (`/network`), tunnel
+and sites/DDNS (`ConnectionEditors.tsx`), firewall rule (`Firewall.tsx`), DHCP reservation, subnet
+list and DNS (`ServiceEditors.tsx`), routing sets/DNS/wizard/bypass (`Routing.tsx`), proxy
+outbounds/subscriptions/groups (`RoutingProxy.tsx`). The state that carried one-object tabs
+(`detailTab`, the tunnels `tab` indices, the firewall composer card) is gone with them.
+
+Two defects were caught by looking at the screenshots rather than at the diff: the firewall rule
+dialog duplicated the row's delete action, and the TProxy bypass section left a delete icon
+floating in the page flow.
