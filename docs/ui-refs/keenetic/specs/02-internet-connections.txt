@@ -1,0 +1,22 @@
+Прочитай `docs/ui-refs/keenetic/_AGENT-SPEC.md` и следуй ему буквально.
+
+Твой блок: **Keenetic → «Интернет» / подключения и сетевые порты**.
+Выходной файл: `docs/ui-refs/keenetic/02-internet-connections.md`
+Префикс скриншотов: `screenshots/02-internet/`
+
+Что собрать (искать ключи в `keenetic-toc.txt`):
+- `13228-internet`, `13229-quick-overview-of-the-internet-connection-options`, `13230-wired`,
+  `13231-internet-connection-via-ethernet`
+- PPPoE: `13773`; PPTP/L2TP: `13774`; mobile 5G/4G/3G: `13776`, `13777`; WISP: `14487`, `14488`
+- смена WAN MAC: `13772`; MTU: `adjusting-mtu-size`; TTL: `changing-the-ttl-values`
+- VLAN у проводного подключения
+- режим работы и назначение сетевых портов: `changing-the-operating-mode-and-role-of-network-ports`
+- резервирование интернета (backup): `configuring-internet-backup-via-a-5g-4g-3g-modem`, `bandwidth-management-for-internet-connections`
+- расписание работы подключений: `a-work-schedule-for-network-connections`
+- приоритеты/политики подключений: `connection-policies` (ключ `connection-policies`)
+- сегменты и домашняя сеть: `14628-segments`, `14629-home-network`, `14006-my-networks-and-wi-fi`
+
+Особо зафиксируй: как выглядит список/карточка подключения, как показан статус «подключено/нет»,
+как задаются VLAN/MTU/MAC (inline или форма), как устроены «Приоритеты подключений».
+
+Отображение: наш раздел «Подключения и адреса» (`/network`) + вкладка маршрутов.

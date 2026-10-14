@@ -1,0 +1,13 @@
+# Screenshots are evidence, not source: reproducible and third-party.
+# The PNGs here come from Keenetic's public documentation
+# (https://support.keenetic.ru/eaeu/asset/images/...) and from this panel
+# rendered against the local stub API. Only the written analysis that cites
+# them is committed.
+#
+# Regeneration: see ../_AGENT-SPEC.md and ../specs/ (fetch the article, extract
+# asset/images/*.png, inspect through vision_analyze). The vs-router-after/
+# subset comes from the CDP harness in
+# vs-router-dev/references/frontend-visual-qa.md.
+#
+# To keep a specific image, force-add it: git add -f <file>.
+*.png

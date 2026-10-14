@@ -1,0 +1,30 @@
+Прочитай `docs/ui-refs/keenetic/_AGENT-SPEC.md` и следуй ему буквально.
+
+Твой блок: **Keenetic → «Управление»: пользователи/доступ, CLI, безопасный режим,
+обновление, диагностика, журнал, резервное копирование**.
+Выходной файл: `docs/ui-refs/keenetic/07-management.md`
+Префикс скриншотов: `screenshots/07-manage/`
+
+Что собрать (ключи в `keenetic-toc.txt`):
+- Пользователи и доступ: `device-user-management--changing-the-admin-password-`,
+  `brute-force-protection-function-for-the-router-password`, `authentication` (если есть),
+  `reset-the-admin-password`, `how-do-i-restore-access-to-the-web-interface-`
+- CLI/доступ: `command-line-interface--cli-`, `cli` (раздел), `enabling-telnet-and-tftp-client-in-windows`
+- **Безопасный режим настройки**: `fail-safe-configuration-mode` — это прямой аналог нашей
+  «безопасной настройки» с откатом; разбери его подробно (UI, таймер, подтверждение)
+- Обновление: `faq--component-installation-and-os-updating`, ключи `update`, `component`
+- Диагностика: `diagnostics` (раздел), `running-app-diagnostics`,
+  `capturing-network-packets-with-wireshark`, `advanced-network-capture-configuration`,
+  `hardware-tdr-ethernet-cable-diagnostics`, `how-to-measure-the-internet-connection-speed-`
+- Журнал: ключи `journal`, `log`, `system-log`, `event`
+- Конфигурация/бэкап: `how-to-prepare-your-device-for-sale`, ключи `configuration`, `backup`,
+  `reset`, `reboot`, `firmware`
+- `changing-the-router-management-port`
+
+Особо зафиксируй: экран «Пользователи и доступ», где переключаются сервисы управления (Telnet,
+SSH?/HTTP), как показан безопасный режим (чекбокс + таймер), структура «Диагностика»
+(инструменты ping/traceroute, выбор пакетов), структура журнала (фильтры, уровни, экспорт),
+как выглядит бэкап/восстановление конфигурации.
+
+Отображение: наши разделы «SSH» (`/ssh`), «Обслуживание» (`/maintenance`),
+«Журнал» (`/events`), «Диагностика» (`/diagnostics`).

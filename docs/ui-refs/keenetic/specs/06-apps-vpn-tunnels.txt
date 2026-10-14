@@ -1,0 +1,24 @@
+Прочитай `docs/ui-refs/keenetic/_AGENT-SPEC.md` и следуй ему буквально.
+
+Твой блок: **Keenetic → «Приложения»: VPN-серверы/туннели/политики маршрутизации**.
+Выходной файл: `docs/ui-refs/keenetic/06-apps-vpn-tunnels.md`
+Префикс скриншотов: `screenshots/06-apps/`
+
+Что собрать (ключи в `keenetic-toc.txt`):
+- Общий раздел «Приложения» (ключ `applications`, `applications.html` — найди id)
+- WireGuard: `wireguard-vpn-server`, `configuring-a-wireguard-vpn-between-two-routers`,
+  `example-of-connecting-networks-via-the-wireguard-vpn-server-app`
+- IPsec/IKEv2, L2TP/IPsec, SSTP, OpenVPN — серверные статьи + клиентские
+- IPIP/GRE/EoIP: `configuring-ipip,-gre,-and-eoip-tunnels`
+- ZeroTier: `connecting-to-a-zerotier-network`
+- Политики маршрутизации: `connection-policies`, `changing-the-routing-policy-on-the-vpn-client-side`
+- Удалённый доступ/веб-серверы: `15884-remote-access-to-home-network-resources-with-dns`,
+  `accessing-files-on-a-usb-drive-remotely-from-the-internet`
+- Пример структуры списка приложений: `ftp-server`, `dlna-over-vpn`, `media-server`
+
+Особо зафиксируй: как выглядит список приложений в разделе «Приложения» (карточки-плитки?),
+как устроен экран VPN-сервера (вкл/выкл, список пиров/клиентов, экспорт конфига/QR),
+как назначается политика/интерфейс выхода, как выглядит раздел «Приоритеты подключений»
+(таблица соединений с приоритетами / список).
+
+Отображение: наши разделы «Туннели» (`/tunnels`) и «Выборочная маршрутизация» (`/routing`).

@@ -1,0 +1,22 @@
+Прочитай `docs/ui-refs/keenetic/_AGENT-SPEC.md` и следуй ему буквально.
+
+Твой блок: **Keenetic → «Домашняя сеть»: IP-адреса, DHCP, устройства/аренды**.
+Выходной файл: `docs/ui-refs/keenetic/03-home-network-dhcp.md`
+Префикс скриншотов: `screenshots/03-dhcp/`
+
+Что собрать (ключи в `keenetic-toc.txt`):
+- `15224-changing-ip-and-dhcp-settings-in-the-home-segment`
+- `changing-the-ip-address-lease-time`, `configuring-dhcp-options`, `configuring-dhcp-option-15`
+- `connected-devices-registration`, `client-lists`, `disabling-automatic-client-registration-on-the-local-network`,
+  `disabling-internet-access-for-all-unregistered-clients`, `a-mobile-device-loses-its-registration-`,
+  `managing-clients-with-random-mac-addresses`, `how-to-get-information-about-wi-fi-clients`,
+  `waking-up-a-device-over-the-network--wake-on-lan-`
+- `changing-a-wan-mac-address` не нужен (это в 02)
+- `14010-limiting-the-speed-of-home-network-devices`, `14052-a-work-schedule-for-connected-devices`,
+  `14193-how-to-block-internet-access-of-a-network-client` — только как примеры списка устройств
+
+Особо зафиксируй: как Keenetic показывает список устройств/аренд (таблица?), как делается
+постоянная привязка IP (static lease / регистрация), фильтры и поиск по клиентам,
+пустое состояние, как выглядит карточка устройства.
+
+Отображение: наши разделы «DHCP» (`/dhcp`) и часть «Подключения и адреса».

@@ -1,0 +1,21 @@
+Прочитай `docs/ui-refs/keenetic/_AGENT-SPEC.md` и следуй ему буквально.
+
+Твой блок: **Keenetic → DNS: серверы, шифрование, DNS-маршруты, KeenDNS**.
+Выходной файл: `docs/ui-refs/keenetic/04-dns.md`
+Префикс скриншотов: `screenshots/04-dns/`
+
+Что собрать (ключи в `keenetic-toc.txt`):
+- `additional-dns-servers`, `how-to-ignore-your-isp-s-dns`
+- `dot-and-doh-proxy-servers-for-dns-requests-encryption`
+- `dns-based-routes` (Маршруты DNS) — очень важно
+- `dns-service` (KeenDNS), `dns-frequently-asked-questions`, `dns-service-error-codes`
+- `creating-a-dns-profile-without-filtering` и профили DNS/фильтрация (`application-filter`? нет — ищи `dns-profile`)
+- `configuring-dns-alias-cname`
+- `accessing-a-network-device-by-its-hostname`
+- `15884-remote-access-to-home-network-resources-with-dns`
+
+Особо зафиксируй: как в UI задаются DNS-серверы (список/строки), как включается DoT/DoH
+(выбор протокола), как показан KeenDNS (авторизация/статус), структура «Маршруты DNS»
+(таблица: домен → маршрут/интерфейс).
+
+Отображение: наш раздел «DNS» (`/dns`) + доменные политики в «Выборочная маршрутизация».

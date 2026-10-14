@@ -1,0 +1,23 @@
+Прочитай `docs/ui-refs/keenetic/_AGENT-SPEC.md` и следуй ему буквально.
+
+Твой блок: **Keenetic → «Межсетевой экран» и «Переадресация портов»**.
+Выходной файл: `docs/ui-refs/keenetic/05-firewall-and-forwarding.md`
+Префикс скриншотов: `screenshots/05-firewall/`
+
+Что собрать (ключи в `keenetic-toc.txt`):
+- `15597-firewall`, `15598-firewall-rule-examples`
+- `22345-how-does-a-firewall-work-`, `22347-copying,-moving-and-deleting-multiple-firewall-rules`
+- `36922-when-should-port-forwarding-and-firewall-rules-be-used-`
+- `51135-configuring-firewall-rules-that-use-ip-address-ranges`
+- `51146-how-do-i-configure-firewall-rules-for-outgoing-packets-`
+- `15600-work-schedule-for-firewall-and-port-forwarding-rules`
+- Порты-форвардинг: ключ `forwarding` (раздел), `forwarding-all-ports-to-a-local-host--dmz-host-`
+- `application-filter`, `ddos-protection`
+- `disabling-stp-support-on-a-router-switch-port` — не нужен
+
+Особо зафиксируй: как выглядит таблица правил (порядок, вкл/выкл, drag/порядок),
+как создаётся правило (инлайн-строка vs модальное окно с формой), как задаются src/dst/порты
+(выпадающие списки? мастер?), как показано «авто»-правило для port forward, пустое состояние,
+что происходит при изменении порядка (кнопки вверх/вниз?).
+
+Отображение: наш раздел «Правила» (`/firewall`) + «Входящие сайты» (`/proxy`, port forward).

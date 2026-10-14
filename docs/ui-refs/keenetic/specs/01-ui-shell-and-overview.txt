@@ -1,0 +1,21 @@
+Прочитай `docs/ui-refs/keenetic/_AGENT-SPEC.md` и следуй ему буквально.
+
+Твой блок: **общая оболочка интерфейса Keenetic + раздел «Статус/Обзор»**.
+Выходной файл: `docs/ui-refs/keenetic/01-ui-shell-and-overview.md`
+Префикс скриншотов: `screenshots/01-overview/`
+
+Что собрать:
+1. Общая оболочка веб-конфигуратора: структура левого меню, верхняя панель, хлебные крошки,
+   переходы, язык интерфейса, поведение при навигации.
+   Статьи (проверь exact slug по `keenetic-toc.txt`, ключи: `web-interface`, `navigation`, `language`,
+   `initial-setup-wizard`, `getting-started`, `introduction`).
+2. Раздел «Статус» / «Системный монитор» / «Монитор трафика»:
+   ключи в TOC: `13913-status`, `13914-system-dashboard`, `19333-current-status-monitoring`,
+   `13915-traffic-monitor`, `24377-wi-fi-monitor`, `21741-internal-service-traffic`,
+   `35338-site-and-node-statuses`, `data-usage-and-limit`.
+3. Как Keenetic показывает статус сервисов/подключений, индикаторы, плитки метрик,
+   состояние интернета на первом экране.
+
+Отображение на наши разделы: «Обзор» (`/`), а также оболочка целиком (меню/шапка) для всей панели.
+
+В конце — раздел «Что переносим в vs-router» с конкретикой (меню, группы, обзорный экран).
