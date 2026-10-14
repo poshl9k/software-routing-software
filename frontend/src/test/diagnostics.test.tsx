@@ -71,6 +71,25 @@ it("filters connections and closes only the confirmed row", async () => {
   await waitFor(() => expect(close.mock.calls.map(([id]) => id)).toEqual(["udp-id"]));
 });
 
+it("keeps all eight connection headers and filters rows by search", async () => {
+  vi.spyOn(api, "runtimeEngine").mockResolvedValue(engine);
+  vi.spyOn(api, "runtimeConnections").mockResolvedValue({ upload: 0, download: 0, connections: [
+    { id: "tcp-id", metadata: { network: "tcp", host: "alpha.example" } },
+    { id: "udp-id", metadata: { network: "udp", host: "beta.example" } },
+  ] });
+  const user = mount();
+  await user.click(screen.getByRole("tab", { name: "Соединения" }));
+  const table = await screen.findByRole("table");
+  expect(within(table).getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+    "Протокол", "Источник", "Назначение", "Правило", "Выход", "Трафик", "Состояние", "Действие",
+  ]);
+  expect(within(table).getAllByRole("row")).toHaveLength(3);
+  await user.type(screen.getByRole("textbox", { name: "Поиск соединений" }), "beta");
+  expect(within(table).getAllByRole("row")).toHaveLength(2);
+  expect(within(table).queryByText(/alpha\.example/)).not.toBeInTheDocument();
+  expect(within(table).getByText(/beta\.example/)).toBeVisible();
+});
+
 it("masks logs, pauses polling, and clears visible entries", async () => {
   vi.spyOn(api, "runtimeEngine").mockResolvedValue(engine);
   const logs = vi.spyOn(api, "runtimeLogs").mockResolvedValue([

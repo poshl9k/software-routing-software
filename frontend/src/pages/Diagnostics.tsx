@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Box, Button, FormControl, InputLabel, MenuItem, Paper, Select, Stack,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Typography,
-} from "@mui/material";
+import { Button, Typography } from "@mui/material";
 import { api } from "../api";
 import type { RuntimeConnection, RuntimeLogEntry } from "../types";
 import { tokens } from "../theme";
 import { useRouterState } from "../state";
 import { PageHeader } from "../components/PageHeader";
 import { PageSection } from "../components/PageSection";
+import { DataTable } from "../components/DataTable";
+import { Field } from "../components/Field";
+import { Select } from "../components/Select";
 import { StatTile } from "../components/StatTile";
 import { InlineStatus } from "../components/InlineStatus";
 import { EmptyState } from "../components/EmptyState";
@@ -56,13 +56,13 @@ function Engine() {
     action={<Button onClick={() => void status.refetch()} disabled={status.isFetching}>Обновить</Button>}>
     <ErrorNotice error={safeError(status.error)} />
     <ErrorNotice error={safeError(action.error)} />
-    <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))", gap: 2, mb: 2 }}>
+    <div className="form-grid stats">
       <StatTile label="Установлен" value={engine ? engine.installed ? "Да" : "Нет" : null} />
       <StatTile label="Версия" value={engine?.version ?? null} />
       <StatTile label="PID" value={engine?.pid ?? null} />
       <StatTile label="Clash API" value={engine ? engine.clash_api ? "Доступен" : "Недоступен" : null} />
-    </Box>
-    <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+    </div>
+    <div className="diag-controls">
       <InlineStatus tone={!engine ? "unknown" : engine.running ? "green" : "neutral"}
         text={!engine ? "Состояние неизвестно" : engine.running ? "Работает" : "Остановлен"} />
       {user?.role === "admin" && <>
@@ -70,7 +70,7 @@ function Engine() {
         <Button variant="outlined" disabled={!engine?.running || action.isPending} onClick={() => submit("stop")}>Остановить</Button>
         <Button variant="outlined" disabled={!engine?.running || action.isPending} onClick={() => setConfirmRestart(true)}>Перезапустить</Button>
       </>}
-    </Stack>
+    </div>
     <ConfirmDialog open={confirmRestart} title="Перезапустить движок?"
       body="Активные соединения могут прерваться." confirmLabel="Перезапустить" cancelLabel="Отмена"
       onConfirm={() => submit("restart")} onCancel={() => setConfirmRestart(false)} danger />
@@ -100,32 +100,29 @@ function Connections() {
     action={<Button onClick={() => void query.refetch()} disabled={query.isFetching}>Обновить</Button>}>
     <ErrorNotice error={safeError(query.error)} />
     <ErrorNotice error={safeError(close.error)} />
-    <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }}>
-      <TextField label="Поиск соединений" value={search} onChange={(e) => setSearch(e.target.value)} size="small" />
-      <FormControl size="small" sx={{ minWidth: 180 }}><InputLabel id="protocol-filter">Протокол</InputLabel>
-        <Select labelId="protocol-filter" label="Протокол" value={protocol} onChange={(e) => setProtocol(e.target.value)}>
-          <MenuItem value="all">Все</MenuItem>{protocols.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}
-        </Select></FormControl>
-    </Stack>
+    <div className="diag-controls">
+      <Field className="grow" label="Поиск соединений" value={search} onChange={setSearch} fullWidth={false} />
+      <Select label="Протокол" value={protocol} onChange={setProtocol} fullWidth={false} sx={{ minWidth: 180 }}
+        options={[{ value: "all", label: "Все" }, ...protocols.map((item) => ({ value: item, label: item }))]} />
+    </div>
     {query.isPending ? <Typography>Загрузка соединений…</Typography> : query.isError ?
       <EmptyState title="Соединения недоступны">Состояние неизвестно.</EmptyState> : visible.length === 0 ?
       <EmptyState title="Нет соединений">Снимок пуст или ничего не найдено.</EmptyState> :
-      <TableContainer component={Paper} sx={{ border: `1px solid ${tokens.border}` }}>
-        <Table size="small" aria-label="Активные соединения"><TableHead><TableRow>
-          {["Протокол", "Источник", "Назначение", "Правило", "Выход", "Трафик", "Состояние", "Действие"].map((label) => <TableCell key={label}>{label}</TableCell>)}
-        </TableRow></TableHead><TableBody>{visible.map((row) => {
+      <div className="table-wide"><DataTable
+        heads={["Протокол", "Источник", "Назначение", "Правило", "Выход", "Трафик", "Состояние", "Действие"]}
+        rows={visible.map((row) => {
           const m = row.metadata;
-          return <TableRow key={row.id}>
-            <TableCell>{address(m?.network)}</TableCell>
-            <TableCell>{address(m?.sourceIP)}:{address(m?.sourcePort)}</TableCell>
-            <TableCell>{address(m?.host ?? m?.destinationIP)}:{address(m?.destinationPort)}</TableCell>
-            <TableCell>{address(row.rule)}</TableCell>
-            <TableCell>{address(row.chains?.join(" → "))}</TableCell>
-            <TableCell>↑ {bytes(row.upload)} · ↓ {bytes(row.download)}</TableCell>
-            <TableCell><InlineStatus tone="green" text="Активно" /></TableCell>
-            <TableCell>{user?.role === "admin" && <Button size="small" color="error" disabled={close.isPending} onClick={() => setClosing(row)}>Закрыть</Button>}</TableCell>
-          </TableRow>;
-        })}</TableBody></Table></TableContainer>}
+          return [
+            address(m?.network),
+            <>{address(m?.sourceIP)}:{address(m?.sourcePort)}</>,
+            <>{address(m?.host ?? m?.destinationIP)}:{address(m?.destinationPort)}</>,
+            address(row.rule),
+            address(row.chains?.join(" → ")),
+            <>↑ {bytes(row.upload)} · ↓ {bytes(row.download)}</>,
+            <InlineStatus tone="green" text="Активно" />,
+            user?.role === "admin" && <Button size="small" color="error" disabled={close.isPending} onClick={() => setClosing(row)}>Закрыть</Button>,
+          ];
+        })} /></div>}
     <ConfirmDialog open={closing !== null} title="Закрыть соединение?" body="Это прервёт выбранное соединение."
       confirmLabel="Закрыть" cancelLabel="Отмена" danger onCancel={() => setClosing(null)}
       onConfirm={() => { if (closing) close.mutate(closing.id); setClosing(null); }} />
@@ -162,29 +159,25 @@ function Logs() {
   return <PageSection title="Журнал sing-box" subtitle="Последние 100 строк ответа API. Обновление каждые 15 секунд; не поток событий. Адреса скрыты."
     action={<Button onClick={refresh} disabled={query.isFetching}>Обновить</Button>}>
     <ErrorNotice error={safeError(query.error)} /><ErrorNotice error={operationError} />
-    <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
-      <FormControl size="small" sx={{ minWidth: 150 }}><InputLabel id="log-level">Уровень</InputLabel>
-        <Select labelId="log-level" label="Уровень" value={level} onChange={(e) => { setLevel(e.target.value as Level); setCleared(false); }}>
-          <MenuItem value="debug">Отладка</MenuItem><MenuItem value="info">Информация</MenuItem>
-          <MenuItem value="warning">Предупреждения</MenuItem><MenuItem value="error">Ошибки</MenuItem>
-        </Select></FormControl>
-      <FormControl size="small" sx={{ minWidth: 150 }}><InputLabel id="log-source">Источник</InputLabel>
-        <Select labelId="log-source" label="Источник" value={sources.includes(source) ? source : "all"} onChange={(e) => setSource(e.target.value)}>
-          <MenuItem value="all">Все</MenuItem>{sources.map((item) => <MenuItem key={item} value={item}>{maskLog(item)}</MenuItem>)}
-        </Select></FormControl>
-      <TextField size="small" label="Поиск в журнале" value={search} onChange={(e) => setSearch(e.target.value)} />
+    <div className="diag-controls">
+      <Select label="Уровень" value={level} fullWidth={false} sx={{ minWidth: 150 }} onChange={(value) => { setLevel(value as Level); setCleared(false); }}
+        options={[{ value: "debug", label: "Отладка" }, { value: "info", label: "Информация" },
+          { value: "warning", label: "Предупреждения" }, { value: "error", label: "Ошибки" }]} />
+      <Select label="Источник" value={sources.includes(source) ? source : "all"} fullWidth={false} sx={{ minWidth: 150 }} onChange={setSource}
+        options={[{ value: "all", label: "Все" }, ...sources.map((item) => ({ value: item, label: maskLog(item) }))]} />
+      <Field className="grow" label="Поиск в журнале" value={search} onChange={setSearch} fullWidth={false} />
       <Button variant="outlined" onClick={() => { if (paused) setCleared(false); setPaused(!paused); }}>{paused ? "Продолжить" : "Пауза"}</Button>
       <Button disabled={!visible.length} onClick={() => void copy()}>Копировать</Button>
       <Button disabled={!visible.length} onClick={download}>Скачать</Button>
       <Button disabled={!entries.length} onClick={() => setCleared(true)}>Очистить</Button>
-    </Stack>
+    </div>
     {query.isPending && !cleared ? <Typography>Загрузка журнала…</Typography> : query.isError ?
       <EmptyState title="Журнал недоступен">Состояние неизвестно.</EmptyState> : visible.length === 0 ?
       <EmptyState title="Нет записей">Хвост пуст или записи скрыты фильтром.</EmptyState> :
-      <Box component="pre" sx={{ p: 2, bgcolor: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 1,
+      <Typography component="pre" sx={{ p: 2, bgcolor: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 1,
         whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 520, overflow: "auto", fontSize: 13 }}>
         {lines}
-      </Box>}
+      </Typography>}
   </PageSection>;
 }
 
@@ -192,6 +185,6 @@ export default function Diagnostics() {
   const [tab, setTab] = useState<Tab>("engine");
   return <div className="page"><PageHeader>Диагностика</PageHeader>
     <ValueTabs tabs={tabs} value={tab} change={setTab} />
-    <Box sx={{ mt: 3 }}>{tab === "engine" ? <Engine /> : tab === "connections" ? <Connections /> : <Logs />}</Box>
+    {tab === "engine" ? <Engine /> : tab === "connections" ? <Connections /> : <Logs />}
   </div>;
 }
