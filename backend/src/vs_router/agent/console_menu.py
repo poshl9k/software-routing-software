@@ -1,4 +1,10 @@
-"""Local root console menu. Pending network edits remain in memory until apply."""
+"""Local root console menu. Pending network edits remain in memory until apply.
+
+Every user-facing string is plain ASCII English on purpose: the menu runs on the
+physical console (tty1) of the installed image, whose console font has no Cyrillic
+glyphs, so Russian labels render as mojibake (`0$)B0...`). English keeps the menu
+readable on any console and any locale.
+"""
 import getpass
 from dataclasses import dataclass, field
 from ipaddress import IPv4Address, IPv4Interface
@@ -100,15 +106,15 @@ def build_configuration(selection, previous=None):
 
 
 def render_status(ports, selection, version, services, management=None, fingerprint=None):
-    lines = [f'Версия: {version if version is not None else "не применена"}']
+    lines = [f'Version: {version if version is not None else "not applied"}']
     for name, mac in sorted(ports.items()):
-        role = selection.roles.get(name, 'не назначен')
+        role = selection.roles.get(name, 'unassigned')
         spec = selection.addresses.get(name)
-        lines.append(f'{name} {mac}: {role}, {spec.address if spec and spec.address else spec.mode if spec else "без адреса"}')
+        lines.append(f'{name} {mac}: {role}, {spec.address if spec and spec.address else spec.mode if spec else "no address"}')
     for name, state in services.items():
         lines.append(f'{name}: {state}')
-    lines.append(f'Панель: https://{management.ip}/' if management else 'Панель: не настроена')
-    lines.append(f'CA SHA-256: {fingerprint}' if fingerprint else 'CA: не установлен')
+    lines.append(f'Panel: https://{management.ip}/' if management else 'Panel: not configured')
+    lines.append(f'CA SHA-256: {fingerprint}' if fingerprint else 'CA: not installed')
     return '\n'.join(lines)
 
 
@@ -160,8 +166,8 @@ class Menu:
                 carrier = '?'
             roles[name] = parse_role(self.input(f'{name} {mac} link={carrier} [WAN/LAN/-]: '))
         roles = {name: role for name, role in roles.items() if role}
-        self.print('Назначение: ' + ', '.join(f'{name}={role}' for name, role in roles.items()))
-        if self.input('Подтвердить? [да/нет]: ').strip().lower() == 'да':
+        self.print('Assignment: ' + ', '.join(f'{name}={role}' for name, role in roles.items()))
+        if self.input('Confirm? [y/n]: ').strip().lower() in ('y', 'yes'):
             self.selection.roles = roles
             self.selection.addresses = {name: spec for name, spec in self.selection.addresses.items()
                                         if name in roles}
@@ -184,26 +190,26 @@ class Menu:
         if not names:
             raise ValueError('console.roles_required')
         self.print(', '.join(names))
-        name = self.input('Интерфейс: ').strip()
+        name = self.input('Interface: ').strip()
         if name not in names:
             raise ValueError('console.invalid_interface')
-        mode = self.input('DHCP или static: ').strip().lower()
+        mode = self.input('Addressing (dhcp/static): ').strip().lower()
         if mode == 'dhcp':
             if self.selection.roles[name] == 'lan':
                 raise ValueError('management.dhcp_forbidden')
             spec = Addressing('dhcp')
         elif mode == 'static':
             default = '192.168.10.1/24' if self.selection.roles[name] == 'lan' else ''
-            address = self.input(f'IP/префикс [{default}]: ').strip() or default
-            spec = static_address(address, self.input('Шлюз (пусто = нет): '),
-                                  self.input('DNS (через пробел, пусто = нет): '))
+            address = self.input(f'IP/prefix [{default}]: ').strip() or default
+            spec = static_address(address, self.input('Gateway (empty = none): '),
+                                  self.input('DNS (space separated, empty = none): '))
         else:
             raise ValueError('console.invalid_addressing')
         self.selection.addresses[name] = spec
 
     def set_password(self):
-        secret = self.password('Новый пароль admin: ')
-        if not 8 <= len(secret) <= 1024 or secret != self.password('Повторите пароль: '):
+        secret = self.password('New admin password: ')
+        if not 8 <= len(secret) <= 1024 or secret != self.password('Repeat password: '):
             raise ValueError('console.password_invalid')
         hashed = PasswordHasher(type=Type.ID).hash(secret)
         with Session(self.database) as db:
@@ -216,7 +222,7 @@ class Menu:
                 user.password_hash = hashed
                 user.role = 'admin'
             db.commit()
-        self.print('Пароль обновлён.')
+        self.print('Password updated.')
 
     def status(self):
         row = None
@@ -226,7 +232,7 @@ class Menu:
                     ConfigurationRow.status == 'confirmed').order_by(ConfigurationRow.id.desc()))
         except Exception:
             # A not-yet-created/empty database must not crash the console.
-            self.print('Конфигурация пока недоступна (база не инициализирована).')
+            self.print('Configuration unavailable yet (database not initialized).')
         state = read_management((self.console.path(STATE_DIR) if self.console else STATE_DIR)
                                 / 'management.json')
         if state:
@@ -241,7 +247,7 @@ class Menu:
         displayed = Selection(dict(self.selection.roles), dict(self.selection.addresses))
         if row:
             for interface in row.configuration.interfaces:
-                displayed.roles.setdefault(interface.name, interface.zone or 'не назначен')
+                displayed.roles.setdefault(interface.name, interface.zone or 'unassigned')
                 displayed.addresses.setdefault(interface.name, Addressing(
                     interface.addressing, interface.addresses[0] if interface.addresses else None))
         self.print(render_status(self.ports(), displayed, row.id if row else None,
@@ -299,14 +305,14 @@ class Menu:
         status = result.get('status') if isinstance(result, dict) else result.status
         if status != 'confirmed':
             raise ValueError('agent.apply_failed')
-        self.print(f'Версия {version_id} применена. Панель: https://{expected.ip}/')
+        self.print(f'Version {version_id} applied. Panel: https://{expected.ip}/')
 
     def ping(self):
-        host = self.input('Хост (IP или имя): ').strip()
+        host = self.input('Host (IP or name): ').strip()
         if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.:-]{0,252}', host) or host.startswith('-'):
             raise ValueError('console.invalid_host')
         result = self.runner(['ping', '-c', '3', '-W', '2', host])
-        self.print('Ping: успешно' if result.returncode == 0 else 'Ping: нет ответа')
+        self.print('Ping: success' if result.returncode == 0 else 'Ping: no reply')
 
     def loop(self):
         local_guard()
@@ -316,9 +322,9 @@ class Menu:
                    '7': lambda: self.runner(['systemctl', 'poweroff']),
                    '9': lambda: self.runner(['/bin/sh'])}
         while True:
-            self.print('0) Выход · 1) Назначить интерфейсы (WAN/LAN) · 2) Задать IP-адрес интерфейса\n'
-                       '3) Сменить пароль администратора · 4) Показать состояние · 5) Сохранить и применить\n'
-                       '6) Перезагрузить · 7) Выключить · 8) Ping-проверка · 9) Оболочка (shell)')
+            self.print('0) Logout | 1) Assign interfaces (WAN/LAN) | 2) Set interface IP address\n'
+                       '3) Reset administrator password | 4) Show status | 5) Save and apply\n'
+                       '6) Reboot | 7) Power off | 8) Ping | 9) Shell')
             try:
                 choice = self.input('> ').strip()
                 if choice == '0':

@@ -68,7 +68,7 @@ def test_assign_confirmation_and_status(tmp_path, database):
         (sysnet / name / 'type').write_text('1')
         (sysnet / name / 'address').write_text(mac)
         (sysnet / name / 'carrier').write_text(carrier)
-    prompts = iter(['wan', 'lan', 'нет', 'wan', 'lan', 'да'])
+    prompts = iter(['wan', 'lan', 'no', 'wan', 'lan', 'yes'])
     output = []
     seen_prompts = []
     def answer(prompt):
@@ -85,7 +85,7 @@ def test_assign_confirmation_and_status(tmp_path, database):
     state = Management(interface='enp2s0', mac='00:11:22:33:44:66', address='10.42.0.1/24')
     text = render_status(menu.ports(), menu.selection, 2, {'caddy': 'active'}, state, 'ab:cd')
     assert 'https://10.42.0.1/' in text and 'CA SHA-256: ab:cd' in text
-    assert 'enp1s0' in text and 'Версия: 2' in text
+    assert 'enp1s0' in text and 'Version: 2' in text
 
 
 def test_password_no_echo(database):
