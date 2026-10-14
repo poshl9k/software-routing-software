@@ -59,6 +59,17 @@ describe("screens", () => {
     expect(disclosure.closest("details")).toHaveAttribute("open");
     expect(screen.getByText(/valid_lifetime/)).toBeVisible();
   });
+  it("reports an unreadable diff payload instead of crashing the screen", () => {
+    // Regression: a 200 response without summary/changes threw
+    // "Cannot read properties of undefined" and unmounted the whole Apply screen.
+    render(<DiffReview data={{} as Parameters<typeof DiffReview>[0]["data"]} />);
+    expect(screen.getByText(/Сервер не вернул разбор изменений/)).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "DHCP" })).not.toBeInTheDocument();
+  });
+  it("survives a summary section without consequences", () => {
+    render(<DiffReview data={{ changes: [], summary: [{ area: "dhcp", title: "DHCP", added: 0, removed: 0, changed: 0 }] } as unknown as Parameters<typeof DiffReview>[0]["data"]} />);
+    expect(screen.getByRole("heading", { name: "DHCP" })).toBeVisible();
+  });
   it("shows empty diff summary", () => {
     render(<DiffReview data={{ changes: [], summary: [] }} />);
     expect(screen.getByText("Нет изменений")).toBeVisible();
