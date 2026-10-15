@@ -12,6 +12,7 @@ const server: Tunnel = {
   peers: [{ name: "phone", public_key: "pub", allowed_ips: ["10.0.0.2/32"], preshared_key: { redacted: true } }],
   endpoint: null, server_public_key: null, allowed_ips: [], keepalive: 25,
   obfuscation: { Jc: 4, S1: 0, S2: 0, H1: 1, H2: 2, H3: 3, H4: 4 }, open_port: true,
+  preshared_key: null, header_protection_key: null, random_trailers: false, disable_cookies: false,
 };
 const generated = { private_key: "generated-private-key", public_key: "generated-public-key",
   obfuscation: { Jc: 4, Jmin: 35, Jmax: 90, S1: 12, S2: 95, H1: 11, H2: 12, H3: 13, H4: 14 } };
@@ -59,7 +60,7 @@ it("shows one tunnel card with honest status; opens one dialog with role locked 
   expect(within(dialog).getByLabelText("Preshared key")).toHaveValue("");
   expect(within(dialog).getByText("phone")).toBeVisible();
   await userEvent.click(within(dialog).getByText("Показать дополнительные настройки"));
-  expect(within(dialog).getByLabelText("Jc")).toHaveValue(4);
+  expect(within(dialog).getByLabelText("Jc")).toHaveValue("4");
 });
 it("opens the tunnel editor as one dialog with connection, keys and peers visible at once", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
@@ -159,19 +160,18 @@ it("creates server with WAN port closed and previews save effects", async () => 
   await userEvent.click(save());
   expect(draft(fetch).tunnels[0]).toMatchObject({ name: "vpn", role: "server", listen_port: 51820, open_port: false });
 });
-it("imports client conf with recognized fields and preserves Address; rejects PSK", async () => {
+it("imports client conf with recognized fields, preserves Address and the preshared secret", async () => {
   const fetch = await mount(<Tunnels />);
   const privateKey = `${"A".repeat(43)}=`;
   const publicKey = `${"B".repeat(43)}=`;
+  const presharedKey = `${"C".repeat(43)}=`;
   await userEvent.click(screen.getByRole("button", { name: "Импорт .conf" }));
-  const conf = `[Interface]\nAddress = 10.9.8.7/24\nPrivateKey = ${privateKey}\n[Peer]\nPublicKey = ${publicKey}\nEndpoint = vpn.example.org:51820\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25`;
-  fill("Содержимое .conf", conf + `\nPresharedKey = ${publicKey}`);
-  await userEvent.click(screen.getByRole("button", { name: "Показать распознанные поля" }));
-  expect(screen.getByText(/PresharedKey не поддерживается/)).toBeVisible();
+  const conf = `[Interface]\nAddress = 10.9.8.7/24\nPrivateKey = ${privateKey}\n[Peer]\nPublicKey = ${publicKey}\nPresharedKey = ${presharedKey}\nEndpoint = vpn.example.org:51820\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25`;
   fill("Содержимое .conf", conf);
   await userEvent.click(screen.getByRole("button", { name: "Показать распознанные поля" }));
   expect(screen.getByText(/Address 10.9.8.7\/24/)).toBeVisible();
   expect(screen.getByText(/endpoint vpn.example.org:51820/)).toBeVisible();
+  expect(screen.getByText(/PSK распознан/)).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Добавить в черновик" }));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Импорт .conf" })).not.toBeInTheDocument());
   expect(screen.getByLabelText("Имя туннеля")).toHaveValue("tunnel1");
@@ -179,6 +179,7 @@ it("imports client conf with recognized fields and preserves Address; rejects PS
   await userEvent.click(save());
   expect(draft(fetch).interfaces[0].addresses).toEqual(["10.9.8.7/24"]);
   expect(draft(fetch).tunnels[0].private_key).toEqual({ plaintext: privateKey });
+  expect(draft(fetch).tunnels[0].preshared_key).toEqual({ plaintext: presharedKey });
 });
 it("retains secret and only edits selected tunnel; delete requires confirmation", async () => {
   const fetch = await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });

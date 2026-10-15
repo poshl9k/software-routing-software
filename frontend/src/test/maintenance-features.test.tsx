@@ -39,7 +39,7 @@ it("generates tunnel keys and fills private key plus AWG parameters",async()=>{
   await user.click(within(editor).getByRole("button",{name:"Сгенерировать ключи"}));await waitFor(()=>expect(within(editor).getByLabelText("Приватный ключ")).toHaveValue("a".repeat(44)));
   expect(fetch).toHaveBeenCalledWith("/api/keygen/tunnel",expect.objectContaining({method:"POST",body:JSON.stringify({protocol:"awg"})}));
   await user.click(within(editor).getByText("Показать дополнительные настройки"));
-  expect(within(editor).getByLabelText("H4")).toHaveValue(14);expect(within(editor).getByLabelText("Jmin")).toHaveValue(35);
+  expect(within(editor).getByLabelText("H4")).toHaveValue("14");expect(within(editor).getByLabelText("Jmin")).toHaveValue("35");
 });
 it("generates and fills a peer PSK",async()=>{
   const fetch=setup(sampleConfiguration,(path)=>path==="/api/keygen/peer"?new Response(JSON.stringify({preshared_key:"p".repeat(44)})):new Response("{}"));

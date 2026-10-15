@@ -117,8 +117,16 @@ export interface Tunnel {
   endpoint: string | null;
   server_public_key: string | null;
   allowed_ips: string[];
-  keepalive: number;
-  obfuscation: Record<string, number>;
+  /** Seconds, or an AWG 3+ "min-max" range. */
+  keepalive: number | string;
+  /** AmneziaWG parameters: uint32s / "min-max" ranges, or I1-I5 signature strings. */
+  obfuscation: Record<string, number | string>;
+  /** Client only: the remote peer's preshared secret. */
+  preshared_key: Secret | null;
+  /** AmneziaWG 3+ header protection key (must match the remote end). */
+  header_protection_key: Secret | null;
+  random_trailers: boolean;
+  disable_cookies: boolean;
   /** Server only: open udp/<listen_port> on the WAN zone (generated firewall rule). */
   open_port: boolean;
 }

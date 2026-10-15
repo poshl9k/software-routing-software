@@ -31,11 +31,14 @@ describe("parseWireGuardConf", () => {
       role: "client", protocol: "wg", private_key: { plaintext: privateKey },
       server_public_key: publicKey, endpoint: "vpn.example.com:51820",
       allowed_ips: ["0.0.0.0/0", "::/0"], keepalive: 25,
+      preshared_key: null, header_protection_key: null,
+      random_trailers: false, disable_cookies: false,
       peers: [], listen_port: null, obfuscation: {},
     } });
     expect(Object.keys(result.tunnel ?? {}).sort()).toEqual([
-      "allowed_ips", "endpoint", "keepalive", "listen_port", "obfuscation", "peers",
-      "private_key", "protocol", "role", "server_public_key",
+      "allowed_ips", "disable_cookies", "endpoint", "header_protection_key", "keepalive",
+      "listen_port", "obfuscation", "peers", "preshared_key", "private_key", "protocol",
+      "random_trailers", "role", "server_public_key",
     ]);
   });
 
@@ -61,10 +64,60 @@ Unknown = ignored`)
     expect(JSON.stringify(result)).not.toContain(presharedKey);
   });
 
-  it("rejects a preshared secret rather than silently dropping it", () => {
+  it("keeps an AmneziaWG preshared secret instead of dropping it", () => {
     const result = parseWireGuardConf(basic.replace("[Peer]", `[Peer]\nPresharedKey = ${presharedKey}`));
-    expect(result).toEqual({ error: expect.stringContaining("PresharedKey") });
-    expect(JSON.stringify(result)).not.toContain(presharedKey);
+    expect(result.tunnel).toMatchObject({ preshared_key: { plaintext: presharedKey } });
+  });
+
+  it("maps an AmneziaWG 3 config with ranges, signature packets and toggles", () => {
+    const headerKey = `${"D".repeat(43)}=`;
+    const i1 = "<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>";
+    const conf = `[Interface]
+Address = 10.8.1.2/32
+DNS = 172.29.172.254, 1.0.0.1
+PrivateKey = ${privateKey}
+Jc = 6
+Jmin = 10
+Jmax = 50
+S1 = 12
+S2 = 12
+S3 = 12
+S4 = 12
+H1 = 1
+H2 = 2
+H3 = 3
+H4 = 4
+I1 = ${i1}
+HeaderProtectionKey = ${headerKey}
+RekeyAfterTime = 100-120
+RekeyTimeout = 3-7
+RejectAfterTime = 150-180
+KeepaliveTimeout = 5-15
+MaxHandshakeAttempts = 15-20
+RandomTrailers = on
+DisableCookies = on
+
+[Peer]
+PublicKey = ${publicKey}
+PresharedKey = ${presharedKey}
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = rg3.example.net:44972
+PersistentKeepalive = 25-35
+`;
+    const result = parseWireGuardConf(conf);
+    expect(result.tunnel).toMatchObject({
+      role: "client", protocol: "awg", endpoint: "rg3.example.net:44972",
+      allowed_ips: ["0.0.0.0/0", "::/0"], keepalive: "25-35",
+      preshared_key: { plaintext: presharedKey },
+      header_protection_key: { plaintext: headerKey },
+      random_trailers: true, disable_cookies: true,
+      obfuscation: {
+        Jc: 6, Jmin: 10, Jmax: 50, S1: 12, S2: 12, S3: 12, S4: 12,
+        H1: 1, H2: 2, H3: 3, H4: 4, I1: i1,
+        RekeyAfterTime: "100-120", RekeyTimeout: "3-7", RejectAfterTime: "150-180",
+        KeepaliveTimeout: "5-15", MaxHandshakeAttempts: "15-20",
+      },
+    });
   });
 
   it("rejects missing sections, required values and invalid keys", () => {
@@ -74,6 +127,7 @@ Unknown = ignored`)
     failure(basic.replace(privateKey, "short"), "PrivateKey");
     failure(basic.replace(publicKey, "short"), "PublicKey");
     failure(basic.replace("AllowedIPs =", "PresharedKey = invalid\nAllowedIPs ="), "PresharedKey");
+    failure(basic.replace("ListenPort = 51820", "HeaderProtectionKey = nope"), "HeaderProtectionKey");
   });
 
   it.each(["vpn.example.com", "vpn.example.com:0", "vpn.example.com:65536", "[bad::ip]:443", "2001:db8::1:443", "999.1.2.3:123", "-bad.example:443"])(
@@ -88,11 +142,14 @@ Unknown = ignored`)
     },
   );
 
-  it("rejects invalid AWG integers and keepalive without throwing", () => {
+  it("rejects invalid AWG integers, ranges, toggles and keepalive without throwing", () => {
     failure(basic.replace("ListenPort = 51820", "Jc = 1.5"), "Jc");
     failure(basic.replace("ListenPort = 51820", "H4 = nope"), "H4");
+    failure(basic.replace("ListenPort = 51820", "RekeyAfterTime = 10-x"), "RekeyAfterTime");
+    failure(basic.replace("ListenPort = 51820", "I1 ="), "I1");
+    failure(basic.replace("ListenPort = 51820", "RandomTrailers = maybe"), "RandomTrailers");
     failure(basic.replace("PersistentKeepalive = 25", "PersistentKeepalive = -1"), "PersistentKeepalive");
-    failure(basic.replace("PersistentKeepalive = 25", "PersistentKeepalive = 65536"), "PersistentKeepalive");
+    failure(basic.replace("PersistentKeepalive = 25", "PersistentKeepalive = soon"), "PersistentKeepalive");
     failure(basic + `\n[Peer]\nPublicKey = ${publicKey}`, "Peer");
   });
 });

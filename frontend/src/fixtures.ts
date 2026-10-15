@@ -51,6 +51,10 @@ export const sampleConfiguration: Configuration = {
     allowed_ips: ["10.8.0.0/24"],
     keepalive: 0,
     obfuscation: {},
+    preshared_key: null,
+    header_protection_key: null,
+    random_trailers: false,
+    disable_cookies: false,
     open_port: true,
     peers: [{
       name: "alina_laptop",

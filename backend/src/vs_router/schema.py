@@ -1,8 +1,9 @@
 """Versioned JSON contract. References use names, aliases use an explicit @ prefix."""
+import re
 from datetime import datetime
 from ipaddress import ip_address
 from typing import Annotated, Literal
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_serializer, model_validator
 
 Name = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,30}$")]
 # Engine-owned tags (DNS servers/rules and references to them) follow sing-box
@@ -187,6 +188,35 @@ class Peer(Model):
     allowed_ips: tuple[str, ...] = ()
 
 
+# AmneziaWG obfuscation parameters. Classic values are integers; AWG 3+ adds the
+# S3/S4 paddings, the I1-I5 signature packets and randomised ``min-max`` ranges
+# for paddings and timings (see amneziawg-go's "AWG 3+" configuration section).
+AWG_NUMERIC = frozenset({
+    "Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4",
+    "ContentPaddingAddition", "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime",
+    "KeepaliveTimeout", "MaxHandshakeAttempts"})
+AWG_SIGNATURE = frozenset({"I1", "I2", "I3", "I4", "I5"})
+# A single uint32 or an inclusive ``min-max`` range; ``(off)`` is a data-file
+# spelling that the panel represents by simply omitting the key.
+AWG_RANGE = re.compile(r"^[0-9]{1,10}(-[0-9]{1,10})?$")
+# AWG 3+ keys that belong to the interface's obfuscation set: the mandatory core
+# keys every client emits plus the optional AWG 3 additions.
+AWG_CORE = frozenset({"Jc", "S1", "S2", "H1", "H2", "H3", "H4"})
+
+
+def awg_parameter(key: str, value):
+    """Validate one obfuscation entry, raising the schema error otherwise."""
+    if key in AWG_NUMERIC:
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 0xFFFFFFFF:
+            return value
+        if isinstance(value, str) and AWG_RANGE.fullmatch(value):
+            return value
+    elif key in AWG_SIGNATURE:
+        if isinstance(value, str) and value and "\n" not in value and "\r" not in value:
+            return value
+    raise ValueError("tunnel.awg_parameter")
+
+
 class Tunnel(Model):
     name: Name
     interface: InterfaceName
@@ -198,11 +228,41 @@ class Tunnel(Model):
     endpoint: str | None = None
     server_public_key: str | None = None
     allowed_ips: tuple[str, ...] = ()
-    keepalive: int = Field(default=0, ge=0, le=65535)
-    obfuscation: dict[str, int] = Field(default_factory=dict)
+    # A client's persistent keepalive: seconds, or an AWG 3+ ``min-max`` range.
+    keepalive: int | str = 0
+    # AmneziaWG interface parameters. Values are uint32s or ``min-max`` ranges;
+    # I1-I5 are signature-packet expressions (strings).
+    obfuscation: dict[str, int | str] = Field(default_factory=dict)
+    # Client only: the peer's preshared secret, imported from a client config.
+    preshared_key: EncryptedSecret | None = None
+    # AmneziaWG 3+: low-entropy header protection key. Server-side in AWG terms
+    # (it must match the remote end); stored for either role, emitted verbatim.
+    header_protection_key: EncryptedSecret | None = None
+    # AmneziaWG 3+ toggles.
+    random_trailers: bool = False
+    disable_cookies: bool = False
     # Server only: open udp/<listen_port> on the WAN zone so remote clients can
     # reach the server. The panel shows the generated rule on the Firewall page.
     open_port: bool = True
+
+    @field_validator("obfuscation")
+    @classmethod
+    def check_obfuscation(cls, value):
+        for key, item in value.items():
+            if key not in AWG_NUMERIC and key not in AWG_SIGNATURE:
+                raise ValueError("tunnel.awg_key")
+            awg_parameter(key, item)
+        return value
+
+    @field_validator("keepalive")
+    @classmethod
+    def check_keepalive(cls, value):
+        if isinstance(value, int) and not isinstance(value, bool):
+            if 0 <= value <= 65535:
+                return value
+        elif isinstance(value, str) and AWG_RANGE.fullmatch(value):
+            return value
+        raise ValueError("tunnel.keepalive")
 
     @model_validator(mode="after")
     def check_role(self):
@@ -213,7 +273,7 @@ class Tunnel(Model):
             raise ValueError("tunnel.server_fields")
         if self.role == "client" and (self.peers or not self.endpoint or not self.server_public_key):
             raise ValueError("tunnel.client_fields")
-        if self.protocol == "awg" and not {"Jc", "S1", "S2", "H1", "H2", "H3", "H4"} <= self.obfuscation.keys():
+        if self.protocol == "awg" and not AWG_CORE <= self.obfuscation.keys():
             raise ValueError("tunnel.awg_parameters")
         return self
 

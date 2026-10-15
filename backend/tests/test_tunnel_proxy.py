@@ -53,6 +53,55 @@ def test_tunnel_golden(config, protocol, role):
     assert text == (Path(__file__).parent / 'golden' / f'{protocol}-{role}.bundle').read_text()
 
 
+def test_awg3_client_config_roundtrip(config):
+    """An imported AmneziaWG 3 client config is emitted verbatim: S3/S4, I1-I5,
+    min-max ranges, header protection, toggles and the preshared secret."""
+    import os
+    key = os.environ['VS_ROUTER_SECRET_KEY'].encode()
+    data = json.loads(json.dumps(config))
+    tunnel = data['configuration']['tunnels'][0]
+    tunnel.update(
+        role='client', protocol='awg', peers=[],
+        endpoint='rg1.example.net:44517', server_public_key='SERVER',
+        allowed_ips=['0.0.0.0/0', '::/0'], keepalive='25-35',
+        obfuscation={
+            'Jc': 5, 'Jmin': 10, 'Jmax': 50, 'S1': 28, 'S2': 132, 'S3': 43, 'S4': 12,
+            'H1': 1, 'H2': 2, 'H3': 3, 'H4': 4,
+            'I1': '<r 2><b 0x858000010001000000000669636c6f7564>',
+            'ContentPaddingAddition': '10-100', 'RekeyAfterTime': '100-120',
+            'RekeyTimeout': '3-7', 'RejectAfterTime': '150-180',
+            'KeepaliveTimeout': '5-15', 'MaxHandshakeAttempts': '15-20'},
+        header_protection_key=encrypt_secret('HEADERPROT', key).model_dump(),
+        preshared_key=encrypt_secret('PRESHARED', key).model_dump(),
+        random_trailers=True, disable_cookies=True)
+    files = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    text = files['vpn.conf']
+    for expected in ('Jc = 5', 'S3 = 43', 'S4 = 12', 'H4 = 4',
+                     'I1 = <r 2><b 0x858000010001000000000669636c6f7564>',
+                     'ContentPaddingAddition = 10-100', 'RekeyAfterTime = 100-120',
+                     'MaxHandshakeAttempts = 15-20', 'HeaderProtectionKey = HEADERPROT',
+                     'RandomTrailers = on', 'DisableCookies = on',
+                     'PresharedKey = PRESHARED', 'PersistentKeepalive = 25-35'):
+        assert expected in text, expected
+    # The interface parameters land before the peer section.
+    assert text.index('HeaderProtectionKey') < text.index('[Peer]')
+    assert text.index('[Peer]') < text.index('PresharedKey')
+
+
+def test_tunnel_contract_rejects_bad_awg_values(config):
+    data = json.loads(json.dumps(config))
+    tunnel = data['configuration']['tunnels'][0]
+    tunnel.update(protocol='awg', obfuscation=dict(Jc=4, S1=15, S2=95, H1=1, H2=2, H3=3, H4=4))
+    for broken in ({'S3': 'x-y'}, {'Unknown': 1}, {'I1': ''}, {'Jc': 1.5}):
+        tunnel['obfuscation'] = {**tunnel['obfuscation'], **broken}
+        with pytest.raises(Exception):
+            Tunnel.model_validate(tunnel)
+    tunnel['obfuscation'] = dict(Jc=4, S1=15, S2=95, H1=1, H2=2, H3=3, H4=4)
+    tunnel['keepalive'] = 'not-a-range'
+    with pytest.raises(Exception):
+        Tunnel.model_validate(tunnel)
+
+
 def test_caddy_golden(config):
     version = ConfigurationVersion.model_validate(config)
     result = generate_caddy_json(version)

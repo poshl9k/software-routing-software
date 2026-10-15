@@ -46,8 +46,23 @@ import { parseWireGuardConf } from "../tunnelConf";
 const ipsValid = (v: string[]) =>
   v.filter((s) => s.trim()).every((s) => addressValid(s.trim()));
 const split = (v: string) => v.split(",");
+const awgNumericKeys = ["Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4",
+  "ContentPaddingAddition", "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime",
+  "KeepaliveTimeout", "MaxHandshakeAttempts"];
+const awgSignatureKeys = ["I1", "I2", "I3", "I4", "I5"];
+const awgFields = [...awgNumericKeys, ...awgSignatureKeys];
+// AWG core parameters every client emits; the rest are optional AWG 3+ additions.
 const awgRequired = ["Jc", "S1", "S2", "H1", "H2", "H3", "H4"];
-const awgFields = ["Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"];
+const rangeValue = /^[0-9]{1,10}(-[0-9]{1,10})?$/;
+/** A uint32 or an AWG 3+ "min-max" range: keepalive, paddings and timings. */
+const numericValue = (v: unknown) =>
+  (typeof v === "number" && Number.isInteger(v) && v >= 0) || (typeof v === "string" && rangeValue.test(v));
+const awgValueValid = (key: string, v: unknown) =>
+  awgSignatureKeys.includes(key) ? typeof v === "string" && v.trim() !== "" : numericValue(v);
+const awgInput = (key: string, v: string): number | string => {
+  const value = v.trim();
+  return awgSignatureKeys.includes(key) || !/^[0-9]+$/.test(value) ? value : Number(value);
+};
 const certificateModeLabels: Record<CaddySite["certificate_mode"], string> = {
   http01: "Авто (HTTP-01)",
   dns01: "Авто (DNS-01)",
@@ -558,7 +573,7 @@ function Collection<T extends Row>({
               </FormWide>
             </FormGrid>
             {preview && parsedImport?.error && <ErrorNotice error={new Error(parsedImport.error)} />}
-            {preview && parsedImport?.row && <InfoNote>Распознано: клиент · {(parsedImport.row as Tunnel).protocol === "awg" ? "AmneziaWG" : "WireGuard"}; endpoint {(parsedImport.row as Tunnel).endpoint}; AllowedIPs {(parsedImport.row as Tunnel).allowed_ips.join(", ")}; Address {parsedImport.address ?? "отсутствует — будет назначен автоматически"}; PSK отсутствует. Приватный ключ скрыт. Сохранение создаёт только черновик.</InfoNote>}
+            {preview && parsedImport?.row && <InfoNote>Распознано: клиент · {(parsedImport.row as Tunnel).protocol === "awg" ? "AmneziaWG" : "WireGuard"}; endpoint {(parsedImport.row as Tunnel).endpoint}; AllowedIPs {(parsedImport.row as Tunnel).allowed_ips.join(", ")}; Address {parsedImport.address ?? "отсутствует — будет назначен автоматически"}; PSK {(parsedImport.row as Tunnel).preshared_key ? "распознан" : "отсутствует"}. Приватный ключ скрыт. Сохранение создаёт только черновик.</InfoNote>}
             <ErrorNotice error={importError ? new Error(importError) : null} />
           </DialogContent>
           <DialogActions>
@@ -601,6 +616,10 @@ export function Tunnels() {
     allowed_ips: [],
     keepalive: 25,
     obfuscation: {},
+    preshared_key: null,
+    header_protection_key: null,
+    random_trailers: false,
+    disable_cookies: false,
     open_port: true,
   });
   const createTunnel = async (rows: Tunnel[], role: Tunnel["role"], protocol: Tunnel["protocol"]): Promise<Tunnel> => {
@@ -664,9 +683,7 @@ export function Tunnels() {
           ifaceNameValid(t.interface) &&
           secretValid(t.private_key) &&
           ipsValid(t.allowed_ips) &&
-          Number.isInteger(t.keepalive) &&
-          t.keepalive >= 0 &&
-          t.keepalive <= 65535 &&
+          numericValue(t.keepalive) &&
           (t.role === "server"
             ? portValid(t.listen_port ?? 0) &&
               t.peers.every(
@@ -678,8 +695,8 @@ export function Tunnels() {
               new Set(t.peers.map((p) => p.name)).size === t.peers.length
             : !!t.endpoint?.trim() && !!t.server_public_key?.trim()) &&
           (t.protocol !== "awg" ||
-            (awgRequired.every((k) => Number.isInteger(t.obfuscation[k])) &&
-              Object.values(t.obfuscation).every(Number.isInteger)))
+            (awgRequired.every((k) => awgValueValid(k, t.obfuscation[k])) &&
+              Object.entries(t.obfuscation).every(([k, v]) => awgValueValid(k, v))))
         }
         clean={(t) => ({
           ...t,
@@ -746,14 +763,17 @@ export function Tunnels() {
             {t.role === "client" && <>
                 <Field label="Endpoint" value={t.endpoint ?? ""} valid={!!t.endpoint?.trim()} onChange={(endpoint) => patch({ endpoint })} />
                 <Field label="AllowedIPs" value={t.allowed_ips.join(",")} valid={ipsValid(t.allowed_ips)} hint="AllowedIPs ≠ маршрут" onChange={(v) => patch({ allowed_ips: split(v) })} />
-                <Field label="Keepalive, с" type="number" value={t.keepalive}
-                  valid={Number.isInteger(t.keepalive) && t.keepalive >= 0 && t.keepalive <= 65535}
-                  onChange={(v) => patch({ keepalive: Number(v) })} />
+                <Field label="Keepalive, с" value={String(t.keepalive)} valid={numericValue(t.keepalive)}
+                  hint="Секунды или диапазон AWG 3+, например 25-35"
+                  onChange={(v) => patch({ keepalive: /^[0-9]+$/.test(v) ? Number(v) : v })} />
             </>}
           </FormGrid></PageSection>
           <PageSection title="Ключи"><FormGrid>
             <FormWide><InfoNote severity="warning">Повторная генерация ключей разорвёт соединение клиентов. Обновите конфигурации другой стороны.</InfoNote></FormWide>
-            {t.role === "client" && <Field label="Публичный ключ сервера" value={t.server_public_key ?? ""} valid={!!t.server_public_key?.trim()} onChange={(server_public_key) => patch({ server_public_key })} />}
+            {t.role === "client" && <>
+              <Field label="Публичный ключ сервера" value={t.server_public_key ?? ""} valid={!!t.server_public_key?.trim()} onChange={(server_public_key) => patch({ server_public_key })} />
+              <SecretField label="Preshared key" value={t.preshared_key} showOriginalHint={false} change={(preshared_key) => patch({ preshared_key })} />
+            </>}
             <div>
               <SecretField label="Приватный ключ" value={t.private_key} change={(v) => patch({ private_key: v ?? { plaintext: "" } })} />
               <FormActions><Button disabled={disabled} onClick={() => void api.keygenTunnel(t.protocol)
@@ -868,21 +888,26 @@ export function Tunnels() {
                       <Field
                         key={k}
                         label={k}
-                        type="number"
-                        value={t.obfuscation[k] ?? ""}
+                        value={t.obfuscation[k] === undefined ? "" : String(t.obfuscation[k])}
+                        hint={awgSignatureKeys.includes(k) ? "Сигнатурный пакет, напр. <r 2><b 0x…>" : "Значение или диапазон, напр. 100-120"}
                         valid={
                           t.obfuscation[k] === undefined
                             ? !awgRequired.includes(k)
-                            : Number.isInteger(t.obfuscation[k])
+                            : awgValueValid(k, t.obfuscation[k])
                         }
                         onChange={(v) => {
                           const obfuscation = { ...t.obfuscation };
-                          if (v === "") delete obfuscation[k];
-                          else obfuscation[k] = Number(v);
+                          if (v.trim() === "") delete obfuscation[k];
+                          else obfuscation[k] = awgInput(k, v);
                           patch({ obfuscation });
                         }}
                       />
                     ))}
+                    <FormWide>
+                      <SecretField label="HeaderProtectionKey" value={t.header_protection_key} showOriginalHint={false} change={(header_protection_key) => patch({ header_protection_key })} />
+                    </FormWide>
+                    <Toggle label="RandomTrailers" value={t.random_trailers} onChange={(random_trailers) => patch({ random_trailers })} />
+                    <Toggle label="DisableCookies" value={t.disable_cookies} onChange={(disable_cookies) => patch({ disable_cookies })} />
                   </FormGrid>
                 </Card>
             )}
