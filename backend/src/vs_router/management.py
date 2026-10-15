@@ -24,6 +24,14 @@ class Management(Model):
     # also the panel endpoint; identity is still pinned by name + MAC, but there
     # is only one wired port and its address may be a DHCP lease. See ADR-0017.
     mode: Literal["separate-lan", "single-uplink"] = "separate-lan"
+    # Optional public publication of the panel (ADR-0017). When `hostname` is set
+    # the panel is served with an ACME (HTTP-01) certificate for that name
+    # instead of the local CA; `path_prefix` puts the panel and its API behind a
+    # secret path so the bare host root exposes nothing.
+    hostname: str | None = Field(
+        default=None,
+        pattern=r'^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$')
+    path_prefix: str | None = Field(default=None, pattern=r'^/[A-Za-z0-9_-]{8,64}$')
 
     @model_validator(mode='after')
     def valid_address(self):

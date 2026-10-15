@@ -413,3 +413,36 @@ def test_single_uplink_site_on_the_panel_address_is_allowed():
     validate_site_bindings(version, VPS)
     with pytest.raises(ValueError, match='management.site_binding_conflict'):
         validate_site_bindings(version, VPS.model_copy(update={'mode': 'separate-lan'}))
+
+
+def test_caddy_publishes_panel_with_acme_hostname_and_secret_path():
+    state = VPS.model_copy(update={'hostname': '92.51.36.131.nip.io',
+                                   'path_prefix': '/uOE3flWG7hvM'})
+    config = generate_caddy_json(ConfigurationVersion(), state)
+    server = config['apps']['http']['servers']['management']
+    assert server['listen'] == ['92.51.36.131:443']
+    assert server['tls_connection_policies'] == [{'default_sni': '92.51.36.131.nip.io'}]
+    # ACME HTTP-01: the name is automated and no local-CA cert is loaded.
+    tls = config['apps']['tls']['certificates']
+    assert '92.51.36.131.nip.io' in tls['automate']
+    assert 'load_files' not in tls
+    assert config['apps']['tls']['automation']['policies'][0]['issuers'][0]['module'] == 'acme'
+    assert config['apps']['http']['servers']['management_acme']['listen'] == ['92.51.36.131:80']
+    # The panel and API live under the prefix; the root 404s; /health stays open.
+    assert server['routes'][0]['match'] == [{'path': ['/health']}]
+    assert server['routes'][1]['match'] == [{'path': ['/uOE3flWG7hvM/*']}]
+    assert server['routes'][1]['handle'][0] == {'handler': 'rewrite',
+                                                'strip_path_prefix': '/uOE3flWG7hvM'}
+    assert server['routes'][2]['handle'][0]['status_code'] == 404
+
+
+def test_caddy_panel_without_hostname_keeps_the_local_ca():
+    config = generate_caddy_json(ConfigurationVersion(), VPS)
+    server = config['apps']['http']['servers']['management']
+    assert server['listen'] == ['92.51.36.131:443']
+    assert server['routes'] == [{'handle': [{'handler': 'reverse_proxy', 'upstreams': [
+        {'dial': 'unix//run/vs-router/web/web.sock'}]}]}]
+    assert server['tls_connection_policies'][0]['certificate_selection'] == {'any_tag': ['management']}
+    assert config['apps']['tls']['certificates']['load_files'][0]['tags'] == ['management']
+    assert 'automate' not in config['apps']['tls']['certificates']
+    assert 'management_acme' not in config['apps']['http']['servers']
