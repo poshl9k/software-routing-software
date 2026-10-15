@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from ipaddress import IPv4Address
 
-from ..management import (Management, STATE_DIR, TLS_DIR, read_management,
+from ..management import (Management, STATE_DIR, STATE_PATH, TLS_DIR, read_management,
                           verify_identity, wired_ports)
 from ..schema import ConfigurationVersion
 from ..generators.caddy import generate_caddy_json
@@ -208,6 +208,81 @@ class Console:
                 time.sleep(1)
         return state, ca.fingerprint(hashes.SHA256()).hex(':')
 
+    def live_address(self, interface):
+        """The interface's current IPv4 address as ``a.b.c.d/prefix``, or None."""
+        result = self.runner(['ip', '-j', '-4', 'address', 'show', 'dev', interface])
+        try:
+            entries = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            return None
+        for entry in entries:
+            if entry.get('ifname') == interface:
+                for addr in entry.get('addr_info', []):
+                    if addr.get('family') == 'inet' and addr.get('local'):
+                        return f"{addr['local']}/{addr['prefixlen']}"
+        return None
+
+    def provision_single_uplink(self, interface=None, address=None, hostname=None,
+                                path_prefix=None, ssh_port=22):
+        """One-NIC (VPS) provisioning, run over SSH: no console, no ISO markers.
+
+        The uplink keeps its own addressing (DHCP or static); only the panel is
+        published on it and SSH is left open, so a remote administrator is never
+        locked out (ADR-0017). The record is created pre-apply only.
+        """
+        ports = wired_ports(self.path('/sys/class/net'))
+        if len(ports) != 1:
+            raise ValueError('management.single_port_required')
+        name, mac = next(iter(ports.items()))
+        if interface is not None and interface != name:
+            raise ValueError('management.identity_mismatch')
+        if address is None:
+            address = self.live_address(name)
+            if address is None:
+                raise ValueError('management.address_unavailable')
+        state = Management(interface=name, mac=mac, address=address,
+                           mode='single-uplink', hostname=hostname, path_prefix=path_prefix)
+        previous = read_management(self.path(STATE_PATH))
+        if previous is not None and previous != state:
+            raise ValueError('management.migration_not_supported')
+        if (self.path('/etc/vs-router/applied/snapshot.json').exists()
+                or self.path('/etc/vs-router/marker.json').exists()):
+            raise ValueError('management.already_applied')
+        expected_caddy = generate_caddy_json(ConfigurationVersion(), state)
+        caddy_path = self.path('/etc/caddy/caddy.json')
+        if caddy_path.exists():
+            current = json.loads(caddy_path.read_text())
+            if current.get('apps') and current != expected_caddy:
+                raise ValueError('management.caddy_ownership_conflict')
+        self.write(STATE_DIR / 'management.json', state.model_dump_json())
+        ca = self.certificates(state)
+        self.write('/etc/caddy/caddy.json', json.dumps(expected_caddy), 0o640, self.caddy_gid)
+        self.runner(['caddy', 'validate', '--config', str(self.path('/etc/caddy/caddy.json'))])
+        self.write(STATE_DIR / 'management.nft', single_uplink_rules(state, ssh_port))
+        self.runner(['nft', '-c', '-f', str(self.path(STATE_DIR / 'management.nft'))])
+        self.runner(['nft', '-f', str(self.path(STATE_DIR / 'management.nft'))])
+        for service in ('vs-router-agent', 'vs-router-web', 'caddy'):
+            self.runner(['systemctl', 'restart', service])
+            self.runner(['systemctl', 'is-active', '--quiet', service])
+        # Real HTTPS, not only unit state: with a public hostname the ACME
+        # certificate may still be issuing, so allow a bounded wait and verify
+        # against the system trust store rather than the local CA.
+        host = state.hostname or state.ip
+        probe = ['curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
+                 '--max-time', '5']
+        if not state.hostname:
+            probe += ['--cacert', str(self.path(TLS_DIR / 'ca.crt'))]
+        probe.append(f'https://{host}/health')
+        for attempt in range(60):
+            try:
+                self.runner(probe)
+                break
+            except subprocess.CalledProcessError:
+                if attempt == 59:
+                    raise
+                time.sleep(2)
+        return state, ca.fingerprint(hashes.SHA256()).hex(':')
+
 
 def bootstrap_rules(state, uplink):
     # Uplink is validated against the sysfs inventory before interpolation.
@@ -231,6 +306,33 @@ table inet vs_router {{
 '''
 
 
+def single_uplink_rules(state, ssh_port=22):
+    """Temporary rules for a one-NIC box until the first apply (ADR-0017).
+
+    The panel and SSH remain reachable on the single uplink; everything else is
+    dropped. SSH stays open because a remote box has no local console to fall
+    back on. The panel's own generated ruleset replaces this at the first apply.
+    """
+    return f'''destroy table inet vs_router
+table inet vs_router {{
+    chain input {{
+        type filter hook input priority filter; policy drop;
+        iifname "lo" accept
+        ct state established,related accept
+        iifname "{state.interface}" ip daddr {state.ip} tcp dport 443 accept
+        iifname "{state.interface}" tcp dport {ssh_port} accept
+        iifname "{state.interface}" udp sport 67 udp dport 68 accept
+    }}
+    chain forward {{
+        type filter hook forward priority filter; policy drop;
+    }}
+    chain output {{
+        type filter hook output priority filter; policy accept;
+    }}
+}}
+'''
+
+
 def check():
     state = read_management()
     if state is None:
@@ -241,20 +343,39 @@ def check():
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Assign first-run management LAN from the local root console')
+    parser = argparse.ArgumentParser(description='Assign the first-run management endpoint')
     parser.add_argument('--mac', help='actual MAC of a separate wired LAN port')
-    parser.add_argument('--address', default='192.168.10.1/24')
+    parser.add_argument('--address', default=None,
+                        help='panel address/prefix; defaults to 192.168.10.1/24 (LAN) '
+                             'or the live lease (--single-uplink)')
+    parser.add_argument('--single-uplink', action='store_true',
+                        help='one-NIC VPS: publish the panel on the uplink over SSH (keeps SSH open)')
+    parser.add_argument('--interface', help='uplink interface for --single-uplink '
+                                            '(default: the only wired port)')
+    parser.add_argument('--hostname', help='public hostname for an ACME certificate, e.g. <ip>.nip.io')
+    parser.add_argument('--path-prefix', dest='path_prefix', help='secret panel path, e.g. /uOE3flWG7hvM')
     parser.add_argument('--check', action='store_true', help='identity gate used at service startup')
     args = parser.parse_args()
     try:
         if args.check:
             check()
             return 0
-        if os.geteuid() != 0 or not sys.stdin.isatty() or os.environ.get('SSH_CONNECTION'):
+        if os.geteuid() != 0:
+            raise ValueError('management.root_required')
+        if args.single_uplink:
+            state, fingerprint = Console().provision_single_uplink(
+                interface=args.interface, address=args.address,
+                hostname=args.hostname, path_prefix=args.path_prefix)
+            print(f'Panel: https://{state.hostname or state.ip}{state.path_prefix or ""}/')
+            print(f'CA SHA-256: {fingerprint}')
+            print('SSH and the panel are open on the uplink; '
+                  'everything else is dropped until the first apply.')
+            return 0
+        if not sys.stdin.isatty() or os.environ.get('SSH_CONNECTION'):
             raise ValueError('management.local_root_console_required')
         if not args.mac:
             parser.error('--mac is required; inspect ports with ip link from the local console')
-        state, fingerprint = Console().provision(args.mac, args.address)
+        state, fingerprint = Console().provision(args.mac, args.address or '192.168.10.1/24')
         print(f'Local HTTPS check passed: https://{state.ip}/')
         print(f'CA SHA-256: {fingerprint}')
         print('Assign the administrator computer an address in the same subnet. Verify HTTPS from LAN and denial from WAN before declaring LAN readiness.')

@@ -446,3 +446,64 @@ def test_caddy_panel_without_hostname_keeps_the_local_ca():
     assert config['apps']['tls']['certificates']['load_files'][0]['tags'] == ['management']
     assert 'automate' not in config['apps']['tls']['certificates']
     assert 'management_acme' not in config['apps']['http']['servers']
+
+
+# --- ADR-0017: headless one-NIC provisioning --------------------------------
+
+def vps_host(tmp_path):
+    port = tmp_path / 'sys/class/net/eth0'
+    (port / 'device').mkdir(parents=True)
+    (port / 'address').write_text('02:00:00:00:00:01\n')
+    (port / 'type').write_text('1\n')
+    (tmp_path / 'etc/caddy').mkdir(parents=True)
+
+
+def vps_runner(calls, iface='eth0', address='92.51.36.131'):
+    def run(argv):
+        calls.append(argv)
+        return SimpleNamespace(stdout=json.dumps([{'ifname': iface, 'addr_info': [
+            {'family': 'inet', 'local': address, 'prefixlen': 24}]}]))
+    return run
+
+
+def test_single_uplink_provision_uses_the_live_lease_and_keeps_ssh(tmp_path):
+    vps_host(tmp_path)
+    calls = []
+    console = Console(tmp_path, vps_runner(calls), os.getgid())
+    state, fingerprint = console.provision_single_uplink(
+        hostname='92.51.36.131.nip.io', ssh_port=2222)
+    assert (state.mode, state.interface, state.address) == ('single-uplink', 'eth0', '92.51.36.131/24')
+    record = json.loads((tmp_path / 'var/lib/vs-router-bootstrap/management.json').read_text())
+    assert record['mode'] == 'single-uplink' and record['hostname'] == '92.51.36.131.nip.io'
+    # No ISO-path markers are required.
+    assert not (tmp_path / 'var/lib/vs-router-bootstrap/installer-uplink').exists()
+    rules = (tmp_path / 'var/lib/vs-router-bootstrap/management.nft').read_text()
+    assert 'tcp dport 443 accept' in rules
+    assert 'tcp dport 2222 accept' in rules
+    caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
+    assert caddy['apps']['http']['servers']['management_acme']['listen'] == ['92.51.36.131:80']
+    assert any(c[0] == 'curl' for c in calls)
+
+
+def test_single_uplink_provision_refuses_a_second_port(tmp_path):
+    host(tmp_path)  # two wired ports
+    console = Console(tmp_path, recording_runner([]), os.getgid())
+    with pytest.raises(ValueError, match='management.single_port_required'):
+        console.provision_single_uplink()
+
+
+def test_single_uplink_provision_rejects_a_wrong_interface(tmp_path):
+    vps_host(tmp_path)
+    console = Console(tmp_path, vps_runner([]), os.getgid())
+    with pytest.raises(ValueError, match='management.identity_mismatch'):
+        console.provision_single_uplink(interface='eth9')
+
+
+def test_single_uplink_provision_refuses_after_an_apply(tmp_path):
+    vps_host(tmp_path)
+    markers = tmp_path / 'etc/vs-router'
+    markers.mkdir(parents=True)
+    (markers / 'marker.json').write_text('{}')
+    console = Console(tmp_path, vps_runner([]), os.getgid())
+    with pytest.raises(ValueError, match='management.already_applied'):
+        console.provision_single_uplink()
