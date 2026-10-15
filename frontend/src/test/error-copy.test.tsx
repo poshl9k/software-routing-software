@@ -16,6 +16,20 @@ describe("error copy", () => {
     expect(text.match(/management\.endpoint_required/g)).toHaveLength(1);
   });
 
+  it("explains an unresolved client tunnel endpoint with a next step and one code", () => {
+    const code = "wireguard.endpoint_unresolved";
+    const text = applyErrorText({ code, message: code });
+    expect(text).toContain("проверьте имя сервера, DNS и доступ к сети");
+    expect(text.match(/wireguard\.endpoint_unresolved/g)).toHaveLength(1);
+  });
+
+  it("explains an agent command timeout with a next step and one code", () => {
+    const code = "agent.command_timeout";
+    const text = applyErrorText({ code, message: code });
+    expect(text).toContain("проверьте состояние агента и сервисов");
+    expect(text.match(/agent\.command_timeout/g)).toHaveLength(1);
+  });
+
   it("explains every management guard the backend can raise", () => {
     for (const code of [
       "management.endpoint_required",

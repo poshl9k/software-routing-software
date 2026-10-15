@@ -4,7 +4,7 @@ import sys
 import time
 from pathlib import Path
 from .apply import SubprocessExecutor, ApplyError
-from .services import checked, WireGuardReloader
+from .services import WireGuardReloader
 
 
 def configure(iface, executor=None, config_dir=Path('/etc/vs-router/wireguard'), sleep=time.sleep):
@@ -20,12 +20,8 @@ def configure(iface, executor=None, config_dir=Path('/etc/vs-router/wireguard'),
             sleep(0.1)
         else:
             raise ApplyError('agent.reload_failed')
-    checked(executor, [entry['protocol'], 'setconf', iface, str(config_dir / entry['file'])])
-    for address in entry['addresses']:
-        checked(executor, ['ip', 'addr', 'replace', address, 'dev', iface])
-    checked(executor, ['ip', 'link', 'set', 'dev', iface, 'up'])
-    for route in entry['routes']:
-        checked(executor, WireGuardReloader.route('replace', route, iface))
+    WireGuardReloader(executor=executor, config_dir=config_dir).configure(
+        iface, entry, entry['protocol'])
 
 
 if __name__ == '__main__':

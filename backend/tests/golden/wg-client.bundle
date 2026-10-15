@@ -4,6 +4,7 @@
     "addresses": [
       "10.66.66.1/24"
     ],
+    "endpoint": "203.0.113.1:51820",
     "file": "vpn.conf",
     "protocol": "wg",
     "routes": [
