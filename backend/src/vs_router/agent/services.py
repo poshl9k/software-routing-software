@@ -293,6 +293,12 @@ class WireGuardReloader:
         files, manifest, previous = self.install(path)
         # Keep union ownership across partial failures, including first application.
         self.fs.write(self.config_dir / 'manifest.json', json.dumps(previous | manifest))
+        # Resolve client endpoints before any routing mutation: once a tunnel's
+        # default route is up it captures the resolver, so a later lookup would
+        # hang. Baking the address into each generated config makes the unit's
+        # ExecStartPost and the configure() below resolve nothing.
+        for entry in manifest.values():
+            self.endpoint_address(entry)
         for iface, old in previous.items():
             new = manifest.get(iface)
             if new is None or old['protocol'] != new['protocol']:
@@ -379,32 +385,55 @@ class WireGuardReloader:
                     pass
         raise ApplyError('agent.reload_failed')
 
+    ENDPOINT = re.compile(r'(?m)^Endpoint = ([^\r\n]+)$')
+
+    def endpoint_address(self, entry):
+        """The client endpoint as an IP, resolved once and baked into the
+        generated config.
+
+        The tunnel's default route captures the very resolver used to look the
+        endpoint up, so a second lookup after the route is installed would hang
+        on a still-unestablished tunnel. Resolving here, while DNS is healthy,
+        and rewriting the `Endpoint` line means no later `setconf` (or the
+        unit's ExecStartPost) ever resolves a hostname again. A literal IP is
+        returned unchanged.
+        """
+        if not entry.get('endpoint'):
+            return None
+        path = self.config_dir / entry['file']
+        content = self.fs.read(path)
+        match = self.ENDPOINT.search(content)
+        if match is None:
+            raise ApplyError('wireguard.endpoint_unresolved')
+        value = match.group(1)
+        host = value[1:].split(']', 1)[0] if value.startswith('[') else value.rsplit(':', 1)[0]
+        port = value.rsplit(':', 1)[1]
+        try:
+            return ip_address(host)
+        except ValueError:
+            pass
+        addresses = self.resolve_endpoint(host)
+        defaults = {ip_network(route).version for route in entry['routes']
+                    if ip_network(route).prefixlen == 0}
+        address = next((item for item in addresses if item.version in defaults), addresses[0])
+        target = f'[{address}]' if address.version == 6 else str(address)
+        self.fs.write(path, self.ENDPOINT.sub(f'Endpoint = {target}:{port}', content, count=1))
+        return address
+
     def configure(self, iface, entry, protocol):
-        endpoint = entry.get('endpoint')
-        if endpoint:
-            host = endpoint[1:].split(']', 1)[0] if endpoint.startswith('[') else endpoint.rsplit(':', 1)[0]
-            addresses = self.resolve_endpoint(host)
-            defaults = {ip_network(route).version for route in entry['routes']
-                        if ip_network(route).prefixlen == 0}
-            address = next((value for value in addresses if value.version in defaults), addresses[0])
-            # setconf must never resolve the hostname again (and hang indefinitely).
-            path = self.config_dir / entry['file']
-            content = self.fs.read(path)
-            target = f'[{address}]' if address.version == 6 else str(address)
-            resolved, count = re.subn(r'(?m)^Endpoint = [^\r\n]+$',
-                                      f'Endpoint = {target}:{endpoint.rsplit(":", 1)[1]}', content)
-            if count != 1:
-                raise ApplyError('wireguard.endpoint_unresolved')
-            if resolved != content:
-                self.fs.write(path, resolved)
-            if address.version in defaults:
-                gateway, device = self.endpoint_gateway(address, iface)
-                command = ['ip', '-6' if address.version == 6 else '-4',
-                           'route', 'replace', f'{address}/{128 if address.version == 6 else 32}',
-                           'via', gateway]
-                if ip_address(gateway).is_link_local:
-                    command += ['dev', device]
-                checked(self.executor, command)
+        address = self.endpoint_address(entry)
+        defaults = {ip_network(route).version for route in entry['routes']
+                    if ip_network(route).prefixlen == 0}
+        if address is not None and address.version in defaults:
+            # Keep the peer's own address reachable over the original gateway,
+            # or the tunnel default route below swallows the handshake.
+            gateway, device = self.endpoint_gateway(address, iface)
+            command = ['ip', '-6' if address.version == 6 else '-4',
+                       'route', 'replace', f'{address}/{128 if address.version == 6 else 32}',
+                       'via', gateway]
+            if ip_address(gateway).is_link_local:
+                command += ['dev', device]
+            checked(self.executor, command)
         checked(self.executor, [protocol, 'setconf', iface, str(self.config_dir / entry['file'])])
         for address in entry['addresses']:
             checked(self.executor, ['ip', 'addr', 'replace', address, 'dev', iface])
