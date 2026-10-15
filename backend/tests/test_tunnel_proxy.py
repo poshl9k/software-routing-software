@@ -1,6 +1,8 @@
 import base64
 import io
 import json
+import subprocess
+from ipaddress import ip_address
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,7 +127,8 @@ def test_reload_tunnel(config, alive, protocol):
     fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
     def run(argv, timeout):
         executor.calls.append((argv, timeout))
-        return SimpleNamespace(returncode=int(not alive and argv[:2] == ['systemctl', 'is-active']))
+        return SimpleNamespace(returncode=int(not alive and argv[:2] == ['systemctl', 'is-active']),
+                               stdout=b'default via 203.0.113.254 dev wan0 metric 100\n')
     executor.run = run
     # Force the userspace daemon path; kernel selection is covered separately.
     WireGuardReloader(executor, fs, sleep=lambda _: None,
@@ -135,7 +138,9 @@ def test_reload_tunnel(config, alive, protocol):
     setconf = [protocol, 'setconf', 'wg0', '/etc/vs-router/wireguard/vpn.conf']
     assert setconf in calls
     assert calls.index(setconf) < calls.index(['ip', 'addr', 'replace', '10.66.66.1/24', 'dev', 'wg0'])
-    assert ['ip', '-4', 'route', 'replace', 'default', 'dev', 'wg0', 'metric', '100'] in calls
+    host_route = ['ip', '-4', 'route', 'replace', '203.0.113.1/32', 'via', '203.0.113.254']
+    default_route = ['ip', '-4', 'route', 'replace', 'default', 'dev', 'wg0', 'metric', '100']
+    assert calls.index(host_route) < calls.index(default_route)
     assert ['ip', '-6', 'route', 'replace', '2001:db8::/64', 'dev', 'wg0'] in calls
     fs.write(source, serialize_wireguard({'manifest.json': '{}\n'}))
     WireGuardReloader(executor, fs, kernel_probe=lambda *_: False)(source)
@@ -154,7 +159,8 @@ def test_reload_tunnel_uses_kernel_when_available(config):
         executor.calls.append((argv, timeout))
         if argv[:3] == ['ip', 'link', 'show']:
             return SimpleNamespace(returncode=0 if argv[4] in present else 1)
-        return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=0,
+                               stdout=b'default via 203.0.113.254 dev wan0\n')
     executor.run = run
     WireGuardReloader(executor, fs, sleep=lambda _: None, kernel_probe=lambda *_: True)(source)
     calls = [a for a, _ in executor.calls]
@@ -162,6 +168,96 @@ def test_reload_tunnel_uses_kernel_when_available(config):
     assert ['systemctl', 'enable', 'vs-router-wg@wg0.service'] not in calls
     assert ['wg', 'setconf', 'wg0', '/etc/vs-router/wireguard/vpn.conf'] in calls
     assert ['ip', 'addr', 'replace', '10.66.66.1/24', 'dev', 'wg0'] in calls
+
+
+def test_client_hostname_resolved_before_setconf(config, monkeypatch):
+    fs, executor = FakeFS(), FakeExecutor()
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='vpn.example.org:51820',
+                  server_public_key='SERVER', allowed_ips=['0.0.0.0/0'])
+    source = APPLIED_DIR / 'wireguard.conf'
+    fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
+    monkeypatch.setattr(WireGuardReloader, 'resolve_endpoint', staticmethod(
+        lambda host: [ip_address('198.51.100.25')]))
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv[:4] == ['ip', '-4', 'route', 'show']:
+            return SimpleNamespace(returncode=0, stdout=b'default dev wg0 metric 100\n'
+                                   b'default via 203.0.113.254 dev wan0 metric 200\n')
+        if 'setconf' in argv:
+            assert 'Endpoint = 198.51.100.25:51820' in fs.read(Path(argv[-1]))
+        return SimpleNamespace(returncode=0)
+    executor.run = run
+    WireGuardReloader(executor, fs, kernel_probe=lambda *_: True)(source)
+    calls = [argv for argv, _ in executor.calls]
+    assert calls.index(['ip', '-4', 'route', 'replace', '198.51.100.25/32',
+                        'via', '203.0.113.254']) < calls.index(
+        ['ip', '-4', 'route', 'replace', 'default', 'dev', 'wg0', 'metric', '100'])
+
+
+@pytest.mark.parametrize('role,allowed', [('server', ['0.0.0.0/0']),
+                                         ('client', ['10.10.0.0/16'])])
+def test_endpoint_host_route_only_for_full_tunnel_client(config, role, allowed):
+    fs, executor = FakeFS(), FakeExecutor()
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role=role, endpoint='203.0.113.1:51820', allowed_ips=allowed)
+    if role == 'client':
+        tunnel.update(peers=[], server_public_key='SERVER')
+    source = APPLIED_DIR / 'wireguard.conf'
+    fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
+    WireGuardReloader(executor, fs, kernel_probe=lambda *_: True)(source)
+    assert not any(argv[:4] == ['ip', '-4', 'route', 'show'] for argv, _ in executor.calls)
+    assert not any('203.0.113.1/32' in argv for argv, _ in executor.calls)
+
+
+def test_ipv6_client_endpoint_host_route(config):
+    fs, executor = FakeFS(), FakeExecutor()
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='[2001:db8::1]:51820',
+                  server_public_key='SERVER', allowed_ips=['::/0'])
+    source = APPLIED_DIR / 'wireguard.conf'
+    fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv[:4] == ['ip', '-6', 'route', 'show']:
+            return SimpleNamespace(returncode=0, stdout=b'default via fe80::ff dev wan0\n')
+        return SimpleNamespace(returncode=0)
+    executor.run = run
+    WireGuardReloader(executor, fs, kernel_probe=lambda *_: True)(source)
+    calls = [argv for argv, _ in executor.calls]
+    assert calls.index(['ip', '-6', 'route', 'replace', '2001:db8::1/128',
+                        'via', 'fe80::ff', 'dev', 'wan0']) < calls.index(
+        ['ip', '-6', 'route', 'replace', 'default', 'dev', 'wg0', 'metric', '100'])
+
+
+def test_unresolvable_client_endpoint_fails_before_setconf(config, monkeypatch):
+    fs, executor = FakeFS(), FakeExecutor()
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='bad.example.org:51820',
+                  server_public_key='SERVER', allowed_ips=['0.0.0.0/0'])
+    source = APPLIED_DIR / 'wireguard.conf'
+    fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
+    def lookup(*_args, **_kwargs):
+        raise OSError('DNS failed')
+    monkeypatch.setattr('vs_router.agent.services.socket.getaddrinfo', lookup)
+    with pytest.raises(ApplyError, match='wireguard.endpoint_unresolved'):
+        WireGuardReloader(executor, fs, kernel_probe=lambda *_: True)(source)
+    assert not any('setconf' in argv for argv, _ in executor.calls)
+
+
+def test_checked_maps_command_timeout():
+    from vs_router.agent.services import checked
+    from vs_router.agent.apply import SubprocessExecutor
+    executor = FakeExecutor()
+    def timeout(argv, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout)
+    executor.run = timeout
+    with pytest.raises(ApplyError, match='agent.command_timeout'):
+        checked(executor, ['wg', 'setconf', 'wg0', '/config'])
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: timeout(args[0], kwargs['timeout']))
+        with pytest.raises(ApplyError, match='agent.command_timeout'):
+            SubprocessExecutor().run(['true'], 15)
 
 
 @pytest.mark.parametrize('failure', [None, 'validate', 'http'])

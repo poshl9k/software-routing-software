@@ -54,7 +54,10 @@ class Clock(Protocol):
 
 class SubprocessExecutor:
     def run(self, argv, timeout):
-        return subprocess.run(argv, timeout=timeout, capture_output=True, check=False)
+        try:
+            return subprocess.run(argv, timeout=timeout, capture_output=True, check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise ApplyError('agent.command_timeout') from exc
 
 
 class LocalFileSystem:

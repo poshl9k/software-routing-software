@@ -24,6 +24,10 @@ import { fmtDateTime } from "../components/format";
 const reasonTexts: Record<string, string> = {
   "agent.reload_failed": "не удалось применить конфигурацию сервиса",
   "agent.validation_failed": "конфигурация сервиса не прошла проверку",
+  "agent.command_timeout":
+    "агент не завершил команду вовремя — проверьте состояние агента и сервисов перед повторным применением",
+  "wireguard.endpoint_unresolved":
+    "не удалось определить адрес сервера туннеля — проверьте имя сервера, DNS и доступ к сети, затем повторите применение",
   "panel.unavailable": "панель управления недоступна",
   timeout: "истекло окно подтверждения",
   requested: "откат запрошен вручную",

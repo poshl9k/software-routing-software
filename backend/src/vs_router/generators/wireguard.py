@@ -217,6 +217,8 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
         manifest[t.interface] = {'file': f'{t.name}.conf', 'protocol': t.protocol,
                                  'addresses': tunnel_addresses(t, c),
                                  'routes': sorted({str(ip_network(v, strict=False)) for v in routes})}
+        if t.role == 'client':
+            manifest[t.interface]['endpoint'] = t.endpoint
         if t.role != 'server' or not t.peers:
             continue
         metadata = key_material.get(t.name, {})
