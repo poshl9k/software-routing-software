@@ -11,7 +11,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from vs_router.management import Management, verify_identity, validate_management
+from vs_router.management import (Management, verify_identity, validate_management,
+                                  validate_site_bindings)
 from vs_router.schema import Configuration, ConfigurationVersion
 from vs_router.generators.caddy import generate_caddy_json
 from vs_router.generators.nftables import generate_nftables
@@ -339,3 +340,76 @@ def test_wrong_actual_lan_address_never_starts_caddy(tmp_path):
         Console(tmp_path, recording_runner(calls, '192.168.99.1'), os.getgid()).provision(
             STATE.mac, STATE.address)
     assert ['systemctl', 'restart', 'caddy'] not in calls
+
+
+# --- ADR-0017: single-uplink (one-NIC VPS) management -----------------------
+
+VPS = Management(interface='eth0', mac='02:00:00:00:00:01',
+                 address='92.51.36.131/24', mode='single-uplink')
+
+
+def one_port(tmp_path):
+    port = tmp_path / 'sys/class/net/eth0'
+    (port / 'device').mkdir(parents=True)
+    (port / 'address').write_text('02:00:00:00:00:01\n')
+    (port / 'type').write_text('1\n')
+    return tmp_path / 'sys/class/net'
+
+
+def vps_wan():
+    return Configuration.model_validate({
+        'interfaces': [{'name': 'eth0', 'zone': 'wan', 'addressing': 'dhcp'}],
+        'ssh': {'interfaces': ['eth0'], 'wan_confirmed_interfaces': ['eth0']},
+    })
+
+
+def test_single_uplink_identity_accepts_one_wired_port(tmp_path):
+    sysnet = one_port(tmp_path)
+    verify_identity(VPS, sysnet)
+    # The same single port is not enough for a separate-lan panel.
+    with pytest.raises(ValueError, match='management.identity_mismatch'):
+        verify_identity(Management(interface='eth0', mac='02:00:00:00:00:01',
+                                   address='192.168.10.1/24'), sysnet)
+    # A MAC that is not the port's own is still refused.
+    with pytest.raises(ValueError, match='management.identity_mismatch'):
+        verify_identity(VPS.model_copy(update={'mac': '02:00:00:00:00:99'}), sysnet)
+
+
+def test_single_uplink_management_allows_a_dhcp_wan_uplink():
+    validate_management(vps_wan(), VPS)
+    with pytest.raises(ValueError, match='management.dhcp_forbidden'):
+        validate_management(vps_wan(), VPS.model_copy(update={'mode': 'separate-lan'}))
+
+
+def test_single_uplink_static_uplink_must_own_the_panel_address():
+    static = Configuration.model_validate({
+        'interfaces': [{'name': 'eth0', 'zone': 'wan', 'addressing': 'static',
+                        'addresses': ['92.51.36.131/24']}],
+    })
+    validate_management(static, VPS)
+    other = static.model_copy(update={'interfaces': tuple(
+        i.model_copy(update={'addresses': ('92.51.36.200/24',)}) for i in static.interfaces)})
+    with pytest.raises(ValueError, match='management.endpoint_required'):
+        validate_management(other, VPS)
+
+
+def test_single_uplink_reserves_443_from_port_forwards():
+    forwarded = Configuration.model_validate({
+        'interfaces': [{'name': 'eth0', 'zone': 'wan', 'addressing': 'dhcp'}],
+        'port_forwards': [{'name': 'p', 'interface': 'eth0', 'protocol': 'tcp',
+                           'external_port': 443, 'target': '10.0.0.2', 'target_port': 443}],
+    })
+    with pytest.raises(ValueError, match='management.port_reserved'):
+        validate_management(forwarded, VPS)
+
+
+def test_single_uplink_site_on_the_panel_address_is_allowed():
+    version = ConfigurationVersion(configuration=Configuration.model_validate({
+        'interfaces': [{'name': 'eth0', 'zone': 'wan', 'addressing': 'static',
+                        'addresses': ['92.51.36.131/24']}],
+        'sites': [{'name': 'web', 'hostname': 'web.example.org', 'upstream': '10.0.0.2:443',
+                   'certificate_mode': 'http01', 'wan_address': '92.51.36.131'}],
+    }))
+    validate_site_bindings(version, VPS)
+    with pytest.raises(ValueError, match='management.site_binding_conflict'):
+        validate_site_bindings(version, VPS.model_copy(update={'mode': 'separate-lan'}))

@@ -5,6 +5,7 @@ explicitly; reading host state is reserved for privileged entry points.
 """
 from ipaddress import IPv4Interface, ip_interface
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from .schema import Model, InterfaceName
@@ -18,6 +19,11 @@ class Management(Model):
     interface: InterfaceName
     mac: str = Field(pattern=r'^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$')
     address: str
+    # separate-lan: a dedicated physical LAN port, pinned static address, exactly
+    # as ADR-0002 requires. single-uplink: a one-NIC box (VPS) where the uplink is
+    # also the panel endpoint; identity is still pinned by name + MAC, but there
+    # is only one wired port and its address may be a DHCP lease. See ADR-0017.
+    mode: Literal["separate-lan", "single-uplink"] = "separate-lan"
 
     @model_validator(mode='after')
     def valid_address(self):
@@ -49,7 +55,10 @@ def wired_ports(sysnet=Path('/sys/class/net')):
 
 def verify_identity(state, sysnet=Path('/sys/class/net')):
     ports = wired_ports(sysnet)
-    if len(ports) < 2 or ports.get(state.interface) != state.mac:
+    # separate-lan needs a second wired port beside the uplink; single-uplink has
+    # only the one, so it verifies that port's identity alone.
+    required = 1 if state.mode == "single-uplink" else 2
+    if len(ports) < required or ports.get(state.interface) != state.mac:
         raise ValueError('management.identity_mismatch')
 
 
@@ -61,14 +70,25 @@ def host_management():
 
 
 def validate_management(configuration, state):
-    """Pinned endpoint: migration is deliberately rejected until transactional TLS exists."""
+    """Pinned endpoint: migration is deliberately rejected until transactional TLS exists.
+
+    ``separate-lan`` (ADR-0002): a dedicated physical LAN port with a static
+    address. ``single-uplink`` (ADR-0017): the one wired port is both uplink and
+    panel endpoint, its address may be a DHCP lease, and its zone is ``wan``.
+    """
+    single = state.mode == "single-uplink"
     iface = next((i for i in configuration.interfaces if i.name == state.interface), None)
-    if iface is not None and iface.addressing == "dhcp":
+    if iface is not None and iface.addressing == "dhcp" and not single:
         # The management endpoint is pinned to a static address; a DHCP client
-        # would move it and lock the administrator out.
+        # would move it and lock the administrator out. A one-NIC box whose panel
+        # address IS the uplink lease is the explicit exception (ADR-0017).
         raise ValueError('management.dhcp_forbidden')
-    if (iface is None or iface.type != 'physical' or iface.zone != 'lan'
-            or IPv4Interface(state.address) not in [ip_interface(a) for a in iface.addresses]
+    zones = ("wan",) if single else ("lan",)
+    # A DHCP uplink carries its address from the lease, not the configuration,
+    # so only a static (or configured) address is matched against the record.
+    address_pinned = (single and iface is not None and iface.addressing == "dhcp")
+    if (iface is None or iface.type != 'physical' or iface.zone not in zones
+            or (not address_pinned and IPv4Interface(state.address) not in [ip_interface(a) for a in iface.addresses])
             or any(state.interface in i.members for i in configuration.interfaces)
             or configuration.panel_port != 443):
         raise ValueError('management.endpoint_required')
@@ -96,5 +116,9 @@ def validate_site_bindings(version, state):
             # actionable condition rather than a hidden management conflict.
             raise ValueError('management.site_binding_conflict' if site.wan_address
                              else 'caddy.wan_address_unavailable')
-        if bound == state.ip:
+        # On a one-NIC box the panel lives on the same address as the uplink, so a
+        # site bound to it is expected; Caddy separates them by host and by the
+        # panel's secret path prefix (ADR-0017). A separate-lan panel shares its
+        # address with no site.
+        if bound == state.ip and state.mode != "single-uplink":
             raise ValueError('management.site_binding_conflict')
