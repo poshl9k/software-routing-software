@@ -27,8 +27,35 @@ const reasonTexts: Record<string, string> = {
   "panel.unavailable": "панель управления недоступна",
   timeout: "истекло окно подтверждения",
   requested: "откат запрошен вручную",
+  // Management guards (`vs_router/management.py`). They are the first-apply
+  // wall: the draft must keep the panel reachable, and each code means one
+  // concrete thing the operator can fix in the draft. Say what to change
+  // instead of echoing the code (docs/ui-rules.md §7).
+  "management.endpoint_required":
+    "адрес панели из записи управления должен остаться статическим на интерфейсе LAN (физический порт, не участник моста, порт панели 443) — иначе панель станет недоступна",
+  "management.dhcp_forbidden":
+    "интерфейс с адресом панели не может получать адрес по DHCP — задайте статический адрес",
+  "management.address_conflict":
+    "адрес панели уже занят другим интерфейсом — уберите его у второго интерфейса",
+  "management.identity_mismatch":
+    "интерфейс панели не совпадает с записью управления (имя или MAC) — восстановите его из консольного меню",
+  "management.invalid_address": "некорректный адрес панели в записи управления",
+  "management.port_reserved": "порт 443 зарезервирован за панелью — освободите его в пробросе портов",
+  "management.site_binding_conflict":
+    "сайт с публикацией на порту 443 конфликтует с адресом панели — укажите конкретный адрес WAN или отключите сайт",
 };
 const reasonText = (code: string) => reasonTexts[code] ?? code;
+
+/**
+ * Readable label plus the raw code, and the code only once. The backend sends
+ * `message` equal to the code for these guard failures, which used to render as
+ * «management.endpoint_required · management.endpoint_required»: a wall the
+ * operator cannot act on.
+ */
+export const applyErrorText = (error: { code: string; message: string }) => {
+  const label = reasonTexts[error.code] ?? error.message;
+  return label === error.code ? label : `${label} · ${error.code}`;
+};
 
 export default function ApplyScreen() {
   const { uncertain, busy, applyState, discardDraft, setNotice, user,
@@ -64,7 +91,7 @@ export default function ApplyScreen() {
     <div className="apply-wrap">
       <PageHeader>Применение изменений</PageHeader>
       <ErrorNotice error={error || (state?.error ?
-        new Error(`${state.error.message} · ${state.error.code}`) : null)} />
+        new Error(applyErrorText(state.error)) : null)} />
       {!confirmed && (
         <Alert severity="warning">
           Первое применение выполняется без автоотката: подтверждённой версии ещё нет.

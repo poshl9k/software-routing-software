@@ -10,8 +10,12 @@ export function ErrorNotice({ error }: { error: unknown }) {
       {error instanceof Error ? error.message : "Ошибка"}
       {error instanceof ApiError && (
         <>
-          {" "}
-          · {error.code}
+          {error.code !== error.message && (
+            <>
+              {" "}
+              · {error.code}
+            </>
+          )}
           {error.status === 401 && (
             <>
               {" "}
