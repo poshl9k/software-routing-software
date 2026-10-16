@@ -39,6 +39,15 @@ export default function Onboarding() {
   const physicalNics = (hostInterfaces.data ?? []).filter(
     (i) => i.kind === "physical" && i.name !== "lo",
   );
+  // A one-NIC host publishes the panel on its own uplink (ADR-0017): the wizard
+  // then records that port as WAN from its lease instead of asking for a LAN.
+  const hostManagement = useQuery({
+    queryKey: queryKeys.hostManagement(),
+    queryFn: api.hostManagement,
+    enabled: step > 0,
+  });
+  const record = hostManagement.data ?? null;
+  const singleUplink = record?.mode === "single-uplink";
   async function next(event: FormEvent) {
     event.preventDefault();
     if (lock.current) return;
@@ -68,7 +77,12 @@ export default function Onboarding() {
       } else if (step === 1) {
         setStep(2);
       } else if (step === 2) {
-        if (!physicalNics.some((i) => i.name === lan)) {
+        if (singleUplink && !record) {
+          throw new Error(
+            "Запись об управляющем интерфейсе ещё не получена — обновите страницу",
+          );
+        }
+        if (!singleUplink && !physicalNics.some((i) => i.name === lan)) {
           throw new Error("Выберите LAN-интерфейс из списка портов системы");
         }
         try {
@@ -76,12 +90,13 @@ export default function Onboarding() {
             ...emptyConfiguration,
             interfaces: [
               {
-                name: lan,
+                // single-uplink: the one port carries the lease and stays WAN.
+                name: singleUplink && record ? record.interface : lan,
                 type: "physical",
-                zone: "lan",
+                zone: singleUplink ? "wan" : "lan",
                 description: null,
-                addressing: "static",
-                addresses: [address],
+                addressing: singleUplink ? "dhcp" : "static",
+                addresses: singleUplink ? [] : [address],
                 parent: null,
                 vlan_id: null,
                 members: [],
@@ -110,7 +125,15 @@ export default function Onboarding() {
         <span className="logo-mark" />
         VS-ROUTER
       </div>
-      <WizardProgress current={step} steps={["Администратор", "LAN и адрес", "Проверка и безопасность", "Черновик готов"]} />
+      <WizardProgress
+        current={step}
+        steps={[
+          "Администратор",
+          singleUplink ? "Аплинк и адрес" : "LAN и адрес",
+          "Проверка и безопасность",
+          "Черновик готов",
+        ]}
+      />
       <ErrorNotice error={error} />
       <form onSubmit={next}>
         {step === 0 && (
@@ -157,49 +180,77 @@ export default function Onboarding() {
         {step === 1 && (
           <>
             <Typography variant="h1" component="h1">
-              Базовая сеть
+              {singleUplink ? "Аплинк и адрес" : "Базовая сеть"}
             </Typography>
-            <p>
-              Укажем LAN-интерфейс из реальных портов системы. Применение —
-              отдельное действие на экране применения.
-            </p>
-            <div className="fields">
-              <Select
-                label="LAN-интерфейс"
-                value={lan}
-                disabled={busy || physicalNics.length === 0}
-                placeholder={{ label: "Выберите порт LAN" }}
-                options={physicalNics.map((i) => ({
-                  value: i.name,
-                  label: `${i.name} · ${i.mac}`,
-                }))}
-                onChange={setLan}
-              />
-              <Field
-                required
-                label="Адрес LAN (CIDR)"
-                value={address}
-                disabled={busy}
-                hint="Например, 192.168.10.1/24. Проверка выполняется API при сохранении."
-                onChange={setAddress}
-              />
-            </div>
-            {hostInterfaces.error && (
-              <Alert severity="warning">
-                Не удалось получить список интерфейсов из системы — проверьте
-                агент.
-              </Alert>
+            {singleUplink ? (
+              <>
+                <p>
+                  У хоста один сетевой порт: через него панель и работает, и
+                  выходит в сеть. Порт остаётся в зоне WAN, а адрес берётся из
+                  выданной аренды — панель его не переносит.
+                </p>
+                <div className="fields">
+                  <Field
+                    readOnly
+                    label="Интерфейс аплинка"
+                    value={record ? `${record.interface} · ${record.mac}` : ""}
+                  />
+                  <Field
+                    readOnly
+                    label="Адрес из аренды"
+                    value={record?.address ?? ""}
+                  />
+                </div>
+                <Alert severity="info">
+                  Режим одного порта задан при установке (ADR-0017). Здесь
+                  сохраняются только остальные параметры конфигурации.
+                </Alert>
+              </>
+            ) : (
+              <>
+                <p>
+                  Укажем LAN-интерфейс из реальных портов системы. Применение —
+                  отдельное действие на экране применения.
+                </p>
+                <div className="fields">
+                  <Select
+                    label="LAN-интерфейс"
+                    value={lan}
+                    disabled={busy || physicalNics.length === 0}
+                    placeholder={{ label: "Выберите порт LAN" }}
+                    options={physicalNics.map((i) => ({
+                      value: i.name,
+                      label: `${i.name} · ${i.mac}`,
+                    }))}
+                    onChange={setLan}
+                  />
+                  <Field
+                    required
+                    label="Адрес LAN (CIDR)"
+                    value={address}
+                    disabled={busy}
+                    hint="Например, 192.168.10.1/24. Проверка выполняется API при сохранении."
+                    onChange={setAddress}
+                  />
+                </div>
+                {hostInterfaces.error && (
+                  <Alert severity="warning">
+                    Не удалось получить список интерфейсов из системы — проверьте
+                    агент.
+                  </Alert>
+                )}
+                {physicalNics.length === 0 && (
+                  <Button disabled={busy} onClick={() => void hostInterfaces.refetch()}>
+                    Обновить список интерфейсов
+                  </Button>
+                )}
+                <Alert severity="info">
+                  Выберите назначенный с консоли LAN-порт, не WAN. Перед первым
+                  применением проверьте WAN и маршрут по умолчанию с локальной
+                  консоли: у первого apply нет автоотката.
+                </Alert>
+              </>
             )}
-            {physicalNics.length === 0 && (
-              <Button disabled={busy} onClick={() => void hostInterfaces.refetch()}>
-                Обновить список интерфейсов
-              </Button>
-            )}
-            <Alert severity="info">
-              Выберите назначенный с консоли LAN-порт, не WAN. Перед первым
-              применением проверьте WAN и маршрут по умолчанию с локальной
-              консоли: у первого apply нет автоотката.
-            </Alert>
           </>
         )}
         {step === 2 && (
@@ -254,7 +305,10 @@ export default function Onboarding() {
               Первичная настройка готова
             </Typography>
             <Alert severity="success">
-              Учётная запись создана, вход выполнен, базовая сеть LAN сохранена.
+              Учётная запись создана, вход выполнен,{" "}
+              {singleUplink
+                ? "аплинк сохранён как WAN-интерфейс."
+                : "базовая сеть LAN сохранена."}{" "}
               Конфигурация ещё не применена.
             </Alert>
             <InfoNote severity="warning">
@@ -272,7 +326,17 @@ export default function Onboarding() {
                 ← Назад
               </Button>
             )}
-            <Button type="submit" variant="contained" disabled={busy || (step === 1 && !physicalNics.some((i) => i.name === lan))}>
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={
+                busy ||
+                (step === 1 &&
+                  (singleUplink
+                    ? record === null
+                    : !physicalNics.some((i) => i.name === lan)))
+              }
+            >
               {busy
                 ? "Сохранение…"
                 : step === 2

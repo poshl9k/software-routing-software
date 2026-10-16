@@ -530,3 +530,28 @@ async def test_draft_save_materializes_tunnel_and_peer_addresses(api, monkeypatc
     saved = response.json()['configuration']
     assert saved['interfaces'][0]['addresses'] == ['10.66.102.1/24']
     assert saved['tunnels'][0]['peers'][0]['allowed_ips'] == ['10.66.102.189/32']
+
+
+async def test_host_management_endpoint(api, monkeypatch):
+    """The wizard needs the management record to detect a one-NIC host."""
+    from vs_router.api import host
+    from unittest.mock import Mock
+    from vs_router.api.errors import APIError
+    client, _, _ = api
+    record = {'interface': 'eth0', 'mac': '02:00:00:00:00:01', 'address': '92.51.36.131/24',
+              'mode': 'single-uplink', 'hostname': 'example.nip.io', 'path_prefix': None}
+    call = Mock(return_value=record)
+    monkeypatch.setattr(host, 'agent_call', call)
+    assert (await client.get('/api/host/management')).status_code == 401
+    call.assert_not_called()
+    await sign_in(client)
+    response = await client.get('/api/host/management')
+    assert response.status_code == 200
+    assert response.json() == record
+    call.assert_called_once_with('management', {})
+    call.side_effect = APIError(503, 'agent.unavailable')
+    assert (await client.get('/api/host/management')).status_code == 503
+    call.side_effect = RuntimeError('private failure')
+    response = await client.get('/api/host/management')
+    assert response.status_code == 503
+    assert response.json()['code'] == 'host.interfaces_unavailable'

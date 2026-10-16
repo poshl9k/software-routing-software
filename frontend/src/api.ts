@@ -1,5 +1,6 @@
 import type {
   HostInterface,
+  HostManagement,
   ApplyRequest,
   ApplyResult,
   ApplyMarker,
@@ -71,6 +72,7 @@ const post = <T>(path: `/api/${string}`, body: unknown) =>
   request<T>(path, { method: "POST", body: JSON.stringify(body) });
 export const api = {
   hostInterfaces: () => request<HostInterface[]>("/api/host/interfaces"),
+  hostManagement: () => request<HostManagement | null>("/api/host/management"),
   hostAddresses: () => request<Record<string, string[]>>("/api/host/addresses"),
   serviceStatus: (signal?: AbortSignal) => request<ServiceStatusResponse>("/api/status/services", { signal }),
   keygenTunnel: (protocol: "wg" | "awg") => post<{ private_key: string; public_key: string; obfuscation?: Record<string, number> }>("/api/keygen/tunnel", { protocol }),

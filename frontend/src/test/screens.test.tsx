@@ -581,6 +581,39 @@ describe("screens", () => {
       addresses: ["192.168.10.1/24"],
     });
   });
+  it("onboarding records a one-NIC uplink as WAN instead of asking for a LAN", async () => {
+    const fetch = mockApi();
+    fetch.mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === "/api/host/management" ? {
+        interface: "eth0", mac: "8e:f5:95:d5:d4:60", address: "92.51.36.131/24",
+        mode: "single-uplink", hostname: "example.nip.io", path_prefix: null,
+      } : path === "/api/host/interfaces" ? [
+        { name: "eth0", kind: "physical", mac: "8e:f5:95:d5:d4:60" },
+      ] : path === "/api/versions" ? [] : {},
+    ))));
+    const user = userEvent.setup();
+    open("/onboarding");
+    await user.type(
+      screen.getByLabelText("Пароль", { exact: false }),
+      "strong-password",
+    );
+    await user.click(screen.getByRole("button", { name: "Продолжить →" }));
+    await screen.findByRole("heading", { name: "Аплинк и адрес" });
+    // The one port is not offered as a choice: it is taken from the record.
+    expect(screen.queryByRole("combobox")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Продолжить →" }));
+    await user.click(screen.getByRole("button", { name: "Сохранить" }));
+    await screen.findByRole("heading", { name: "Первичная настройка готова" });
+    const draft = fetch.mock.calls.find(
+      ([path, init]) => path === "/api/draft" && init?.method === "POST",
+    );
+    expect(JSON.parse(draft![1].body).interfaces[0]).toMatchObject({
+      name: "eth0",
+      zone: "wan",
+      addressing: "dhcp",
+      addresses: [],
+    });
+  });
   it("onboarding continues past an existing administrator (setup.completed)", async () => {
     // Reproduces the dead end seen on a freshly provisioned VM where an admin
     // already exists but no configuration does: the wizard must not stop.

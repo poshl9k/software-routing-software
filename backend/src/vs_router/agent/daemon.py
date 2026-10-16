@@ -186,6 +186,19 @@ def list_interfaces() -> list[dict[str, str | None]]:
     return interfaces
 
 
+def management() -> dict | None:
+    """The first-run management record, for the wizard.
+
+    Read-only and secret-free; lets the panel adapt the first-run wizard to
+    ``single-uplink`` (the one port is also the uplink) instead of assuming a
+    dedicated management LAN (ADR-0017).
+    """
+    from ..management import host_management
+
+    state = host_management()
+    return None if state is None else state.model_dump()
+
+
 def list_addresses() -> dict[str, list[str]]:
     """Read live IPv4 addresses per interface without changing configuration.
 
@@ -426,7 +439,8 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
             'rollback': lambda: engine.rollback('requested'), 'status': status,
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
             'nft_counters': nft_counters, 'list_interfaces': list_interfaces,
-            'list_addresses': list_addresses, 'update_status': update_status,
+            'list_addresses': list_addresses, 'management': management,
+            'update_status': update_status,
             'apply_update': apply_update,
             'update_source': update_source, 'source_status': source_status,
             'service_status': service_status,

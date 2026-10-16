@@ -475,6 +475,16 @@ export interface HostInterface {
   mac: string | null;
 }
 
+/** First-run management endpoint; `single-uplink` means the one port is also the uplink. */
+export interface HostManagement {
+  interface: string;
+  mac: string;
+  address: string;
+  mode: "separate-lan" | "single-uplink";
+  hostname: string | null;
+  path_prefix: string | null;
+}
+
 export interface ReleaseInfo {
   commit: string | null;
   semver: string | null;
