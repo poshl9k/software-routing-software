@@ -173,7 +173,7 @@ def import_aliases(body: dict = Body(), db: Session = Depends(get_db)):
         previous = db.scalars(select(ConfigurationRow).where(ConfigurationRow.status == 'confirmed')
                               .order_by(ConfigurationRow.id.desc())).first()
         row = ConfigurationRow(id=(db.scalar(select(func.max(ConfigurationRow.id))) or 0) + 1,
-                               status='draft',
+                               status='draft', profile=previous.profile if previous else 'router',
                                configuration=previous.configuration if previous else Configuration())
         db.add(row)
         db.flush()

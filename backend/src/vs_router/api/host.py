@@ -30,6 +30,17 @@ def management() -> dict | None:
         raise APIError(503, 'host.interfaces_unavailable') from None
 
 
+@router.get('/host/profile')
+def profile() -> dict:
+    """Read the host-owned product marker and live DHCP capability."""
+    try:
+        return agent_call('profile', {})
+    except APIError:
+        raise
+    except Exception:
+        raise APIError(503, 'host.interfaces_unavailable') from None
+
+
 @router.put('/host/panel-domain', dependencies=[Depends(admin)])
 def panel_domain(body: PanelDomainParams) -> dict:
     """Publish the panel under a public name, or clear it (ADR-0025).

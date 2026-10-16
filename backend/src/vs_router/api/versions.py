@@ -124,7 +124,8 @@ def create_draft(body: dict | None = Body(default=None), db: Session = Depends(g
     configuration = materialize_addresses(configuration)
     # Explicit monotonic allocation matches save_version's persisted snapshots.
     next_id = (db.scalar(select(func.max(ConfigurationRow.id))) or 0) + 1
-    row = ConfigurationRow(id=next_id, status="draft", configuration=configuration)
+    row = ConfigurationRow(id=next_id, status="draft", configuration=configuration,
+                           profile=previous.profile if previous else 'router')
     db.add(row)
     try:
         db.commit()

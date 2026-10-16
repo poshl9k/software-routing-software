@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -197,7 +198,16 @@ def dhcp_available() -> bool:
     """
     from .apply import PHASE_TOOLS, host_files
 
-    return all(name in host_files() for name in PHASE_TOOLS)
+    available = host_files(which=shutil.which)
+    return all(name in available for name in PHASE_TOOLS)
+
+
+def profile() -> dict:
+    """Read-only product identity, independent of the management assignment."""
+    from ..profile import read_profile
+
+    marker = read_profile()
+    return {'profile': marker, 'declared': marker is not None, 'dhcp': dhcp_available()}
 
 
 def management() -> dict | None:
@@ -482,7 +492,7 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
             'rollback': lambda: engine.rollback('requested'), 'status': status,
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
             'nft_counters': nft_counters, 'list_interfaces': list_interfaces,
-            'list_addresses': list_addresses, 'management': management,
+            'list_addresses': list_addresses, 'management': management, 'profile': profile,
             'set_panel_domain': set_panel_domain,
             'tunnel_activity': tunnel_activity,
             'tunnel_peers_sync': tunnel_peers_sync,

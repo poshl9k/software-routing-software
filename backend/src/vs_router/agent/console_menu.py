@@ -282,7 +282,8 @@ class Menu:
                 row = pending
             else:
                 row = ConfigurationRow(id=(db.scalar(select(func.max(ConfigurationRow.id))) or 0) + 1,
-                                       status='draft', configuration=configuration)
+                                       status='draft', configuration=configuration,
+                                       profile=previous.profile if previous else 'router')
                 db.add(row)
             db.commit()
             version_id = row.id

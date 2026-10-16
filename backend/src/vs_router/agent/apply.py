@@ -17,6 +17,7 @@ from ..generators.wireguard import generate_wg_bundle, serialize_wireguard
 from ..generators.caddy import generate_caddy_bundle, serialize_caddy
 from ..secrets import decrypt_secret as _decrypt
 from ..schema import ConfigurationVersion
+from ..profile import capability_conflict, read_profile
 from . import tproxy_apply
 
 PENDING_DIR = Path('/run/vs-router/pending')
@@ -438,6 +439,14 @@ class ApplyEngine:
             version_snapshot = version.model_dump(mode='json')
         else:
             version = ConfigurationVersion.model_validate(version_snapshot)
+        profile = read_profile()
+        if profile is not None:
+            if version.profile != profile:
+                raise ApplyError('configuration.profile_mismatch')
+            available = host_files(which=shutil.which)
+            conflict = capability_conflict(profile, all(name in available for name in PHASE_TOOLS))
+            if conflict is not None:
+                raise ApplyError(conflict)
         tproxy_files, tproxy_validators = _tproxy_branch(version)
         doh_files, doh_validators = _doh_branch(version)
         from . import pppoe_apply

@@ -29,6 +29,7 @@ class ConfigurationRow(Base):
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     status: Mapped[str] = mapped_column(String(9), nullable=False, default="draft")
+    profile: Mapped[str] = mapped_column(String(6), nullable=False, default="router", server_default="router")
     configuration: Mapped[Configuration] = mapped_column(ConfigurationJSON(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -36,6 +37,7 @@ class ConfigurationRow(Base):
         return ConfigurationVersion(
             id=self.id,
             status=self.status,
+            profile=self.profile,
             configuration=self.configuration,
             created_at=self.created_at,
         )
@@ -48,7 +50,8 @@ def save_version(session: Session, version: ConfigurationVersion) -> Configurati
         roles = {t.name: t.role for t in previous.configuration.tunnels}
         if any(t.name in roles and roles[t.name] != t.role for t in version.configuration.tunnels):
             raise ValueError("tunnel.role_immutable")
-    row = ConfigurationRow(id=version.id, status=version.status, configuration=version.configuration)
+    row = ConfigurationRow(id=version.id, status=version.status, profile=version.profile,
+                           configuration=version.configuration)
     session.add(row)
     session.flush()
     return row

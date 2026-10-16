@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..db import ConfigurationRow, UserRow
 from ..generators.wireguard import materialize_addresses
-from ..schema import Configuration
+from ..schema import Configuration, ConfigurationVersion
 from .auth import admin, get_db
 from .configuration import encrypt_inputs, redact
 from .errors import APIError
@@ -160,6 +160,7 @@ def restore(body: dict = Body(), db: Session = Depends(get_db)):
                            if x.get('certificate_mode') != 'manual'
                            or (x.get('certificate') and x.get('private_key'))]
         configuration = Configuration.model_validate(config)
+        profile = ConfigurationVersion(profile=item.get('profile', 'router')).profile
     except APIError:
         raise
     except Exception:
@@ -175,7 +176,8 @@ def restore(body: dict = Body(), db: Session = Depends(get_db)):
     configuration = materialize_addresses(configuration)
     next_id = db.scalar(select(func.max(ConfigurationRow.id))) or 0
     # Import one snapshot for explicit apply. Old archive history is not host state.
-    db.add(ConfigurationRow(id=next_id + 1, status='draft', configuration=configuration))
+    db.add(ConfigurationRow(id=next_id + 1, status='draft', profile=profile,
+                            configuration=configuration))
     try:
         db.commit()
     except IntegrityError:

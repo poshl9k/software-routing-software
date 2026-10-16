@@ -11,6 +11,7 @@ Name = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,30}$")]
 EngineTag = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]{0,30}$")]
 InterfaceName = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$")]
 Port = Annotated[int, Field(ge=1, le=65535)]
+Profile = Literal['router', 'panel']
 
 
 class Model(BaseModel):
@@ -691,6 +692,7 @@ class Configuration(Model):
 
 class ConfigurationVersion(Model):
     id: int = Field(default=1, ge=1)
+    profile: Profile = 'router'
     status: Literal["draft", "confirmed"] = "draft"
     configuration: Configuration = Field(default_factory=Configuration)
     created_at: datetime | None = None
