@@ -17,8 +17,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from ipaddress import IPv4Address
 
-from ..management import (Management, STATE_DIR, STATE_PATH, TLS_DIR, read_management,
-                          verify_identity, wired_ports)
+from ..management import (Management, STATE_DIR, STATE_PATH, TLS_DIR, panel_probe_target,
+                          read_management, verify_identity, wired_ports)
 from ..schema import ConfigurationVersion
 from ..generators.caddy import generate_caddy_json
 from ..generators.networkd import deserialize_networkd, serialize_networkd
@@ -193,11 +193,14 @@ class Console:
         for service in ('vs-router-agent', 'vs-router-web', 'caddy'):
             self.runner(['systemctl', 'restart', service])
             self.runner(['systemctl', 'is-active', '--quiet', service])
-        # systemctl restart returns before Caddy has bound the LAN listener.
+        # systemctl restart returns before Caddy has bound the listener.
         # Verify real HTTPS, not only its unit state, with a bounded wait.
+        url, ca_file = panel_probe_target(state)
         probe = ['curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
-                 '--cacert', str(self.path(TLS_DIR / 'ca.crt')), '--max-time', '3',
-                 f'https://{state.ip}/health']
+                 '--max-time', '5']
+        if ca_file is not None:
+            probe += ['--cacert', str(self.path(ca_file))]
+        probe.append(url)
         for attempt in range(30):
             try:
                 self.runner(probe)
@@ -267,12 +270,12 @@ class Console:
         # Real HTTPS, not only unit state: with a public hostname the ACME
         # certificate may still be issuing, so allow a bounded wait and verify
         # against the system trust store rather than the local CA.
-        host = state.hostname or state.ip
+        url, ca_file = panel_probe_target(state)
         probe = ['curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
                  '--max-time', '5']
-        if not state.hostname:
-            probe += ['--cacert', str(self.path(TLS_DIR / 'ca.crt'))]
-        probe.append(f'https://{host}/health')
+        if ca_file is not None:
+            probe += ['--cacert', str(self.path(ca_file))]
+        probe.append(url)
         for attempt in range(60):
             try:
                 self.runner(probe)

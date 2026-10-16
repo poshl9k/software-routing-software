@@ -234,7 +234,7 @@ def test_panel_probe_requires_https_with_management_ca(monkeypatch):
     assert calls[0] == str(TLS_DIR / 'ca.crt')
     assert len(calls[1]) == 2
     assert calls[1][1]._context is context
-    opener.open.assert_called_once_with('https://192.168.10.1/health', timeout=3)
+    opener.open.assert_called_once_with('https://192.168.10.1/health', timeout=8)
 
 
 def test_guarded_first_apply_and_rollback_preserve_panel():
@@ -508,3 +508,19 @@ def test_single_uplink_provision_refuses_after_an_apply(tmp_path):
     console = Console(tmp_path, vps_runner([]), os.getgid())
     with pytest.raises(ValueError, match='management.already_applied'):
         console.provision_single_uplink()
+
+
+def test_panel_probe_target_trusts_acme_for_a_public_hostname():
+    from vs_router.management import Management, panel_probe_target
+
+    host = Management(interface='eth0', mac='02:00:00:00:00:01',
+                      address='92.51.36.131/24', mode='single-uplink',
+                      hostname='92.51.36.131.nip.io')
+    url, ca = panel_probe_target(host)
+    # ACME-signed certificate: system store, not the local CA, and SNI by name.
+    assert (url, ca) == ('https://92.51.36.131.nip.io/health', None)
+
+    lan = Management(interface='eth1', mac='02:00:00:00:00:02', address='192.168.10.1/24')
+    url, ca = panel_probe_target(lan)
+    assert url == 'https://192.168.10.1/health'
+    assert ca is not None and ca.name == 'ca.crt'

@@ -147,16 +147,19 @@ def serve(socket_path, handlers, allowed_uids=None, *, stop_event=None, ready_ev
 
 def panel_probe():
     """Probe provisioned HTTPS only; Unix API health is not LAN access."""
-    from ..management import host_management, TLS_DIR
+    from ..management import host_management, panel_probe_target
     try:
         management = host_management()
         if management is None:
             return False
         import ssl
         from urllib.request import build_opener, ProxyHandler, HTTPSHandler
-        context = ssl.create_default_context(cafile=str(TLS_DIR / 'ca.crt'))
+        url, ca = panel_probe_target(management)
+        context = (ssl.create_default_context() if ca is None
+                   else ssl.create_default_context(cafile=str(ca)))
         opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context))
-        with opener.open(f'https://{management.ip}/health', timeout=3) as response:
+        # A hostname adds a DNS lookup to the handshake; 3 s was too tight.
+        with opener.open(url, timeout=8) as response:
             return response.status == 200
     except (OSError, ValueError):
         return False

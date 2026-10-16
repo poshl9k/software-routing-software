@@ -51,6 +51,19 @@ class Management(Model):
         return str(IPv4Interface(self.address).ip)
 
 
+def panel_probe_target(state):
+    """The HTTPS URL to probe and the CA file to trust (``None`` = system store).
+
+    A public hostname is served by an ACME certificate, so it must be verified
+    against the system trust store; the local CA only signs the IP certificate of
+    the ``separate-lan`` mode and would reject the public one. ``/health`` is
+    published outside any secret panel path, so it needs no prefix.
+    """
+    if state.hostname:
+        return f'https://{state.hostname}/health', None
+    return f'https://{state.ip}/health', TLS_DIR / 'ca.crt'
+
+
 def read_management(path=STATE_PATH):
     try:
         return Management.model_validate_json(path.read_text())
