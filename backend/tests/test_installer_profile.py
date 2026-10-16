@@ -53,3 +53,28 @@ def test_criterion_5_semver_and_source_are_honest():
     # `source` is derived from what was actually found, not a fixed literal.
     assert 'elif [ -n "$semver" ]; then source=wheel' in install
     assert 'VS_ROUTER_RELEASE_SOURCE:-unknown' not in install
+
+
+def test_criterion_6_the_panel_does_not_take_the_routers_local_console():
+    install = _read('install.sh')
+    # ADR-0021: the console unit and the getty mask belong to the router's
+    # physical console, so the unit is skipped while it is installed — disabling
+    # it afterwards would still let a unit file reach a host that must not have
+    # one.
+    assert 'panel:vs-router-console.service) continue' in install
+    assert re.search(
+        r'if \[ "\$PROFILE" = router \]; then\s*\n(?:\s*#.*\n)*\s*systemctl mask getty@tty1\.service',
+        install,
+    )
+    # A host reinstalled as a panel keeps the router's leftovers otherwise.
+    assert re.search(
+        r'if \[ "\$PROFILE" = panel \]; then\s*\n(?:\s*#.*\n)*\s*rm -f /etc/systemd/system/vs-router-console\.service',
+        install,
+    )
+
+
+def test_criterion_7_the_router_still_gets_its_console():
+    install = _read('install.sh')
+    # The guard narrows the panel; it must not remove the console for everyone.
+    assert 'systemctl enable vs-router-console.service' in install
+    assert re.search(r'else\s*\n\s*systemctl disable vs-router-console\.service', install)

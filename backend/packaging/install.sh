@@ -15,6 +15,14 @@
 # EnvironmentFile; never put the encryption key into generated bundles.
 set -eu
 umask 022
+# The product profile decides what this host owns (ADR-0021, ADR-0026), so it is
+# resolved before anything is written: a panel host must not receive the router's
+# local console unit, and must not get the getty mask that goes with it.
+PROFILE=${VS_ROUTER_PROFILE:-router}
+case "$PROFILE" in
+    router|panel) ;;
+    *) echo "ERROR: VS_ROUTER_PROFILE must be router or panel, got '$PROFILE'" >&2; exit 1 ;;
+esac
 command -v pppd >/dev/null 2>&1 || { echo 'ERROR: Debian ppp package is required' >&2; exit 1; }
 # Listener remains closed until the agent has installed the interface firewall.
 # The ISO/bootstrap path masks SSH and repoints sshd at /etc/vs-router-ssh with a
@@ -157,7 +165,20 @@ done
 install -d -m 0770 /run/vs-router
 chgrp vs-router-web /run/vs-router
 install -d -m 0770 -o vs-router-web -g vs-router-web /run/vs-router/web /var/lib/vs-router
-install -m 0644 "$packaging_dir"/*.service "$packaging_dir"/*.timer /etc/systemd/system/
+for unit in "$packaging_dir"/*.service "$packaging_dir"/*.timer; do
+    base=$(basename -- "$unit")
+    case "$PROFILE:$base" in
+        panel:vs-router-console.service) continue ;;
+    esac
+    install -m 0644 "$unit" /etc/systemd/system/"$base"
+done
+if [ "$PROFILE" = panel ]; then
+    # ADR-0021: the panel owns no local console. A host reinstalled as a panel
+    # would otherwise keep the router's leftovers — the console unit would come
+    # back on boot and the physical login would stay masked.
+    rm -f /etc/systemd/system/vs-router-console.service
+    systemctl unmask getty@tty1.service >/dev/null 2>&1 || true
+fi
 install -d -m 0755 /usr/local/libexec/vs-router
 install -m 0644 "$packaging_dir/reconcile-networkd-boot.py" /usr/local/libexec/vs-router/reconcile-networkd-boot.py
 install -m 0644 "$packaging_dir/vs-router.conf" /etc/tmpfiles.d/vs-router.conf
@@ -228,11 +249,6 @@ fi
 # ISO; the semver falls back to the installed wheel's metadata, so a host
 # installed from a copied packaging directory can still say what it runs.
 repo_root=$(dirname -- "$packaging_dir")/..
-PROFILE=${VS_ROUTER_PROFILE:-router}
-case "$PROFILE" in
-    router|panel) ;;
-    *) echo "ERROR: VS_ROUTER_PROFILE must be router or panel, got '$PROFILE'" >&2; exit 1 ;;
-esac
 semver=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' "$repo_root/backend/pyproject.toml" 2>/dev/null | head -n1)
 commit=""
 if command -v git >/dev/null 2>&1 && git -C "$repo_root" rev-parse --verify -q HEAD >/dev/null 2>&1; then
@@ -314,11 +330,16 @@ else
         /etc/systemd/system/vs-router-bootrestore.service.d/kea.conf
 fi
 systemctl enable vs-router-bootrestore.service vs-router-tproxy-postboot.service vs-router-pppoe-postboot.service
-# Replace the physical tty1 login on the next boot, not the active installer
-# session: stopping getty here would kill an operator running bootstrap on tty1.
-# SSH units are managed separately; this only affects the local VGA console.
-systemctl mask getty@tty1.service
-systemctl enable vs-router-console.service
+if [ "$PROFILE" = router ]; then
+    # Replace the physical tty1 login on the next boot, not the active installer
+    # session: stopping getty here would kill an operator running bootstrap on
+    # tty1. SSH units are managed separately; this only affects the local VGA
+    # console, which the panel profile does not own (ADR-0021).
+    systemctl mask getty@tty1.service
+    systemctl enable vs-router-console.service
+else
+    systemctl disable vs-router-console.service >/dev/null 2>&1 || true
+fi
 systemctl daemon-reload
 systemctl restart vs-router-agent.service vs-router-web.service
 # Kea may be inactive on a fresh machine; its control agent must be up before

@@ -142,11 +142,15 @@ def test_console_menu_replaces_tty1_getty_without_assigning_lan():
         assert setting in unit
     assert 'After=vs-router-bootstrap-firstboot.service' in unit
     assert 'Conflicts=getty@tty1.service' in unit
-    assert 'install -m 0644 "$packaging_dir"/*.service' in install
-    assert 'systemctl mask getty@tty1.service' in install
-    assert 'systemctl enable vs-router-console.service' in install
     assert 'systemctl mask --now getty@tty1.service' not in install
-    assert install.index('systemctl mask getty@tty1.service') > install.index('install -m 0644 "$packaging_dir"/*.service')
+    # The router installs the unit and hands tty1 to it. Both now sit behind the
+    # profile test that keeps them off a panel host (ADR-0021), so they are read
+    # from the router branch rather than from the whole script.
+    router_branch = install.split('if [ "$PROFILE" = router ]; then')[1].split('\nfi')[0]
+    assert 'systemctl mask getty@tty1.service' in router_branch
+    assert 'systemctl enable vs-router-console.service' in router_branch
+    # The unit file must be installed before tty1 is handed over to it.
+    assert install.index('systemctl mask getty@tty1.service') > install.index('for unit in "$packaging_dir"/*.service')
     assert 'console menu on tty1' in bootstrap
     assert '192.168.10.1' not in bootstrap
     for name in ('preseed.cfg', 'preseed-semiauto.cfg'):
