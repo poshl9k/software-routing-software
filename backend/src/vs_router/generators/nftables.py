@@ -159,6 +159,16 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
                              f'ip daddr {p.target} {p.protocol} dport {p.target_port} '
                              f'counter accept comment "auto_{p.name}"')
         lines.extend(compiler.rules(c.firewall_rules, chain))
+        if chain == "forward" and "wan" in zones:
+            # A server tunnel exists to carry its clients' traffic outward; with
+            # default-deny and no rule, every packet from the device is dropped
+            # (NAT alone never sees them). Emitted after the operator's rules so
+            # an explicit block still wins, and only for tunnels this host
+            # terminates.
+            for tunnel in c.tunnels:
+                if tunnel.role == "server" and tunnel.interface:
+                    lines.append(f'        iifname "{tunnel.interface}" oifname {names(zones["wan"])} '
+                                 f'counter accept comment "tunnel_{tunnel.name}_forward"')
         lines.append("    }")
     lines += ["    chain prerouting {", "        type nat hook prerouting priority dstnat; policy accept;"]
     for p in c.port_forwards:

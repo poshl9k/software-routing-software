@@ -363,13 +363,36 @@ def test_each_server_tunnel_gets_its_own_subnet(config):
 
 def test_server_tunnel_opens_its_listen_port_on_the_wan(config):
     """A server tunnel with `open_port` gets an INPUT accept for udp/<port> on
-    the WAN zone; turning it off removes the generated rule."""
+    the WAN zone; turning it off removes exactly that generated rule."""
     from vs_router.generators import generate_nftables
     output = generate_nftables(ConfigurationVersion.model_validate(config))
     assert 'iifname { "wan0" } udp dport 51820 counter accept comment "tunnel_vpn"' in output
     data = json.loads(json.dumps(config))
     data['configuration']['tunnels'][0]['open_port'] = False
-    assert 'tunnel_vpn' not in generate_nftables(ConfigurationVersion.model_validate(data))
+    assert 'comment "tunnel_vpn"' not in generate_nftables(ConfigurationVersion.model_validate(data))
+
+
+def test_server_tunnel_traffic_is_forwarded_to_the_wan(config):
+    """The clients of a server tunnel must reach the internet: default-deny plus
+    no rule drops every packet, and NAT never even sees them. A client tunnel
+    carries no such traffic, so it gets no forward accept."""
+    from vs_router.generators import generate_nftables
+    output = generate_nftables(ConfigurationVersion.model_validate(config))
+    assert 'iifname "wg0" oifname { "wan0" } counter accept comment "tunnel_vpn_forward"' in output
+
+    client = json.loads(json.dumps(config))
+    client['configuration']['tunnels'][0].update(
+        role='client', peers=[], endpoint='203.0.113.1:51820', server_public_key='SERVER',
+        allowed_ips=['0.0.0.0/0'])
+    assert 'tunnel_vpn_forward' not in generate_nftables(ConfigurationVersion.model_validate(client))
+
+    # An operator rule is emitted before the generated one, so an explicit block
+    # still wins over the implicit egress grant.
+    blocked = json.loads(json.dumps(config))
+    blocked['configuration']['firewall_rules'] = [{
+        'name': 'no_egress', 'ingress_zone': 'lan', 'action': 'block', 'order': 0}]
+    output = generate_nftables(ConfigurationVersion.model_validate(blocked))
+    assert output.index('comment "no_egress"') < output.index('comment "tunnel_vpn_forward"')
 
 
 def test_server_endpoint_is_advertised_to_clients(config):
