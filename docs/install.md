@@ -214,3 +214,40 @@ management endpoint и сертификата; автоматическое пр
 (серверный сертификат действует 397 дней); испытания чистой Debian 13 VM,
 reboot/rollback и доступ с настоящих LAN/WAN клиентов. `/api/setup` pairing
 не изменён. Проверки на временных деревьях не заменяют эти VM-испытания.
+
+## Онлайн-установка на VPS с одним NIC (ADR-0017)
+
+`backend/packaging/online-install.sh` ставит панель на хост, к которому есть
+только сетевой доступ. В отличие от ISO-пути он **не трогает sshd и порт 22**:
+у установщика нет локальной консоли, и fail-closed SSH был бы необратим.
+Порядок:
+
+1. ставит `nftables`, `unbound`, `kea`, `ppp`, `fail2ban`, Go/Node и прочее;
+2. собирает `amneziawg-go`/`awg` и Caddy с модулем L4 (`xcaddy`);
+3. ставит зависимости панели и wheel, кладёт статику в `/var/lib/vs-router/ui`;
+4. запускает `install.sh` с `VS_ROUTER_KEEP_SSH=1` (пропускает маскирование SSH,
+   drop-in `ssh.service.d/vs-router.conf` и `/etc/vs-router-ssh`);
+5. провизионит режим `single-uplink` (`management_console --single-uplink`);
+6. проверяет, что `sshd` активен, `:22` слушает и таблицы `vs_router_ssh_lock` нет.
+
+```sh
+sh packaging/online-install.sh \
+  --wheel vs_router_backend-0.1.0-py3-none-any.whl \
+  --ui dist \
+  --hostname <ip>.nip.io \
+  --ssh-port 22
+```
+
+Открытые порты на одноруком хосте: `443` (панель), `80` (ACME HTTP-01 и
+редирект; нужен и для продления) и SSH. Пока нет первого apply, действует
+временный набор `vs_router`; при первом apply его заменяет генерируемый правилами
+снимок. Запись `Management.path_prefix` публикует панель по секретному пути, а
+корень отдаёт 404; `/health` остаётся вне префикса.
+
+`/etc/vs-router/online-install` пишется до первого старта агента: `SSHController`
+считает его достаточным основанием не включать fail-closed контур, поскольку на
+момент запуска записи `management.json` ещё нет.
+
+Проверено вживую (Debian 13, один NIC, `92.51.36.131`): сертификат Let's Encrypt
+по HTTP-01 для `<ip>.nip.io`, редирект `80 → 443`, `/health` → `200`, SPA и
+`/assets/*` отдаются, `/api/auth/login` без сессии → `401`, SSH не тронут.

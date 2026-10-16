@@ -311,7 +311,9 @@ def single_uplink_rules(state, ssh_port=22):
 
     The panel and SSH remain reachable on the single uplink; everything else is
     dropped. SSH stays open because a remote box has no local console to fall
-    back on. The panel's own generated ruleset replaces this at the first apply.
+    back on. Port 80 stays open too: ACME HTTP-01 challenges (and later renewals)
+    arrive there, even though the panel itself is served over HTTPS. The panel's
+    own generated ruleset replaces this at the first apply.
     """
     return f'''destroy table inet vs_router
 table inet vs_router {{
@@ -320,6 +322,7 @@ table inet vs_router {{
         iifname "lo" accept
         ct state established,related accept
         iifname "{state.interface}" ip daddr {state.ip} tcp dport 443 accept
+        iifname "{state.interface}" ip daddr {state.ip} tcp dport 80 accept
         iifname "{state.interface}" tcp dport {ssh_port} accept
         iifname "{state.interface}" udp sport 67 udp dport 68 accept
     }}
@@ -354,6 +357,8 @@ def main():
                                             '(default: the only wired port)')
     parser.add_argument('--hostname', help='public hostname for an ACME certificate, e.g. <ip>.nip.io')
     parser.add_argument('--path-prefix', dest='path_prefix', help='secret panel path, e.g. /uOE3flWG7hvM')
+    parser.add_argument('--ssh-port', type=int, default=22,
+                        help='SSH port kept open on a --single-uplink host (default 22)')
     parser.add_argument('--check', action='store_true', help='identity gate used at service startup')
     args = parser.parse_args()
     try:
@@ -365,7 +370,8 @@ def main():
         if args.single_uplink:
             state, fingerprint = Console().provision_single_uplink(
                 interface=args.interface, address=args.address,
-                hostname=args.hostname, path_prefix=args.path_prefix)
+                hostname=args.hostname, path_prefix=args.path_prefix,
+                ssh_port=args.ssh_port)
             print(f'Panel: https://{state.hostname or state.ip}{state.path_prefix or ""}/')
             print(f'CA SHA-256: {fingerprint}')
             print('SSH and the panel are open on the uplink; '

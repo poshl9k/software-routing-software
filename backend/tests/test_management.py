@@ -479,6 +479,7 @@ def test_single_uplink_provision_uses_the_live_lease_and_keeps_ssh(tmp_path):
     assert not (tmp_path / 'var/lib/vs-router-bootstrap/installer-uplink').exists()
     rules = (tmp_path / 'var/lib/vs-router-bootstrap/management.nft').read_text()
     assert 'tcp dport 443 accept' in rules
+    assert 'tcp dport 80 accept' in rules
     assert 'tcp dport 2222 accept' in rules
     caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
     assert caddy['apps']['http']['servers']['management_acme']['listen'] == ['92.51.36.131:80']
