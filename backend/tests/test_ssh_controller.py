@@ -55,3 +55,23 @@ def test_restore_queues_ssh_only_after_guard_ready():
     assert calls.index(['systemctl', 'start', 'vs-router-ssh-guard.service']) < calls.index(
         ['systemctl', '--no-block', 'start', 'ssh.service'])
     assert ['systemctl', 'restart', 'ssh.service'] not in calls
+
+
+def test_single_uplink_leaves_ssh_and_port_22_untouched(monkeypatch):
+    """ADR-0017: a one-NIC box has no console, so the panel must not fail closed."""
+    from vs_router.management import Management
+
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(READY, 'protected\n')
+    state = Management(interface='eth0', mac='02:00:00:00:00:01',
+                       address='92.51.36.131/24', mode='single-uplink')
+    monkeypatch.setattr('vs_router.agent.ssh.read_management', lambda path: state)
+    controller = SSHController(executor, fs)
+
+    controller.close()
+    controller.activate({'interfaces': ['eth0']})
+    controller.restore(SimpleNamespace(status=lambda: {'status': 'confirmed'}))
+
+    assert executor.calls == []
+    assert READY in fs.files
+    assert not any(str(name).endswith('.nft') for name in fs.files)

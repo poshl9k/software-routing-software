@@ -10,6 +10,7 @@ import subprocess
 import time
 
 from .apply import ApplyError, LocalFileSystem, SubprocessExecutor, APPLIED_DIR, CONFIRMED_DIR
+from ..management import STATE_PATH, read_management
 from ..schema import SSH, ConfigurationVersion
 
 ROOT = Path('/etc/vs-router-ssh')
@@ -105,7 +106,23 @@ class SSHController:
         self.fs.write(path, content)
         self.checked(['nft', '-f', str(path)])
 
+    def single_uplink(self):
+        """True when the panel is the only host on its own uplink (ADR-0017).
+
+        There is no separate management LAN to protect and no local console, so
+        the fail-closed lifecycle below (nft drop on :22, mask/stop sshd, and an
+        sshd_config with PermitRootLogin no) would lock a remote operator out of
+        the box for good. In this mode the panel leaves sshd and port 22 alone.
+        """
+        try:
+            state = read_management(STATE_PATH)
+        except (OSError, ValueError):
+            return False
+        return state is not None and state.mode == 'single-uplink'
+
     def close(self):
+        if self.single_uplink():
+            return
         # Attempt every independent containment measure even when one fails.
         errors = []
         for operation in (
@@ -145,6 +162,8 @@ class SSHController:
                 self.client('set', 'vs-router-ssh', 'unbanip', address)
 
     def activate(self, data, *, start_listener=True):
+        if self.single_uplink():
+            return
         policy = SSH.model_validate(data)
         if not policy.interfaces:
             return  # _install/restore already closed and masked the service.
@@ -183,6 +202,8 @@ class SSHController:
             raise
 
     def restore(self, engine, *, start_listener=False):
+        if self.single_uplink():
+            return
         self.close()
         marker = engine.status()
         if marker and marker['status'] not in ('confirmed', 'rolled_back'):

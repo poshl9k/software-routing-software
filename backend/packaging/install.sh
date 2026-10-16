@@ -15,11 +15,18 @@ set -eu
 umask 022
 command -v pppd >/dev/null 2>&1 || { echo 'ERROR: Debian ppp package is required' >&2; exit 1; }
 # Listener remains closed until the agent has installed the interface firewall.
-systemctl mask ssh.service ssh.socket
-systemctl stop ssh.service ssh.socket
-install -d -m 0700 /etc/vs-router-ssh /var/lib/vs-router-ssh /run/vs-router-ssh
-install -d -m 0755 /etc/systemd/system/ssh.service.d
-cat > /etc/systemd/system/ssh.service.d/vs-router.conf <<'EOF'
+# The ISO/bootstrap path masks SSH and repoints sshd at /etc/vs-router-ssh with a
+# /run marker that only an apply creates. A remote (online) install over SSH must
+# touch NONE of that, or the operator is locked out of a box with no local
+# console (ADR-0017): VS_ROUTER_KEEP_SSH=1 skips both.
+if [ "${VS_ROUTER_KEEP_SSH:-0}" = "1" ]; then
+    echo 'VS_ROUTER_KEEP_SSH=1: leaving sshd and its units untouched'
+else
+    systemctl mask ssh.service ssh.socket
+    systemctl stop ssh.service ssh.socket
+    install -d -m 0700 /etc/vs-router-ssh /var/lib/vs-router-ssh /run/vs-router-ssh
+    install -d -m 0755 /etc/systemd/system/ssh.service.d
+    cat > /etc/systemd/system/ssh.service.d/vs-router.conf <<'EOF'
 [Unit]
 Requires=vs-router-bootrestore.service
 After=vs-router-bootrestore.service vs-router-ssh-guard.service
@@ -35,6 +42,7 @@ ExecReload=/usr/sbin/sshd -t -f /etc/vs-router-ssh/sshd_config
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=control-group
 EOF
+fi
 # Caddy built from source (xcaddy) ships no user/group and no distro unit —
 # create them; the binary lives wherever PATH resolves it (usually /usr/local/bin).
 getent group caddy >/dev/null 2>&1 || groupadd --system caddy
