@@ -23,13 +23,46 @@ router = APIRouter(dependencies=[Depends(current_user)])
 DEFAULT_SECONDARY_DNS = '1.0.0.1'
 
 
+def _public_endpoint() -> str | None:
+    """The address clients should dial: the panel's published name, else its IP.
+
+    Read from the agent's management record. Without it an export is only a
+    fill-in template (the tunnel's own endpoint is often unset on a DHCP uplink),
+    so it is worth one RPC. A host without a port gets the listen port appended
+    by the generator.
+    """
+    try:
+        state = agent_call('management', {})
+    except Exception:
+        return None
+    if not isinstance(state, dict):
+        return None
+    hostname = state.get('hostname')
+    if isinstance(hostname, str) and hostname.strip():
+        return hostname
+    address = state.get('address')
+    if isinstance(address, str) and address:
+        try:
+            return str(ip_interface(address).ip)
+        except ValueError:
+            return None
+    return None
+
+
 def _peer_conf(db: Session, name: str, peer_name: str) -> str:
     """The peer's client config, generated exactly as the QR encodes it."""
     row = db.scalars(select(ConfigurationRow).order_by(ConfigurationRow.id.desc())).first()
     if not row:
         raise APIError(404, 'tunnel.not_found')
     try:
-        content = generate_wg_bundle(row.snapshot(), {}).get(f'{name}.peer-{peer_name}.conf')
+        snapshot = row.snapshot()
+        endpoint = _public_endpoint()
+        # An endpoint the operator set is intentional and wins; the panel's own
+        # published address only fills the gap where none was configured.
+        metadata = ({t.name: {'endpoint': endpoint}
+                     for t in snapshot.configuration.tunnels if endpoint and not t.endpoint}
+                    if endpoint else {})
+        content = generate_wg_bundle(snapshot, metadata).get(f'{name}.peer-{peer_name}.conf')
     except (ValueError, KeyError):
         content = None
     if content is None:
@@ -99,7 +132,7 @@ def _amnezia_uri(db: Session, name: str, peer_name: str,
         raise APIError(404, 'tunnel.not_found') from None
     tunnel = next((t for t in snapshot.configuration.tunnels if t.name == name), None)
     peer = next((p for p in tunnel.peers if p.name == peer_name), None) if tunnel else None
-    if peer is None:
+    if peer is None or tunnel is None:
         raise APIError(404, 'peer.not_found')
     primary = dns1 or str(ip_interface(tunnel_addresses(tunnel, snapshot.configuration)[0]).ip)
     for value in (primary, dns2 or DEFAULT_SECONDARY_DNS):
@@ -108,7 +141,10 @@ def _amnezia_uri(db: Session, name: str, peer_name: str,
         except ValueError:
             raise APIError(400, 'amnezia.invalid_dns') from None
     try:
+        # A configured endpoint wins; otherwise the panel's published address
+        # fills the gap (a DHCP uplink leaves the tunnel's own endpoint unset).
         return amnezia_uri(tunnel, peer, snapshot.configuration,
+                           endpoint=None if tunnel.endpoint else _public_endpoint(),
                            dns1=primary, dns2=dns2 or DEFAULT_SECONDARY_DNS)
     except ValueError as error:
         raise APIError(400, str(error)) from error

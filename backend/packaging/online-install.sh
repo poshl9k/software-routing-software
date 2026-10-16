@@ -128,12 +128,26 @@ if [ -n "$UI" ]; then
 fi
 
 # --- 6. Publish the panel on the uplink --------------------------------------
+# Provisioning is pre-apply only: a host that already applied a configuration
+# keeps its record and the console refuses to rewrite it. That is not an install
+# failure — the panel is already published — so continue to verification instead
+# of aborting before the check that actually matters.
 if [ "$DRY_RUN" != 1 ]; then
     set -- --single-uplink --ssh-port "$SSH_PORT"
     if [ -n "$HOSTNAME_ARG" ]; then set -- "$@" --hostname "$HOSTNAME_ARG"; fi
     if [ -n "$PATH_PREFIX" ]; then set -- "$@" --path-prefix "$PATH_PREFIX"; fi
     if [ -n "$ADDRESS" ]; then set -- "$@" --address "$ADDRESS"; fi
-    python3 -m vs_router.agent.management_console "$@"
+    if provisioning=$(python3 -m vs_router.agent.management_console "$@" 2>&1); then
+        printf '%s\n' "$provisioning"
+    else
+        case "$provisioning" in
+            *management.already_applied*|*management.migration_not_supported*)
+                echo "NOTE: the panel was already provisioned; keeping the existing record." ;;
+            *)
+                printf '%s\n' "$provisioning" >&2
+                exit 1 ;;
+        esac
+    fi
 else
     echo "+ management_console --single-uplink --ssh-port $SSH_PORT ${HOSTNAME_ARG:+--hostname $HOSTNAME_ARG}"
 fi

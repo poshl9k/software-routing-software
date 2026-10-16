@@ -389,8 +389,10 @@ def main():
         print(f'CA SHA-256: {fingerprint}')
         print('Assign the administrator computer an address in the same subnet. Verify HTTPS from LAN and denial from WAN before declaring LAN readiness.')
         return 0
-    except (OSError, ValueError, subprocess.SubprocessError):
-        print('Management provisioning/check failed; inspect identity, ownership and service status from the local console. Panel readiness is NOT established.', file=sys.stderr)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print(f'Management provisioning/check failed ({error}); inspect identity, '
+              'ownership and service status from the local console. '
+              'Panel readiness is NOT established.', file=sys.stderr)
         return 1
 
 

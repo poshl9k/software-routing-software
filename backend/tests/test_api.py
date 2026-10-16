@@ -588,7 +588,7 @@ async def test_tunnel_activity_and_peer_conf_export(api, monkeypatch):
     response = await client.get('/api/tunnels/activity')
     assert response.status_code == 200
     assert response.json() == {'vpn': {'phone': 1700000000}}
-    call.assert_called_once_with('tunnel_activity', {})
+    call.assert_any_call('tunnel_activity', {})
 
     # A configured peer with no handshake reports 0, not a missing entry.
     call.return_value = {'tun0': [{'public_key': 'P' * 44, 'latest_handshake': 0,
@@ -599,6 +599,48 @@ async def test_tunnel_activity_and_peer_conf_export(api, monkeypatch):
     assert conf.status_code == 200
     assert conf.headers['content-disposition'] == 'attachment; filename="vpn-phone.conf"'
     assert '[Interface]' in conf.text and '[Peer]' in conf.text
+
+
+async def test_export_fills_a_missing_endpoint_from_the_panel_published_address(api, monkeypatch):
+    """A DHCP uplink leaves the tunnel endpoint unset; the export must still carry
+    a reachable address, taken from the agent's management record."""
+    from vs_router.api import tunnels as tunnels_api
+    from vs_router.generators.amnezia import decode_document
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', Fernet.generate_key().decode())
+    client, _, _ = api
+    await sign_in(client)
+
+    def agent(method, params):
+        assert method == 'management'
+        return {'hostname': 'panel.example.org', 'address': '203.0.113.9/24', 'mode': 'single-uplink'}
+
+    monkeypatch.setattr(tunnels_api, 'agent_call', agent)
+    body = {
+        'schema_version': 1,
+        'interfaces': [{'name': 'tun0', 'zone': 'lan'}],
+        'tunnels': [{
+            'name': 'vpn', 'interface': 'tun0', 'role': 'server', 'protocol': 'awg',
+            'private_key': {'plaintext': base64.b64encode(b'k' * 32).decode()},
+            'listen_port': 44517, 'endpoint': None,
+            'obfuscation': {'Jc': 5, 'S1': 28, 'S2': 132, 'H1': 1, 'H2': 2, 'H3': 3, 'H4': 4},
+            'peers': [{'name': 'phone', 'public_key': 'P' * 44,
+                       'private_key': {'plaintext': base64.b64encode(b'p' * 32).decode()}}],
+        }],
+    }
+    assert (await client.post('/api/draft', json=body)).status_code == 201
+
+    document = decode_document((await client.get('/api/tunnels/vpn/peer/phone/amnezia')).text)
+    assert document['hostName'] == 'panel.example.org'
+    assert 'Endpoint = panel.example.org:44517' in json.loads(
+        document['containers'][0]['awg']['last_config'])['config']
+    assert 'Endpoint = panel.example.org:44517' in (await client.get('/api/tunnels/vpn/peer/phone/conf')).text
+
+    # An endpoint the operator configured still wins over the panel's own name.
+    data = json.loads(json.dumps(body))
+    data['tunnels'][0]['endpoint'] = 'rg1.example.net'
+    assert (await client.put('/api/draft', json=data)).status_code == 200
+    document = decode_document((await client.get('/api/tunnels/vpn/peer/phone/amnezia')).text)
+    assert document['hostName'] == 'rg1.example.net'
 
 
 async def test_peer_amnezia_export_is_an_importable_vpn_document(api, monkeypatch):
