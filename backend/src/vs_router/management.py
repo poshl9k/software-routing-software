@@ -12,6 +12,10 @@ from .schema import Model, InterfaceName
 
 STATE_DIR = Path('/var/lib/vs-router-bootstrap')
 STATE_PATH = STATE_DIR / 'management.json'
+# Written by the online installer before the agent is first started: a remote
+# box has no console, so the fail-closed SSH lifecycle must be off from the very
+# beginning — not only once the management record exists (ADR-0017).
+ONLINE_MARKER = Path('/etc/vs-router/online-install')
 TLS_DIR = Path('/etc/caddy/management')
 
 

@@ -10,7 +10,7 @@ import subprocess
 import time
 
 from .apply import ApplyError, LocalFileSystem, SubprocessExecutor, APPLIED_DIR, CONFIRMED_DIR
-from ..management import STATE_PATH, read_management
+from ..management import ONLINE_MARKER, STATE_PATH, read_management
 from ..schema import SSH, ConfigurationVersion
 
 ROOT = Path('/etc/vs-router-ssh')
@@ -113,7 +113,13 @@ class SSHController:
         the fail-closed lifecycle below (nft drop on :22, mask/stop sshd, and an
         sshd_config with PermitRootLogin no) would lock a remote operator out of
         the box for good. In this mode the panel leaves sshd and port 22 alone.
+
+        The install-time marker is authoritative on its own: at the moment the
+        agent is first started the management record does not exist yet, and a
+        missing record must not mean "fail closed".
         """
+        if ONLINE_MARKER.exists():
+            return True
         try:
             state = read_management(STATE_PATH)
         except (OSError, ValueError):

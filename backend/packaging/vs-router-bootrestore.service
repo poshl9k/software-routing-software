@@ -11,6 +11,10 @@ Wants=systemd-udev-settle.service
 Type=oneshot
 RemainAfterExit=yes
 User=root
+# Created by systemd before the sandbox is set up, so the /run path survives a
+# reboot; install-time creation alone is lost with /run.
+RuntimeDirectory=vs-router-ssh
+RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/python3 -m vs_router.agent.boot_restore
 ExecStartPost=-/usr/bin/python3 /usr/local/libexec/vs-router/reconcile-networkd-boot.py
 NoNewPrivileges=yes

@@ -57,6 +57,13 @@ fi
 WORK=/root/vs-router-install
 run install -d -m 0755 "$WORK"
 
+# Written before anything is installed or started: the agent must never fail
+# closed on a host the operator can only reach over the network (ADR-0017).
+if [ "$DRY_RUN" != 1 ]; then
+    install -d -m 0755 /etc/vs-router
+    : > /etc/vs-router/online-install
+fi
+
 # --- 1. Packages ------------------------------------------------------------
 # Go builds need scratch space outside the RAM-backed /tmp on small VPSes.
 run install -d -m 0700 "$WORK/tmp"
@@ -91,10 +98,10 @@ id caddy >/dev/null 2>&1 || run useradd --system --gid caddy --home /var/lib/cad
     --shell /usr/sbin/nologin caddy
 if ! command -v caddy >/dev/null 2>&1; then
     run sh -c "PATH=\"\$PATH:\$(go env GOPATH)/bin\"; export PATH; \
-        TMPDIR='$WORK/tmp' GOTMPDIR='$WORK/tmp'; \
+        export TMPDIR='$WORK/tmp' GOTMPDIR='$WORK/tmp'; \
         go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7"
     run sh -c "PATH=\"\$PATH:\$(go env GOPATH)/bin\"; export PATH; \
-        TMPDIR='$WORK/tmp' GOTMPDIR='$WORK/tmp'; \
+        export TMPDIR='$WORK/tmp' GOTMPDIR='$WORK/tmp'; \
         xcaddy build v2.11.4 --with github.com/mholt/caddy-l4@v0.1.2 \
         --with github.com/caddy-dns/cloudflare@v0.2.4 --output /usr/local/bin/caddy"
 fi

@@ -19,12 +19,18 @@ command -v pppd >/dev/null 2>&1 || { echo 'ERROR: Debian ppp package is required
 # /run marker that only an apply creates. A remote (online) install over SSH must
 # touch NONE of that, or the operator is locked out of a box with no local
 # console (ADR-0017): VS_ROUTER_KEEP_SSH=1 skips both.
+# The directories exist regardless of mode: unit sandboxing (ProtectSystem with
+# ReadWritePaths) refuses to start when a listed path is missing.
+install -d -m 0700 /etc/vs-router-ssh /var/lib/vs-router-ssh /run/vs-router-ssh
 if [ "${VS_ROUTER_KEEP_SSH:-0}" = "1" ]; then
     echo 'VS_ROUTER_KEEP_SSH=1: leaving sshd and its units untouched'
+    # Tell the agent (which starts further down) to leave SSH alone: it reads
+    # this marker before the management record exists.
+    install -d -m 0755 /etc/vs-router
+    : > /etc/vs-router/online-install
 else
     systemctl mask ssh.service ssh.socket
     systemctl stop ssh.service ssh.socket
-    install -d -m 0700 /etc/vs-router-ssh /var/lib/vs-router-ssh /run/vs-router-ssh
     install -d -m 0755 /etc/systemd/system/ssh.service.d
     cat > /etc/systemd/system/ssh.service.d/vs-router.conf <<'EOF'
 [Unit]

@@ -75,3 +75,17 @@ def test_single_uplink_leaves_ssh_and_port_22_untouched(monkeypatch):
     assert executor.calls == []
     assert READY in fs.files
     assert not any(str(name).endswith('.nft') for name in fs.files)
+
+
+def test_online_install_marker_disables_the_fail_closed_lifecycle(tmp_path, monkeypatch):
+    """The marker exists before the management record, so it must stand alone."""
+    marker = tmp_path / 'online-install'
+    marker.write_text('')
+    monkeypatch.setattr('vs_router.agent.ssh.ONLINE_MARKER', marker)
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(READY, 'protected\n')
+
+    SSHController(executor, fs).close()
+
+    assert executor.calls == []
+    assert READY in fs.files
