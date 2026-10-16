@@ -512,3 +512,11 @@ it("criterion_12_a_new_awg_tunnel_takes_the_generated_profile_and_port", async (
   expect(tunnel.header_protection_key).toEqual({ plaintext: "HPK=" });
   expect(tunnel.obfuscation).toEqual(profile);
 });
+
+it("criterion_13_peer_tab_states_that_a_peer_goes_live_without_an_apply", async () => {
+  const fetch = await mount();
+  const editor = await openPeers();
+  expect(within(editor).getByText(/применяются на работающем туннеле сразу при сохранении/)).toBeVisible();
+  expect(within(editor).getByText(/только после применения/)).toBeVisible();
+  expect(calls(fetch, "/api/draft")).toHaveLength(0);
+});

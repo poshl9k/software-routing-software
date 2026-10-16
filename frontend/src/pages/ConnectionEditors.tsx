@@ -198,14 +198,59 @@ function materializeTunnels(configuration: Configuration, rows: Tunnel[]): Tunne
   });
 }
 
+/** Devices the stored configuration attributes to a tunnel the editor no longer
+ * carries: that tunnel was deleted (or moved to another device), so its device
+ * leaves with it. */
+function removedTunnelDevices(configuration: Configuration, tunnels: Tunnel[]): Set<string> {
+  const owned = new Set(tunnels.map((tunnel) => tunnel.interface).filter(Boolean));
+  return new Set(configuration.tunnels
+    .map((tunnel) => tunnel.interface)
+    .filter((name): name is string => !!name && AUTO_TUNNEL_NAME.test(name) && !owned.has(name)));
+}
+
+/** Remove a deleted tunnel's device and every object that references it.
+ * The stored configuration may only name interfaces that exist (backend
+ * validation rejects `route.interface`, `nat.interface`, `dhcp.id_or_interface`,
+ * `dns.interface_address_required`, `ssh.interface_binding_required`,
+ * `tproxy.ingress_interface`, `tunnel.interface`), so a reference left behind
+ * either blocks the save or silently keeps the device alive. */
+function dropTunnelDevices(configuration: Configuration, devices: Set<string>): Partial<Configuration> {
+  if (!devices.size) return {};
+  const gone = (name: string | null) => !!name && devices.has(name);
+  return {
+    interfaces: configuration.interfaces
+      .filter((iface) => !devices.has(iface.name))
+      .map((iface) => iface.parent && devices.has(iface.parent)
+        ? { ...iface, parent: null }
+        : iface.members.some((member) => devices.has(member))
+          ? { ...iface, members: iface.members.filter((member) => !devices.has(member)) }
+          : iface),
+    static_routes: (configuration.static_routes ?? []).filter((route) => !gone(route.interface)),
+    dhcp_subnets: configuration.dhcp_subnets.filter((subnet) => !gone(subnet.interface)),
+    port_forwards: configuration.port_forwards.filter((forward) => !gone(forward.interface)),
+    dns: { ...configuration.dns, interfaces: configuration.dns.interfaces.filter((name) => !devices.has(name)) },
+    ddns: configuration.ddns.filter((job) => !gone(job.wan_interface)),
+    ssh: { ...configuration.ssh,
+      interfaces: configuration.ssh.interfaces.filter((name) => !devices.has(name)),
+      wan_confirmed_interfaces: configuration.ssh.wan_confirmed_interfaces.filter((name) => !devices.has(name)) },
+    tproxy: { ...configuration.tproxy,
+      ingress_interfaces: configuration.tproxy.ingress_interfaces.filter((name) => !devices.has(name)) },
+  };
+}
+
 /** Keep the configuration's tunnel devices in sync with the edited tunnels:
  * create/fill a LAN-zone interface for each tunnel (with its automatic address),
+ * drop a device whose tunnel was deleted together with every reference to it,
  * and drop an orphaned auto-created device (`tun<N>` no longer owned by a tunnel
  * or referenced anywhere). An operator-declared interface is never removed. */
-function reconcileTunnelInterfaces(configuration: Configuration, tunnels: Tunnel[]): Interface[] {
-  const referenced = referencedInterfaces(configuration, tunnels);
-  const byName = new Map(configuration.interfaces.map((i) => [i.name, i]));
-  const result = configuration.interfaces.filter(
+function reconcileTunnelInterfaces(configuration: Configuration, tunnels: Tunnel[]): Partial<Configuration> {
+  const cleaned: Configuration = {
+    ...configuration,
+    ...dropTunnelDevices(configuration, removedTunnelDevices(configuration, tunnels)),
+  };
+  const referenced = referencedInterfaces(cleaned, tunnels);
+  const byName = new Map(cleaned.interfaces.map((i) => [i.name, i]));
+  const result = cleaned.interfaces.filter(
     (iface) => !(AUTO_TUNNEL_NAME.test(iface.name) && !referenced.has(iface.name)),
   );
   for (const tunnel of tunnels) {
@@ -236,7 +281,7 @@ function reconcileTunnelInterfaces(configuration: Configuration, tunnels: Tunnel
       if (index >= 0) result[index] = updated;
     }
   }
-  return result;
+  return { ...cleaned, interfaces: result };
 }
 
 /** Interface description for an auto-created tunnel device (the tunnel name). */
@@ -561,7 +606,7 @@ function Collection<T extends Row>({
         </DialogContent>
       </Dialog>}
       {kind === "tunnels" && <ConfirmDialog open={deleteTarget !== null} title="Удалить туннель?"
-        body="Туннель, его клиенты и автоматически созданный интерфейс будут удалены из черновика. Проверьте зависимости перед применением."
+        body="Туннель, его пиры и автоматически созданный интерфейс будут удалены из черновика. Вместе с интерфейсом удаляются ссылки на него: статические маршруты, подсети DHCP, проброс портов, DNS, SSH и вход TProxy."
         confirmLabel="Удалить из черновика" cancelLabel="Отмена" danger
         onCancel={() => setDeleteTarget(null)} onConfirm={() => {
           const remaining = (currentEditing.current ?? []).filter((v) => v.id !== deleteTarget);
@@ -679,7 +724,7 @@ function PeerEditor({ peer, peers, disabled, save, remove, cancel }: {
           save(value);
         }} />
         <ConfirmDialog open={confirmDelete} title="Удалить пира?"
-          body="Пир будет удалён только из черновика туннеля. Изменения вступят в силу после сохранения и применения."
+          body="Пир будет удалён из черновика и с работающего туннеля при сохранении; если туннель ещё не применён, удаление произойдёт при применении."
           confirmLabel="Удалить из черновика" cancelLabel="Отмена" danger
           onCancel={() => setConfirmDelete(false)} onConfirm={() => { active.current = false; remove(); }} />
       </DialogContent>
@@ -783,6 +828,7 @@ function TunnelEditorTabs({ tunnel, patch, created, disabled, setError, setBusy,
       {/* Keep secret fields mounted so switching tabs cannot replace their original opaque values. */}
       <div hidden={peersVisible}>{children}</div>
       {peersVisible && <>
+        <InfoNote>Добавление и удаление пира применяются на работающем туннеле сразу при сохранении черновика, без общего применения. Изменение ключей или порта самого туннеля вступает в силу только после применения.</InfoNote>
         <FormActions><Button disabled={disabled || adding} onClick={() => void add()}>+ Добавить пира</Button></FormActions>
         <div className="table-wide tunnel-peers-table">
         <DataTable heads={["Имя", "Активность", "Действия"]} empty={<EmptyState>Пиров нет.</EmptyState>}
@@ -889,10 +935,16 @@ export function Tunnels() {
         tunnelStatus={telemetry.isSuccess ? telemetry.data : undefined}
         title="Туннели"
         addLabel="+ Добавить туннель"
-        configPatch={(rows, importedAddresses) => ({
-          interfaces: reconcileTunnelInterfaces(c, rows).map((iface) => importedAddresses[iface.name] ? { ...iface, addresses: [importedAddresses[iface.name]] } : iface),
-          tunnels: materializeTunnels(c, rows),
-        })}
+        configPatch={(rows, importedAddresses) => {
+          const patch = reconcileTunnelInterfaces(c, rows);
+          const interfaces = (patch.interfaces ?? c.interfaces)
+            .map((iface) => importedAddresses[iface.name] ? { ...iface, addresses: [importedAddresses[iface.name]] } : iface);
+          return {
+            ...patch,
+            interfaces,
+            tunnels: materializeTunnels({ ...c, ...patch, interfaces }, rows),
+          };
+        }}
         empty={emptyTunnel}
         create={createTunnel}
         importRow={(text, rows) => {

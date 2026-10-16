@@ -209,6 +209,13 @@ def tunnel_activity() -> dict:
     return TunnelActivity()()
 
 
+def tunnel_peers_sync(interface, peers):
+    """Program one applied tunnel's peers on the running device (no apply)."""
+    from .services import TunnelPeers
+
+    return TunnelPeers().sync(interface, list(peers))
+
+
 def list_addresses() -> dict[str, list[str]]:
     """Read live IPv4 addresses per interface without changing configuration.
 
@@ -467,6 +474,7 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
             'list_addresses': list_addresses, 'management': management,
             'set_panel_domain': set_panel_domain,
             'tunnel_activity': tunnel_activity,
+            'tunnel_peers_sync': tunnel_peers_sync,
             'update_status': update_status,
             'apply_update': apply_update,
             'update_source': update_source, 'source_status': source_status,

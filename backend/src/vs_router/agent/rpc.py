@@ -11,7 +11,8 @@ RequestID = StrictInt | StrictStr
 VersionID = Annotated[int, Field(strict=True, ge=1)]
 Method = Literal["apply_version", "confirm_version", "rollback", "status",
                  "diag_ping", "diag_traceroute", "nft_counters", "list_interfaces",
-                 "list_addresses", "management", "tunnel_activity", "update_status", "apply_update",
+                 "list_addresses", "management", "tunnel_activity", "tunnel_peers_sync",
+                 "update_status", "apply_update",
                  "update_source", "source_status", "service_status",
                  "engine_status", "engine_control", "clash_connections", "clash_close",
                  "clash_logs", "clash_proxies", "clash_select", "clash_delay",
@@ -30,6 +31,28 @@ class ConfirmParams(Model):
 
 class EmptyParams(Model):
     pass
+
+
+# A WireGuard/AmneziaWG key or preshared key: 32 base64-encoded bytes.
+WG_KEY = r'^[A-Za-z0-9+/]{43}=$'
+WG_INTERFACE = r'^[a-zA-Z][a-zA-Z0-9_.-]{0,14}$'
+
+
+class TunnelPeerSpec(Model):
+    """One peer as the live device must carry it.
+
+    ``allowed_ips`` may not be empty: ``setconf`` rejects an empty ``AllowedIPs``
+    line and the whole wireguard phase then fails on the next apply.
+    """
+    public_key: Annotated[str, Field(strict=True, pattern=WG_KEY)]
+    allowed_ips: tuple[Annotated[str, Field(strict=True, min_length=1, max_length=64)], ...] = \
+        Field(min_length=1, max_length=16)
+    preshared_key: Annotated[str, Field(strict=True, pattern=WG_KEY)] | None = None
+
+
+class TunnelPeersSyncParams(Model):
+    interface: Annotated[str, Field(strict=True, pattern=WG_INTERFACE)]
+    peers: tuple[TunnelPeerSpec, ...] = Field(default=(), max_length=64)
 
 
 class PanelDomainParams(Model):
@@ -120,6 +143,7 @@ PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "nft_counters": EmptyParams, "list_interfaces": EmptyParams,
           "list_addresses": EmptyParams, "management": EmptyParams,
           "tunnel_activity": EmptyParams,
+          "tunnel_peers_sync": TunnelPeersSyncParams,
           "update_status": EmptyParams,
           "apply_update": ApplyUpdateParams,
           "update_source": UpdateSourceParams, "source_status": EmptyParams,

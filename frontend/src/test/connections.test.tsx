@@ -205,7 +205,7 @@ it("confirmation removes tunnel and auto interface only from draft", async () =>
   await openTunnel();
   await userEvent.click(screen.getByRole("button", { name: "Удалить vpn" }));
   const dialog = screen.getByRole("dialog", { name: "Удалить туннель?" });
-  expect(within(dialog).getByText(/проверьте зависимости/i)).toBeVisible();
+  expect(within(dialog).getByText(/ссылки на него/i)).toBeVisible();
   expect(fetch.mock.calls.filter(([p]) => p === "/api/draft")).toHaveLength(0);
   await userEvent.click(within(dialog).getByRole("button", { name: "Удалить из черновика" }));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Удалить туннель?" })).not.toBeInTheDocument());
@@ -214,6 +214,32 @@ it("confirmation removes tunnel and auto interface only from draft", async () =>
   await waitFor(() => expect(fetch.mock.calls.some(([p]) => p === "/api/draft")).toBe(true));
   expect(draft(fetch).tunnels).toEqual([]);
   expect(draft(fetch).interfaces).toEqual([]);
+});
+it("removes a deleted tunnel's device and every reference that named it", async () => {
+  const backup: Tunnel = { ...server, name: "backup", interface: "tun1", peers: [] };
+  const tun = (name: string, description: string, address: string) => ({
+    name, type: "physical" as const, zone: "lan" as const, addressing: "static" as const,
+    addresses: [address], description, parent: null, vlan_id: null, members: [],
+  });
+  const config: Configuration = {
+    ...emptyConfiguration,
+    tunnels: [server, backup],
+    interfaces: [tun("tun0", "vpn", "10.66.66.1/24"), tun("tun1", "backup", "10.66.67.1/24")],
+    // A surviving tunnel keeps its device; the deleted one takes its references.
+    tproxy: { ...emptyConfiguration.tproxy, ingress_interfaces: ["tun0", "tun1"] },
+    static_routes: [{ destination: "192.0.2.0/24", gateway: null, interface: "tun0", metric: 100, enabled: true }],
+  };
+  const fetch = await mount(<Tunnels />, config);
+  await userEvent.click((await screen.findAllByRole("button", { name: "Открыть" }))[0]);
+  await userEvent.click(screen.getByRole("button", { name: "Удалить vpn" }));
+  await userEvent.click(within(screen.getByRole("dialog", { name: "Удалить туннель?" }))
+    .getByRole("button", { name: "Удалить из черновика" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Удалить туннель?" })).not.toBeInTheDocument());
+  if (screen.queryByRole("button", { name: "Сохранить" })) await userEvent.click(save());
+  await waitFor(() => expect(fetch.mock.calls.some(([p]) => p === "/api/draft")).toBe(true));
+  expect(draft(fetch).interfaces.map((i: { name: string }) => i.name)).toEqual(["tun1"]);
+  expect(draft(fetch).tproxy.ingress_interfaces).toEqual(["tun1"]);
+  expect(draft(fetch).static_routes).toEqual([]);
 });
 it("surfaces keygen failure and keeps save error in editor", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, true, async () => new Response(JSON.stringify({ message: "Генерация не удалась" }), { status: 500 }));

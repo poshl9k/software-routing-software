@@ -144,7 +144,34 @@ def test_reload_tunnel(config, alive, protocol):
     assert ['ip', '-6', 'route', 'replace', '2001:db8::/64', 'dev', 'wg0'] in calls
     fs.write(source, serialize_wireguard({'manifest.json': '{}\n'}))
     WireGuardReloader(executor, fs, kernel_probe=lambda *_: False)(source)
-    assert ['systemctl', 'disable', '--now', f'vs-router-{protocol}@wg0.service'] in [a for a, _ in executor.calls]
+    calls = [a for a, _ in executor.calls]
+    assert ['systemctl', 'disable', '--now', f'vs-router-{protocol}@wg0.service'] in calls
+    # The device must go with the tunnel: a kernel link outlives its unit.
+    assert ['ip', 'link', 'del', 'wg0'] in calls
+
+
+def test_removed_tunnel_deletes_the_kernel_link(config):
+    """An in-kernel tunnel has no unit to stop, so the link is deleted explicitly."""
+    fs, executor = FakeFS(), FakeExecutor()
+    t = config['configuration']['tunnels'][0]
+    t.update(role='client', protocol='wg', peers=[], endpoint='203.0.113.1:51820',
+             server_public_key='SERVER', allowed_ips=['0.0.0.0/0'], obfuscation={})
+    source = APPLIED_DIR / 'wireguard.conf'
+    fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
+
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        return SimpleNamespace(returncode=0,
+                               stdout=b'default via 203.0.113.254 dev wan0 metric 100\n')
+    executor.run = run
+    WireGuardReloader(executor, fs, sleep=lambda _: None, kernel_probe=lambda *_: True)(source)
+    executor.calls.clear()
+    # Applying a configuration without the tunnel removes its manifest entry.
+    fs.write(source, serialize_wireguard({'manifest.json': '{}\n'}))
+    WireGuardReloader(executor, fs, sleep=lambda _: None, kernel_probe=lambda *_: True)(source)
+    calls = [a for a, _ in executor.calls]
+    assert ['ip', 'link', 'del', 'wg0'] in calls
+    assert not any(a[:3] == ['ip', 'link', 'add'] for a in calls)
 
 
 def test_reload_tunnel_uses_kernel_when_available(config):

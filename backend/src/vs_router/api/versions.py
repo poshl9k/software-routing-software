@@ -14,6 +14,7 @@ from ..schema import Configuration
 from .auth import admin, current_user, get_db
 from .configuration import check_roles, parse_configuration, redact, structural_diff, validate
 from .errors import APIError
+from .tunnel_peers import live_peers
 
 router = APIRouter(dependencies=[Depends(current_user)])
 PositiveID = Annotated[int, Path(ge=1)]
@@ -130,17 +131,24 @@ def create_draft(body: dict | None = Body(default=None), db: Session = Depends(g
     except IntegrityError:
         db.rollback()
         raise APIError(409, "draft.exists") from None
+    # Peers of a running server tunnel take effect now, not at the next apply.
+    # The outcome is deliberately not part of the version payload: that record
+    # is the configuration, and every consumer compares it as one. A peer that
+    # could not be programmed is visible in the peers tab (activity) and the log.
+    live_peers(configuration, old)
     return view(row)
 
 
 @router.put("/draft", dependencies=[Depends(admin)])
 def update_draft(body: dict = Body(), db: Session = Depends(get_db)):
     row = draft(db)
-    configuration = parse_configuration(body, row.configuration.model_dump(mode="json"))
-    check_roles(configuration, row.configuration)
+    old = row.configuration
+    configuration = parse_configuration(body, old.model_dump(mode="json"))
+    check_roles(configuration, old)
     configuration = materialize_addresses(configuration)
     row.configuration = configuration
     db.commit()
+    live_peers(configuration, old)
     return view(row)
 
 

@@ -125,6 +125,94 @@ class TunnelActivity:
                 for iface, protocol in sorted(tunnel_interfaces(self.fs).items())}
 
 
+class TunnelPeers:
+    """Program one tunnel's peers onto its running device, outside the apply cycle.
+
+    Adding or removing a client is additive and reversible, and the stored
+    configuration carries it for the next apply, so it needs no whole-config
+    transaction. Only interfaces the panel itself applied are touched (the same
+    manifest the status and activity probes own); a tunnel that is not applied
+    answers ``tunnel.not_applied`` and the change waits for the next apply.
+    """
+
+    def __init__(self, executor=None, filesystem=None,
+                 config_dir=Path('/etc/vs-router/wireguard')):
+        self.executor = executor if executor is not None else SubprocessExecutor()
+        self.fs = filesystem if filesystem is not None else LocalFileSystem()
+        self.config_dir = config_dir
+
+    def _run(self, argv):
+        try:
+            result = self.executor.run(argv, 15)
+        except subprocess.TimeoutExpired as exc:
+            raise ApplyError('agent.command_timeout') from exc
+        if result.returncode:
+            raise ApplyError('tunnel.peer_failed')
+
+    def current(self, tool, interface):
+        """Public keys of the peers the live device currently carries."""
+        try:
+            result = self.executor.run([tool, 'show', interface, 'dump'], 15)
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        if result.returncode:
+            return None
+        output = getattr(result, 'stdout', b'') or b''
+        if isinstance(output, bytes):
+            output = output.decode('utf-8', 'replace')
+        # The first dump line describes the interface itself; peers follow it.
+        return [line.split()[0] for line in output.strip().splitlines()[1:] if line.split()]
+
+    def sync(self, interface, peers):
+        """Make the device's peer set match ``peers``; returns what changed.
+
+        ``peers`` items are ``{public_key, allowed_ips, preshared_key}``. The
+        preshared key never enters argv: it is written to a root-only file and
+        removed as soon as the device has read it.
+        """
+        protocol = tunnel_interfaces(self.fs).get(interface)
+        if protocol is None:
+            raise ApplyError('tunnel.not_applied')
+        tool = 'awg' if protocol == 'awg' else 'wg'
+        live = self.current(tool, interface)
+        if live is None:
+            raise ApplyError('tunnel.peer_failed')
+        wanted = {peer['public_key']: peer for peer in peers}
+        added, unchanged = [], []
+        for key, peer in wanted.items():
+            # An empty AllowedIPs is a setconf parse error on the next reload;
+            # the panel materializes addresses, and an API client that skipped
+            # it must not silently break the tunnel.
+            try:
+                for value in peer['allowed_ips']:
+                    ip_network(value)
+            except ValueError:
+                raise ApplyError('tunnel.peer_allowed_ips_invalid') from None
+            addresses = ','.join(peer['allowed_ips'])
+            if not addresses:
+                raise ApplyError('tunnel.peer_allowed_ips_required')
+            command = [tool, 'set', interface, 'peer', key, 'allowed-ips', addresses]
+            secret = peer.get('preshared_key')
+            path = None
+            if secret:
+                path = self.config_dir / 'peer-preshared-key.tmp'
+                self.fs.write(path, secret)
+                command += ['preshared-key', str(path)]
+            try:
+                self._run(command)
+            finally:
+                if path is not None:
+                    self.fs.remove(path)
+            (unchanged if key in live else added).append(key)
+        removed = []
+        for key in live:
+            if key in wanted:
+                continue
+            self._run([tool, 'set', interface, 'peer', key, 'remove'])
+            removed.append(key)
+        return {'added': added, 'removed': removed, 'unchanged': unchanged}
+
+
 def checked(executor, argv):
     try:
         result = executor.run(argv, 15)
@@ -368,6 +456,13 @@ class WireGuardReloader:
             new = manifest.get(iface)
             if new is None or old['protocol'] != new['protocol']:
                 checked(self.executor, ['systemctl', 'disable', '--now', f'vs-router-{old["protocol"]}@{iface}.service'])
+                # A userspace daemon destroys its TUN device when it stops, but an
+                # in-kernel link (`ip link add ... type wireguard`) has no unit to
+                # stop and survives the removed manifest entry with its addresses
+                # and routes, so the deleted tunnel keeps running. Delete the link
+                # explicitly; a device the daemon already removed fails the call,
+                # which is not an error.
+                self.executor.run(['ip', 'link', 'del', iface], 15)
             elif new:
                 for route in sorted(set(old['routes']) - set(new['routes'])):
                     checked(self.executor, self.route('del', route, iface))

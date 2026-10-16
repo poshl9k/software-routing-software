@@ -1,6 +1,7 @@
 """Secret-safe views, JSON Pointer differences and offline validation."""
 import warnings
 import os
+from typing import Any
 
 from ..secrets import encrypt_secret
 from ipaddress import ip_address, ip_network
@@ -16,7 +17,7 @@ REDACTED = {"redacted": True}
 _validation_lock = RLock()
 
 
-def redact(value):
+def redact(value) -> Any:
     if isinstance(value, dict):
         if value.get("encrypted") is True and "ciphertext" in value:
             return REDACTED.copy()
