@@ -18,7 +18,11 @@ RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadOnlyPaths=/usr /bin
-ReadWritePaths=/etc/vs-router-ssh /run/vs-router-ssh /var/lib/vs-router-ssh /etc/systemd/network /etc/caddy /etc/systemd/system /etc/vs-router /etc/ppp /run/vs-router /var/lib/vs-router /var/lib/vs-router-bootstrap /etc/unbound/unbound.conf.d /etc/kea
+# /etc/kea is NOT listed here: it exists only where a DHCP server is installed,
+# and a ReadWritePaths entry for a missing directory fails the unit with
+# 226/NAMESPACE before it can start. install.sh adds a kea.conf drop-in on a host
+# that has Kea.
+ReadWritePaths=/etc/vs-router-ssh /run/vs-router-ssh /var/lib/vs-router-ssh /etc/systemd/network /etc/caddy /etc/systemd/system /etc/vs-router /etc/ppp /run/vs-router /var/lib/vs-router /var/lib/vs-router-bootstrap /etc/unbound/unbound.conf.d
 UMask=0007
 
 [Install]

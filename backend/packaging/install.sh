@@ -250,6 +250,16 @@ if command -v kea-dhcp4 >/dev/null 2>&1; then
     fi
     chmod 0640 /etc/kea/kea-api-password
     chown root:_kea /etc/kea/kea-api-password
+    # The base units must not name /etc/kea: a ReadWritePaths target that does
+    # not exist fails the unit with 226/NAMESPACE at start. Add it per host,
+    # only where the directory is really there.
+    for unit in vs-router-agent vs-router-bootrestore; do
+        install -d -m 0755 "/etc/systemd/system/$unit.service.d"
+        cat > "/etc/systemd/system/$unit.service.d/kea.conf" <<'EOF'
+[Service]
+ReadWritePaths=/etc/kea
+EOF
+    done
     # PID 1 reads the restricted source; the web service gets a private copy so
     # the leases view never needs the password in unit text or argv.
     cat > /etc/systemd/system/vs-router-web.service.d/kea-api.conf <<'EOF'
@@ -272,9 +282,13 @@ EOF
     fi
 else
     # No DHCP server on this host (the panel profile installs none, ADR-0021).
-    # A leftover drop-in is not harmless: its ExecStartPre demands the Kea
-    # credential, so vs-router-web would fail to start after Kea is removed.
-    rm -f /etc/systemd/system/vs-router-web.service.d/kea-api.conf
+    # Leftovers are not harmless: the web drop-in demands the Kea credential
+    # (ExecStartPre, so vs-router-web would not start), and the ReadWritePaths
+    # drop-ins name a directory that no longer exists (the unit then dies with
+    # 226/NAMESPACE before it runs).
+    rm -f /etc/systemd/system/vs-router-web.service.d/kea-api.conf \
+        /etc/systemd/system/vs-router-agent.service.d/kea.conf \
+        /etc/systemd/system/vs-router-bootrestore.service.d/kea.conf
 fi
 systemctl enable vs-router-bootrestore.service vs-router-tproxy-postboot.service vs-router-pppoe-postboot.service
 # Replace the physical tty1 login on the next boot, not the active installer

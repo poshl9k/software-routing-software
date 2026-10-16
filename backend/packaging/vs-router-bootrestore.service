@@ -19,7 +19,10 @@ ExecStart=/usr/bin/python3 -m vs_router.agent.boot_restore
 ExecStartPost=-/usr/bin/python3 /usr/local/libexec/vs-router/reconcile-networkd-boot.py
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/etc/caddy /etc/systemd/system /etc/systemd/network /etc/vs-router /etc/vs-router-ssh /etc/unbound/unbound.conf.d /etc/kea /etc/ppp /run
+# No /etc/kea here: it exists only with a DHCP server installed, and a missing
+# ReadWritePaths target fails the unit with 226/NAMESPACE. install.sh adds a
+# kea.conf drop-in where Kea is present.
+ReadWritePaths=/etc/caddy /etc/systemd/system /etc/systemd/network /etc/vs-router /etc/vs-router-ssh /etc/unbound/unbound.conf.d /etc/ppp /run
 
 [Install]
 WantedBy=multi-user.target
