@@ -541,19 +541,41 @@ def panel_runner(calls, *, reachable=True):
     return run
 
 
-def vps_applied(tmp_path):
-    """A one-NIC record (with the nip.io reserve) plus an applied snapshot."""
+def vps_applied(tmp_path, ssh_interfaces=('eth0',)):
+    """A one-NIC record (with the nip.io reserve) plus an applied snapshot.
+
+    ``ssh_interfaces`` is what the applied configuration allows SSH on: a real
+    one-NIC host reaches the operator over the uplink, and publishing regenerates
+    the live firewall from this snapshot.
+    """
     vps_host(tmp_path)
     applied = tmp_path / 'etc/vs-router/applied'
     applied.mkdir(parents=True)
     version = ConfigurationVersion(configuration=Configuration.model_validate({
         'interfaces': [{'name': 'eth0', 'zone': 'wan', 'addressing': 'static',
-                        'addresses': ['92.51.36.131/24']}]}))
+                        'addresses': ['92.51.36.131/24']}],
+        'ssh': {'interfaces': list(ssh_interfaces),
+                'wan_confirmed_interfaces': list(ssh_interfaces)}}))
     (applied / 'snapshot.json').write_text(version.model_dump_json())
     state_dir = tmp_path / 'var/lib/vs-router-bootstrap'
     state_dir.mkdir(parents=True)
     (state_dir / 'management.json').write_text(RESERVE.model_dump_json())
     return applied, state_dir
+
+
+def test_publish_panel_domain_refuses_when_the_applied_rules_close_ssh(tmp_path):
+    """Publishing rewrites the live firewall from the applied configuration; a
+    configuration that allows no SSH on the management interface would lock the
+    operator out, so the change is refused before anything is written."""
+    applied, state_dir = vps_applied(tmp_path, ssh_interfaces=())
+    before = (state_dir / 'management.json').read_text()
+    console = Console(tmp_path, panel_runner([]), os.getgid(), resolver=lambda name: None)
+    with pytest.raises(ValueError, match='management.ssh_unprotected'):
+        console.publish_panel_domain('rg3.poshl9k.ru')
+    # Nothing was published and no firewall was rewritten.
+    assert (state_dir / 'management.json').read_text() == before
+    assert not (applied / 'nftables.conf').exists()
+    assert not (tmp_path / 'etc/caddy/caddy.json').exists()
 
 
 def test_publish_panel_domain_serves_the_custom_name_beside_the_reserve(tmp_path):

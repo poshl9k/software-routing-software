@@ -345,6 +345,14 @@ class Console:
                 self.resolver(updated.custom_hostname)
             except OSError as exc:
                 raise ValueError('management.domain_unresolved') from exc
+        # Publishing regenerates the live firewall from the applied configuration
+        # (ADR-0025). If that configuration allows no SSH on the management
+        # interface, loading it would lock the operator out of a host they can
+        # only reach over the network — so refuse before writing anything, rather
+        # than publish a name and lose the way in.
+        if (self.path(APPLIED_DIR / 'snapshot.json').exists()
+                and updated.interface not in self.applied_version().configuration.ssh.interfaces):
+            raise ValueError('management.ssh_unprotected')
         management_path = self.path(STATE_PATH)
         caddy_path = self.path('/etc/caddy/caddy.json')
         previous = {'management': management_path.read_text(),
