@@ -122,8 +122,10 @@ fi
 
 # --- 5. Privileged install (never touches sshd) ------------------------------
 # VS_ROUTER_KEEP_SSH=1 makes install.sh skip the SSH mask and the sshd drop-in.
+# VS_ROUTER_PROFILE=panel records the product this host is (ADR-0026): the
+# online path installs the one-NIC panel, not the router.
 if [ -d "${PACKAGING:-}" ]; then
-    run env VS_ROUTER_KEEP_SSH=1 sh "$PACKAGING/install.sh"
+    run env VS_ROUTER_KEEP_SSH=1 VS_ROUTER_PROFILE=panel sh "$PACKAGING/install.sh"
 fi
 if [ -n "$UI" ]; then
     run install -d -m 0755 /var/lib/vs-router/ui

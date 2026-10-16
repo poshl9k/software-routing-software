@@ -223,9 +223,16 @@ if [ -d "$UI_SRC" ] && [ -f "$UI_SRC/index.html" ]; then
     chmod -R a+rX /var/lib/vs-router/ui
 fi
 # Record the installed release identity (pinned commit + semver) for
-# GET /api/release. The commit comes from git when present, else a REVISION
-# file vendored into the ISO; it stays "unknown" when neither exists.
+# GET /api/release, plus the product profile this host runs (ADR-0026). The
+# commit comes from git when present, else a REVISION file vendored into the
+# ISO; the semver falls back to the installed wheel's metadata, so a host
+# installed from a copied packaging directory can still say what it runs.
 repo_root=$(dirname -- "$packaging_dir")/..
+PROFILE=${VS_ROUTER_PROFILE:-router}
+case "$PROFILE" in
+    router|panel) ;;
+    *) echo "ERROR: VS_ROUTER_PROFILE must be router or panel, got '$PROFILE'" >&2; exit 1 ;;
+esac
 semver=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' "$repo_root/backend/pyproject.toml" 2>/dev/null | head -n1)
 commit=""
 if command -v git >/dev/null 2>&1 && git -C "$repo_root" rev-parse --verify -q HEAD >/dev/null 2>&1; then
@@ -233,12 +240,28 @@ if command -v git >/dev/null 2>&1 && git -C "$repo_root" rev-parse --verify -q H
 elif [ -f "$repo_root/REVISION" ]; then
     commit=$(tr -d '[:space:]' < "$repo_root/REVISION")
 fi
+if [ -z "$semver" ]; then
+    semver=$(python3 -c "import importlib.metadata as m; print(m.version('vs-router-backend'))" 2>/dev/null || true)
+fi
+source=${VS_ROUTER_RELEASE_SOURCE:-}
+if [ -z "$source" ]; then
+    if [ -n "$commit" ]; then source=git
+    elif [ -n "$semver" ]; then source=wheel
+    else source=unknown
+    fi
+fi
 [ -n "$commit" ] || commit=unknown
 [ -n "$semver" ] || semver=unknown
-printf '{"commit":"%s","semver":"%s","installed_at":"%s","source":"%s"}\n' \
-    "$commit" "$semver" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${VS_ROUTER_RELEASE_SOURCE:-unknown}" \
+printf '{"commit":"%s","semver":"%s","profile":"%s","installed_at":"%s","source":"%s"}\n' \
+    "$commit" "$semver" "$PROFILE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$source" \
     > /etc/vs-router/version.json
 chmod 0644 /etc/vs-router/version.json
+# The product identity is installer-owned and never switched from the panel
+# (ADR-0026). Failing to record it must not fail the install — the host then
+# falls back to capability rules — but it must never pass silently.
+if ! python3 -m vs_router.profile write "$PROFILE"; then
+    echo "WARNING: could not record the product profile ('$PROFILE'); this host will decide by capability only" >&2
+fi
 # Kea control channel: the agent reloads DHCP through localhost HTTP, so the
 # credential file and a running control agent are prerequisites of the first
 # apply. Missing either used to surface as a bare agent.apply_failed.
