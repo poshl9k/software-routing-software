@@ -11,6 +11,7 @@ readiness. Base networkd, nft, Unbound, Kea and SSH files are restored here.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -247,7 +248,7 @@ def restore_pppoe_files(previous_bundle, confirmed_bundle, *, applied_dir=None,
 def recover_interrupted_apply():
     """Reboot never promotes a pending/partially installed snapshot."""
     from pathlib import Path
-    from .apply import ApplyEngine, CONFIRMED_DIR, FILES
+    from .apply import ApplyEngine, CONFIRMED_DIR, host_files
     from ..schema import ConfigurationVersion
     from ..generators.nftables import generate_nftables
     engine = ApplyEngine()
@@ -272,8 +273,12 @@ def recover_interrupted_apply():
     # Old snapshots predate the dedicated SSH decision; regenerate their nft.
     from ..management import read_management
     files['nftables'] = generate_nftables(version, read_management())
-    for name, filename in FILES.items():
-        engine.fs.write(Path(APPLIED) / filename, files[name])
+    # Only the phases this host has. A snapshot written while Kea was installed
+    # must not KeyError on a host whose profile has no DHCP server (ADR-0021):
+    # that failure aborts the whole boot restore.
+    for name, filename in host_files().items():
+        if name in files:
+            engine.fs.write(Path(APPLIED) / filename, files[name])
     # Additive TProxy scaffold. Inert for every current configuration: the branch
     # only runs when the confirmed target (or the interrupted marker) carries
     # TProxy artifacts, which the closed gate prevents.
@@ -376,9 +381,10 @@ def main() -> int:
             handle.write(f'include: "{unbound}"\n')
         failures += run(["/usr/sbin/unbound-checkconf", "/etc/unbound/unbound.conf"])
 
-    # 4. kea
+    # 4. kea — only on a host that still has the DHCP server; a leftover
+    # artifact from an install that had Kea must not be reinstated here.
     kea = os.path.join(APPLIED, "kea.json")
-    if os.path.exists(kea) and os.path.isdir("/etc/kea"):
+    if os.path.exists(kea) and os.path.isdir("/etc/kea") and shutil.which("kea-dhcp4"):
         with open(kea) as src, open(KEA_CONF, "w") as dst:
             dst.write(src.read())
         os.chmod(KEA_CONF, 0o644)

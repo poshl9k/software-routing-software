@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Box,
@@ -41,6 +42,8 @@ import {
   useRouterState,
 } from "./state";
 import { useApplyStatus } from "./hooks/useApplyStatus";
+import { api } from "./api";
+import { queryKeys } from "./query";
 import { ApplyStatusRail, type ApplyStatusRailProps } from "./components/ApplyStatusRail";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Badge } from "./components/Badge";
@@ -133,8 +136,20 @@ export const navigation: { group: string; items: NavigationItem[] }[] = [
     { to: "/maintenance", label: "Обслуживание", icon: "maintenance" },
   ] },
 ];
+/** A host without a DHCP server has no DHCP section (ADR-0021). An unread or
+ * older host record keeps the section: a failed capability read must not hide a
+ * page the operator may still need. */
+function useDhcpAvailable(): boolean {
+  const host = useQuery({ queryKey: queryKeys.hostManagement(), queryFn: api.hostManagement });
+  return host.data?.dhcp !== false;
+}
+/** The DHCP route redirects away only when the host says it has no DHCP. */
+function DhcpRoute() {
+  return useDhcpAvailable() ? <DHCP /> : <Navigate to="/" replace />;
+}
 function Layout() {
   const { pathname, search } = useLocation();
+  const dhcpAvailable = useDhcpAvailable();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -175,7 +190,11 @@ function Layout() {
       : draft ? { state: "draft", draftVersion: draft.id, stableVersion: confirmed?.id }
       : confirmed ? { state: "applied", confirmedVersion: confirmed.id }
       : { state: "uncertain" };
-  const navContents = (mobile: boolean) => navigation.map((group) => {
+  const visibleNavigation = navigation.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => dhcpAvailable || item.to !== "/dhcp"),
+  })).filter((group) => group.items.length);
+  const navContents = (mobile: boolean) => visibleNavigation.map((group) => {
     const items = group.items.filter((item) =>
       item.label.toLowerCase().includes(query.trim().toLowerCase()) ||
       group.group.toLowerCase().includes(query.trim().toLowerCase()));
@@ -317,7 +336,7 @@ export default function App() {
           <Route element={<Protected />}>
             <Route index element={<Dashboard />} />
             <Route path="network" element={<Network />} />
-            <Route path="dhcp" element={<DHCP />} />
+            <Route path="dhcp" element={<DhcpRoute />} />
             <Route path="dns" element={<DNS />} />
             <Route path="tunnels" element={<Tunnels />} />
             <Route path="proxy" element={<Proxy />} />

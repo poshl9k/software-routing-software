@@ -71,10 +71,14 @@ run install -d -m 0700 "$WORK/tmp"
 install_packages() {
     export DEBIAN_FRONTEND=noninteractive
     run apt-get update -y
+    # No Kea/DHCP: the online (panel) profile serves no addresses, and the agent
+    # simply has no `kea` apply phase on a host without the DHCP server
+    # (ADR-0021). Installing it here would make every apply depend on a daemon
+    # that has nothing to serve.
     run apt-get install -y \
         dbus python3 python3-pip python3-venv python3-setuptools python3-wheel \
         git build-essential golang-go nodejs npm curl socat nftables apparmor \
-        wireguard-tools unbound kea-dhcp4-server kea-ctrl-agent ppp traceroute \
+        wireguard-tools unbound ppp traceroute \
         fail2ban python3-systemd openssh-server
 }
 if ! command -v nft >/dev/null 2>&1 || ! command -v unbound >/dev/null 2>&1; then

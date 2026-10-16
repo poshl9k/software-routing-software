@@ -189,6 +189,17 @@ def list_interfaces() -> list[dict[str, str | None]]:
     return interfaces
 
 
+def dhcp_available() -> bool:
+    """Whether this host can serve DHCP at all (it must have a DHCP server).
+
+    The panel profile installs none (ADR-0021), so a panel host has no DHCP
+    section and no ``kea`` apply phase.
+    """
+    from .apply import PHASE_TOOLS, host_files
+
+    return all(name in host_files() for name in PHASE_TOOLS)
+
+
 def management() -> dict | None:
     """The first-run management record, for the wizard.
 
@@ -199,7 +210,7 @@ def management() -> dict | None:
     from ..management import host_management
 
     state = host_management()
-    return None if state is None else state.model_dump()
+    return None if state is None else {**state.model_dump(), 'dhcp': dhcp_available()}
 
 
 def tunnel_activity() -> dict:
@@ -498,7 +509,10 @@ def main():
     from .services import NftApply, UnboundReloader, KeaReloader, NetworkdReloader, WireGuardReloader, CaddyReloader
     from ..management import host_management
     from .ssh import SSHController
-    engine = ApplyEngine(panel_probe=panel_probe, management_provider=host_management, ssh_controller=SSHController(), reload_commands={
+    # A host with no engine binary (a panel host installs no Kea, ADR-0021) has no
+    # phase for it, instead of failing every apply at that phase.
+    from .apply import host_files
+    engine = ApplyEngine(files=host_files(), panel_probe=panel_probe, management_provider=host_management, ssh_controller=SSHController(), reload_commands={
         'nftables': NftApply(), 'unbound': UnboundReloader(), 'kea': KeaReloader(),
         'networkd': NetworkdReloader(),
         'wireguard': WireGuardReloader(), 'caddy': CaddyReloader(),

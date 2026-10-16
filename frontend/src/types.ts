@@ -486,6 +486,9 @@ export interface HostManagement {
   /** Operator's own domain, added from the panel (ADR-0024). */
   custom_hostname: string | null;
   path_prefix: string | null;
+  /** Host-owned capability: false when this host has no DHCP server at all
+   * (the panel profile installs no Kea, ADR-0021). Undefined on an older agent. */
+  dhcp?: boolean;
 }
 
 export interface ReleaseInfo {

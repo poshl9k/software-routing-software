@@ -4,6 +4,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -33,6 +34,19 @@ DOH_FILES = {'dnscrypt': 'dnscrypt.toml'}
 DOH_VALIDATORS = {'dnscrypt': ['dnscrypt-proxy', '-check', '-config']}
 VALIDATORS = {'nftables': ['nft', '-c', '-f'], 'unbound': ['unbound-checkconf'],
               'kea': ['kea-dhcp4', '-t'], 'networkd': ['true'], 'wireguard': ['true'], 'caddy': ['true'], 'ddns': ['true'], 'ssh': ['true']}
+#: Phases whose engine binary a host may not have at all. The panel profile
+#: installs no DHCP server (ADR-0021), so ``kea`` is absent there and its phase
+#: must not run — an unconditional phase would fail the whole apply with a bare
+#: ``agent.validation_failed`` on a host that is meant to have no DHCP.
+PHASE_TOOLS = {'kea': 'kea-dhcp4'}
+#: A phase that is dropped must fail loudly when the configuration needs it.
+PHASE_REQUIRED = {'kea': lambda configuration: bool(configuration.dhcp_subnets)}
+
+
+def host_files(which=shutil.which):
+    """The phases this host can actually run (its engine binaries are present)."""
+    return {name: filename for name, filename in FILES.items()
+            if name not in PHASE_TOOLS or which(PHASE_TOOLS[name]) is not None}
 
 
 class Completed(Protocol):
@@ -200,10 +214,13 @@ class ApplyResult:
 class ApplyEngine:
     def __init__(self, *, executor=None, filesystem=None, clock: Clock = time.time,
                  validators=None, reload_commands=None, panel_probe: Callable | None = None,
-                 management_provider=None, ssh_controller=None):
+                 management_provider=None, ssh_controller=None, files=None):
         self.executor = executor or SubprocessExecutor()
         self.fs = filesystem or LocalFileSystem()
         self.clock = clock
+        # The phase set this host runs; the daemon passes ``host_files()`` so a
+        # host without an engine binary never tries to apply its phase.
+        self.files = FILES if files is None else files
         self.validators = VALIDATORS if validators is None else validators
         self.reload_commands = reload_commands or {}
         self.panel_probe = panel_probe
@@ -265,7 +282,7 @@ class ApplyEngine:
 
     def _install(self, contents, marker, validators, files=None, steps=None,
                  steps_before=None):
-        files = FILES if files is None else files
+        files = self.files if files is None else files
         # Gated typed readiness steps, executed once just before ``steps_before``
         # is activated. Empty (no-op) for every ordinary configuration.
         steps = list(steps or [])
@@ -389,7 +406,7 @@ class ApplyEngine:
                 pass
 
     def _backup(self, version_id, files=None):
-        files = FILES if files is None else files
+        files = self.files if files is None else files
         contents = {n: self.fs.read(APPLIED_DIR / f) for n, f in files.items()}
         # One atomic bundle is the authority, avoiding mixed backup generations.
         self.fs.write(CONFIRMED_DIR / 'snapshot.json', json.dumps(
@@ -468,7 +485,12 @@ class ApplyEngine:
             marker['doh'] = True
         if pppoe_files:
             marker['pppoe'] = True
-        apply_files = {**FILES, **pppoe_files, **tproxy_files, **doh_files}
+        apply_files = {**self.files, **pppoe_files, **tproxy_files, **doh_files}
+        for name, required in PHASE_REQUIRED.items():
+            if name not in apply_files and required(version.configuration):
+                # The configuration needs an engine this host does not have:
+                # refuse loudly instead of applying a subnet nobody serves.
+                raise ApplyError(f'{name}.unavailable')
         apply_validators = _merged_validators(
             _merged_validators(self.validators if validators is None else validators, tproxy_validators),
             doh_validators)
@@ -622,12 +644,12 @@ class ApplyEngine:
         # engine / capture artifacts and make this confirmed state inconsistent.
         # Also include DoH files when present in the marker.
         doh_files_in_marker = marker.get('doh', False)
-        files = ({**FILES, **tproxy_apply.TPROXY_FILES} if 'tproxy' in marker else None)
+        files = ({**self.files, **tproxy_apply.TPROXY_FILES} if 'tproxy' in marker else None)
         if doh_files_in_marker:
-            files = {**FILES, **DOH_FILES} if files is None else {**files, **DOH_FILES}
+            files = {**self.files, **DOH_FILES} if files is None else {**files, **DOH_FILES}
         if marker.get('pppoe'):
             from . import pppoe_apply
-            files = {**(FILES if files is None else files), **pppoe_apply.FILES}
+            files = {**(self.files if files is None else files), **pppoe_apply.FILES}
             _, peer_names = pppoe_apply.interfaces(self.fs.read(APPLIED_DIR / 'pppoe.json'))
             if not pppoe_apply.ready(self.executor, peer_names):
                 self.rollback('pppoe.not_ready')
@@ -730,7 +752,7 @@ class ApplyEngine:
         doh_files, doh_validators = _doh_branch_from_snapshot(backup['version_snapshot'])
         from . import pppoe_apply
         pppoe_files = dict(pppoe_apply.FILES) if 'pppoe' in backup['files'] else {}
-        rollback_files = {**FILES, **pppoe_files, **tproxy_files, **doh_files}
+        rollback_files = {**self.files, **pppoe_files, **tproxy_files, **doh_files}
         rollback_validators = _merged_validators(
             _merged_validators(self.validators, tproxy_validators), doh_validators)
         if pppoe_files:

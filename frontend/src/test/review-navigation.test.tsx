@@ -118,3 +118,44 @@ it("labels the events page and explains that its journal is unavailable", async 
   expect(await screen.findByRole("heading", { name: "Журнал событий", level: 1 })).toBeVisible();
   expect(screen.getByText("Просмотр событий пока не подключён к API.")).toBeVisible();
 });
+
+/** A host-owned capability: the panel offers no DHCP section where the host has
+ * no DHCP server at all (ADR-0021). */
+const record = (dhcp: unknown) => ({
+  interface: "eth0", mac: "8e:f5:95:d5:d4:60", address: "92.51.36.131/24",
+  mode: "single-uplink", hostname: "92.51.36.131.nip.io", custom_hostname: null,
+  path_prefix: null, dhcp,
+});
+
+function openOn(path: string, management: unknown) {
+  const fetch = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(
+    url === "/api/versions" ? versions :
+    url === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
+    url === "/api/apply/status" ? null :
+    url === "/api/host/management" ? management :
+    url === "/api/host/interfaces" ? [] : {},
+  ))));
+  vi.stubGlobal("fetch", fetch);
+  render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
+  return fetch;
+}
+
+it("hides the DHCP section where the host has no DHCP server", async () => {
+  const fetch = openOn("/", record(false));
+  await screen.findByRole("navigation", { name: "Разделы панели" });
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === "/api/host/management")).toBe(true));
+  expect(screen.queryByRole("link", { name: "DHCP" })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "DNS" })).toBeVisible();
+});
+
+it("redirects away from the DHCP page where the host has no DHCP server", async () => {
+  openOn("/dhcp", record(false));
+  await screen.findByRole("navigation", { name: "Разделы панели" });
+  await waitFor(() => expect(screen.queryByRole("heading", { name: "DHCP (Kea)", level: 1 })).not.toBeInTheDocument());
+});
+
+it("keeps the DHCP section when the host record does not say", async () => {
+  openOn("/dhcp", record(undefined));
+  expect(await screen.findByRole("heading", { name: "DHCP (Kea)", level: 1 })).toBeVisible();
+  expect(screen.getByRole("link", { name: "DHCP" })).toBeVisible();
+});
