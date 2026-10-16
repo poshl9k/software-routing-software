@@ -7,13 +7,15 @@
   `router_project_plan.md`, which tracks work rather than defining semantics.
 - **Two products, one core.** `vs-router` (VM/hardware) and `vs-panel` (VPS) are
   being split from this single repository: staged plan in
-  `docs/panel-router-split.md`, decisions in ADRs 0018–0021, plus 0022–0025.
-  The split sits at **phase A (profile as data) — not started**; it currently
-  advances through *host capability* instead: a host without `kea-dhcp4` has no
-  DHCP phase, section or installer step (ADR-0021), and a host without a profile
-  marker behaves as `router`. `main` is shared — several agents work in this tree
-  and push to `origin/main`, so `git pull` and read that plan's priority section
-  before starting work on either product.
+  `docs/panel-router-split.md`, decisions in ADRs 0018–0021 plus 0022–0026.
+  **Phase A (profile as data) is implemented in the backend** (ADR-0026): the
+  product is an installer-owned marker at `/etc/vs-router/profile`, travels as
+  `profile` on the version, and apply refuses a document or a marker that
+  disagrees with the host (`configuration.profile_mismatch`,
+  `profile.capability_mismatch`) before touching the system. A host *without* a
+  marker still decides purely by capability, so older hosts keep working.
+  `main` is shared — several agents work in this tree and push to `origin/main`,
+  so `git pull` and read that plan's priority section before starting work.
 - Read ADRs by full filename: two files have number `0001` (Debian/userspace AWG,
   and removal of demo data/LAB_MODE). ADRs `0002`–`0005` cover first LAN access,
   first-apply safety, interface-scoped SSH, and verified installer releases.
