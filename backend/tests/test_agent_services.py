@@ -177,3 +177,34 @@ def test_phase_is_recorded_only_after_callable_reload_and_failure_recovers():
     assert len(seen) == 2
     assert seen[-1] == original
     assert engine.status()['reason'] == 'agent.reload_failed'
+
+
+def test_tunnel_activity_reads_handshakes_and_skips_junk():
+    from vs_router.agent.services import TunnelActivity
+
+    fs = FakeFS()
+    fs.write(Path('/etc/vs-router/wireguard/manifest.json'),
+             json.dumps({'tun0': {'protocol': 'awg'}, 'tun9': {'protocol': 'wg'}}))
+
+    class Executor:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, argv, timeout):
+            self.calls.append(argv)
+            if argv[2] == 'tun9':
+                return SimpleNamespace(returncode=1, stdout='')
+            return SimpleNamespace(returncode=0, stdout=(
+                'privkey\tpubkey\t51820\toff\n'
+                'PEERKEY\t(none)\t1.2.3.4:51820\t10.66.102.2/32\t1700000000\t10\t20\t25\n'
+                'short line\n'))
+
+    executor = Executor()
+    activity = TunnelActivity(executor, fs)()
+
+    assert ['awg', 'show', 'tun0', 'dump'] in executor.calls
+    assert ['wg', 'show', 'tun9', 'dump'] in executor.calls
+    assert activity['tun0'] == [{'public_key': 'PEERKEY', 'latest_handshake': 1700000000,
+                                 'rx_bytes': 10, 'tx_bytes': 20}]
+    # A tunnel whose device cannot be read reports nothing, not a stale value.
+    assert activity['tun9'] == []

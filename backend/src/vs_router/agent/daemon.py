@@ -202,6 +202,13 @@ def management() -> dict | None:
     return None if state is None else state.model_dump()
 
 
+def tunnel_activity() -> dict:
+    """Latest handshake per peer of every panel-applied tunnel (read-only)."""
+    from .services import TunnelActivity
+
+    return TunnelActivity()()
+
+
 def list_addresses() -> dict[str, list[str]]:
     """Read live IPv4 addresses per interface without changing configuration.
 
@@ -443,6 +450,7 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
             'nft_counters': nft_counters, 'list_interfaces': list_interfaces,
             'list_addresses': list_addresses, 'management': management,
+            'tunnel_activity': tunnel_activity,
             'update_status': update_status,
             'apply_update': apply_update,
             'update_source': update_source, 'source_status': source_status,

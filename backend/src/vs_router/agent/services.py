@@ -14,12 +14,32 @@ from urllib.request import Request, ProxyHandler, build_opener
 
 from .apply import ApplyError, LocalFileSystem, SubprocessExecutor
 
+MANIFEST = Path('/etc/vs-router/wireguard/manifest.json')
+IFACE = re.compile(r'[a-zA-Z][a-zA-Z0-9_.-]{0,14}\Z')
+
+
+def tunnel_interfaces(filesystem):
+    """``{interface: protocol}`` for the tunnels the panel applied.
+
+    One owner of this mapping: both the service status and the peer activity
+    probe must agree on which interfaces the panel is responsible for.
+    """
+    try:
+        manifest = json.loads(filesystem.read(MANIFEST))
+        if not isinstance(manifest, dict):
+            return {}
+    except (OSError, ValueError, TypeError):
+        return {}
+    found = {}
+    for name, entry in manifest.items():
+        if (isinstance(name, str) and IFACE.fullmatch(name) and isinstance(entry, dict)
+                and entry.get('protocol') in ('wg', 'awg')):
+            found[name] = entry['protocol']
+    return found
+
 
 class ServiceStatus:
     """Read fixed systemd units only. No desired configuration is treated as health."""
-
-    MANIFEST = Path('/etc/vs-router/wireguard/manifest.json')
-    IFACE = re.compile(r'[a-zA-Z][a-zA-Z0-9_.-]{0,14}\Z')
 
     def __init__(self, executor=None, filesystem=None, clock=None):
         self.executor = executor if executor is not None else SubprocessExecutor()
@@ -51,18 +71,58 @@ class ServiceStatus:
                     {'name': 'ddns', 'state': 'unknown',
                      'detail': 'У DDNS нет отдельной службы'}]
         try:
-            manifest = json.loads(self.fs.read(self.MANIFEST))
+            manifest = json.loads(self.fs.read(MANIFEST))
             if not isinstance(manifest, dict):
                 manifest = {}
         except (OSError, ValueError, TypeError):
             manifest = {}
         for iface, entry in sorted(manifest.items()):
-            if (not isinstance(iface, str) or not self.IFACE.fullmatch(iface)
+            if (not isinstance(iface, str) or not IFACE.fullmatch(iface)
                     or not isinstance(entry, dict) or entry.get('protocol') not in ('wg', 'awg')):
                 continue
             unit = f"vs-router-{entry['protocol']}@{iface}.service"
             services.append(self._unit(f'tunnel:{iface}', unit, tunnel=True))
         return {'generated_at': self.clock().isoformat(), 'services': services}
+
+
+class TunnelActivity:
+    """Latest handshake per peer, read from the live tunnel device.
+
+    Read-only. A peer that never handshaked reads as 0, and the panel must show
+    it as such rather than implying an idle tunnel is healthy.
+    """
+
+    def __init__(self, executor=None, filesystem=None):
+        self.executor = executor if executor is not None else SubprocessExecutor()
+        self.fs = filesystem if filesystem is not None else LocalFileSystem()
+
+    def peers(self, interface, protocol):
+        """``[{public_key, latest_handshake, rx_bytes, tx_bytes}, …]``."""
+        tool = 'awg' if protocol == 'awg' else 'wg'
+        try:
+            result = self.executor.run([tool, 'show', interface, 'dump'], 10)
+        except Exception:
+            return []
+        if result.returncode:
+            return []
+        peers = []
+        # The first line describes the interface itself; peers follow it.
+        for line in (result.stdout or '').strip().splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 8:
+                continue
+            try:
+                peers.append({'public_key': fields[0],
+                              'latest_handshake': int(fields[4]),
+                              'rx_bytes': int(fields[5]),
+                              'tx_bytes': int(fields[6])})
+            except ValueError:
+                continue
+        return peers
+
+    def __call__(self):
+        return {iface: self.peers(iface, protocol)
+                for iface, protocol in sorted(tunnel_interfaces(self.fs).items())}
 
 
 def checked(executor, argv):

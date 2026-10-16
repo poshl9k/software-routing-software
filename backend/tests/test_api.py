@@ -1,3 +1,4 @@
+import base64
 import asyncio
 import socket
 from contextlib import suppress
@@ -516,12 +517,13 @@ async def test_draft_save_materializes_tunnel_and_peer_addresses(api, monkeypatc
     monkeypatch.setenv('VS_ROUTER_SECRET_KEY', Fernet.generate_key().decode())
     client, _, _ = api
     await sign_in(client)
+    private_key = base64.b64encode(b'k' * 32).decode()
     body = {
         'schema_version': 1,
         'interfaces': [{'name': 'tun0', 'zone': 'lan'}],
         'tunnels': [{
             'name': 'vpn', 'interface': 'tun0', 'role': 'server', 'protocol': 'wg',
-            'private_key': {'plaintext': 'k' * 44}, 'listen_port': 51820,
+            'private_key': {'plaintext': private_key}, 'listen_port': 51820,
             'peers': [{'name': 'phone', 'public_key': 'P' * 44}],
         }],
     }
@@ -555,3 +557,44 @@ async def test_host_management_endpoint(api, monkeypatch):
     response = await client.get('/api/host/management')
     assert response.status_code == 503
     assert response.json()['code'] == 'host.interfaces_unavailable'
+
+
+async def test_tunnel_activity_and_peer_conf_export(api, monkeypatch):
+    """Peer telemetry reads live handshakes; the export matches the QR bytes."""
+    from vs_router.api import tunnels as tunnels_api
+    from unittest.mock import Mock
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', Fernet.generate_key().decode())
+    client, _, _ = api
+    await sign_in(client)
+    private_key = base64.b64encode(b'k' * 32).decode()
+    body = {
+        'schema_version': 1,
+        'interfaces': [{'name': 'tun0', 'zone': 'lan'}],
+        'tunnels': [{
+            'name': 'vpn', 'interface': 'tun0', 'role': 'server', 'protocol': 'wg',
+            'private_key': {'plaintext': private_key}, 'listen_port': 51820,
+            'peers': [{'name': 'phone', 'public_key': 'P' * 44,
+                       'private_key': {'plaintext': 'A' * 44}}],
+        }],
+    }
+    assert (await client.post('/api/draft', json=body)).status_code == 201
+
+    call = Mock(return_value={'tun0': [
+        {'public_key': 'P' * 44, 'latest_handshake': 1700000000,
+         'rx_bytes': 10, 'tx_bytes': 20},
+    ]})
+    monkeypatch.setattr(tunnels_api, 'agent_call', call)
+    response = await client.get('/api/tunnels/activity')
+    assert response.status_code == 200
+    assert response.json() == {'vpn': {'phone': 1700000000}}
+    call.assert_called_once_with('tunnel_activity', {})
+
+    # A configured peer with no handshake reports 0, not a missing entry.
+    call.return_value = {'tun0': [{'public_key': 'P' * 44, 'latest_handshake': 0,
+                                   'rx_bytes': 0, 'tx_bytes': 0}]}
+    assert (await client.get('/api/tunnels/activity')).json() == {'vpn': {'phone': 0}}
+
+    conf = await client.get('/api/tunnels/vpn/peer/phone/conf')
+    assert conf.status_code == 200
+    assert conf.headers['content-disposition'] == 'attachment; filename="vpn-phone.conf"'
+    assert '[Interface]' in conf.text and '[Peer]' in conf.text
