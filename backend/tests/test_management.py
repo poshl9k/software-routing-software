@@ -661,3 +661,17 @@ def test_panel_domain_params_enforce_the_hostname_contract():
         PanelDomainParams(hostname='not a name')
     with pytest.raises(ValidationError):
         PanelDomainParams(hostname='-bad.example')
+
+
+def test_agent_unit_may_write_the_management_record():
+    """Publishing rewrites the host-owned record (ADR-0025) from INSIDE the agent.
+
+    The agent runs under ``ProtectSystem=strict``; without the bootstrap state
+    directory in ``ReadWritePaths`` the write fails with ``EROFS`` and surfaces
+    only as a bare ``agent.internal_error`` (observed on the live VPS).
+    """
+    from pathlib import Path
+
+    unit = (Path(__file__).parents[1] / 'packaging' / 'vs-router-agent.service').read_text()
+    paths = next(line for line in unit.splitlines() if line.startswith('ReadWritePaths='))
+    assert '/var/lib/vs-router-bootstrap' in paths.split()
