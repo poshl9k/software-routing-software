@@ -5,6 +5,13 @@
 - `README.md`: project overview. `CONTEXT.md`: authoritative domain semantics.
   `docs/adr/`: accepted design decisions; these and CONTEXT take precedence over
   `router_project_plan.md`, which tracks work rather than defining semantics.
+- **Two products, one core.** `vs-router` (VM/hardware) and `vs-panel` (VPS) are
+  being split from this single repository: staged plan in
+  `docs/panel-router-split.md`, decisions in ADRs 0018–0021, plus 0022–0025.
+  The split sits at **phase A (profile as data) — not started**; today `panel`
+  exists only as the `single-uplink` mode (ADR-0017) and a host without a profile
+  marker behaves as `router`. Read that plan's priority section for the current
+  stage before starting work on either product.
 - Read ADRs by full filename: two files have number `0001` (Debian/userspace AWG,
   and removal of demo data/LAB_MODE). ADRs `0002`–`0005` cover first LAN access,
   first-apply safety, interface-scoped SSH, and verified installer releases.
