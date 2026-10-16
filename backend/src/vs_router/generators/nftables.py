@@ -126,6 +126,13 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
             if management is not None:
                 lines += [f'        iifname "{management.interface}" ip daddr {management.ip} tcp dport 443 counter accept comment "management"',
                           f'        ip daddr {management.ip} tcp dport 443 drop']
+                if management.hostname:
+                    # ACME HTTP-01 for the public panel name arrives on the
+                    # plaintext :80 listener (Caddy's ``management_acme``). Without
+                    # this rule the certificate could never issue or renew after
+                    # the first apply closed :80.
+                    lines += [f'        iifname "{management.interface}" ip daddr {management.ip} tcp dport 80 counter accept comment "management_acme"',
+                              f'        ip daddr {management.ip} tcp dport 80 drop']
             # DHCP replies arrive before conntrack can classify a broadcast
             # exchange, so this rule must precede the invalid/established checks.
             # Applies to every interface that is a DHCP client, any zone/type.

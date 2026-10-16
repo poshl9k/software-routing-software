@@ -445,11 +445,27 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
         return ServiceStatus(executor=getattr(engine, 'executor', None),
                              filesystem=getattr(engine, 'fs', None))()
 
+    def set_panel_domain(hostname=None):
+        """Publish the panel under a public name (or clear it) — ADR-0025.
+
+        Delegated to the console's transactional publisher, which owns the
+        management record and Caddy config. A guard failure surfaces its specific
+        code (e.g. ``management.domain_unresolved``) rather than one opaque error.
+        """
+        from .management_console import Console
+        from .apply import guard_code
+        try:
+            state = Console().publish_panel_domain(hostname=hostname)
+        except ValueError as exc:
+            raise ApplyError(guard_code(exc, 'management.domain_unverified')) from None
+        return state.model_dump()
+
     return {'apply_version': apply_version, 'confirm_version': confirm_version,
             'rollback': lambda: engine.rollback('requested'), 'status': status,
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
             'nft_counters': nft_counters, 'list_interfaces': list_interfaces,
             'list_addresses': list_addresses, 'management': management,
+            'set_panel_domain': set_panel_domain,
             'tunnel_activity': tunnel_activity,
             'update_status': update_status,
             'apply_update': apply_update,

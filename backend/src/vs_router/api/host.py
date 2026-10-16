@@ -1,7 +1,8 @@
-"""Read-only host interface inventory via the agent."""
+"""Host inventory reads and the panel-publication write (ADR-0025)."""
 from fastapi import APIRouter, Depends
 
-from .auth import current_user
+from ..agent.rpc import PanelDomainParams
+from .auth import admin, current_user
 from .errors import APIError
 from .versions import agent_call
 
@@ -23,6 +24,21 @@ def management() -> dict | None:
     """The management record so the wizard knows if this is a one-NIC host."""
     try:
         return agent_call('management', {})
+    except APIError:
+        raise
+    except Exception:
+        raise APIError(503, 'host.interfaces_unavailable') from None
+
+
+@router.put('/host/panel-domain', dependencies=[Depends(admin)])
+def panel_domain(body: PanelDomainParams) -> dict:
+    """Publish the panel under a public name, or clear it (ADR-0025).
+
+    Admin-only: it moves where the administrator reaches the panel. The agent
+    keeps the change only once an ACME certificate answers over HTTPS.
+    """
+    try:
+        return agent_call('set_panel_domain', body)
     except APIError:
         raise
     except Exception:

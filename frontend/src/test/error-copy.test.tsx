@@ -39,6 +39,9 @@ describe("error copy", () => {
       "management.invalid_address",
       "management.port_reserved",
       "management.site_binding_conflict",
+      "management.state_missing",
+      "management.domain_unresolved",
+      "management.domain_unverified",
     ]) {
       const text = applyErrorText({ code, message: code });
       expect(text, code).not.toBe(code);

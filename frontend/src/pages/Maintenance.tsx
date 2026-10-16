@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Alert, Button, Checkbox, FormControlLabel } from "@mui/material";
 import { Link, useSearchParams } from "react-router-dom";
 import { useConfiguration } from "../state";
-import { api } from "../api";
+import { api, ApiError } from "../api";
+import { applyErrorText } from "./ApplyScreen";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
 import { Card } from "../components/Card";
@@ -18,9 +19,18 @@ import { InterfaceSelect } from "../components/Select";
 import { PageTabs } from "../components/Tabs";
 import type { UpdateStatus } from "../types";
 
-const tabs = ["Резервные копии", "Диагностика", "Выпуск установки"];
-const tabKeys = ["backup", "diagnostics", "release"];
+const tabs = ["Резервные копии", "Диагностика", "Выпуск установки", "Домен панели"];
+const tabKeys = ["backup", "diagnostics", "release", "domain"];
 type Backup = { schema_version: number; versions: unknown[]; users: unknown[] };
+
+/** A public panel name: labels separated by dots, no leading/trailing dot or hyphen. */
+const hostnamePattern = /^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$/;
+/** Attach the guard's plain-language explanation, keeping the raw code (ADR-0025). */
+function friendlyPanelError(error: unknown) {
+  return error instanceof ApiError
+    ? new ApiError(error.status, error.code, applyErrorText(error), error.details)
+    : error;
+}
 
 function download(data: Blob, filename: string) {
   const url = URL.createObjectURL(data);
@@ -52,6 +62,7 @@ export default function Maintenance() {
   const [busy, setBusy] = useState(false);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [confirmRelease, setConfirmRelease] = useState(false);
+  const [domain, setDomain] = useState("");
   const perform = async (fn: () => Promise<void>) => {
     setError(null);
     setNotice("");
@@ -59,6 +70,9 @@ export default function Maintenance() {
     try { await fn(); } catch (e) { setError(e); } finally { setBusy(false); }
   };
   const counters = useQuery({ queryKey: queryKeys.rulesCounters(), queryFn: () => api.rulesCounters(), enabled: admin && tab === 1 });
+  const panel = useQuery({ queryKey: queryKeys.hostManagement(), queryFn: api.hostManagement, enabled: admin && tab === 3 });
+  const panelRecord = panel.data ?? null;
+  const domainValid = hostnamePattern.test(domain);
   const restoreFile = async (file?: File) => {
     if (!file) return;
     void perform(async () => {
@@ -164,6 +178,46 @@ export default function Maintenance() {
           setUpdate(await api.updateStatus());
         });
       }} />
+    </Card>}
+    {tab === 3 && <Card title="Домен панели" action={panelRecord?.hostname ? <Badge tone="green">{panelRecord.hostname}</Badge> : <Badge tone="amber">Домен не задан</Badge>}>
+      <InfoNote>
+        Укажите домен, который уже указывает в DNS на публичный адрес этого хоста.
+        Панель выпустит для него сертификат Let's Encrypt (HTTP-01, порт 80) и начнёт
+        отвечать по адресу https://домен. Изменение применяется сразу, отдельного
+        «Применения» не требует; при неудаче остаётся прежний адрес панели.
+      </InfoNote>
+      {panel.error ? <ErrorNotice error={panel.error} /> : panel.isPending ? <InfoNote>Чтение записи управления…</InfoNote> : !panelRecord ? <InfoNote severity="warning">Запись управления не найдена — панель не провизионирована. Восстановите её из консоли.</InfoNote> : (
+        <DataTable heads={["Параметр", "Значение"]} rows={[
+          ["Текущий домен", panelRecord.hostname ?? "не задан (панель на IP-адресе)"],
+          ["Интерфейс", `${panelRecord.interface} · ${panelRecord.mac}`],
+          ["Режим", panelRecord.mode === "single-uplink" ? "один аплинк (VPS)" : "отдельный LAN"],
+        ]} />
+      )}
+      <div className="fields">
+        <Field className="grow" label="Домен" value={domain}
+          valid={!domain || domainValid}
+          placeholder="panel.example.ru"
+          hint={!domain ? "Латинские буквы, цифры, дефис и точка" : !domainValid ? "Некорректное имя домена" : "A-запись домена должна указывать на публичный адрес хоста"}
+          fullWidth={false}
+          onChange={setDomain} />
+      </div>
+      <div className="footer-actions">
+        <Button disabled={!admin || busy || !domainValid} onClick={() => void perform(async () => {
+          try {
+            await api.setPanelDomain(domain);
+          } catch (e) { throw friendlyPanelError(e); }
+          setDomain("");
+          await panel.refetch();
+          setNotice(`Домен панели: ${domain}`);
+        })}>Привязать домен</Button>
+        <Button disabled={!admin || busy || !panelRecord?.hostname} onClick={() => void perform(async () => {
+          try {
+            await api.setPanelDomain(null);
+          } catch (e) { throw friendlyPanelError(e); }
+          await panel.refetch();
+          setNotice("Домен панели сброшен — панель снова на IP-адресе.");
+        })}>Сбросить на IP</Button>
+      </div>
     </Card>}
   </>;
 }

@@ -1,6 +1,7 @@
 """All host effects use temporary trees or injected executors; no live services."""
 import json
 import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 from ipaddress import IPv4Address
 from types import SimpleNamespace
@@ -524,3 +525,112 @@ def test_panel_probe_target_trusts_acme_for_a_public_hostname():
     url, ca = panel_probe_target(lan)
     assert url == 'https://192.168.10.1/health'
     assert ca is not None and ca.name == 'ca.crt'
+
+
+# --- ADR-0025: publish the panel under an operator-supplied domain ----------
+
+def panel_runner(calls, *, reachable=True):
+    """Record host commands; simulate an HTTPS endpoint that may never answer."""
+    def run(argv):
+        calls.append(argv)
+        if argv[0] == 'curl' and not reachable:
+            raise subprocess.CalledProcessError(22, argv)
+        return SimpleNamespace(stdout='')
+    return run
+
+
+def vps_applied(tmp_path):
+    """A one-NIC record plus an applied snapshot, as a live VPS would have."""
+    vps_host(tmp_path)
+    applied = tmp_path / 'etc/vs-router/applied'
+    applied.mkdir(parents=True)
+    version = ConfigurationVersion(configuration=Configuration.model_validate({
+        'interfaces': [{'name': 'eth0', 'zone': 'wan', 'addressing': 'static',
+                        'addresses': ['92.51.36.131/24']}]}))
+    (applied / 'snapshot.json').write_text(version.model_dump_json())
+    state_dir = tmp_path / 'var/lib/vs-router-bootstrap'
+    state_dir.mkdir(parents=True)
+    (state_dir / 'management.json').write_text(VPS.model_dump_json())
+    return applied, state_dir
+
+
+def test_publish_panel_domain_switches_to_acme_and_back(tmp_path):
+    applied, state_dir = vps_applied(tmp_path)
+    calls = []
+    console = Console(tmp_path, panel_runner(calls), os.getgid(),
+                      resolver=lambda name: None)
+    updated = console.publish_panel_domain('rg3.poshl9k.ru')
+    assert updated.hostname == 'rg3.poshl9k.ru'
+    assert json.loads((state_dir / 'management.json').read_text())['hostname'] == 'rg3.poshl9k.ru'
+    caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
+    # ACME HTTP-01 listener and no local-CA cert loaded for the public name.
+    assert caddy['apps']['http']['servers']['management_acme']['listen'] == ['92.51.36.131:80']
+    assert 'load_files' not in caddy['apps']['tls']['certificates']
+    # The applied firewall is regenerated so :80 reaches the ACME listener.
+    rules = (applied / 'nftables.conf').read_text()
+    assert 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 counter accept comment "management_acme"' in rules
+    assert any(c[0] == 'curl' and any('rg3.poshl9k.ru' in part for part in c) for c in calls)
+    # Clearing returns the panel to its IP/local-CA endpoint and closes :80 again.
+    back = console.publish_panel_domain(None)
+    assert back.hostname is None
+    assert json.loads((state_dir / 'management.json').read_text())['hostname'] is None
+    assert 'management_acme' not in json.loads(
+        (tmp_path / 'etc/caddy/caddy.json').read_text())['apps']['http']['servers']
+    assert 'tcp dport 80' not in (applied / 'nftables.conf').read_text()
+
+
+def test_publish_panel_domain_reverts_when_the_name_never_answers(tmp_path, monkeypatch):
+    applied, state_dir = vps_applied(tmp_path)
+    monkeypatch.setattr('vs_router.agent.management_console.time.sleep', lambda _seconds: None)
+    console = Console(tmp_path, panel_runner([], reachable=False), os.getgid(),
+                      resolver=lambda name: None)
+    with pytest.raises(ValueError, match='management.domain_unverified'):
+        console.publish_panel_domain('rg3.poshl9k.ru')
+    # The previous publication is intact: no hostname, no ACME server, :80 closed.
+    assert json.loads((state_dir / 'management.json').read_text())['hostname'] is None
+    # There was no Caddy config before, so the failed publication leaves none.
+    assert not (tmp_path / 'etc/caddy/caddy.json').exists()
+    assert 'tcp dport 80' not in (applied / 'nftables.conf').read_text()
+
+
+def test_publish_panel_domain_rejects_an_unresolvable_name(tmp_path):
+    _applied, state_dir = vps_applied(tmp_path)
+
+    def unresolvable(name):
+        raise OSError('name not known')
+
+    console = Console(tmp_path, panel_runner([]), os.getgid(), resolver=unresolvable)
+    with pytest.raises(ValueError, match='management.domain_unresolved'):
+        console.publish_panel_domain('rg3.poshl9k.ru')
+    # Nothing was written: the unreachable name never touched the live endpoint.
+    assert json.loads((state_dir / 'management.json').read_text())['hostname'] is None
+    assert not (tmp_path / 'etc/caddy/caddy.json').exists()
+
+
+def test_publish_panel_domain_requires_a_management_record(tmp_path):
+    console = Console(tmp_path, panel_runner([]), os.getgid())
+    with pytest.raises(ValueError, match='management.state_missing'):
+        console.publish_panel_domain('rg3.poshl9k.ru')
+
+
+def test_nftables_opens_acme_port_only_for_a_public_name():
+    version = ConfigurationVersion(configuration=Configuration.model_validate({
+        'interfaces': [{'name': 'eth0', 'zone': 'wan', 'addressing': 'static',
+                        'addresses': ['92.51.36.131/24']}]}))
+    public = generate_nftables(version, VPS.model_copy(update={'hostname': 'rg3.poshl9k.ru'}))
+    assert 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 counter accept comment "management_acme"' in public
+    assert 'ip daddr 92.51.36.131 tcp dport 80 drop' in public
+    # Without a public name the ACME exception is absent (fail-closed).
+    assert 'tcp dport 80' not in generate_nftables(version, VPS)
+
+
+def test_panel_domain_params_enforce_the_hostname_contract():
+    from pydantic import ValidationError
+    from vs_router.agent.rpc import PanelDomainParams
+
+    assert PanelDomainParams().hostname is None
+    assert PanelDomainParams(hostname='rg3.poshl9k.ru').hostname == 'rg3.poshl9k.ru'
+    with pytest.raises(ValidationError):
+        PanelDomainParams(hostname='not a name')
+    with pytest.raises(ValidationError):
+        PanelDomainParams(hostname='-bad.example')

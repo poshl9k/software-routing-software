@@ -73,6 +73,13 @@ const post = <T>(path: `/api/${string}`, body: unknown) =>
 export const api = {
   hostInterfaces: () => request<HostInterface[]>("/api/host/interfaces"),
   hostManagement: () => request<HostManagement | null>("/api/host/management"),
+  /** Publish the panel under an operator-supplied domain (ADR-0025); null clears it. */
+  setPanelDomain: (hostname: string | null) =>
+    request<HostManagement>("/api/host/panel-domain", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hostname }),
+    }),
   hostAddresses: () => request<Record<string, string[]>>("/api/host/addresses"),
   serviceStatus: (signal?: AbortSignal) => request<ServiceStatusResponse>("/api/status/services", { signal }),
   keygenTunnel: (protocol: "wg" | "awg") => post<{

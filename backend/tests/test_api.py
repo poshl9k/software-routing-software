@@ -725,3 +725,26 @@ async def test_peer_amnezia_export_is_an_importable_vpn_document(api, monkeypatc
 def deepcopy_body(body):
     import json as _json
     return _json.loads(_json.dumps(body))
+
+
+async def test_panel_domain_forwards_to_the_agent_and_is_admin_only(api, monkeypatch):
+    from vs_router.api import host as routes
+
+    client, _, _ = api
+    await sign_in(client)
+    calls = []
+    record = {'interface': 'eth0', 'mac': '02:00:00:00:00:01',
+              'address': '92.51.36.131/24', 'mode': 'single-uplink',
+              'hostname': 'rg3.poshl9k.ru', 'path_prefix': None}
+    monkeypatch.setattr(routes, 'agent_call',
+                        lambda method, body: calls.append((method, body.model_dump())) or record)
+    response = await client.put('/api/host/panel-domain', json={'hostname': 'rg3.poshl9k.ru'})
+    assert response.status_code == 200 and response.json() == record
+    assert calls == [('set_panel_domain', {'hostname': 'rg3.poshl9k.ru'})]
+    # Clearing the name forwards ``None`` (the panel returns to its IP endpoint).
+    await client.put('/api/host/panel-domain', json={})
+    assert calls[-1] == ('set_panel_domain', {'hostname': None})
+    # A malformed name is rejected by the contract and never reaches the agent.
+    assert (await client.put('/api/host/panel-domain',
+                             json={'hostname': 'not a name'})).status_code == 422
+    assert len(calls) == 2

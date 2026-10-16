@@ -4,6 +4,7 @@ from typing import Annotated, Any, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import Field, StrictBool, StrictInt, StrictStr, model_validator
+from ..management import HOSTNAME_PATTERN
 from ..schema import Model, ProxySubscription, ProxyOutbound
 
 RequestID = StrictInt | StrictStr
@@ -14,7 +15,7 @@ Method = Literal["apply_version", "confirm_version", "rollback", "status",
                  "update_source", "source_status", "service_status",
                  "engine_status", "engine_control", "clash_connections", "clash_close",
                  "clash_logs", "clash_proxies", "clash_select", "clash_delay",
-                 "subscription_preview", "subscription_refresh"]
+                 "subscription_preview", "subscription_refresh", "set_panel_domain"]
 
 
 class ApplyParams(Model):
@@ -29,6 +30,15 @@ class ConfirmParams(Model):
 
 class EmptyParams(Model):
     pass
+
+
+class PanelDomainParams(Model):
+    """Publish the panel under a public name, or clear it (``null``).
+
+    The name is validated against the management contract; the agent resolves it
+    and only keeps the change once an ACME certificate answers over HTTPS.
+    """
+    hostname: Annotated[str, Field(strict=True, pattern=HOSTNAME_PATTERN)] | None = None
 
 
 class PingParams(Model):
@@ -119,7 +129,8 @@ PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "clash_logs": ClashLogsParams, "clash_proxies": EmptyParams,
           "clash_select": ClashSelectParams, "clash_delay": ClashDelayParams,
           "subscription_preview": SubscriptionPreviewParams,
-          "subscription_refresh": SubscriptionRefreshParams}
+          "subscription_refresh": SubscriptionRefreshParams,
+          "set_panel_domain": PanelDomainParams}
 
 
 class RPCRequest(Model):

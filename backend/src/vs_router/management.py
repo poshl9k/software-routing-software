@@ -17,6 +17,8 @@ STATE_PATH = STATE_DIR / 'management.json'
 # beginning — not only once the management record exists (ADR-0017).
 ONLINE_MARKER = Path('/etc/vs-router/online-install')
 TLS_DIR = Path('/etc/caddy/management')
+# A public panel name: at least one label, dot-separated, no leading/trailing dot.
+HOSTNAME_PATTERN = r'^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$'
 
 
 class Management(Model):
@@ -33,8 +35,7 @@ class Management(Model):
     # instead of the local CA; `path_prefix` puts the panel and its API behind a
     # secret path so the bare host root exposes nothing.
     hostname: str | None = Field(
-        default=None,
-        pattern=r'^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$')
+        default=None, pattern=HOSTNAME_PATTERN)
     path_prefix: str | None = Field(default=None, pattern=r'^/[A-Za-z0-9_-]{8,64}$')
 
     @model_validator(mode='after')
@@ -62,6 +63,16 @@ def panel_probe_target(state):
     if state.hostname:
         return f'https://{state.hostname}/health', None
     return f'https://{state.ip}/health', TLS_DIR / 'ca.crt'
+
+
+def with_hostname(state, hostname):
+    """A copy of the management record republished under ``hostname`` (pure).
+
+    ``None`` clears the public name and returns the panel to its IP/local-CA
+    endpoint. Revalidates the whole record so a malformed name cannot bypass the
+    contract via :meth:`model_copy <pydantic.BaseModel.model_copy>`.
+    """
+    return state.model_validate({**state.model_dump(), 'hostname': hostname})
 
 
 def read_management(path=STATE_PATH):

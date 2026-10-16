@@ -51,6 +51,13 @@ const reasonTexts: Record<string, string> = {
   "management.port_reserved": "порт 443 зарезервирован за панелью — освободите его в пробросе портов",
   "management.site_binding_conflict":
     "сайт с публикацией на порту 443 конфликтует с адресом панели — укажите конкретный адрес WAN или отключите сайт",
+  // Panel domain (ADR-0025): the panel rejects a name it cannot serve safely.
+  "management.state_missing":
+    "запись управления не найдена — панель не провизионирована, восстановите запись из консоли",
+  "management.domain_unresolved":
+    "домен не разрешается этим хостом — добавьте A-запись домена на публичный адрес хоста и повторите",
+  "management.domain_unverified":
+    "домен не подтвердился: Let's Encrypt не выдал сертификат (проверьте, что DNS указывает на этот хост и порт 80 доступен). Прежний домен панели сохранён",
 };
 const reasonText = (code: string) => reasonTexts[code] ?? code;
 

@@ -6,6 +6,7 @@ import json
 import os
 import re
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import time
@@ -18,18 +19,30 @@ from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from ipaddress import IPv4Address
 
 from ..management import (Management, STATE_DIR, STATE_PATH, TLS_DIR, panel_probe_target,
-                          read_management, verify_identity, wired_ports)
+                          read_management, verify_identity, with_hostname, wired_ports)
 from ..schema import ConfigurationVersion
 from ..generators.caddy import generate_caddy_json
+from ..generators.nftables import generate_nftables
 from ..generators.networkd import deserialize_networkd, serialize_networkd
-from .apply import LocalFileSystem
+from .apply import APPLIED_DIR, LocalFileSystem
+
+
+def resolve_hostname(hostname):
+    """Resolve a public name to at least one address; ``OSError`` when it does not.
+
+    A name the host cannot resolve can never obtain an ACME certificate, so the
+    panel rejects it before touching the live endpoint rather than locking the
+    operator out with an unreachable publication.
+    """
+    socket.getaddrinfo(hostname, None)
 
 
 class Console:
-    def __init__(self, root=Path('/'), runner=None, caddy_gid=None):
+    def __init__(self, root=Path('/'), runner=None, caddy_gid=None, resolver=None):
         self.root = root
         self.runner = runner or self.run
         self.caddy_gid = grp.getgrnam('caddy').gr_gid if caddy_gid is None else caddy_gid
+        self.resolver = resolver or resolve_hostname
         self.fs = LocalFileSystem()
 
     def path(self, path):
@@ -195,20 +208,7 @@ class Console:
             self.runner(['systemctl', 'is-active', '--quiet', service])
         # systemctl restart returns before Caddy has bound the listener.
         # Verify real HTTPS, not only its unit state, with a bounded wait.
-        url, ca_file = panel_probe_target(state)
-        probe = ['curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
-                 '--max-time', '5']
-        if ca_file is not None:
-            probe += ['--cacert', str(self.path(ca_file))]
-        probe.append(url)
-        for attempt in range(30):
-            try:
-                self.runner(probe)
-                break
-            except subprocess.CalledProcessError:
-                if attempt == 29:
-                    raise
-                time.sleep(1)
+        self.probe_panel(state)
         return state, ca.fingerprint(hashes.SHA256()).hex(':')
 
     def live_address(self, interface):
@@ -270,21 +270,100 @@ class Console:
         # Real HTTPS, not only unit state: with a public hostname the ACME
         # certificate may still be issuing, so allow a bounded wait and verify
         # against the system trust store rather than the local CA.
+        self.probe_panel(state, attempts=60, delay=2)
+        return state, ca.fingerprint(hashes.SHA256()).hex(':')
+
+    def probe_panel(self, state, attempts=30, delay=1):
+        """Wait until the panel answers over HTTPS, or re-raise the last failure.
+
+        A public name is verified against the system trust store (its ACME
+        certificate may still be issuing); the local-CA endpoint is verified
+        against the host CA. ``/health`` sits outside any secret path prefix.
+        """
         url, ca_file = panel_probe_target(state)
         probe = ['curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
                  '--max-time', '5']
         if ca_file is not None:
             probe += ['--cacert', str(self.path(ca_file))]
         probe.append(url)
-        for attempt in range(60):
+        for attempt in range(attempts):
             try:
                 self.runner(probe)
-                break
+                return
             except subprocess.CalledProcessError:
-                if attempt == 59:
+                if attempt == attempts - 1:
                     raise
-                time.sleep(2)
-        return state, ca.fingerprint(hashes.SHA256()).hex(':')
+                time.sleep(delay)
+
+    def applied_version(self):
+        """The configuration currently in force, or an empty one before first apply."""
+        try:
+            payload = json.loads(self.fs.read(self.path(APPLIED_DIR / 'snapshot.json')))
+        except (FileNotFoundError, ValueError):
+            return ConfigurationVersion()
+        return ConfigurationVersion.model_validate(payload)
+
+    def _reload_panel(self, state):
+        """Reload Caddy for a new management record and keep the firewall in step.
+
+        Caddy is restarted, not reloaded: a changed listener/config is not
+        guaranteed to be picked up otherwise. When a configuration is already
+        applied its nftables is regenerated from the same version and the *new*
+        record — opening the :80 ACME listener a public name needs, and removing
+        it again when the name is cleared — and the live table is replaced.
+        """
+        path = self.path(APPLIED_DIR / 'nftables.conf')
+        if self.path(APPLIED_DIR / 'snapshot.json').exists():
+            self.write(APPLIED_DIR / 'nftables.conf',
+                       generate_nftables(self.applied_version(), state))
+            self.runner(['nft', '-c', '-f', str(path)])
+            self.runner(['nft', '-f', str(path)])
+        self.runner(['systemctl', 'restart', 'caddy'])
+
+    def publish_panel_domain(self, hostname=None):
+        """Republish the panel under a public name (or back to its IP) from the panel.
+
+        Transactional TLS: the new management record and Caddy config are
+        installed, Caddy is reloaded, and the public name must answer HTTPS (its
+        ACME certificate verified against the system trust store) before the
+        change is kept. Any failure — an unresolved name, a Caddy config the
+        binary rejects, or a name that never issues — restores the previous
+        record and config, so a bad domain cannot lock the operator out. This is
+        the transactional step ADR-0017 required before the pinned endpoint may
+        move. ``None`` clears the name and returns the panel to its IP endpoint.
+        """
+        state = read_management(self.path(STATE_PATH))
+        if state is None:
+            raise ValueError('management.state_missing')
+        updated = with_hostname(state, hostname)
+        if updated == state:
+            return state
+        if updated.hostname:
+            try:
+                self.resolver(updated.hostname)
+            except OSError as exc:
+                raise ValueError('management.domain_unresolved') from exc
+        management_path = self.path(STATE_PATH)
+        caddy_path = self.path('/etc/caddy/caddy.json')
+        previous = {'management': management_path.read_text(),
+                    'caddy': caddy_path.read_text() if caddy_path.exists() else None}
+        self.write(STATE_PATH, updated.model_dump_json())
+        self.write('/etc/caddy/caddy.json',
+                   json.dumps(generate_caddy_json(self.applied_version(), updated)),
+                   0o640, self.caddy_gid)
+        self.runner(['caddy', 'validate', '--config', str(caddy_path)])
+        self._reload_panel(updated)
+        try:
+            self.probe_panel(updated, attempts=60, delay=2)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.write(STATE_PATH, previous['management'])
+            if previous['caddy'] is None:
+                self.fs.remove(caddy_path)
+            else:
+                self.write('/etc/caddy/caddy.json', previous['caddy'], 0o640, self.caddy_gid)
+            self._reload_panel(state)
+            raise ValueError('management.domain_unverified') from exc
+        return updated
 
 
 def bootstrap_rules(state, uplink):
