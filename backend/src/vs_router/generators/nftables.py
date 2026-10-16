@@ -126,10 +126,11 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
             if management is not None:
                 lines += [f'        iifname "{management.interface}" ip daddr {management.ip} tcp dport 443 counter accept comment "management"',
                           f'        ip daddr {management.ip} tcp dport 443 drop']
-                if management.hostname:
-                    # ACME HTTP-01 for the public panel name arrives on the
+                from ..management import publication_names
+                if publication_names(management):
+                    # ACME HTTP-01 for every public panel name arrives on the
                     # plaintext :80 listener (Caddy's ``management_acme``). Without
-                    # this rule the certificate could never issue or renew after
+                    # this rule the certificates could never issue or renew after
                     # the first apply closed :80.
                     lines += [f'        iifname "{management.interface}" ip daddr {management.ip} tcp dport 80 counter accept comment "management_acme"',
                               f'        ip daddr {management.ip} tcp dport 80 drop']

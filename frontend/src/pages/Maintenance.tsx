@@ -179,22 +179,24 @@ export default function Maintenance() {
         });
       }} />
     </Card>}
-    {tab === 3 && <Card title="Домен панели" action={panelRecord?.hostname ? <Badge tone="green">{panelRecord.hostname}</Badge> : <Badge tone="amber">Домен не задан</Badge>}>
+    {tab === 3 && <Card title="Домен панели" action={panelRecord?.custom_hostname ? <Badge tone="green">{panelRecord.custom_hostname}</Badge> : <Badge tone="amber">Свой домен не задан</Badge>}>
       <InfoNote>
-        Укажите домен, который уже указывает в DNS на публичный адрес этого хоста.
-        Панель выпустит для него сертификат Let's Encrypt (HTTP-01, порт 80) и начнёт
-        отвечать по адресу https://домен. Изменение применяется сразу, отдельного
-        «Применения» не требует; при неудаче остаётся прежний адрес панели.
+        Укажите свой домен: он должен уже указывать в DNS на публичный адрес этого
+        хоста. Панель выпустит для него сертификат Let's Encrypt (HTTP-01, порт 80)
+        и начнёт отвечать и по нему, и по резервному адресу. Изменение применяется
+        сразу, отдельного «Применения» не требует; при неудаче остаётся прежний
+        адрес панели.
       </InfoNote>
       {panel.error ? <ErrorNotice error={panel.error} /> : panel.isPending ? <InfoNote>Чтение записи управления…</InfoNote> : !panelRecord ? <InfoNote severity="warning">Запись управления не найдена — панель не провизионирована. Восстановите её из консоли.</InfoNote> : (
         <DataTable heads={["Параметр", "Значение"]} rows={[
-          ["Текущий домен", panelRecord.hostname ?? "не задан (панель на IP-адресе)"],
+          ["Резервный адрес", panelRecord.hostname ?? "не задан"],
+          ["Свой домен", panelRecord.custom_hostname ?? "не задан"],
           ["Интерфейс", `${panelRecord.interface} · ${panelRecord.mac}`],
           ["Режим", panelRecord.mode === "single-uplink" ? "один аплинк (VPS)" : "отдельный LAN"],
         ]} />
       )}
       <div className="fields">
-        <Field className="grow" label="Домен" value={domain}
+        <Field className="grow" label="Свой домен" value={domain}
           valid={!domain || domainValid}
           placeholder="panel.example.ru"
           hint={!domain ? "Латинские буквы, цифры, дефис и точка" : !domainValid ? "Некорректное имя домена" : "A-запись домена должна указывать на публичный адрес хоста"}
@@ -208,15 +210,15 @@ export default function Maintenance() {
           } catch (e) { throw friendlyPanelError(e); }
           setDomain("");
           await panel.refetch();
-          setNotice(`Домен панели: ${domain}`);
+          setNotice(`Свой домен панели: ${domain}`);
         })}>Привязать домен</Button>
-        <Button disabled={!admin || busy || !panelRecord?.hostname} onClick={() => void perform(async () => {
+        <Button disabled={!admin || busy || !panelRecord?.custom_hostname} onClick={() => void perform(async () => {
           try {
             await api.setPanelDomain(null);
           } catch (e) { throw friendlyPanelError(e); }
           await panel.refetch();
-          setNotice("Домен панели сброшен — панель снова на IP-адресе.");
-        })}>Сбросить на IP</Button>
+          setNotice("Свой домен снят — панель отвечает по резервному адресу.");
+        })}>Убрать свой домен</Button>
       </div>
     </Card>}
   </>;

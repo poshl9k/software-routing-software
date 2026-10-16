@@ -19,7 +19,8 @@ from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from ipaddress import IPv4Address
 
 from ..management import (Management, STATE_DIR, STATE_PATH, TLS_DIR, panel_probe_target,
-                          read_management, verify_identity, with_hostname, wired_ports)
+                          read_management, verify_identity, with_custom_hostname,
+                          wired_ports)
 from ..schema import ConfigurationVersion
 from ..generators.caddy import generate_caddy_json
 from ..generators.nftables import generate_nftables
@@ -330,17 +331,18 @@ class Console:
         binary rejects, or a name that never issues — restores the previous
         record and config, so a bad domain cannot lock the operator out. This is
         the transactional step ADR-0017 required before the pinned endpoint may
-        move. ``None`` clears the name and returns the panel to its IP endpoint.
+        move. ``None`` clears the operator's own name and leaves the reserve name
+        (its IP endpoint when there is no reserve).
         """
         state = read_management(self.path(STATE_PATH))
         if state is None:
             raise ValueError('management.state_missing')
-        updated = with_hostname(state, hostname)
+        updated = with_custom_hostname(state, hostname)
         if updated == state:
             return state
-        if updated.hostname:
+        if updated.custom_hostname:
             try:
-                self.resolver(updated.hostname)
+                self.resolver(updated.custom_hostname)
             except OSError as exc:
                 raise ValueError('management.domain_unresolved') from exc
         management_path = self.path(STATE_PATH)

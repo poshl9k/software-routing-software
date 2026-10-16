@@ -347,6 +347,8 @@ def test_wrong_actual_lan_address_never_starts_caddy(tmp_path):
 
 VPS = Management(interface='eth0', mac='02:00:00:00:00:01',
                  address='92.51.36.131/24', mode='single-uplink')
+# The install-time reserve name the online installer seeds (ADR-0017).
+RESERVE = VPS.model_copy(update={'hostname': '92.51.36.131.nip.io'})
 
 
 def one_port(tmp_path):
@@ -540,7 +542,7 @@ def panel_runner(calls, *, reachable=True):
 
 
 def vps_applied(tmp_path):
-    """A one-NIC record plus an applied snapshot, as a live VPS would have."""
+    """A one-NIC record (with the nip.io reserve) plus an applied snapshot."""
     vps_host(tmp_path)
     applied = tmp_path / 'etc/vs-router/applied'
     applied.mkdir(parents=True)
@@ -550,47 +552,51 @@ def vps_applied(tmp_path):
     (applied / 'snapshot.json').write_text(version.model_dump_json())
     state_dir = tmp_path / 'var/lib/vs-router-bootstrap'
     state_dir.mkdir(parents=True)
-    (state_dir / 'management.json').write_text(VPS.model_dump_json())
+    (state_dir / 'management.json').write_text(RESERVE.model_dump_json())
     return applied, state_dir
 
 
-def test_publish_panel_domain_switches_to_acme_and_back(tmp_path):
+def test_publish_panel_domain_serves_the_custom_name_beside_the_reserve(tmp_path):
     applied, state_dir = vps_applied(tmp_path)
     calls = []
     console = Console(tmp_path, panel_runner(calls), os.getgid(),
                       resolver=lambda name: None)
     updated = console.publish_panel_domain('rg3.poshl9k.ru')
-    assert updated.hostname == 'rg3.poshl9k.ru'
-    assert json.loads((state_dir / 'management.json').read_text())['hostname'] == 'rg3.poshl9k.ru'
+    assert updated.custom_hostname == 'rg3.poshl9k.ru'
+    record = json.loads((state_dir / 'management.json').read_text())
+    # The install-time reserve name (nip.io) is kept, the custom name is added.
+    assert record['hostname'] == '92.51.36.131.nip.io'
+    assert record['custom_hostname'] == 'rg3.poshl9k.ru'
     caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
-    # ACME HTTP-01 listener and no local-CA cert loaded for the public name.
+    automate = caddy['apps']['tls']['certificates']['automate']
+    assert set(automate) == {'92.51.36.131.nip.io', 'rg3.poshl9k.ru'}
+    assert set(caddy['apps']['tls']['automation']['policies'][0]['subjects']) == set(automate)
     assert caddy['apps']['http']['servers']['management_acme']['listen'] == ['92.51.36.131:80']
-    assert 'load_files' not in caddy['apps']['tls']['certificates']
-    # The applied firewall is regenerated so :80 reaches the ACME listener.
-    rules = (applied / 'nftables.conf').read_text()
-    assert 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 counter accept comment "management_acme"' in rules
+    assert 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 counter accept comment "management_acme"' in (applied / 'nftables.conf').read_text()
     assert any(c[0] == 'curl' and any('rg3.poshl9k.ru' in part for part in c) for c in calls)
-    # Clearing returns the panel to its IP/local-CA endpoint and closes :80 again.
+    # Clearing the custom name keeps the reserve: still ACME, still :80.
     back = console.publish_panel_domain(None)
-    assert back.hostname is None
-    assert json.loads((state_dir / 'management.json').read_text())['hostname'] is None
-    assert 'management_acme' not in json.loads(
-        (tmp_path / 'etc/caddy/caddy.json').read_text())['apps']['http']['servers']
-    assert 'tcp dport 80' not in (applied / 'nftables.conf').read_text()
+    assert back.custom_hostname is None
+    record = json.loads((state_dir / 'management.json').read_text())
+    assert record['hostname'] == '92.51.36.131.nip.io' and record['custom_hostname'] is None
+    caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
+    assert caddy['apps']['tls']['certificates']['automate'] == ['92.51.36.131.nip.io']
+    assert 'management_acme' in caddy['apps']['http']['servers']
+    assert 'management_acme' in (applied / 'nftables.conf').read_text()
 
 
 def test_publish_panel_domain_reverts_when_the_name_never_answers(tmp_path, monkeypatch):
-    applied, state_dir = vps_applied(tmp_path)
+    _applied, state_dir = vps_applied(tmp_path)
     monkeypatch.setattr('vs_router.agent.management_console.time.sleep', lambda _seconds: None)
     console = Console(tmp_path, panel_runner([], reachable=False), os.getgid(),
                       resolver=lambda name: None)
     with pytest.raises(ValueError, match='management.domain_unverified'):
         console.publish_panel_domain('rg3.poshl9k.ru')
-    # The previous publication is intact: no hostname, no ACME server, :80 closed.
-    assert json.loads((state_dir / 'management.json').read_text())['hostname'] is None
+    # The previous publication is intact: reserve kept, custom never added.
+    record = json.loads((state_dir / 'management.json').read_text())
+    assert record['hostname'] == '92.51.36.131.nip.io' and record['custom_hostname'] is None
     # There was no Caddy config before, so the failed publication leaves none.
     assert not (tmp_path / 'etc/caddy/caddy.json').exists()
-    assert 'tcp dport 80' not in (applied / 'nftables.conf').read_text()
 
 
 def test_publish_panel_domain_rejects_an_unresolvable_name(tmp_path):
@@ -603,7 +609,8 @@ def test_publish_panel_domain_rejects_an_unresolvable_name(tmp_path):
     with pytest.raises(ValueError, match='management.domain_unresolved'):
         console.publish_panel_domain('rg3.poshl9k.ru')
     # Nothing was written: the unreachable name never touched the live endpoint.
-    assert json.loads((state_dir / 'management.json').read_text())['hostname'] is None
+    record = json.loads((state_dir / 'management.json').read_text())
+    assert record['custom_hostname'] is None
     assert not (tmp_path / 'etc/caddy/caddy.json').exists()
 
 
@@ -613,14 +620,34 @@ def test_publish_panel_domain_requires_a_management_record(tmp_path):
         console.publish_panel_domain('rg3.poshl9k.ru')
 
 
-def test_nftables_opens_acme_port_only_for_a_public_name():
+def test_publication_names_favour_the_custom_name_but_keep_the_reserve():
+    from vs_router.management import publication_names, panel_probe_target
+
+    both = VPS.model_copy(update={'hostname': '92.51.36.131.nip.io',
+                                  'custom_hostname': 'rg3.poshl9k.ru'})
+    assert publication_names(both) == ('92.51.36.131.nip.io', 'rg3.poshl9k.ru')
+    # A duplicate name (custom == reserve) is served once.
+    assert publication_names(both.model_copy(update={'custom_hostname': '92.51.36.131.nip.io'})) \
+        == ('92.51.36.131.nip.io',)
+    # No names at all: IP endpoint with the local CA.
+    assert publication_names(VPS) == ()
+    assert panel_probe_target(VPS)[0] == 'https://92.51.36.131/health'
+    # Probe prefers the operator's own name, else the reserve.
+    assert panel_probe_target(both)[0] == 'https://rg3.poshl9k.ru/health'
+    assert panel_probe_target(VPS.model_copy(update={'hostname': '92.51.36.131.nip.io'}))[0] \
+        == 'https://92.51.36.131.nip.io/health'
+
+
+def test_nftables_opens_acme_port_for_either_public_name():
     version = ConfigurationVersion(configuration=Configuration.model_validate({
         'interfaces': [{'name': 'eth0', 'zone': 'wan', 'addressing': 'static',
                         'addresses': ['92.51.36.131/24']}]}))
-    public = generate_nftables(version, VPS.model_copy(update={'hostname': 'rg3.poshl9k.ru'}))
-    assert 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 counter accept comment "management_acme"' in public
-    assert 'ip daddr 92.51.36.131 tcp dport 80 drop' in public
-    # Without a public name the ACME exception is absent (fail-closed).
+    rule = 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 counter accept comment "management_acme"'
+    # Reserve alone, and custom alone, both need the ACME listener.
+    assert rule in generate_nftables(version, RESERVE)
+    assert rule in generate_nftables(version, VPS.model_copy(update={'custom_hostname': 'rg3.poshl9k.ru'}))
+    assert 'ip daddr 92.51.36.131 tcp dport 80 drop' in generate_nftables(version, RESERVE)
+    # Without any public name the exception is absent (fail-closed).
     assert 'tcp dport 80' not in generate_nftables(version, VPS)
 
 

@@ -30,11 +30,15 @@ class Management(Model):
     # also the panel endpoint; identity is still pinned by name + MAC, but there
     # is only one wired port and its address may be a DHCP lease. See ADR-0017.
     mode: Literal["separate-lan", "single-uplink"] = "separate-lan"
-    # Optional public publication of the panel (ADR-0017). When `hostname` is set
-    # the panel is served with an ACME (HTTP-01) certificate for that name
-    # instead of the local CA; `path_prefix` puts the panel and its API behind a
-    # secret path so the bare host root exposes nothing.
+    # Public publication of the panel (ADR-0017 / ADR-0024).
+    # `hostname` is the **default/reserve** name seeded at install (e.g.
+    # `<ip>.nip.io`); it is expected to stay for as long as the operator wants a
+    # fallback. `custom_hostname` is the operator's own domain, added later from
+    # the panel. Both are served with ACME (HTTP-01) certificates at once, so
+    # losing one name never locks the administrator out. Empty = local CA / IP.
     hostname: str | None = Field(
+        default=None, pattern=HOSTNAME_PATTERN)
+    custom_hostname: str | None = Field(
         default=None, pattern=HOSTNAME_PATTERN)
     path_prefix: str | None = Field(default=None, pattern=r'^/[A-Za-z0-9_-]{8,64}$')
 
@@ -52,27 +56,39 @@ class Management(Model):
         return str(IPv4Interface(self.address).ip)
 
 
+def publication_names(state):
+    """Public panel names, in order, without duplicates (reserve first).
+
+    ``()`` means the panel is served only on its IP with the local CA. Otherwise
+    every name gets an ACME certificate and the panel answers on all of them.
+    """
+    return tuple(dict.fromkeys(
+        name for name in (state.hostname, state.custom_hostname) if name))
+
+
 def panel_probe_target(state):
     """The HTTPS URL to probe and the CA file to trust (``None`` = system store).
 
-    A public hostname is served by an ACME certificate, so it must be verified
+    A public name is served by an ACME certificate, so it must be verified
     against the system trust store; the local CA only signs the IP certificate of
     the ``separate-lan`` mode and would reject the public one. ``/health`` is
     published outside any secret panel path, so it needs no prefix.
     """
-    if state.hostname:
-        return f'https://{state.hostname}/health', None
+    names = publication_names(state)
+    if names:
+        # Probe the operator's own name when present, else the reserve one.
+        return f'https://{state.custom_hostname or names[0]}/health', None
     return f'https://{state.ip}/health', TLS_DIR / 'ca.crt'
 
 
-def with_hostname(state, hostname):
-    """A copy of the management record republished under ``hostname`` (pure).
+def with_custom_hostname(state, hostname):
+    """A copy of the record with the operator's own panel name set or cleared (pure).
 
-    ``None`` clears the public name and returns the panel to its IP/local-CA
-    endpoint. Revalidates the whole record so a malformed name cannot bypass the
-    contract via :meth:`model_copy <pydantic.BaseModel.model_copy>`.
+    ``None`` clears it and returns the panel to the reserve name (or its IP when
+    no reserve name exists). Revalidates the whole record so a malformed name
+    cannot bypass the contract via :meth:`model_copy <pydantic.BaseModel.model_copy>`.
     """
-    return state.model_validate({**state.model_dump(), 'hostname': hostname})
+    return state.model_validate({**state.model_dump(), 'custom_hostname': hostname})
 
 
 def read_management(path=STATE_PATH):

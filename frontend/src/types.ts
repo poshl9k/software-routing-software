@@ -481,7 +481,10 @@ export interface HostManagement {
   mac: string;
   address: string;
   mode: "separate-lan" | "single-uplink";
+  /** Reserve name seeded at install (e.g. `<ip>.nip.io`); kept as a fallback. */
   hostname: string | null;
+  /** Operator's own domain, added from the panel (ADR-0024). */
+  custom_hostname: string | null;
   path_prefix: string | null;
 }
 

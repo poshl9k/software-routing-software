@@ -199,26 +199,27 @@ it("shows that no update is available",async()=>{
   expect(screen.queryByRole("button",{name:"Установить выпуск"})).toBeNull();
 });
 
-it("binds a custom panel domain and clears it from the maintenance screen",async()=>{
+it("binds a custom panel domain beside the reserve and clears it",async()=>{
   let current={interface:"eth0",mac:"02:00:00:00:00:01",address:"92.51.36.131/24",
-    mode:"single-uplink",hostname:null as string|null,path_prefix:null};
+    mode:"single-uplink",hostname:"92.51.36.131.nip.io",custom_hostname:null as string|null,path_prefix:null};
   const fetch=vi.fn(async(path:string,init?:RequestInit)=>{
     if(path==="/api/auth/me")return new Response(JSON.stringify({id:1,username:"admin",role:"admin"}));
     if(path==="/api/versions")return new Response(JSON.stringify([{id:1,status:"draft",configuration:emptyConfiguration}]));
     if(path==="/api/apply/status")return new Response("null");
     if(path==="/api/host/management")return new Response(JSON.stringify(current));
-    if(path==="/api/host/panel-domain"){const body=JSON.parse(String(init?.body));current={...current,hostname:body.hostname};return new Response(JSON.stringify(current));}
+    if(path==="/api/host/panel-domain"){const body=JSON.parse(String(init?.body));current={...current,custom_hostname:body.hostname};return new Response(JSON.stringify(current));}
     return new Response("{}");
   });
   vi.stubGlobal("fetch",fetch);
   render(<MemoryRouter initialEntries={["/maintenance?tab=domain"]}><App/></MemoryRouter>);
   const user=userEvent.setup();
   await screen.findByText("admin");
-  expect(await screen.findByText("не задан (панель на IP-адресе)")).toBeVisible();
-  await user.type(screen.getByLabelText("Домен"),"rg3.poshl9k.ru");
+  // The reserve address is shown and kept; the custom field starts empty.
+  expect(await screen.findByText("92.51.36.131.nip.io")).toBeVisible();
+  await user.type(screen.getByLabelText("Свой домен"),"rg3.poshl9k.ru");
   await user.click(screen.getByRole("button",{name:"Привязать домен"}));
   await waitFor(()=>expect(fetch).toHaveBeenCalledWith("/api/host/panel-domain",expect.objectContaining({method:"PUT",body:JSON.stringify({hostname:"rg3.poshl9k.ru"})})));
   expect((await screen.findAllByText("rg3.poshl9k.ru")).length).toBeGreaterThan(0);
-  await user.click(screen.getByRole("button",{name:"Сбросить на IP"}));
+  await user.click(screen.getByRole("button",{name:"Убрать свой домен"}));
   await waitFor(()=>expect(fetch).toHaveBeenCalledWith("/api/host/panel-domain",expect.objectContaining({method:"PUT",body:JSON.stringify({hostname:null})})));
 });

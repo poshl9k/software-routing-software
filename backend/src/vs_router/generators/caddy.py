@@ -24,9 +24,12 @@ def generate_caddy_json(version, management=None) -> dict:
     sites = sorted(version.configuration.sites, key=lambda s: s.name)
     apps, servers, l4, policies, automate, certificates = {}, {}, {}, [], [], []
     if management is not None:
-        from ..management import TLS_DIR, validate_site_bindings
+        from ..management import TLS_DIR, publication_names, validate_site_bindings
         validate_site_bindings(version, management)
-        sni = management.hostname or management.ip
+        # Every published name answers the panel; the reserve and the operator's
+        # own domain coexist, so a failure of one never hides the panel (ADR-0024).
+        names = list(publication_names(management))
+        sni = management.custom_hostname or (names[0] if names else management.ip)
         panel = [{'handler': 'reverse_proxy',
                   'upstreams': [{'dial': 'unix//run/vs-router/web/web.sock'}]}]
         if management.path_prefix:
@@ -42,18 +45,18 @@ def generate_caddy_json(version, management=None) -> dict:
             routes = [{'handle': panel}]
         section = {'listen': [bind(management.ip, 443)], 'routes': routes,
                    'automatic_https': {'disable': True}}
-        if management.hostname:
-            # A public name: an ACME HTTP-01 challenge rides the plaintext :80
+        if names:
+            # Public names: an ACME HTTP-01 challenge rides the plaintext :80
             # listener, and no local-CA certificate is loaded (its IP SAN would
-            # not match the hostname).
+            # not match any hostname).
             section['tls_connection_policies'] = [{'default_sni': sni}]
             servers['management'] = section
             servers['management_acme'] = {
                 'listen': [bind(management.ip, 80)],
                 'routes': [{'handle': [{'handler': 'static_response', 'status_code': 308,
                                         'headers': {'Location': ['https://{http.request.host}{http.request.uri}']}}]}]}
-            automate.append(sni)
-            policies.append({'subjects': [sni], 'issuers': [
+            automate.extend(names)
+            policies.append({'subjects': names, 'issuers': [
                 {'module': 'acme', 'challenges': {'tls-alpn': {'disabled': True}}}]})
         else:
             section['tls_connection_policies'] = [{'default_sni': sni,
