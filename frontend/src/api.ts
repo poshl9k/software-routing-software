@@ -1,6 +1,7 @@
 import type {
   HostInterface,
   HostManagement,
+  HostProfile,
   ApplyRequest,
   ApplyResult,
   ApplyMarker,
@@ -73,6 +74,7 @@ const post = <T>(path: `/api/${string}`, body: unknown) =>
 export const api = {
   hostInterfaces: () => request<HostInterface[]>("/api/host/interfaces"),
   hostManagement: () => request<HostManagement | null>("/api/host/management"),
+  hostProfile: () => request<HostProfile>("/api/host/profile"),
   /** Publish the panel under an operator-supplied domain (ADR-0025); null clears it. */
   setPanelDomain: (hostname: string | null) =>
     request<HostManagement>("/api/host/panel-domain", {

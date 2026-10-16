@@ -1,9 +1,14 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
-import App from "../App";
+import App, { navigation } from "../App";
 import { emptyConfiguration } from "../fixtures";
+import { useHostProfile } from "../hooks/useHostProfile";
+import { queryKeys } from "../query";
+import type { HostProfile } from "../types";
 
 const versions = [
   { id: 3, status: "draft", configuration: emptyConfiguration },
@@ -119,19 +124,16 @@ it("labels the events page and explains that its journal is unavailable", async 
   expect(screen.getByText("Просмотр событий пока не подключён к API.")).toBeVisible();
 });
 
-/** A host-owned capability: the panel offers no DHCP section where the host has
- * no DHCP server at all (ADR-0021). */
-const record = (dhcp: unknown) => ({
-  interface: "eth0", mac: "8e:f5:95:d5:d4:60", address: "92.51.36.131/24",
-  mode: "single-uplink", hostname: "92.51.36.131.nip.io", custom_hostname: null,
-  path_prefix: null, dhcp,
-});
+/** Product identity and DHCP availability come from the host profile, not management. */
+const profile = (dhcp: boolean, product: HostProfile["profile"] = dhcp ? "router" : "panel", declared = true): HostProfile =>
+  ({ profile: product, declared, dhcp });
 
-function openOn(path: string, management: unknown) {
+function openOn(path: string, hostProfile: unknown = profile(true), management: unknown = { dhcp: false }) {
   const fetch = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(
     url === "/api/versions" ? versions :
     url === "/api/auth/me" ? { id: 1, username: "admin", role: "admin" } :
     url === "/api/apply/status" ? null :
+    url === "/api/host/profile" ? hostProfile :
     url === "/api/host/management" ? management :
     url === "/api/host/interfaces" ? [] : {},
   ))));
@@ -140,22 +142,148 @@ function openOn(path: string, management: unknown) {
   return fetch;
 }
 
+const nav = () => screen.getByRole("navigation", { name: "Разделы панели" });
+const navHrefs = () => within(nav()).getAllByRole("link").map((link) => link.getAttribute("href"));
+const otherHrefs = navigation.flatMap(({ items }) => items.map(({ to }) => to)).filter((to) => to !== "/dhcp");
+const noProductClaim = () => expect(document.body.textContent).not.toMatch(/vs-(?:router|panel)/i);
+
+it("criterion_1_useHostProfile_fetches_real_endpoint_and_shares_query_key_cache", async () => {
+  const expected = profile(false);
+  const fetch = vi.fn(() => Promise.resolve(new Response(JSON.stringify(expected))));
+  vi.stubGlobal("fetch", fetch);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const first = renderHook(() => useHostProfile(), { wrapper });
+  const second = renderHook(() => useHostProfile(), { wrapper });
+  await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
+  expect(second.result.current.data).toEqual(expected);
+  expect(client.getQueryData(queryKeys.hostProfile())).toEqual(expected);
+  expect(client.getQueryCache().getAll()).toHaveLength(1);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledWith("/api/host/profile", expect.objectContaining({ credentials: "include" }));
+});
+
+it.each([
+  ["panel", "vs-panel"],
+  ["router", "vs-router"],
+] as const)("criterion_2_%s_marker_displays_%s", async (product, label) => {
+  openOn("/", profile(product === "router", product));
+  expect(await screen.findByText(label)).toBeVisible();
+});
+
+it("criterion_3_undeclared_profile_shows_capabilities_without_product_claim", async () => {
+  openOn("/", profile(false, null, false));
+  expect(await screen.findByText(/Продукт не заявлен/)).toBeVisible();
+  expect(screen.getByText(/по возможностям хоста/)).toBeVisible();
+  noProductClaim();
+});
+
+it("criterion_4_pending_read_never_claims_product", async () => {
+  const fetch = vi.fn((url: string) => url === "/api/host/profile"
+    ? new Promise<Response>(() => {})
+    : Promise.resolve(new Response(JSON.stringify(url === "/api/auth/me"
+      ? { id: 1, username: "admin", role: "admin" }
+      : url === "/api/versions" ? versions : url === "/api/host/interfaces" ? [] : null))));
+  vi.stubGlobal("fetch", fetch);
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  expect(await screen.findByText("Продукт не прочитан")).toBeVisible();
+  noProductClaim();
+});
+
+it("criterion_4_failed_read_never_claims_product", async () => {
+  const fetch = vi.fn((url: string) => Promise.resolve(url === "/api/host/profile"
+    ? new Response(JSON.stringify({ code: "host.unavailable", message: "Недоступно" }), { status: 503 })
+    : new Response(JSON.stringify(url === "/api/auth/me"
+      ? { id: 1, username: "admin", role: "admin" }
+      : url === "/api/versions" ? versions : url === "/api/host/interfaces" ? [] : null))));
+  vi.stubGlobal("fetch", fetch);
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  await waitFor(() => expect(fetch.mock.calls.filter(([url]) => url === "/api/host/profile").length).toBeGreaterThan(1), { timeout: 3000 });
+  expect(await screen.findByText("Продукт не прочитан")).toBeVisible();
+  noProductClaim();
+});
+
+it("criterion_4_failed_refetch_suppresses_cached_identity", async () => {
+  let fail = false;
+  const fetch = vi.fn(() => Promise.resolve(fail
+    ? new Response(JSON.stringify({ code: "host.unavailable", message: "Недоступно" }), { status: 503 })
+    : new Response(JSON.stringify(profile(true)))));
+  vi.stubGlobal("fetch", fetch);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const { result } = renderHook(() => useHostProfile(), { wrapper });
+  await waitFor(() => expect(result.current.data?.profile).toBe("router"));
+  fail = true;
+  await result.current.refetch();
+  await waitFor(() => expect(result.current.isError).toBe(true));
+  expect(result.current.data).toBeUndefined();
+  expect(client.getQueryData(queryKeys.hostProfile())).toEqual(profile(true));
+});
+
+it("criterion_5_false_hides_DHCP_link_despite_management_claiming_true", async () => {
+  const fetch = openOn("/", profile(false), { dhcp: true });
+  await screen.findByText("vs-panel");
+  expect(fetch.mock.calls.some(([url]) => url === "/api/host/profile")).toBe(true);
+  expect(within(nav()).queryByRole("link", { name: "DHCP" })).not.toBeInTheDocument();
+  expect(within(nav()).getByRole("link", { name: "DNS" })).toBeVisible();
+});
+
+it.each(["/dhcp", "/DHCP/", "/d%68cp"])("criterion_5_false_blocks_direct_DHCP_route_%s", async (path) => {
+  openOn(path, profile(false), { dhcp: true });
+  await screen.findByText("vs-panel");
+  await waitFor(() => expect(screen.queryByRole("heading", { name: "DHCP (Kea)", level: 1 })).not.toBeInTheDocument());
+  expect(within(nav()).queryByRole("link", { name: "DHCP" })).not.toBeInTheDocument();
+});
+
+it("criterion_6_true_keeps_DHCP_link_and_route_despite_management_false", async () => {
+  openOn("/dhcp", profile(true), { dhcp: false });
+  await screen.findByText("vs-router");
+  expect(await screen.findByRole("heading", { name: "DHCP (Kea)", level: 1 })).toBeVisible();
+  expect(within(nav()).getByRole("link", { name: "DHCP" })).toHaveAttribute("href", "/dhcp");
+});
+
+it("criterion_6_older_profile_record_keeps_DHCP_link_and_route", async () => {
+  openOn("/dhcp", {});
+  expect(await screen.findByRole("heading", { name: "DHCP (Kea)", level: 1 })).toBeVisible();
+  expect(within(nav()).getByRole("link", { name: "DHCP" })).toBeVisible();
+  expect(screen.getByText("Продукт не прочитан")).toBeVisible();
+});
+
+it("criterion_6_unread_profile_keeps_DHCP_link_and_route", async () => {
+  const fetch = vi.fn((url: string) => url === "/api/host/profile"
+    ? new Promise<Response>(() => {})
+    : Promise.resolve(new Response(JSON.stringify(url === "/api/auth/me"
+      ? { id: 1, username: "admin", role: "admin" }
+      : url === "/api/versions" ? versions : url === "/api/host/interfaces" ? [] : null))));
+  vi.stubGlobal("fetch", fetch);
+  render(<MemoryRouter initialEntries={["/dhcp"]}><App /></MemoryRouter>);
+  expect(await screen.findByRole("heading", { name: "DHCP (Kea)", level: 1 })).toBeVisible();
+  expect(within(nav()).getByRole("link", { name: "DHCP" })).toBeVisible();
+});
+
 it("hides the DHCP section where the host has no DHCP server", async () => {
-  const fetch = openOn("/", record(false));
-  await screen.findByRole("navigation", { name: "Разделы панели" });
-  await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === "/api/host/management")).toBe(true));
-  expect(screen.queryByRole("link", { name: "DHCP" })).not.toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "DNS" })).toBeVisible();
+  openOn("/", profile(false));
+  await screen.findByText("vs-panel");
+  expect(within(nav()).queryByRole("link", { name: "DHCP" })).not.toBeInTheDocument();
+  expect(within(nav()).getByRole("link", { name: "DNS" })).toBeVisible();
 });
 
 it("redirects away from the DHCP page where the host has no DHCP server", async () => {
-  openOn("/dhcp", record(false));
-  await screen.findByRole("navigation", { name: "Разделы панели" });
+  openOn("/dhcp", profile(false));
+  await screen.findByText("vs-panel");
   await waitFor(() => expect(screen.queryByRole("heading", { name: "DHCP (Kea)", level: 1 })).not.toBeInTheDocument());
 });
 
 it("keeps the DHCP section when the host record does not say", async () => {
-  openOn("/dhcp", record(undefined));
+  openOn("/dhcp", {});
   expect(await screen.findByRole("heading", { name: "DHCP (Kea)", level: 1 })).toBeVisible();
-  expect(screen.getByRole("link", { name: "DHCP" })).toBeVisible();
+  expect(within(nav()).getByRole("link", { name: "DHCP" })).toBeVisible();
+});
+
+it.each([false, true])("criterion_7_other_navigation_unchanged_when_DHCP_is_%s", async (dhcp) => {
+  openOn("/", profile(dhcp));
+  await screen.findByText(dhcp ? "vs-router" : "vs-panel");
+  expect(navHrefs().filter((to) => to !== "/dhcp")).toEqual(otherHrefs);
 });

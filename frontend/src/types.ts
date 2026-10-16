@@ -475,6 +475,13 @@ export interface HostInterface {
   mac: string | null;
 }
 
+/** Installer-declared product and live host capability; null means no marker. */
+export interface HostProfile {
+  profile: "router" | "panel" | null;
+  declared: boolean;
+  dhcp: boolean;
+}
+
 /** First-run management endpoint; `single-uplink` means the one port is also the uplink. */
 export interface HostManagement {
   interface: string;

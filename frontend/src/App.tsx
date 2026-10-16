@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useHostProfile } from "./hooks/useHostProfile";
+import { isHostScreenAvailable } from "./hostScreens";
 import {
   Alert,
   Box,
@@ -42,8 +43,6 @@ import {
   useRouterState,
 } from "./state";
 import { useApplyStatus } from "./hooks/useApplyStatus";
-import { api } from "./api";
-import { queryKeys } from "./query";
 import { ApplyStatusRail, type ApplyStatusRailProps } from "./components/ApplyStatusRail";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Badge } from "./components/Badge";
@@ -136,20 +135,15 @@ export const navigation: { group: string; items: NavigationItem[] }[] = [
     { to: "/maintenance", label: "Обслуживание", icon: "maintenance" },
   ] },
 ];
-/** A host without a DHCP server has no DHCP section (ADR-0021). An unread or
- * older host record keeps the section: a failed capability read must not hide a
- * page the operator may still need. */
-function useDhcpAvailable(): boolean {
-  const host = useQuery({ queryKey: queryKeys.hostManagement(), queryFn: api.hostManagement });
-  return host.data?.dhcp !== false;
-}
-/** The DHCP route redirects away only when the host says it has no DHCP. */
-function DhcpRoute() {
-  return useDhcpAvailable() ? <DHCP /> : <Navigate to="/" replace />;
-}
 function Layout() {
   const { pathname, search } = useLocation();
-  const dhcpAvailable = useDhcpAvailable();
+  const { data: hostProfile } = useHostProfile();
+  const product = hostProfile?.declared &&
+    (hostProfile.profile === "router" || hostProfile.profile === "panel")
+    ? `vs-${hostProfile.profile}` : null;
+  const productLabel = product ?? (hostProfile?.profile === null && hostProfile.declared === false
+    ? "Продукт не заявлен — по возможностям хоста"
+    : "Продукт не прочитан");
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -192,7 +186,7 @@ function Layout() {
       : { state: "uncertain" };
   const visibleNavigation = navigation.map((group) => ({
     ...group,
-    items: group.items.filter((item) => dhcpAvailable || item.to !== "/dhcp"),
+    items: group.items.filter((item) => isHostScreenAvailable(item.to, hostProfile)),
   })).filter((group) => group.items.length);
   const navContents = (mobile: boolean) => visibleNavigation.map((group) => {
     const items = group.items.filter((item) =>
@@ -226,7 +220,7 @@ function Layout() {
   return (
     <div className="shell">
       <Box component="aside" className="sidebar" sx={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div className="logo"><span className="logo-mark" />VS-ROUTER</div>
+        <div className="logo"><span className="logo-mark" />Панель управления</div>
         <Box component="nav" className="nav" aria-label="Разделы панели" sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           {navContents(false)}
         </Box>
@@ -236,7 +230,7 @@ function Layout() {
         transitionDuration={reducedMotion ? 0 : { enter: 160, exit: 120 }}
         slotProps={{ paper: { className: "mobile-drawer" } }}
       >
-        <div className="logo"><span className="logo-mark" />VS-ROUTER</div>
+        <div className="logo"><span className="logo-mark" />Панель управления</div>
         <TextField label="Поиск раздела" value={query} onChange={(e) => setQuery(e.target.value)} sx={{ mx: 2, mb: 1 }} />
         <Box component="nav" className="nav" aria-label="Разделы панели" sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           {navContents(true)}
@@ -247,8 +241,9 @@ function Layout() {
         <header className="topbar">
           <Button className="mobile-menu" variant="outlined" onClick={() => setDrawerOpen(true)} aria-label="Разделы" aria-haspopup="dialog" aria-expanded={drawerOpen}>Разделы</Button>
           <div className="breadcrumbs">
-            vs-router › <b>{title}</b>
+            Панель › <b>{title}</b>
           </div>
+          <Badge tone={product ? "blue" : "amber"}>{productLabel}</Badge>
           {!noConfiguration && version && (
             <Badge tone={version.status === "draft" ? "amber" : "green"}>
               v{version.id} ·{" "}
@@ -305,7 +300,7 @@ function Layout() {
             Нет сохранённой конфигурации — <Link to="/onboarding">начните первичную настройку</Link> или проверьте доступность панели.
           </InfoNote>
         )}
-        <Outlet />
+        {isHostScreenAvailable(pathname, hostProfile) ? <Outlet /> : <Navigate to="/" replace />}
       </main>
     </div>
   );
@@ -336,7 +331,7 @@ export default function App() {
           <Route element={<Protected />}>
             <Route index element={<Dashboard />} />
             <Route path="network" element={<Network />} />
-            <Route path="dhcp" element={<DhcpRoute />} />
+            <Route path="dhcp" element={<DHCP />} />
             <Route path="dns" element={<DNS />} />
             <Route path="tunnels" element={<Tunnels />} />
             <Route path="proxy" element={<Proxy />} />

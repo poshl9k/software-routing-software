@@ -25,6 +25,7 @@ export const queryKeys = {
     ["diff", before, after] as const,
   hostInterfaces: () => ["host", "interfaces"] as const,
   hostManagement: () => ["host", "management"] as const,
+  hostProfile: () => ["host", "profile"] as const,
   hostAddresses: () => ["host", "addresses"] as const,
   serviceStatus: () => ["status", "services"] as const,
   tunnelActivity: () => ["tunnels", "activity"] as const,

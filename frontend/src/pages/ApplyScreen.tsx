@@ -58,6 +58,8 @@ const reasonTexts: Record<string, string> = {
     "домен не разрешается этим хостом — добавьте A-запись домена на публичный адрес хоста и повторите",
   "management.domain_unverified":
     "домен не подтвердился: Let's Encrypt не выдал сертификат (проверьте, что DNS указывает на этот хост и порт 80 доступен). Прежний домен панели сохранён",
+  "management.ssh_unprotected":
+    "публикация пересобрала бы firewall без SSH на интерфейсе управления — сначала разрешите SSH на этом интерфейсе в разделе «SSH», иначе доступ к хосту будет потерян",
 };
 const reasonText = (code: string) => reasonTexts[code] ?? code;
 
