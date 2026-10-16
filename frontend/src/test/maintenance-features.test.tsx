@@ -24,10 +24,11 @@ it("loads runtime leases in the DHCP leases tab",async()=>{
   const user=userEvent.setup();mount(<DHCP/>);await user.click(screen.getByRole("tab",{name:"Аренды"}));expect(await screen.findByText("laptop")).toBeVisible();expect(screen.getByText("1 мин")).toBeVisible();
 });
 it("opens the tunnel peer QR dialog from a blob response",async()=>{
-  Object.defineProperty(URL,"createObjectURL",{configurable:true,value:vi.fn(()=>"blob:qr")});const fetch=setup(sampleConfiguration,(path)=>path.includes("/qr")?new Response(new Blob(["png"],{type:"image/png"})):new Response("{}"));
+  Object.defineProperty(URL,"createObjectURL",{configurable:true,value:vi.fn(()=>"blob:qr")});Object.defineProperty(URL,"revokeObjectURL",{configurable:true,value:vi.fn()});const fetch=setup(sampleConfiguration,(path)=>path.includes("/qr")?new Response("png",{headers:{"Content-Type":"image/png"}}):new Response("{}"));
   const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("button",{name:"Открыть"}));
   const editor=screen.getByRole("dialog",{name:"Туннель: wg_office · WireGuard · Сервер"});
-  await user.click(within(editor).getAllByRole("button",{name:"QR-код"})[0]);
+  await user.click(within(editor).getByRole("tab",{name:"Пиры"}));
+  await user.click(within(editor).getByRole("button",{name:"QR"}));
   expect(await screen.findByRole("img",{name:/QR-код пира/})).toBeVisible();
   expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/tunnels/wg_office/peer/alina_laptop/qr"),expect.objectContaining({credentials:"include"}));
 });
@@ -45,7 +46,10 @@ it("generates and fills a peer PSK",async()=>{
   const fetch=setup(sampleConfiguration,(path)=>path==="/api/keygen/peer"?new Response(JSON.stringify({preshared_key:"p".repeat(44)})):new Response("{}"));
   const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("button",{name:"Открыть"}));
   const editor=screen.getByRole("dialog",{name:"Туннель: wg_office · WireGuard · Сервер"});
-  await user.click(within(editor).getAllByRole("button",{name:"Сгенерировать PSK"})[0]);await waitFor(()=>expect(within(editor).getAllByLabelText("Preshared key")[0]).toHaveValue("p".repeat(44)));expect(fetch).toHaveBeenCalledWith("/api/keygen/peer",expect.objectContaining({method:"POST",body:"{}"}));
+  await user.click(within(editor).getByRole("tab",{name:"Пиры"}));
+  await user.click(within(editor).getByRole("button",{name:"Изменить"}));
+  const peer=screen.getByRole("dialog",{name:"Пир: alina_laptop"});
+  await user.click(within(peer).getByRole("button",{name:"Сгенерировать PSK"}));await waitFor(()=>expect(within(peer).getByLabelText("Preshared key")).toHaveValue("p".repeat(44)));expect(fetch).toHaveBeenCalledWith("/api/keygen/peer",expect.objectContaining({method:"POST",body:"{}"}));
 });
 it("exports aliases in the selected format",async()=>{
   const fetch=setup(emptyConfiguration,(path)=>path==="/api/aliases/export"?new Response("[]",{headers:{"Content-Type":"application/json"}}):new Response("{}"));

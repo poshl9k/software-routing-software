@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
@@ -17,7 +17,8 @@ import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { EditorShell } from "../components/EditorShell";
+import { EditorFooter, EditorShell } from "../components/EditorShell";
+import { ValueTabs } from "../components/Tabs";
 import { ExpertDisclosure } from "../components/ExpertDisclosure";
 import { PageSection } from "../components/PageSection";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -280,7 +281,7 @@ function Collection<T extends Row>({
   create?: (rows: T[], role: Tunnel["role"], protocol: Tunnel["protocol"]) => Promise<T>;
   valid: (v: T) => boolean;
   clean?: (v: T) => T;
-  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean, setError: (error: unknown) => void, importedAddresses: Record<string, string>) => ReactNode;
+  form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean, setError: (error: unknown) => void, importedAddresses: Record<string, string>, setBusy: (busy: boolean) => void) => ReactNode;
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
   /** Extra configuration derived from the edited rows (e.g. auto-created
@@ -293,6 +294,7 @@ function Collection<T extends Row>({
   const editor = useDraftEditor<EditableRow<T>[]>();
   const [next, setNext] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [formBusy, setFormBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
@@ -403,7 +405,7 @@ function Collection<T extends Row>({
               const updated = latest.map((v) => v.id === id ? { ...v, row: { ...v.row, ...patch } } : v);
               currentEditing.current = updated;
               editor.setValue(updated);
-            }, created, noConfiguration, editor.setError, importAddresses)}
+            }, created, noConfiguration, editor.setError, importAddresses, setFormBusy)}
           </div>
         ) : (
           <div key={id}>
@@ -413,7 +415,7 @@ function Collection<T extends Row>({
               const updated = latest.map((v) => v.id === id ? { ...v, row: { ...v.row, ...patch } } : v);
               currentEditing.current = updated;
               editor.setValue(updated);
-            }, created, noConfiguration, editor.setError, importAddresses)}
+            }, created, noConfiguration, editor.setError, importAddresses, setFormBusy)}
           </div>
         )
       ))}
@@ -523,7 +525,7 @@ function Collection<T extends Row>({
         </DialogTitle>
         <DialogContent>
           <ErrorNotice error={editor.error} />
-          <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating}
+          <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating && !formBusy}
             onCancel={cancel} onSave={() => void save()} view={null} edit={renderEdit} />
         </DialogContent>
       </Dialog>}
@@ -535,7 +537,7 @@ function Collection<T extends Row>({
         <DialogContent>
           <ErrorNotice error={editor.error} />
           {selectedTunnel && <FormActions><DeleteButton label={`Удалить ${selectedTunnel.name || "запись"}`} onClick={() => setDeleteTarget(selected!)} /></FormActions>}
-          <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating}
+          <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating && !formBusy}
             onCancel={cancel} onSave={() => void save()} view={null} edit={renderEdit} />
         </DialogContent>
       </Dialog>}
@@ -585,6 +587,211 @@ function Collection<T extends Row>({
     </>
   );
 }
+/** A peer edits a private copy; only Save or confirmed deletion touches the outer draft. */
+function PeerEditor({ peer, peers, disabled, save, remove, cancel }: {
+  peer: Peer;
+  peers: Peer[];
+  disabled: boolean;
+  save: (peer: Peer) => void;
+  remove: () => void;
+  cancel: () => void;
+}) {
+  const [value, setValue] = useState<Peer>(() => ({ ...peer, allowed_ips: [...peer.allowed_ips] }));
+  const [error, setError] = useState<unknown>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const active = useRef(true);
+  const generatingRef = useRef(false);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  const update = (patch: Partial<Peer>) => setValue((current) => ({ ...current, ...patch }));
+  const close = () => { active.current = false; cancel(); };
+  const generate = async (kind: "keys" | "psk") => {
+    if (generatingRef.current) return;
+    generatingRef.current = true;
+    setGenerating(true);
+    setError(null);
+    try {
+      const patch: Partial<Peer> = kind === "keys"
+        ? await api.keygenPeerKeypair().then((pair) => ({ public_key: pair.public_key, private_key: { plaintext: pair.private_key } }))
+        : await api.keygenPeer().then((key) => ({ preshared_key: { plaintext: key.preshared_key } }));
+      if (active.current) update(patch);
+    } catch (failure) {
+      if (active.current) setError(failure);
+    } finally {
+      generatingRef.current = false;
+      if (active.current) setGenerating(false);
+    }
+  };
+  const valid = nameValid(value.name) && !!value.public_key.trim() && ipsValid(value.allowed_ips)
+    && !peers.some((item) => item !== peer && item.name === value.name);
+  return (
+    <Dialog open onClose={close} fullWidth maxWidth="sm" aria-labelledby="peer-editor-title">
+      <DialogTitle id="peer-editor-title">Пир: {peer.name || "Новый пир"}</DialogTitle>
+      <DialogContent>
+        <ErrorNotice error={error} />
+        <FormActions><DeleteButton label={`Удалить пира ${peer.name || "Новый пир"}`} onClick={() => setConfirmDelete(true)} /></FormActions>
+        <FormGrid>
+          {peer.preshared_key && "redacted" in peer.preshared_key ? (
+            <Field label="Имя пира" value={value.name} readOnly hint="Имя сохраняет привязку секретов" />
+          ) : (
+            <Field label="Имя пира" value={value.name} valid={nameValid(value.name)}
+              hint="Латиница, цифры, «_»; до 31 символа" onChange={(name) => update({ name })} />
+          )}
+          <Field label="Публичный ключ пира" value={value.public_key} valid={!!value.public_key.trim()}
+            hint={value.private_key ? "Сгенерирован панелью вместе с приватным" : "Введён вручную (клиентский)"}
+            onChange={(public_key) => update({ public_key, private_key: null })} />
+          <Field label="AllowedIPs пира" value={value.allowed_ips.join(",")} valid={ipsValid(value.allowed_ips)}
+            placeholder="10.66.66.2/32"
+            hint="AllowedIPs ≠ маршрут. Пусто — адрес выдастся автоматически (.2, .3, … в подсети туннеля)"
+            onChange={(v) => update({ allowed_ips: split(v) })} />
+          <SecretField label="Preshared key" value={value.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />
+          <FormWide><SecretField label="Приватный ключ пира (входит в клиентский конфиг)" value={value.private_key ?? null}
+            showOriginalHint={false} change={(private_key) => update({ private_key })} /></FormWide>
+          <FormWide><FormActions>
+            <Button disabled={disabled || generating} onClick={() => void generate("keys")}>Сгенерировать ключи пира</Button>
+            <Button disabled={disabled || generating} onClick={() => void generate("psk")}>Сгенерировать PSK</Button>
+          </FormActions></FormWide>
+        </FormGrid>
+        <EditorFooter saving={false} valid={valid && !generating} cancel={close} save={() => {
+          active.current = false;
+          save(value);
+        }} />
+        <ConfirmDialog open={confirmDelete} title="Удалить пира?"
+          body="Пир будет удалён только из черновика туннеля. Изменения вступят в силу после сохранения и применения."
+          confirmLabel="Удалить из черновика" cancelLabel="Отмена" danger
+          onCancel={() => setConfirmDelete(false)} onConfirm={() => { active.current = false; remove(); }} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function peerActivityLabel(seconds: number | null | undefined): string {
+  if (seconds === 0) return "Не подключался";
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "Активность недоступна";
+  const date = new Date(seconds * 1000);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("ru-RU") : "Активность недоступна";
+}
+
+/** Mounted only within the existing tunnel draft editor, never a second draft lifecycle. */
+function TunnelEditorTabs({ tunnel, patch, created, disabled, setError, setBusy, showQr, children }: {
+  tunnel: Tunnel;
+  patch: (patch: Partial<Tunnel>) => void;
+  created: boolean;
+  disabled: boolean;
+  setError: (error: unknown) => void;
+  setBusy: (busy: boolean) => void;
+  showQr: (tunnel: string, peer: string, current: () => boolean) => Promise<void>;
+  children: ReactNode;
+}) {
+  const [tab, setTab] = useState<"tunnel" | "peers">("tunnel");
+  const [selected, setSelected] = useState<Peer | null>(null);
+  const [adding, setAdding] = useState(false);
+  const addingRef = useRef(false);
+  const active = useRef(true);
+  const latest = useRef({ tunnel, patch, setError });
+  latest.current = { tunnel, patch, setError };
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; setBusy(false); };
+  }, [setBusy]);
+  useEffect(() => { setBusy(adding || selected !== null); }, [adding, selected, setBusy]);
+  const peersVisible = tunnel.role === "server" && tab === "peers";
+  const activity = useQuery({
+    queryKey: queryKeys.tunnelActivity(),
+    queryFn: ({ signal }) => api.tunnelActivity(signal),
+    enabled: peersVisible,
+    refetchInterval: 30_000,
+    // A failed poll must immediately hide the previous successful sample.
+    retry: false,
+  });
+  const replacePeers = (peers: Peer[]) => {
+    const current = latest.current;
+    latest.current = { ...current, tunnel: { ...current.tunnel, peers } };
+    current.patch({ peers });
+  };
+  const add = async () => {
+    if (addingRef.current) return;
+    addingRef.current = true;
+    setAdding(true);
+    setError(null);
+    try {
+      const pair = await api.keygenPeerKeypair();
+      if (!active.current) return;
+      const peer: Peer = {
+        name: "", public_key: pair.public_key, private_key: { plaintext: pair.private_key },
+        preshared_key: null, allowed_ips: [],
+      };
+      replacePeers([...latest.current.tunnel.peers, peer]);
+      setSelected(peer);
+    } catch (error) {
+      if (active.current) latest.current.setError(error);
+    } finally {
+      addingRef.current = false;
+      if (active.current) setAdding(false);
+    }
+  };
+  const exportPeer = async (peer: Peer) => {
+    setError(null);
+    try {
+      const blob = await api.peerConf(tunnel.name, peer.name);
+      if (!active.current) return;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      try {
+        anchor.href = url;
+        anchor.download = `${tunnel.name}-${peer.name}.conf`;
+        document.body.appendChild(anchor);
+        anchor.click();
+      } finally {
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      if (active.current) latest.current.setError(error);
+    }
+  };
+  return (
+    <>
+      {tunnel.role === "server" && <ValueTabs<"tunnel" | "peers">
+        tabs={[{ value: "tunnel", label: "Туннель" }, { value: "peers", label: "Пиры" }]}
+        value={tab} change={setTab} />}
+      {/* Keep secret fields mounted so switching tabs cannot replace their original opaque values. */}
+      <div hidden={peersVisible}>{children}</div>
+      {peersVisible && <>
+        <FormActions><Button disabled={disabled || adding} onClick={() => void add()}>+ Добавить пира</Button></FormActions>
+        <div className="table-wide tunnel-peers-table">
+        <DataTable heads={["Имя", "Активность", "Действия"]} empty={<EmptyState>Пиров нет.</EmptyState>}
+          rows={tunnel.peers.map((peer) => [
+            peer.name || "Новый пир",
+            peerActivityLabel(activity.isSuccess ? activity.data?.[tunnel.name]?.[peer.name] : undefined),
+            <FormActions>
+              <Button disabled={created} onClick={() => {
+                setError(null);
+                void showQr(tunnel.name, peer.name, () => active.current).catch((error) => {
+                  if (active.current) latest.current.setError(error);
+                });
+              }}>QR</Button>
+              <Button disabled={created} onClick={() => void exportPeer(peer)}>Экспорт конфигурации</Button>
+              <Button onClick={() => setSelected(peer)}>Изменить</Button>
+            </FormActions>,
+          ])} />
+        </div>
+      </>}
+      {selected && <PeerEditor peer={selected} peers={tunnel.peers} disabled={disabled}
+        cancel={() => setSelected(null)} save={(peer) => {
+          replacePeers(latest.current.tunnel.peers.map((item) => item === selected ? peer : item));
+          setSelected(null);
+        }} remove={() => {
+          replacePeers(latest.current.tunnel.peers.filter((item) => item !== selected));
+          setSelected(null);
+        }} />}
+    </>
+  );
+}
+
 export function Tunnels() {
   const { configuration: c } = useConfiguration();
   const telemetry = useQuery({
@@ -598,8 +805,29 @@ export function Tunnels() {
     enabled: c.tunnels.length > 0,
     refetchInterval: 30_000,
   });
-  const [qr,setQr]=useState<{peer:string;url:string}|null>(null); const [qrError,setQrError]=useState<unknown>(null);
-  const showQr=async(tunnel:string,peer:string)=>{setQrError(null);try{const blob=await api.peerQr(tunnel,peer);setQr({peer,url:URL.createObjectURL(blob)});}catch(e){setQrError(e);}};
+  const [qr, setQr] = useState<{ peer: string; url: string } | null>(null);
+  const qrUrl = useRef<string | null>(null);
+  const qrRequest = useRef(0);
+  useEffect(() => () => {
+    qrRequest.current += 1;
+    if (qrUrl.current) URL.revokeObjectURL(qrUrl.current);
+    qrUrl.current = null;
+  }, []);
+  const closeQr = () => {
+    qrRequest.current += 1;
+    if (qrUrl.current) URL.revokeObjectURL(qrUrl.current);
+    qrUrl.current = null;
+    setQr(null);
+  };
+  const showQr = async (tunnel: string, peer: string, current: () => boolean) => {
+    const request = ++qrRequest.current;
+    const blob = await api.peerQr(tunnel, peer);
+    if (request !== qrRequest.current || !current()) return;
+    const url = URL.createObjectURL(blob);
+    if (qrUrl.current) URL.revokeObjectURL(qrUrl.current);
+    qrUrl.current = url;
+    setQr({ peer, url });
+  };
   const emptyTunnel = (rows: Tunnel[]): Tunnel => ({
     name: "",
     interface: nextTunnelInterface([
@@ -635,25 +863,12 @@ export function Tunnels() {
   };
   return (
     <>
-      {qrError && !qr && <ErrorNotice error={qrError} />}
       <PageHeader>Туннели</PageHeader>
       <Collection<Tunnel>
         kind="tunnels"
         tunnelStatus={telemetry.isSuccess ? telemetry.data : undefined}
         title="Туннели"
         addLabel="+ Добавить туннель"
-        rowActions={(row) =>
-          row.role === "server" && row.peers.length ? (
-            <div key="qr" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {row.peers.map((p) => (
-                <Button key={p.name} size="small" variant="text"
-                  onClick={() => void showQr(row.name, p.name)}>
-                  {p.name}
-                </Button>
-              ))}
-            </div>
-          ) : null
-        }
         configPatch={(rows, importedAddresses) => ({
           interfaces: reconcileTunnelInterfaces(c, rows).map((iface) => importedAddresses[iface.name] ? { ...iface, addresses: [importedAddresses[iface.name]] } : iface),
           tunnels: materializeTunnels(c, rows),
@@ -711,8 +926,8 @@ export function Tunnels() {
           <Badge>{t.role === "server" ? "сервер" : "клиент"}</Badge>,
           t.protocol,
         ]}
-        form={(t, patch, created, disabled, setError, importedAddresses) => (
-          <>
+        form={(t, patch, created, disabled, setError, importedAddresses, setBusy) => (
+          <TunnelEditorTabs tunnel={t} patch={patch} created={created} disabled={disabled} setError={setError} setBusy={setBusy} showQr={showQr}>
           <PageSection title="Идентификация">
           <FormGrid>
             {created ? (
@@ -783,103 +998,6 @@ export function Tunnels() {
             </div>
             {t.private_key && !("plaintext" in t.private_key) && <FormWide><p className="sub">Публичный ключ этого туннеля для удалённых клиентов не отображается: он выводится из приватного на хосте при применении.</p></FormWide>}
           </FormGrid></PageSection>
-          {t.role === "server" && <PageSection title="Пиры"><FormGrid>
-                {t.peers.length === 0 && <FormWide><EmptyState>Пиров нет.</EmptyState></FormWide>}
-                {t.peers.map((p, index) => {
-                  const update = (v: Partial<typeof p>) =>
-                    patch({
-                      peers: t.peers.map((r, i) =>
-                        i === index ? { ...r, ...v } : r,
-                      ),
-                    });
-                  return (
-                    <FormWide key={index}>
-                      <Card
-                        title={p.name || "Новый пир"}
-                        action={
-                          <DeleteButton
-                            label={`Удалить пира ${p.name || index + 1}`}
-                            onClick={() =>
-                              patch({
-                                peers: t.peers.filter((_, i) => i !== index),
-                              })
-                            }
-                          />
-                        }
-                      >
-                        <FormGrid>
-                          {p.preshared_key && "redacted" in p.preshared_key ? (
-                            <Field
-                              label="Имя пира"
-                              value={p.name}
-                              readOnly
-                              hint="Имя сохраняет привязку секретов"
-                            />
-                          ) : (
-                            <Field
-                              label="Имя пира"
-                              value={p.name}
-                              valid={nameValid(p.name)}
-                              hint="Латиница, цифры, «_»; до 31 символа"
-                              onChange={(name) => update({ name })}
-                            />
-                          )}
-                          <Field
-                            label="Публичный ключ пира"
-                            value={p.public_key}
-                            valid={!!p.public_key.trim()}
-                            hint={p.private_key ? "Сгенерирован панелью вместе с приватным" : "Введён вручную (клиентский)"}
-                            onChange={(public_key) => update({ public_key, private_key: null })}
-                          />
-                          <Field
-                            label="AllowedIPs пира"
-                            value={p.allowed_ips.join(",")}
-                            valid={ipsValid(p.allowed_ips)}
-                            placeholder="10.66.66.2/32"
-                            hint="AllowedIPs ≠ маршрут. Пусто — адрес выдастся автоматически (.2, .3, … в подсети туннеля)"
-                            onChange={(v) => update({ allowed_ips: split(v) })}
-                          />
-                          <SecretField label="Preshared key" value={p.preshared_key} showOriginalHint={false} change={(preshared_key) => update({ preshared_key })} />
-                          <FormWide>
-                            <SecretField label="Приватный ключ пира (входит в клиентский конфиг)" value={p.private_key ?? null} showOriginalHint={false} change={(private_key) => update({ private_key })} />
-                          </FormWide>
-                          <FormWide>
-                            <FormActions>
-                              <Button disabled={disabled} onClick={() => void api.keygenPeerKeypair().then((pair) => update({ public_key: pair.public_key, private_key: { plaintext: pair.private_key } })).catch(setError)}>Сгенерировать ключи пира</Button>
-                              <Button disabled={disabled} onClick={() => void api.keygenPeer().then((key) => update({ preshared_key: { plaintext: key.preshared_key } })).catch(setError)}>Сгенерировать PSK</Button>
-                              <Button onClick={()=>void showQr(t.name,p.name)}>QR-код</Button>
-                              <Button disabled>Экспорт пира</Button>
-                            </FormActions>
-                          </FormWide>
-                        </FormGrid>
-                      </Card>
-                    </FormWide>
-                  );
-                })}
-                <FormActions>
-                  <Button
-                    onClick={() =>
-                      void api.keygenPeerKeypair()
-                        .then((pair) =>
-                          patch({
-                            peers: [
-                              ...t.peers,
-                              {
-                                name: "",
-                                public_key: pair.public_key,
-                                private_key: { plaintext: pair.private_key },
-                                preshared_key: null,
-                                allowed_ips: [],
-                              },
-                            ],
-                          }))
-                        .catch(setError)
-                    }
-                  >
-                    + Добавить пира
-                  </Button>
-                </FormActions>
-          </FormGrid></PageSection>}
           <PageSection title="Дополнительно"><ExpertDisclosure>
             {t.protocol === "awg" && (
               <Card title="Обфускация">
@@ -912,12 +1030,16 @@ export function Tunnels() {
                 </Card>
             )}
           </ExpertDisclosure></PageSection>
-          </>
+          </TunnelEditorTabs>
         )}
       />
-      <Dialog open={!!qr} onClose={()=>{if(qr)URL.revokeObjectURL(qr.url);setQr(null);}}>
-        <DialogTitle>QR-код пира {qr?.peer}</DialogTitle><DialogContent>{qrError?<ErrorNotice error={qrError}/>:qr&&<img src={qr.url} alt={`QR-код пира ${qr.peer}`} style={{maxWidth:"100%"}}/>}</DialogContent>
-        <DialogActions>{qr&&<Button component="a" href={qr.url} download={`${qr.peer}.png`}>Скачать PNG</Button>}<Button onClick={()=>{if(qr)URL.revokeObjectURL(qr.url);setQr(null);}}>Закрыть</Button></DialogActions>
+      <Dialog open={!!qr} onClose={closeQr} aria-labelledby="peer-qr-title">
+        <DialogTitle id="peer-qr-title">QR-код пира {qr?.peer}</DialogTitle>
+        <DialogContent>{qr && <img src={qr.url} alt={`QR-код пира ${qr.peer}`} style={{ maxWidth: "100%" }} />}</DialogContent>
+        <DialogActions>
+          {qr && <Button component="a" href={qr.url} download={`${qr.peer}.png`}>Скачать PNG</Button>}
+          <Button onClick={closeQr}>Закрыть</Button>
+        </DialogActions>
       </Dialog>
       <p className="sub">Роль после создания не меняется.</p>
     </>

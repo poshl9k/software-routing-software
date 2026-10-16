@@ -451,6 +451,10 @@ pre {
 .table-wide table {
   min-width: 1040px;
 }
+/* The compact peer list still needs room for activity and download actions. */
+.table-wide.tunnel-peers-table table {
+  min-width: 760px;
+}
 
 /* Table editors: controls fill their column so rows stay aligned. */
 .MuiTableCell-root .MuiFormControl-root {

@@ -53,27 +53,33 @@ it("shows one tunnel card with honest status; opens one dialog with role locked 
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
   await openTunnel();
   const dialog = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
-  expect(within(dialog).queryByRole("tab")).not.toBeInTheDocument();
+  expect(within(dialog).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Туннель", "Пиры"]);
   expect(within(dialog).getByLabelText("Роль")).toHaveAttribute("readonly");
   expect(within(dialog).getByLabelText("Приватный ключ")).toHaveValue("");
   expect(within(dialog).getByText(/Повторная генерация ключей разорвёт/)).toBeVisible();
-  expect(within(dialog).getByLabelText("Preshared key")).toHaveValue("");
-  expect(within(dialog).getByText("phone")).toBeVisible();
+  expect(within(dialog).queryByLabelText("Preshared key")).not.toBeInTheDocument();
   await userEvent.click(within(dialog).getByText("Показать дополнительные настройки"));
   expect(within(dialog).getByLabelText("Jc")).toHaveValue("4");
+  await userEvent.click(within(dialog).getByRole("tab", { name: "Пиры" }));
+  expect(within(dialog).getByText("phone")).toBeVisible();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Изменить" }));
+  expect(within(screen.getByRole("dialog", { name: "Пир: phone" })).getByLabelText("Preshared key")).toHaveValue("");
 });
-it("opens the tunnel editor as one dialog with connection, keys and peers visible at once", async () => {
+it("keeps the entire server tunnel form on its own tab and peers on the other", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
   await openTunnel();
   const dialog = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
-  for (const section of ["Идентификация", "Подключение", "Ключи", "Пиры", "Дополнительно"]) {
+  for (const section of ["Идентификация", "Подключение", "Ключи", "Дополнительно"]) {
     expect(within(dialog).getByRole("heading", { name: section })).toBeVisible();
   }
   expect(within(dialog).getByLabelText("Порт")).toBeVisible();
   expect(within(dialog).getByLabelText("Приватный ключ")).toBeVisible();
-  expect(within(dialog).getByLabelText("Preshared key")).toBeVisible();
+  expect(within(dialog).queryByLabelText("Preshared key")).not.toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: "Отмена" })).toBeVisible();
   expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeVisible();
+  await userEvent.click(within(dialog).getByRole("tab", { name: "Пиры" }));
+  expect(within(dialog).getByLabelText("Порт")).not.toBeVisible();
+  expect(within(dialog).getByRole("table")).toBeVisible();
 });
 it("keeps peer and key fields off the page until the editor dialog opens", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
@@ -82,8 +88,11 @@ it("keeps peer and key fields off the page until the editor dialog opens", async
   expect(screen.queryByLabelText("Приватный ключ")).not.toBeInTheDocument();
   await openTunnel();
   expect(screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" })).toBeVisible();
-  expect(screen.getByLabelText("Preshared key")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Preshared key")).not.toBeInTheDocument();
   expect(screen.getByLabelText("Приватный ключ")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: "Пиры" }));
+  await userEvent.click(screen.getByRole("button", { name: "Изменить" }));
+  expect(within(screen.getByRole("dialog", { name: "Пир: phone" })).getByLabelText("Preshared key")).toBeInTheDocument();
 });
 it("shows two server clients as a number in the read-only facts", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, peers: [...server.peers, { ...server.peers[0], name: "laptop" }] }] });
@@ -102,6 +111,7 @@ it("shows one empty state in the server peers section without duplicating the ad
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, peers: [] }] });
   await openTunnel();
   const dialog = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
+  await userEvent.click(within(dialog).getByRole("tab", { name: "Пиры" }));
   expect(within(dialog).getAllByText("Пиров нет.")).toHaveLength(1);
   expect(within(dialog).getAllByRole("button", { name: "+ Добавить пира" })).toHaveLength(1);
 });
