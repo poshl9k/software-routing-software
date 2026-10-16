@@ -453,3 +453,32 @@ it("criterion_10_no_fabricated_activity_while_loading_or_after_failed_request", 
   expect(within(peerRow(editor, "phone")).getByText("Активность недоступна")).toBeVisible();
   expect(within(editor).getByRole("tab", { name: "Пиры" })).toBeVisible();
 });
+
+it("criterion_11_amnezia_export_downloads_the_vpn_document", async () => {
+  const create = vi.fn((_blob: Blob) => "blob:peer-vpn");
+  const revoke = vi.fn();
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: create });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+    expect(this.download).toBe("vpn-phone.vpn");
+    expect(this.href).toBe("blob:peer-vpn");
+  });
+  const fetch = await mount(config([server]), (path) => path.endsWith("/amnezia")
+    ? new Response("vpn://AAAA", { headers: { "Content-Type": "text/plain; charset=utf-8" } }) : json({}));
+  const editor = await openPeers();
+  await userEvent.click(within(peerRow(editor, "phone")).getByRole("button", { name: "Для Amnezia" }));
+  await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+  expect(fetch).toHaveBeenCalledWith("/api/tunnels/vpn/peer/phone/amnezia", expect.objectContaining({ credentials: "include" }));
+  expect(revoke).toHaveBeenCalledWith("blob:peer-vpn");
+  click.mockRestore();
+});
+
+it("criterion_11_amnezia_export_is_disabled_for_a_wireguard_tunnel", async () => {
+  const wireguard: Tunnel = { ...server, protocol: "wg", obfuscation: {} };
+  const fetch = await mount(config([wireguard]));
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const editor = screen.getByRole("dialog", { name: /Туннель: vpn/ });
+  await userEvent.click(within(editor).getByRole("tab", { name: "Пиры" }));
+  expect(within(peerRow(editor, "phone")).getByRole("button", { name: "Для Amnezia" })).toBeDisabled();
+  expect(fetch.mock.calls.filter(([path]) => /\/amnezia$/.test(path as string))).toHaveLength(0);
+});

@@ -733,16 +733,19 @@ function TunnelEditorTabs({ tunnel, patch, created, disabled, setError, setBusy,
       if (active.current) setAdding(false);
     }
   };
-  const exportPeer = async (peer: Peer) => {
+  const exportPeer = async (peer: Peer, format: "conf" | "amnezia" = "conf") => {
     setError(null);
     try {
-      const blob = await api.peerConf(tunnel.name, peer.name);
+      const blob = format === "amnezia"
+        ? await api.peerAmnezia(tunnel.name, peer.name)
+        : await api.peerConf(tunnel.name, peer.name);
       if (!active.current) return;
+      const suffix = format === "amnezia" ? "vpn" : "conf";
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       try {
         anchor.href = url;
-        anchor.download = `${tunnel.name}-${peer.name}.conf`;
+        anchor.download = `${tunnel.name}-${peer.name}.${suffix}`;
         document.body.appendChild(anchor);
         anchor.click();
       } finally {
@@ -774,7 +777,9 @@ function TunnelEditorTabs({ tunnel, patch, created, disabled, setError, setBusy,
                   if (active.current) latest.current.setError(error);
                 });
               }}>QR</Button>
-              <Button disabled={created} onClick={() => void exportPeer(peer)}>Экспорт конфигурации</Button>
+              <Button disabled={created} onClick={() => void exportPeer(peer, "conf")}>Экспорт конфигурации</Button>
+              {/* Amnezia's own container format; its app does not import a bare .conf. */}
+              <Button disabled={created || tunnel.protocol !== "awg"} onClick={() => void exportPeer(peer, "amnezia")}>Для Amnezia</Button>
               <Button onClick={() => setSelected(peer)}>Изменить</Button>
             </FormActions>,
           ])} />

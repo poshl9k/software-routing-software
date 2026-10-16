@@ -1,5 +1,6 @@
 """QR and file export of tunnel peer configs, plus peer activity telemetry."""
 from io import BytesIO
+from ipaddress import ip_address, ip_interface
 
 import qrcode
 from fastapi import APIRouter, Depends
@@ -8,12 +9,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import ConfigurationRow
-from ..generators.wireguard import generate_wg_bundle
+from ..generators.amnezia import amnezia_uri
+from ..generators.wireguard import generate_wg_bundle, tunnel_addresses
 from .auth import current_user, get_db
 from .errors import APIError
 from .versions import agent_call
 
 router = APIRouter(dependencies=[Depends(current_user)])
+
+# The app resolves the inner config's DNS placeholders from these; the panel has
+# no per-tunnel DNS field yet, so the secondary is a public resolver and the
+# primary is the tunnel's own address (the resolver a client reaches inside).
+DEFAULT_SECONDARY_DNS = '1.0.0.1'
 
 
 def _peer_conf(db: Session, name: str, peer_name: str) -> str:
@@ -78,3 +85,50 @@ def activity(db: Session = Depends(get_db)) -> dict[str, dict[str, int | None]]:
         result[tunnel.name] = {peer.name: handshakes.get(peer.public_key)
                                for peer in tunnel.peers}
     return result
+
+
+def _amnezia_uri(db: Session, name: str, peer_name: str,
+                 dns1: str | None, dns2: str | None) -> str:
+    """The Amnezia `vpn://` document for one peer, or an APIError explaining why not."""
+    row = db.scalars(select(ConfigurationRow).order_by(ConfigurationRow.id.desc())).first()
+    if not row:
+        raise APIError(404, 'tunnel.not_found')
+    try:
+        snapshot = row.snapshot()
+    except (ValueError, KeyError):
+        raise APIError(404, 'tunnel.not_found') from None
+    tunnel = next((t for t in snapshot.configuration.tunnels if t.name == name), None)
+    peer = next((p for p in tunnel.peers if p.name == peer_name), None) if tunnel else None
+    if peer is None:
+        raise APIError(404, 'peer.not_found')
+    primary = dns1 or str(ip_interface(tunnel_addresses(tunnel, snapshot.configuration)[0]).ip)
+    for value in (primary, dns2 or DEFAULT_SECONDARY_DNS):
+        try:
+            ip_address(value)
+        except ValueError:
+            raise APIError(400, 'amnezia.invalid_dns') from None
+    try:
+        return amnezia_uri(tunnel, peer, snapshot.configuration,
+                           dns1=primary, dns2=dns2 or DEFAULT_SECONDARY_DNS)
+    except ValueError as error:
+        raise APIError(400, str(error)) from error
+
+
+@router.get('/tunnels/{name}/peer/{peer_name}/amnezia')
+def peer_amnezia(name: str, peer_name: str, dns1: str | None = None, dns2: str | None = None,
+                 db: Session = Depends(get_db)):
+    """The peer as an Amnezia `vpn://` document the app imports natively."""
+    return Response(
+        _amnezia_uri(db, name, peer_name, dns1, dns2),
+        media_type='text/plain; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="{name}-{peer_name}.vpn"'},
+    )
+
+
+@router.get('/tunnels/{name}/peer/{peer_name}/amnezia/qr')
+def peer_amnezia_qr(name: str, peer_name: str, dns1: str | None = None, dns2: str | None = None,
+                    db: Session = Depends(get_db)):
+    image = qrcode.make(_amnezia_uri(db, name, peer_name, dns1, dns2))
+    out = BytesIO()
+    image.save(out, format='PNG')
+    return Response(out.getvalue(), media_type='image/png')

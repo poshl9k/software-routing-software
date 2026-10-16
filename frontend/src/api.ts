@@ -121,6 +121,12 @@ export const api = {
     if (!response.ok) throw await responseError(response);
     return response.blob();
   },
+  /** Amnezia `vpn://` document the app imports natively (AWG tunnels only). */
+  peerAmnezia: async (name: string, peer: string) => {
+    const response = await fetch(`/api/tunnels/${encodeURIComponent(name)}/peer/${encodeURIComponent(peer)}/amnezia`, { credentials: "include" });
+    if (!response.ok) throw await responseError(response);
+    return response.blob();
+  },
   tunnelActivity: (signal?: AbortSignal) => request<Record<string, Record<string, number | null>>>("/api/tunnels/activity", { signal }),
   backupExport: (include_secrets: boolean, password?: string) => post<{ schema_version: number; versions: unknown[]; users: unknown[] }>("/api/backup/export", { include_secrets, ...(password ? { password } : {}) }),
   backupRestore: (body: { schema_version: number; versions: unknown[]; password?: string; allow_partial: boolean }) => post<{ restored: number; skipped: number }>("/api/backup/restore", body),

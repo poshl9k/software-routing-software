@@ -1,5 +1,6 @@
 import base64
 import asyncio
+import json
 import socket
 from contextlib import suppress
 from pathlib import Path
@@ -598,3 +599,67 @@ async def test_tunnel_activity_and_peer_conf_export(api, monkeypatch):
     assert conf.status_code == 200
     assert conf.headers['content-disposition'] == 'attachment; filename="vpn-phone.conf"'
     assert '[Interface]' in conf.text and '[Peer]' in conf.text
+
+
+async def test_peer_amnezia_export_is_an_importable_vpn_document(api, monkeypatch):
+    """The Amnezia app imports `vpn://`, not a bare `.conf`; the export is that
+    document and stays honest about what it cannot produce."""
+    from vs_router.generators.amnezia import decode_document
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', Fernet.generate_key().decode())
+    client, _, _ = api
+    await sign_in(client)
+    private_key = base64.b64encode(b'k' * 32).decode()
+    peer_private = base64.b64encode(b'p' * 32).decode()
+    body = {
+        'schema_version': 1,
+        'interfaces': [{'name': 'tun0', 'zone': 'lan'}],
+        'tunnels': [{
+            'name': 'vpn', 'interface': 'tun0', 'role': 'server', 'protocol': 'awg',
+            'private_key': {'plaintext': private_key}, 'listen_port': 44517,
+            'endpoint': 'rg1.example.net',
+            'obfuscation': {'Jc': 5, 'S1': 28, 'S2': 132, 'H1': 1, 'H2': 2, 'H3': 3, 'H4': 4},
+            'peers': [{'name': 'phone', 'public_key': 'P' * 44,
+                       'private_key': {'plaintext': peer_private},
+                       'preshared_key': {'plaintext': 'Q' * 44}}],
+        }],
+    }
+    assert (await client.post('/api/draft', json=body)).status_code == 201
+
+    response = await client.get('/api/tunnels/vpn/peer/phone/amnezia')
+    assert response.status_code == 200
+    assert response.headers['content-disposition'] == 'attachment; filename="vpn-phone.vpn"'
+    document = decode_document(response.text)
+    assert document['format_version'] == '1'
+    assert document['hostName'] == 'rg1.example.net'
+    container = document['containers'][0]
+    assert container['container'] == 'amnezia-awg2'
+    assert container['awg']['port'] == '44517'
+    inner = json.loads(container['awg']['last_config'])
+    assert 'DNS = $PRIMARY_DNS, $SECONDARY_DNS' in inner['config']
+    assert inner['client_priv_key'] == peer_private
+
+    # DNS is caller-controlled but must be a real address, never embedded raw.
+    bad = await client.get('/api/tunnels/vpn/peer/phone/amnezia?dns1=not-an-ip')
+    assert bad.status_code == 400 and bad.json()['code'] == 'amnezia.invalid_dns'
+    chosen = await client.get('/api/tunnels/vpn/peer/phone/amnezia?dns1=172.29.172.254&dns2=1.0.0.1')
+    assert decode_document(chosen.text)['dns1'] == '172.29.172.254'
+
+    # The QR carries the same document.
+    qr = await client.get('/api/tunnels/vpn/peer/phone/amnezia/qr')
+    assert qr.status_code == 200 and qr.headers['content-type'] == 'image/png'
+
+    # A plain WireGuard tunnel is out of scope and says so instead of inventing.
+    wireguard = deepcopy_body(body)
+    wireguard['tunnels'][0]['protocol'] = 'wg'
+    wireguard['tunnels'][0]['obfuscation'] = {}
+    assert (await client.put('/api/draft', json=wireguard)).status_code == 200
+    refused = await client.get('/api/tunnels/vpn/peer/phone/amnezia')
+    assert refused.status_code == 400 and refused.json()['code'] == 'amnezia.role_unsupported'
+
+    missing = await client.get('/api/tunnels/vpn/peer/nobody/amnezia')
+    assert missing.status_code == 404
+
+
+def deepcopy_body(body):
+    import json as _json
+    return _json.loads(_json.dumps(body))
