@@ -482,3 +482,33 @@ it("criterion_11_amnezia_export_is_disabled_for_a_wireguard_tunnel", async () =>
   expect(within(peerRow(editor, "phone")).getByRole("button", { name: "Для Amnezia" })).toBeDisabled();
   expect(fetch.mock.calls.filter(([path]) => /\/amnezia$/.test(path as string))).toHaveLength(0);
 });
+
+it("criterion_12_a_new_awg_tunnel_takes_the_generated_profile_and_port", async () => {
+  const profile = {
+    Jc: 5, Jmin: 20, Jmax: 60, S1: 30, S2: 40, S3: 50, S4: 60,
+    H1: 11, H2: 22, H3: 33, H4: 44, I1: "<b 0xaabb><r 3>", I5: "<rc 8>",
+    ContentPaddingAddition: "10-100", RekeyAfterTime: "100-120", RekeyTimeout: "3-7",
+    RejectAfterTime: "150-180", KeepaliveTimeout: "5-15", MaxHandshakeAttempts: "15-20",
+  };
+  const fetch = await mount(config([]), (path) => path === "/api/keygen/tunnel"
+    ? json({ public_key: "server-public", private_key: "server-private", obfuscation: profile,
+             header_protection_key: "HPK=", random_trailers: true, disable_cookies: true,
+             listen_port: 41234 })
+    : json({}));
+  await userEvent.click(screen.getByRole("button", { name: "+ Добавить туннель" }));
+  const scenario = await screen.findByRole("dialog", { name: "Новый туннель" });
+  await userEvent.selectOptions(within(scenario).getByLabelText("Протокол нового туннеля"), "awg");
+  await userEvent.click(within(scenario).getByRole("button", { name: "Поднять сервер" }));
+  await userEvent.click(within(scenario).getByRole("button", { name: "Продолжить" }));
+  const editor = await screen.findByRole("dialog", { name: /Туннель:/ });
+  fill(editor, "Имя туннеля", "maxsec");
+  await userEvent.click(within(editor).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(calls(fetch, "/api/draft")).toHaveLength(1));
+  const tunnel = saved(fetch).tunnels[0];
+  // The defaults the Amnezia app rates "базовая" are exactly what must not ship.
+  expect(tunnel.listen_port).toBe(41234);
+  expect(tunnel.random_trailers).toBe(true);
+  expect(tunnel.disable_cookies).toBe(true);
+  expect(tunnel.header_protection_key).toEqual({ plaintext: "HPK=" });
+  expect(tunnel.obfuscation).toEqual(profile);
+});

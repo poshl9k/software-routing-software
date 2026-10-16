@@ -93,12 +93,32 @@ async def test_keygen_endpoints(api):
         assert len(value) == 44 and len(base64.b64decode(value, validate=True)) == 32
     awg = (await client.post('/api/keygen/tunnel', json={'protocol': 'awg'})).json()
     obf = awg['obfuscation']
-    assert set(obf) == {'Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'H1', 'H2', 'H3', 'H4'}
-    assert all(type(v) is int for v in obf.values())
-    assert 3 <= obf['Jc'] <= 10 and 30 <= obf['Jmin'] < obf['Jmax'] <= 120
-    assert 10 <= obf['S1'] <= 30 and 80 <= obf['S2'] <= 120
+    # The whole AWG 3+ set, not just the classic core: leaving header protection
+    # and the AWG 3 additions out is what the Amnezia app rates "базовая".
+    assert set(obf) == {'Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'S3', 'S4',
+                        'H1', 'H2', 'H3', 'H4', 'I1', 'I2', 'I3', 'I4', 'I5',
+                        'ContentPaddingAddition', 'RekeyAfterTime', 'RekeyTimeout',
+                        'RejectAfterTime', 'KeepaliveTimeout', 'MaxHandshakeAttempts'}
+    assert 4 <= obf['Jc'] <= 12 and 8 <= obf['Jmin'] < obf['Jmax'] <= 128
+    # Header protection requires S1-S4 >= 12 (amneziawg-go).
+    assert all(12 <= obf[f'S{i}'] <= 150 for i in range(1, 5))
     assert len({obf[f'H{i}'] for i in range(1, 5)}) == 4
     assert all(5 <= obf[f'H{i}'] <= 2_147_483_647 for i in range(1, 5))
+    assert all(obf[f'I{i}'].startswith('<') for i in range(1, 6))
+    for key in ('ContentPaddingAddition', 'RekeyAfterTime', 'RekeyTimeout',
+                'RejectAfterTime', 'KeepaliveTimeout', 'MaxHandshakeAttempts'):
+        low, high = (int(part) for part in obf[key].split('-'))
+        assert 0 < low < high
+    assert len(base64.b64decode(awg['header_protection_key'], validate=True)) == 32
+    assert awg['random_trailers'] is True and awg['disable_cookies'] is True
+    # A server on the AWG default port is its own fingerprint.
+    assert awg['listen_port'] not in (51820, 51821)
+    assert 20000 <= awg['listen_port'] <= 60000
+    # Nothing in a generated profile is a constant between tunnels.
+    second = (await client.post('/api/keygen/tunnel', json={'protocol': 'awg'})).json()
+    assert second['obfuscation'] != obf
+    assert second['header_protection_key'] != awg['header_protection_key']
+    assert second['listen_port'] != awg['listen_port']
     psk = (await client.post('/api/keygen/peer', json={})).json()['preshared_key']
     assert len(psk) == 44 and len(base64.b64decode(psk, validate=True)) == 32
 ROUTES = [('get', '/api/versions', None), ('get', '/api/versions/1', None), ('get', '/api/draft/tproxy/preview', None), ('get', '/api/apply/status', None), ('get', '/api/backup/export', None), ('get', '/api/diff/1/2', None), ('post', '/api/draft', {}), ('put', '/api/draft', {}), ('delete', '/api/draft', None), ('post', '/api/draft/validate', None), ('post', '/api/apply', {'version_id': 1}), ('post', '/api/confirm', {'version_id': 1}), ('post', '/api/rollback', {}), ('post', '/api/backup/export', {'include_secrets': True, 'password': 'example-password'}), ('post', '/api/backup/restore', {'schema_version': 1, 'versions': []})]

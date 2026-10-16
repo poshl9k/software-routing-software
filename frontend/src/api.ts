@@ -75,7 +75,11 @@ export const api = {
   hostManagement: () => request<HostManagement | null>("/api/host/management"),
   hostAddresses: () => request<Record<string, string[]>>("/api/host/addresses"),
   serviceStatus: (signal?: AbortSignal) => request<ServiceStatusResponse>("/api/status/services", { signal }),
-  keygenTunnel: (protocol: "wg" | "awg") => post<{ private_key: string; public_key: string; obfuscation?: Record<string, number> }>("/api/keygen/tunnel", { protocol }),
+  keygenTunnel: (protocol: "wg" | "awg") => post<{
+    private_key: string; public_key: string; obfuscation?: Record<string, number | string>;
+    header_protection_key?: string; random_trailers?: boolean; disable_cookies?: boolean;
+    listen_port?: number;
+  }>("/api/keygen/tunnel", { protocol }),
   keygenPeer: () => post<{ preshared_key: string }>("/api/keygen/peer", {}),
   keygenPeerKeypair: () => post<{ private_key: string; public_key: string }>("/api/keygen/peer-keypair", {}),
   versions: (signal?: AbortSignal) =>

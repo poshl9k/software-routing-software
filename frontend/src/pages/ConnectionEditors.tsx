@@ -64,6 +64,25 @@ const awgInput = (key: string, v: string): number | string => {
   const value = v.trim();
   return awgSignatureKeys.includes(key) || !/^[0-9]+$/.test(value) ? value : Number(value);
 };
+
+/** Apply a keygen response to a tunnel: the whole AWG 3+ profile (header
+ * protection, signatures, padding, timings, toggles) and a server port that is
+ * not the AWG default, not just the key material. */
+function keygenPatch(
+  keys: Awaited<ReturnType<typeof api.keygenTunnel>>,
+  protocol: Tunnel["protocol"],
+): Partial<Tunnel> {
+  return {
+    private_key: { plaintext: keys.private_key },
+    ...(protocol === "awg" ? {
+      obfuscation: keys.obfuscation ?? {},
+      header_protection_key: keys.header_protection_key ? { plaintext: keys.header_protection_key } : null,
+      random_trailers: keys.random_trailers ?? false,
+      disable_cookies: keys.disable_cookies ?? false,
+    } : {}),
+    ...(keys.listen_port ? { listen_port: keys.listen_port } : {}),
+  };
+}
 const certificateModeLabels: Record<CaddySite["certificate_mode"], string> = {
   http01: "Авто (HTTP-01)",
   dns01: "Авто (DNS-01)",
@@ -860,11 +879,7 @@ export function Tunnels() {
     if (row.private_key && "plaintext" in row.private_key && row.private_key.plaintext) return row;
     const keys = await api.keygenTunnel(row.protocol);
     if (!keys.private_key?.trim()) throw new Error("Сервер не вернул приватный ключ туннеля");
-    return {
-      ...row,
-      private_key: { plaintext: keys.private_key },
-      ...(keys.obfuscation ? { obfuscation: keys.obfuscation } : {}),
-    };
+    return { ...row, ...keygenPatch(keys, row.protocol) };
   };
   return (
     <>
@@ -997,8 +1012,7 @@ export function Tunnels() {
             <div>
               <SecretField label="Приватный ключ" value={t.private_key} change={(v) => patch({ private_key: v ?? { plaintext: "" } })} />
               <FormActions><Button disabled={disabled} onClick={() => void api.keygenTunnel(t.protocol)
-                .then((keys) => patch({ private_key: { plaintext: keys.private_key },
-                  ...(t.protocol === "awg" ? { obfuscation: keys.obfuscation ?? {} } : {}) }))
+                .then((keys) => patch(keygenPatch(keys, t.protocol)))
                 .catch(setError)}>Сгенерировать ключи</Button></FormActions>
             </div>
             {t.private_key && !("plaintext" in t.private_key) && <FormWide><p className="sub">Публичный ключ этого туннеля для удалённых клиентов не отображается: он выводится из приватного на хосте при применении.</p></FormWide>}
