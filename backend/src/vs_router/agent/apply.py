@@ -1,5 +1,6 @@
 """Host-side application pipeline. All effects can be replaced in tests."""
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -23,6 +24,7 @@ CONFIRMED_DIR = Path('/etc/vs-router/confirmed')
 MARKER_PATH = Path('/run/vs-router/marker.json')
 # /run is volatile: retain the same journal across host reboots.
 JOURNAL_PATH = Path('/etc/vs-router/marker.json')
+logger = logging.getLogger(__name__)
 FILES = {'nftables': 'nftables.conf', 'unbound': 'unbound.conf', 'kea': 'kea.json',
          'networkd': 'networkd.conf', 'wireguard': 'wireguard.conf', 'caddy': 'caddy.conf',
          'ddns': 'ddns.conf', 'ssh': 'ssh.json'}
@@ -546,7 +548,20 @@ class ApplyEngine:
                     pass
             code = exc.code if isinstance(exc, ApplyError) else 'agent.apply_failed'
             mutated = any(v == 'applied' for v in marker['phases'].values()) or self.status() == marker
-            marker.update(status='failed', error={'code': code, 'message': code, 'details': []})
+            if isinstance(exc, ApplyError):
+                details: list[str] = []
+            else:
+                # Keep the underlying reason. A swallowed message left the panel
+                # with only "agent.apply_failed" and no way to explain or fix it;
+                # ValueError from generators/validators carries a real code.
+                text = f'{type(exc).__name__}: {exc}'.strip().rstrip(':')
+                details = [text[:400]]
+                logger.exception('apply failed with an unexpected error (%s)', type(exc).__name__)
+            marker.update(status='failed', error={
+                'code': code,
+                'message': details[0] if details else code,
+                'details': details,
+            })
             self.marker(marker)
             if self.ssh_controller is not None:
                 try:

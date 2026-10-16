@@ -53,6 +53,25 @@ describe("error copy", () => {
       .toBe("сервис не ответил · agent.some_new_code");
   });
 
+  it("surfaces the host reason for an unexpected agent failure", () => {
+    // agent.apply_failed used to be a dead end: the marker dropped the reason.
+    const text = applyErrorText({
+      code: "agent.apply_failed",
+      message: "agent.apply_failed",
+      details: ["FileNotFoundError: [Errno 2] /etc/kea/kea-api-password"],
+    });
+    expect(text).toContain("внутренней ошибкой агента");
+    expect(text).toContain("/etc/kea/kea-api-password");
+    expect(text.match(/agent\.apply_failed/g)).toHaveLength(1);
+  });
+
+  it("explains a missing Kea API credential as an installation gap", () => {
+    const code = "kea.api_password_missing";
+    const text = applyErrorText({ code, message: code });
+    expect(text).toContain("kea-api-password");
+    expect(text).toContain(code);
+  });
+
   it("does not repeat the code in ErrorNotice when it carries no extra text", () => {
     render(
       <MemoryRouter>

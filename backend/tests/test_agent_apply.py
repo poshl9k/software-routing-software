@@ -179,3 +179,22 @@ def test_failed_rollback_can_be_retried_by_timer(pipeline):
     executor.fail = False
     assert check_deadline(engine.status(), engine.rollback, lambda: now[0])
     assert engine.status()['status'] == 'rolled_back'
+
+
+def test_unexpected_apply_error_keeps_its_reason(pipeline):
+    """A bare agent.apply_failed left the panel with nothing to act on."""
+    engine, fs, executor, _ = pipeline
+
+    def boom(path):
+        raise FileNotFoundError('/etc/kea/kea-api-password')
+
+    engine.reload_commands = {'kea': boom}
+    result = engine.apply_version(snapshot())
+
+    assert result.status == 'failed'
+    assert result.error['code'] == 'agent.apply_failed'
+    assert '/etc/kea/kea-api-password' in result.error['message']
+    assert result.error['details']
+    # The marker the panel reads back carries the same reason.
+    marker = json.loads(fs.read(MARKER_PATH))
+    assert 'kea-api-password' in marker['error']['message']

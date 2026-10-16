@@ -112,7 +112,10 @@ def test_kea_transport_and_password_failure(password):
     fs.write(APPLIED_DIR / 'kea.json', '{}')
     def http(*args, **kwargs):
         raise URLError('offline')
-    with pytest.raises((ApplyError, FileNotFoundError)):
+    # A missing/empty credential is reported as such; only a real transport
+    # failure is a reload failure.
+    expected = 'agent.reload_failed' if password == 'secret' else 'kea.api_password_missing'
+    with pytest.raises(ApplyError, match=expected):
         KeaReloader(FakeExecutor(), fs, http)(APPLIED_DIR / 'kea.json')
 
 

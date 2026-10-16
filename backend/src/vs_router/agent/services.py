@@ -118,9 +118,14 @@ class KeaReloader:
         self.password_path = password_path
 
     def __call__(self, path):
-        password = self.fs.read(self.password_path).rstrip('\r\n')
+        try:
+            password = self.fs.read(self.password_path).rstrip('\r\n')
+        except OSError as exc:
+            # A missing credential file is an installation gap, not a reload
+            # failure; it used to escape as a bare agent.apply_failed.
+            raise ApplyError('kea.api_password_missing') from exc
         if not password:
-            raise ApplyError('agent.reload_failed')
+            raise ApplyError('kea.api_password_missing')
         self.fs.write(self.config_path, self.fs.read(path))
         # Debian runs DHCPv4 as _kea; directory /etc/kea remains restricted.
         checked(self.executor, ['chmod', '0644', str(self.config_path)])

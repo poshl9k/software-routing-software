@@ -234,6 +234,36 @@ printf '{"commit":"%s","semver":"%s","installed_at":"%s","source":"%s"}\n' \
     "$commit" "$semver" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${VS_ROUTER_RELEASE_SOURCE:-unknown}" \
     > /etc/vs-router/version.json
 chmod 0644 /etc/vs-router/version.json
+# Kea control channel: the agent reloads DHCP through localhost HTTP, so the
+# credential file and a running control agent are prerequisites of the first
+# apply. Missing either used to surface as a bare agent.apply_failed.
+if [ ! -s /etc/kea/kea-api-password ]; then
+    install -m 0600 /dev/null /etc/kea/kea-api-password
+    python3 -c 'import secrets; from pathlib import Path; Path("/etc/kea/kea-api-password").write_text(secrets.token_urlsafe(32) + "\n")'
+fi
+chmod 0640 /etc/kea/kea-api-password
+chown root:_kea /etc/kea/kea-api-password
+# PID 1 reads the restricted source; the web service gets a private copy so the
+# leases view never needs the password in unit text or argv.
+install -d -m 0755 /etc/systemd/system/vs-router-web.service.d
+cat > /etc/systemd/system/vs-router-web.service.d/kea-api.conf <<'EOF'
+[Service]
+LoadCredential=kea-api-password:/etc/kea/kea-api-password
+ExecStartPre=/usr/bin/test -s %d/kea-api-password
+Environment=VS_ROUTER_KEA_API_USER=kea-api
+Environment=VS_ROUTER_KEA_API_PASSWORD_FILE=%d/kea-api-password
+EOF
+# The distro default config binds every interface and would hand out leases on
+# this host's uplink, so seed a serve-nothing config until the panel writes its
+# own at the first apply. Never overwrite a config the panel already owns.
+if [ ! -f /etc/vs-router/applied/kea.json ]; then
+    printf '%s\n' '{"Dhcp4": {"interfaces-config": {"interfaces": []},' \
+        ' "lease-database": {"type": "memfile", "persist": true,' \
+        ' "name": "/var/lib/kea/kea-leases4.csv"}, "valid-lifetime": 3600,' \
+        ' "subnet4": []}}' > /etc/kea/kea-dhcp4.conf
+    chmod 0640 /etc/kea/kea-dhcp4.conf
+    chown root:_kea /etc/kea/kea-dhcp4.conf
+fi
 systemctl enable vs-router-bootrestore.service vs-router-tproxy-postboot.service vs-router-pppoe-postboot.service
 # Replace the physical tty1 login on the next boot, not the active installer
 # session: stopping getty here would kill an operator running bootstrap on tty1.
@@ -242,5 +272,9 @@ systemctl mask getty@tty1.service
 systemctl enable vs-router-console.service
 systemctl daemon-reload
 systemctl restart vs-router-agent.service vs-router-web.service
+# Kea may be inactive on a fresh machine; its control agent must be up before
+# the panel can reload DHCP, so start it now and do not fail the install on it.
+systemctl restart kea-ctrl-agent kea-dhcp4-server 2>/dev/null || \
+    echo 'WARNING: kea services did not start; the panel needs them at apply' >&2
 systemctl is-active --quiet vs-router-agent.service
 systemctl is-active --quiet vs-router-web.service

@@ -24,6 +24,10 @@ import { fmtDateTime } from "../components/format";
 const reasonTexts: Record<string, string> = {
   "agent.reload_failed": "не удалось применить конфигурацию сервиса",
   "agent.validation_failed": "конфигурация сервиса не прошла проверку",
+  "agent.apply_failed":
+    "применение прервано внутренней ошибкой агента — ниже её текст, его нужно показать при разборе",
+  "kea.api_password_missing":
+    "нет файла пароля API Kea (/etc/kea/kea-api-password) — установка панели не завершена, переустановите или создайте файл",
   "agent.command_timeout":
     "агент не завершил команду вовремя — проверьте состояние агента и сервисов перед повторным применением",
   "wireguard.endpoint_unresolved":
@@ -54,11 +58,27 @@ const reasonText = (code: string) => reasonTexts[code] ?? code;
  * Readable label plus the raw code, and the code only once. The backend sends
  * `message` equal to the code for these guard failures, which used to render as
  * «management.endpoint_required · management.endpoint_required»: a wall the
- * operator cannot act on.
+ * operator cannot act on. An unexpected agent failure now carries the underlying
+ * reason in `details`, so it is shown instead of a bare `agent.apply_failed`.
  */
-export const applyErrorText = (error: { code: string; message: string }) => {
-  const label = reasonTexts[error.code] ?? error.message;
-  return label === error.code ? label : `${label} · ${error.code}`;
+export const applyErrorText = (error: {
+  code: string;
+  message: string;
+  details?: unknown[];
+}) => {
+  const detail = error.details?.find((entry) => typeof entry === "string") as
+    | string
+    | undefined;
+  const extra = error.message === error.code ? detail : error.message;
+  const known = reasonTexts[error.code];
+  if (known) {
+    // Keep the explanation and the concrete reason from the host, so the code
+    // is never the only thing shown.
+    return extra && !known.includes(extra)
+      ? `${known} · ${extra} · ${error.code}`
+      : `${known} · ${error.code}`;
+  }
+  return extra ? `${extra} · ${error.code}` : error.code;
 };
 
 export default function ApplyScreen() {
