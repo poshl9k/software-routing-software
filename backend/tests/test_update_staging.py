@@ -351,3 +351,89 @@ rollback_update && echo ROLLED_BACK || echo NOTHING_TO_ROLL_BACK
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'NOTHING_TO_ROLL_BACK' in result.stdout
     assert (current / 'state.txt').read_text() == 'only tree\n'
+
+
+# --- the database half of a rollback (ADR-0010) ----------------------------
+def _alembic_stub(tmp_path, *, answer='abc123 (head)'):
+    """A fake python3 that answers `alembic current` and records its argv."""
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir(exist_ok=True)
+    calls = tmp_path / 'alembic-calls.txt'
+    (bin_dir / 'python3').write_text(
+        '#!/bin/sh\n'
+        f'printf "%s\\n" "$*" >> "{calls}"\n'
+        f'printf "%s\\n" "{answer}"\n'
+    )
+    (bin_dir / 'python3').chmod(0o755)
+    return bin_dir, calls
+
+
+def test_the_database_revision_is_read_before_the_schema_moves(tmp_path):
+    """ADR-0010: the update has to know where to come back to."""
+    bin_dir, calls = _alembic_stub(tmp_path)
+    tree = tmp_path / 'tree'
+    (tree / 'backend').mkdir(parents=True)
+    code = f'''set -euo pipefail
+source "{PACKAGING}/update.sh"
+export PATH="{bin_dir}:$PATH"
+REPO_ROOT="{tree}"
+DB="{tmp_path / 'vs-router.db'}"
+printf 'revision=[%s]' "$(db_revision)"
+'''
+    result = bash(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'revision=[abc123]' in result.stdout
+    assert 'alembic current' in calls.read_text()
+
+
+def test_an_unreadable_revision_is_empty_not_invented(tmp_path):
+    bin_dir, _ = _alembic_stub(tmp_path, answer='')
+    tree = tmp_path / 'tree'
+    (tree / 'backend').mkdir(parents=True)
+    code = f'''set -euo pipefail
+source "{PACKAGING}/update.sh"
+export PATH="{bin_dir}:$PATH"
+REPO_ROOT="{tree}"
+DB="{tmp_path / 'vs-router.db'}"
+printf 'revision=[%s]' "$(db_revision)"
+'''
+    result = bash(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'revision=[]' in result.stdout
+
+
+def _rollback_with_db(tmp_path, *, recorded):
+    bin_dir, calls = _alembic_stub(tmp_path)
+    current = tmp_path / 'tree'
+    previous = tmp_path / 'tree.prev'
+    (previous / 'backend/packaging').mkdir(parents=True)
+    current.mkdir()
+    (current / 'state.txt').write_text('new\n')
+    (previous / 'state.txt').write_text('previous\n')
+    (previous / 'backend/packaging/install.sh').write_text('#!/bin/sh\ntrue\n')
+    env = f'DB_REVISION_BEFORE={recorded}' if recorded is not None else 'DB_REVISION_BEFORE='
+    code = f'''set -euo pipefail
+source "{PACKAGING}/update.sh"
+export PATH="{bin_dir}:$PATH"
+REPO_ROOT="{current}"
+DB="{tmp_path / 'vs-router.db'}"
+{env}
+rollback_update
+'''
+    return bash(code), calls
+
+
+def test_rollback_reverts_the_database_to_the_recorded_revision(tmp_path):
+    """A rollback that leaves a newer schema is not a rollback (ADR-0010)."""
+    result, calls = _rollback_with_db(tmp_path, recorded='abc123')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'alembic downgrade abc123' in calls.read_text()
+
+
+def test_rollback_without_a_recorded_revision_says_so_instead_of_pretending(tmp_path):
+    result, calls = _rollback_with_db(tmp_path, recorded=None)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'was not recorded' in result.stdout + result.stderr
+    # Nothing was reverted, and nothing pretended to be: the stub was not asked
+    # for a downgrade at all.
+    assert not calls.exists() or 'downgrade' not in calls.read_text()

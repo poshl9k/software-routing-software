@@ -18,6 +18,8 @@
 #   5. apply database migrations (alembic upgrade head) against the live DB
 #   6. deploy the UI bundle + systemd units via install.sh
 #   7. restart the runtime services
+#   8. check that the panel and SSH answer, and roll the tree and the database
+#      revision back if they do not (ADR-0010/0021)
 #
 # Re-run bootstrap.sh only when OS-level dependencies or the toolchain change
 # (new Caddy/AmneziaWG/WireGuard builds, new apt packages).
@@ -96,6 +98,11 @@ ssh_answers() {
     ss -H -tln 2>/dev/null | grep -qE "[:.]${port}[[:space:]]"
 }
 
+db_revision() {  # the alembic revision the database is at; empty when unreadable
+    ( cd "$REPO_ROOT/backend" && VS_ROUTER_DATABASE_URL="sqlite:///${DB}" \
+        python3 -m alembic current 2>/dev/null | awk 'NR==1 {print $1}' )
+}
+
 verify_update() {
     local attempts=$PROBE_ATTEMPTS
     while (( attempts > 0 )); do
@@ -127,9 +134,18 @@ rollback_update() {
     else
         warn "no wheel in ${wheel_dir}: the previous Python package is still installed"
     fi
-    # The database is deliberately left migrated: alembic runs forward here, and
-    # the previous release is expected to tolerate a newer schema. Saying so is
-    # better than implying the rollback undid everything.
+    # ADR-0010: a rollback that leaves a newer schema behind is not a rollback.
+    # The revision that was in place before the upgrade is restored from the
+    # previous tree's migrations; if it was never read, or the downgrade fails,
+    # that is said out loud instead of implying the database came back too.
+    if [[ -n ${DB_REVISION_BEFORE:-} ]]; then
+        log "Reverting the database to ${DB_REVISION_BEFORE}"
+        ( cd "$REPO_ROOT/backend" && VS_ROUTER_DATABASE_URL="sqlite:///${DB}" \
+            python3 -m alembic downgrade "$DB_REVISION_BEFORE" ) \
+            || warn "could not revert the database to ${DB_REVISION_BEFORE}: the schema stays newer than the restored code"
+    else
+        warn 'the database revision before the update was not recorded; the schema is left as it is'
+    fi
     resolve_profile
     VS_ROUTER_RELEASE_SOURCE=online bash "$REPO_ROOT/backend/packaging/install.sh" \
         || warn 'the previous installer did not complete'
@@ -288,7 +304,14 @@ main() {
     bash "$SCRIPT_DIR/install-runtime-deps.sh" "$REPO_ROOT/backend/requirements-runtime.txt"
 
     log 'Applying database migrations'
+    DB_REVISION_BEFORE=
     if [ -f "$DB" ]; then
+        # ADR-0010: migrations must be reversible, otherwise the update must
+        # refuse, because a rollback that restores the code and leaves a newer
+        # schema is not a rollback. The revision in place before the upgrade is
+        # what a rollback returns to; if it cannot be read we do not pretend the
+        # update is reversible.
+        DB_REVISION_BEFORE=$(db_revision)
         ( cd "$REPO_ROOT/backend" && VS_ROUTER_DATABASE_URL="sqlite:///${DB}" python3 -m alembic upgrade head ) \
             || fail 'alembic upgrade failed; the database was not migrated'
     else
