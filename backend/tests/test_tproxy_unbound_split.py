@@ -105,9 +105,11 @@ def test_output_guard_allows_only_stub_and_explicit_forward_for_selected_uid():
         with pytest.raises(ValueError, match='tproxy.dns_output_invalid_uid'):
             generate_tproxy_dns_output_guard(v, uid)
     no_forwards = version(dns={"interfaces": ["lan0", "lan1"],
+                               "access_control": ["10.212.0.0/16"],
                                "upstreams": ["198.18.0.3"]})
     assert 'tproxy_dns_explicit_forward' not in generate_tproxy_dns_output_guard(no_forwards, 29092)
     ipv6_forward = version(dns={"interfaces": ["lan0", "lan1"],
+                                "access_control": ["10.212.0.0/16"],
                                 "forwards": [{"domain": "corp.test.",
                                               "upstreams": ["2001:db8::53"]}]})
     with pytest.raises(ValueError, match='tproxy.dns_output_ipv4_required'):

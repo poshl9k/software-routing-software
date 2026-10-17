@@ -1,5 +1,5 @@
 import json
-from ipaddress import ip_interface
+from ipaddress import IPv4Network, ip_interface, ip_network
 from ..schema import ConfigurationVersion, DNSUpstream
 from .dnscrypt import DOH_LISTEN_ADDR, DOH_LISTEN_PORT
 
@@ -91,6 +91,18 @@ def tproxy_unbound_listener_addresses(version: ConfigurationVersion) -> dict[str
                             for a in interfaces[name].addresses))
     ordinary = tuple(sorted(str(ip_interface(a).ip) for name in c.dns.interfaces
                             if name not in sources for a in interfaces[name].addresses))
+    # The listener on the ingress interface answers the subscribers, but the
+    # generated configuration refuses everyone unless dns.access_control names
+    # their network: the resolver would answer REFUSED to the very clients the
+    # contour exists for. Fail closed here, next to dns_split_missing_listener,
+    # rather than shipping a resolver that cannot serve its own subnet.
+    allowed = [ip_network(network, strict=False) for network in c.dns.access_control]
+    for name in sources:
+        for raw in interfaces[name].addresses:
+            # Every interface address is IPv4 by the check above.
+            subnet = IPv4Network(ip_interface(raw).network)
+            if not any(subnet.subnet_of(net) for net in allowed if isinstance(net, IPv4Network)):
+                raise ValueError("tproxy.dns_access_control_missing")
     return {"selected": selected, "ordinary": ordinary or ("127.0.0.1",)}
 
 

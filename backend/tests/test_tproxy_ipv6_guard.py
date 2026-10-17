@@ -31,7 +31,7 @@ def base(ingress=("lan0",)):
             {"name": "lan1", "zone": "lan", "addresses": ["10.213.1.1/24"]},
             {"name": "wan0", "zone": "wan", "addresses": ["192.0.2.1/24"]},
         ],
-        "dns": {"interfaces": ["lan0"]},
+        "dns": {"interfaces": ["lan0"], "access_control": ["10.212.0.0/16"]},
         "tproxy": {"ingress_interfaces": list(ingress)},
     }})
 

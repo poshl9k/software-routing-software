@@ -35,7 +35,7 @@ def bypass_version(rows, ingress=("lan0",)):
     """Offline enabled snapshot with validated bypass rows (public contract runs)."""
     version = ConfigurationVersion.model_validate({"configuration": {
         "interfaces": BYPASS_INTERFACES,
-        "dns": {"interfaces": ["lan0"]},
+        "dns": {"interfaces": ["lan0"], "access_control": ["10.212.0.0/16"]},
         "tproxy": {"ingress_interfaces": list(ingress), "bypass": rows},
     }})
     tproxy = version.configuration.tproxy.model_copy(update={"enabled": True})
@@ -50,7 +50,7 @@ def base(ingress=("lan0",)):
             {"name": "lan1", "zone": "lan", "addresses": ["10.213.1.1/24"]},
             {"name": "wan0", "zone": "wan", "addresses": ["192.0.2.1/24"]},
         ],
-        "dns": {"interfaces": ["lan0"]},
+        "dns": {"interfaces": ["lan0"], "access_control": ["10.212.0.0/16"]},
         "tproxy": {"ingress_interfaces": list(ingress)},
     }})
 

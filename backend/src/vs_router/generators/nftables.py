@@ -148,6 +148,16 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
         else:
             lines.append("        drop")
         lines += ["        ct state invalid drop", "        ct state established,related accept"]
+        if chain == "input" and c.tproxy.enabled:
+            # Captured traffic is delivered to the local engine socket while keeping
+            # its original destination, so no other rule in this chain can match it
+            # and the default deny would drop every captured packet: capture would
+            # fire and deliver nothing. The conntrack proof mark is written only by
+            # the interception table, so this accepts capture and nothing else.
+            proof = marks.MARK_TPROXY_CT_PROOF_VALUE
+            lines.append(f'        ct mark & {proof:#x} == {proof:#x} '
+                         'counter accept comment "tproxy_captured"')
+
         if chain == "input" and c.anti_lockout and "lan" in zones:
             lines.append(f'        iifname {names(zones["lan"])} tcp dport {c.panel_port} counter accept comment "anti_lockout"')
         if chain == "input" and "wan" in zones:
@@ -454,6 +464,18 @@ def generate_tproxy_preauthorization(version: ConfigurationVersion) -> str:
     lines.extend(compiler.rules(c.firewall_rules, "forward", families=(4,),
                                 actions={"pass": "return", "block": "drop", "reject": "drop"},
                                 stamps={"pass": stamp}))
+    # Tunnel-derived forwarding is authorized for capture on the same terms the
+    # forward chain grants it (see generate_nftables): a configuration whose
+    # forwarding permission comes from a server tunnel has no matching entry in
+    # firewall_rules, so without this the gate is never stamped, capture returns
+    # for every packet and the contour contains traffic it was meant to route.
+    # Authorization follows the ingress interface; the route rules still decide
+    # the exit, and the capture path stays fail-closed if this table is lost.
+    wan = sorted(i.name for i in c.interfaces if i.zone == "wan")
+    for tunnel in c.tunnels:
+        if tunnel.role == "server" and tunnel.interface and wan:
+            lines.append(f'        iifname "{tunnel.interface}" meta nfproto ipv4 '
+                         f'{stamp}counter return comment "preauth_{tunnel.name}_forward"')
     lines += ["        counter drop", "    }", "}"]
     return "\n".join(lines) + "\n"
 
