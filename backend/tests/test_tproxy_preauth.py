@@ -107,14 +107,16 @@ def test_live_firewall_golden_stability_and_purity(name):
         assert generate_tproxy_preauthorization(version) == output
         assert version.model_dump_json() == before
         # The live firewall is generated from the configuration, never from the
-        # experiment's output. Enabling the contour adds exactly the capture
-        # acceptance the shipped path needs (capture is delivered to the local
-        # engine socket and would otherwise be dropped by the default deny) and
-        # nothing else, so any other drift still fails here.
+        # experiment's output. Enabling the contour adds exactly the two shipped
+        # acceptances — capture delivered to the local engine socket, and the
+        # subscriber resolver on the ingress interface — and nothing else, so any
+        # other drift still fails here.
         drift = (set(generate_nftables(version).splitlines())
                  - set(generate_nftables(base).splitlines()))
-        assert drift == {'        ct mark & 0x200 == 0x200 '
-                         'counter accept comment "tproxy_captured"'}
+        assert drift, 'enabling the contour must add its acceptances'
+        assert all('tproxy_captured' in line or 'tproxy_dns_listener' in line
+                   for line in drift), drift
+        assert any('tproxy_captured' in line for line in drift)
 
 
 @pytest.mark.parametrize('update', [

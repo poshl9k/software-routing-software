@@ -5,6 +5,9 @@ from ..validators import address, expand_aliases
 from . import marks
 from .unbound import tproxy_unbound_listener_addresses
 
+#: The subscriber resolver's service port on the ingress interfaces.
+DNS_PORT = 53
+
 
 def names(values):
     return '{ ' + ', '.join(f'"{v}"' for v in values) + ' }'
@@ -157,6 +160,15 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
             proof = marks.MARK_TPROXY_CT_PROOF_VALUE
             lines.append(f'        ct mark & {proof:#x} == {proof:#x} '
                          'counter accept comment "tproxy_captured"')
+            # The subscriber resolver listens on the ingress interfaces and is the
+            # reason capture exists; a device reaching it is a local destination, so
+            # it is never captured and the default deny would drop the query before
+            # the resolver ever sees it. Addresses come from the same planner the
+            # resolver config and its guards use, so they cannot drift.
+            for address in tproxy_unbound_listener_addresses(version)["selected"]:
+                lines.append(f'        iifname {names(sorted(c.tproxy.ingress_interfaces))} '
+                             f'ip daddr {address} meta l4proto {{ tcp, udp }} th dport {DNS_PORT} '
+                             'counter accept comment "tproxy_dns_listener"')
 
         if chain == "input" and c.anti_lockout and "lan" in zones:
             lines.append(f'        iifname {names(zones["lan"])} tcp dport {c.panel_port} counter accept comment "anti_lockout"')
