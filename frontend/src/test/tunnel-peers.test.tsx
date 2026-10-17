@@ -238,8 +238,12 @@ it("criterion_6_conf_export_encodes_names_downloads_body_and_releases_url", asyn
   await userEvent.click(within(peerRow(editor, "телефон / 1")).getByRole("button", { name: "Экспорт конфигурации" }));
   await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
   expect(fetch).toHaveBeenCalledWith(`/api/tunnels/${encodeURIComponent(named.name)}/peer/${encodeURIComponent(named.peers[0].name)}/conf`, expect.objectContaining({ credentials: "include" }));
-  expect(create).toHaveBeenCalledWith(expect.any(Blob));
-  expect(await blobText(create.mock.calls[0][0])).toContain("PrivateKey = client-key");
+  const [blob] = create.mock.calls[0];
+  // Deliberately not `expect.any(Blob)`: that compares constructor identity, and
+  // under jsdom the Blob's realm depends on the Node build — it passed locally and
+  // failed on CI. What matters is that a Blob carrying the config was handed over.
+  expect(Object.prototype.toString.call(blob)).toBe("[object Blob]");
+  expect(await blobText(blob)).toContain("PrivateKey = client-key");
   expect(revoke).toHaveBeenCalledWith("blob:peer-conf");
   click.mockRestore();
 });
