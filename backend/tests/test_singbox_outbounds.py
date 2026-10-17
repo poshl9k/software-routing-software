@@ -384,10 +384,22 @@ def test_dns_servers_and_rule_render_in_declared_order():
         "final": "primary",
     }
     assert rendered["route"]["default_domain_resolver"] == {"server": "primary"}
+    # A DNS policy is now SERVED, not merely rendered: the engine gains the loopback
+    # stub inbound the subscriber resolver forwards its unmatched queries to, plus
+    # the two rules that make it answer. In the pinned engine the old shapes are
+    # gone (an inbound `sniff` field and the `dns` outbound are both rejected by
+    # `check`), so sniffing is a rule action and DNS is answered by hijack-dns —
+    # scoped to that inbound so nothing else starts sniffing on its account.
     legacy = generate_singbox(version())
-    assert rendered["inbounds"] == legacy["inbounds"]
+    assert rendered["inbounds"] == legacy["inbounds"] + [
+        {"type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": 15353}]
     assert rendered["outbounds"] == legacy["outbounds"]
-    assert {k: v for k, v in rendered["route"].items() if k != "default_domain_resolver"} == legacy["route"]
+    added = [r for r in rendered["route"]["rules"] if r not in legacy["route"]["rules"]]
+    assert added == [{"inbound": ["dns-in"], "action": "sniff"},
+                     {"inbound": ["dns-in"], "protocol": "dns", "action": "hijack-dns"}]
+    assert {k: v for k, v in rendered["route"].items()
+            if k not in ("default_domain_resolver", "rules")} == {
+        k: v for k, v in legacy["route"].items() if k != "rules"}
 
 
 def test_dns_https_tls_name_and_custom_path():

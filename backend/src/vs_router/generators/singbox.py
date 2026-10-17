@@ -16,6 +16,8 @@ from typing import Callable
 
 from vs_router.schema import Configuration, ConfigurationVersion, ProxyOutbound
 
+from . import marks
+
 # Fixed, non-secret stand-ins so a preview is structurally valid for
 # ``sing-box check`` without ever exposing encrypted material. They are not
 # credentials and are not derived from any secret.
@@ -26,6 +28,8 @@ PLACEHOLDER_SHADOWSOCKS_METHOD = "chacha20-ietf-poly1305"
 
 # Tags owned by the generator itself; a contract object may not shadow them.
 IMPLICIT_DIRECT_TAG = "direct"
+#: The loopback DNS stub inbound: the subscriber resolver's unmatched upstream.
+DNS_STUB_TAG = "dns-in"
 IMPLICIT_BLOCK_TAG = "block"
 
 
@@ -297,17 +301,31 @@ def generate_singbox(version: ConfigurationVersion,
         if proxies.enabled:
             final = _default_outbound_tag(proxies.groups)
 
+    dns_policy = tproxy.dns
+    inbounds = [
+        {"type": "tproxy", "tag": "tproxy-udp", "listen": "127.0.0.1", "listen_port": 51271,
+         "network": "udp"},
+        {"type": "tproxy", "tag": "tproxy-tcp", "listen": "127.0.0.1", "listen_port": 51272,
+         "network": "tcp"},
+    ]
+    if dns_policy.servers:
+        # The subscriber resolver forwards its unmatched queries to this loopback
+        # stub (marks.DNS_STUB_PORT) and the engine answers them from the dns policy
+        # below, so the split decision lives where the routing policy does. Both
+        # 1.11-era mechanisms are gone from the pinned engine: an inbound `sniff`
+        # field and the `dns` outbound are rejected outright (measured with `check`
+        # on the panel), so sniffing is a rule action and DNS is answered by
+        # hijack-dns. Both rules are scoped to this inbound, so nothing else starts
+        # sniffing on the stub's account.
+        inbounds.append({"type": "direct", "tag": DNS_STUB_TAG, "listen": marks.DNS_STUB_ADDR,
+                         "listen_port": marks.DNS_STUB_PORT})
+        rules.insert(0, {"inbound": [DNS_STUB_TAG], "action": "sniff"})
+        rules.insert(1, {"inbound": [DNS_STUB_TAG], "protocol": "dns", "action": "hijack-dns"})
     result = {
-        "inbounds": [
-            {"type": "tproxy", "tag": "tproxy-udp", "listen": "127.0.0.1", "listen_port": 51271,
-             "network": "udp"},
-            {"type": "tproxy", "tag": "tproxy-tcp", "listen": "127.0.0.1", "listen_port": 51272,
-             "network": "tcp"},
-        ],
+        "inbounds": inbounds,
         "outbounds": outbounds,
         "route": {"rules": rules, "final": final, "auto_detect_interface": True},
     }
-    dns_policy = tproxy.dns
     if dns_policy.servers:
         dns_servers = []
         bootstrap_tag = None

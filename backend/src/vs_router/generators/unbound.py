@@ -117,7 +117,12 @@ def generate_tproxy_unbound_split(version: ConfigurationVersion) -> dict[str, st
     sources = c.tproxy.ingress_interfaces
     selected_dns = c.dns.model_copy(update={"interfaces": tuple(sorted(sources))})
     ordinary_dns = c.dns.model_copy(update={
-        "interfaces": tuple(name for name in c.dns.interfaces if name not in sources)})
+        "interfaces": tuple(name for name in c.dns.interfaces if name not in sources),
+        # The loopback stub is the ordinary instance's only client. Without this
+        # allow its own default ACL refuses that query and every subscriber lookup
+        # hangs, which reads as a dead resolver rather than a missing permission.
+        "access_control": tuple(dict.fromkeys((*c.dns.access_control, "127.0.0.1/32"))),
+    })
     return {
         "selected": _render_unbound(c, selected_dns, "127.0.0.1@15353",
                                     username=""),

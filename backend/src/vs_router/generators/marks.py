@@ -346,6 +346,8 @@ class PortClaim:
 TPROXY_TCP_PORT = 51272
 TPROXY_UDP_PORT = 51271
 DNS_STUB_PORT = 15353
+#: The stub is a loopback listener of the engine, not a resolver of its own.
+DNS_STUB_ADDR = "127.0.0.1"
 
 PORTS: tuple[PortClaim, ...] = (
     PortClaim(TPROXY_UDP_PORT, "udp", "sing-box TProxy UDP inbound (127.0.0.1)",
