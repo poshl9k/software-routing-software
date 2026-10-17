@@ -131,3 +131,76 @@ stage_release
     result = bash(code)
     assert result.returncode != 0
     assert 'must be https' in result.stdout + result.stderr
+
+
+def _profile(tmp_path, marker_text=None, *, env=None, marker='marker'):
+    """Source update.sh and resolve the profile the way main() does."""
+    path = tmp_path / marker
+    if marker_text is not None:
+        path.write_text(marker_text)
+    prefix = ''.join(f'export {key}={value}\n' for key, value in (env or {}).items())
+    code = f'''set -euo pipefail
+source "{PACKAGING}/update.sh"
+VS_ROUTER_PROFILE_MARKER="{path}"
+{prefix}resolve_profile
+printf 'profile=[%s]' "$VS_ROUTER_PROFILE"
+'''
+    return bash(code)
+
+
+def test_update_carries_the_hosts_profile_into_install(tmp_path):
+    """An update must not relabel the host (ADR-0026).
+
+    install.sh derives the profile from VS_ROUTER_PROFILE and writes the marker,
+    so an update that passed nothing would turn a panel into a router and its own
+    stored documents would then fail the profile check at the next apply.
+    """
+    result = _profile(tmp_path, 'panel\n')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'profile=[panel]' in result.stdout
+    # Exported, not merely set: install.sh is a child process.
+    code = f'''set -euo pipefail
+source "{PACKAGING}/update.sh"
+VS_ROUTER_PROFILE_MARKER="{tmp_path / 'marker'}"
+resolve_profile
+bash -c 'printf "child=[%s]" "${{VS_ROUTER_PROFILE:-unset}}"'
+'''
+    child = bash(code)
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert 'child=[panel]' in child.stdout
+
+
+def test_update_keeps_the_router_profile(tmp_path):
+    result = _profile(tmp_path, 'router')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'profile=[router]' in result.stdout
+
+
+def test_update_without_a_marker_leaves_the_decision_to_install(tmp_path):
+    """No marker: nothing is claimed, and install.sh's own default still stands."""
+    result = _profile(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'profile=[]' in result.stdout
+    install = (PACKAGING / 'install.sh').read_text()
+    assert 'PROFILE=${VS_ROUTER_PROFILE:-router}' in install
+
+
+def test_an_empty_marker_is_a_warning_not_a_silent_router(tmp_path):
+    result = _profile(tmp_path, '  \n')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'profile=[]' in result.stdout
+    assert 'is empty' in result.stderr
+
+
+def test_a_marker_that_is_not_a_profile_stops_the_update(tmp_path):
+    """Guessing here would write a wrong identity; refuse instead."""
+    result = _profile(tmp_path, 'router\npanel\n')
+    assert result.returncode != 0
+    assert 'not a known profile' in result.stderr
+    assert 'profile=[' not in result.stdout
+
+
+def test_an_explicit_profile_wins_over_the_marker(tmp_path):
+    result = _profile(tmp_path, 'panel\n', env={'VS_ROUTER_PROFILE': 'router'})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'profile=[router]' in result.stdout

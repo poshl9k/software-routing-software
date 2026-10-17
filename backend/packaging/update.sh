@@ -35,6 +35,35 @@ log()  { printf '[vs-router-update] %s\n' "$*" >&2; }
 warn() { printf '[vs-router-update] WARNING: %s\n' "$*" >&2; }
 fail() { printf '[vs-router-update] ERROR: %s\n' "$*" >&2; exit 1; }
 
+# The product identity is installer-owned (ADR-0026), and an update must not
+# change it: install.sh derives the profile from VS_ROUTER_PROFILE and defaults
+# to `router`, so an update that passed nothing would silently relabel a panel
+# host a router. Its own stored documents, which say `panel`, would then fail the
+# profile check at the next apply — the host would keep serving while refusing to
+# accept any configuration. The marker the installer wrote is the source of truth
+# here; an unreadable marker keeps the old capability-only behaviour, and a marker
+# that holds something other than a profile stops the update instead of guessing.
+resolve_profile() {  # sets and exports VS_ROUTER_PROFILE; empty means "installer decides"
+    VS_ROUTER_PROFILE=${VS_ROUTER_PROFILE:-}
+    if [[ -n $VS_ROUTER_PROFILE ]]; then
+        export VS_ROUTER_PROFILE
+        return 0
+    fi
+    local marker=${VS_ROUTER_PROFILE_MARKER:-/etc/vs-router/profile}
+    if [[ ! -r $marker ]]; then
+        export VS_ROUTER_PROFILE
+        return 0
+    fi
+    local value
+    value=$(tr -d '[:space:]' < "$marker")
+    case $value in
+        router|panel) VS_ROUTER_PROFILE=$value ;;
+        '') warn "profile marker ${marker} is empty; the installer will decide by capability" ;;
+        *) fail "profile marker ${marker} is not a known profile: '${value}'" ;;
+    esac
+    export VS_ROUTER_PROFILE
+}
+
 usage() {
     cat <<'EOF'
 Usage: update.sh [--release <40-hex-commit> | --manifest <url>]
@@ -192,6 +221,8 @@ main() {
     fi
 
     log 'Deploying UI bundle and systemd units'
+    resolve_profile
+    log "Product profile: ${VS_ROUTER_PROFILE:-decided by host capability}"
     VS_ROUTER_RELEASE_SOURCE=online bash "$SCRIPT_DIR/install.sh"
 
     log 'Restarting runtime services'
