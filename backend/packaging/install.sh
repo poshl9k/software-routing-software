@@ -342,9 +342,16 @@ else
 fi
 systemctl daemon-reload
 systemctl restart vs-router-agent.service vs-router-web.service
-# Kea may be inactive on a fresh machine; its control agent must be up before
-# the panel can reload DHCP, so start it now and do not fail the install on it.
-systemctl restart kea-ctrl-agent kea-dhcp4-server 2>/dev/null || \
-    echo 'WARNING: kea services did not start; the panel needs them at apply' >&2
+# Kea may be inactive on a fresh machine; its control agent must be up before the
+# panel can reload DHCP, so start it now and do not fail the install on it. A host
+# without kea-dhcp4 installs no DHCP server at all (ADR-0021), so it is not warned
+# about a service it is not supposed to have: that warning fired on every panel
+# install and told the operator the panel was missing something it does not use.
+if command -v kea-dhcp4 >/dev/null 2>&1; then
+    systemctl restart kea-ctrl-agent kea-dhcp4-server 2>/dev/null || \
+        echo 'WARNING: kea services did not start; DHCP reload will fail at apply' >&2
+else
+    echo 'No kea-dhcp4 on this host: no DHCP phase, and no kea services to start'
+fi
 systemctl is-active --quiet vs-router-agent.service
 systemctl is-active --quiet vs-router-web.service

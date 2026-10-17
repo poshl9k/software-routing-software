@@ -78,3 +78,14 @@ def test_criterion_7_the_router_still_gets_its_console():
     # The guard narrows the panel; it must not remove the console for everyone.
     assert 'systemctl enable vs-router-console.service' in install
     assert re.search(r'else\s*\n\s*systemctl disable vs-router-console\.service', install)
+
+
+def test_criterion_8_a_host_without_kea_is_not_warned_about_kea():
+    install = _read('install.sh')
+    # The warning used to fire on every panel install and told the operator the
+    # panel needed a service ADR-0021 says it does not have.
+    assert 'the panel needs them at apply' not in install
+    tail = install.split('# Kea may be inactive on a fresh machine')[1]
+    assert 'if command -v kea-dhcp4 >/dev/null 2>&1; then' in tail
+    assert 'kea services did not start' in tail
+    assert 'No kea-dhcp4 on this host' in tail
