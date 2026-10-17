@@ -11,6 +11,7 @@ import time
 
 from .apply import ApplyError, LocalFileSystem, SubprocessExecutor, APPLIED_DIR, CONFIRMED_DIR
 from ..management import ONLINE_MARKER, STATE_PATH, read_management
+from ..profile import read_profile
 from ..schema import SSH, ConfigurationVersion
 
 ROOT = Path('/etc/vs-router-ssh')
@@ -107,17 +108,24 @@ class SSHController:
         self.checked(['nft', '-f', str(path)])
 
     def single_uplink(self):
-        """True when the panel is the only host on its own uplink (ADR-0017).
+        """True when this host must keep the router's fail-closed SSH lifecycle off.
 
-        There is no separate management LAN to protect and no local console, so
-        the fail-closed lifecycle below (nft drop on :22, mask/stop sshd, and an
-        sshd_config with PermitRootLogin no) would lock a remote operator out of
-        the box for good. In this mode the panel leaves sshd and port 22 alone.
+        Two different reasons reach the same answer, and they are not the same
+        claim:
 
-        The install-time marker is authoritative on its own: at the moment the
-        agent is first started the management record does not exist yet, and a
-        missing record must not mean "fail closed".
+        - A panel host is not a router at all. It is reached over the network it
+          serves and has no console to recover from, so it never masks, repoints
+          or locks sshd. That is ownership (ADR-0027), not a runtime condition:
+          a stale install marker or a record that disagrees cannot turn the
+          hardening back on for a product that does not do it.
+        - A router installed over the network (ADR-0017, `VS_ROUTER_KEEP_SSH=1`)
+          keeps the same lifecycle off for a different reason — the install-time
+          marker is authoritative on its own, because at the moment the agent is
+          first started the management record does not exist yet, and a missing
+          record must not mean "fail closed".
         """
+        if read_profile() == 'panel':
+            return True
         if ONLINE_MARKER.exists():
             return True
         try:

@@ -1,5 +1,6 @@
 """Host-free checks for SSH fail-closed lifecycle and restore order."""
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +8,19 @@ import pytest
 from vs_router.agent.apply import APPLIED_DIR, CONFIRMED_DIR, ApplyError
 from vs_router.agent.ssh import SSHController, READY
 from test_agent_apply import FakeExecutor, FakeFS
+
+
+@pytest.fixture(autouse=True)
+def host_has_no_install_marker(monkeypatch):
+    """Decide the host's identity from the test, never from /etc.
+
+    ``SSHController`` consults the profile marker first (ADR-0027) and the
+    install marker second, so a machine that happens to have either — a lab VM,
+    or the panel this was written against — would otherwise change what these
+    tests exercise.
+    """
+    monkeypatch.setattr('vs_router.agent.ssh.read_profile', lambda: None)
+    monkeypatch.setattr('vs_router.agent.ssh.ONLINE_MARKER', Path('/nonexistent/online-install'))
 
 
 def test_close_attempts_all_containment_even_after_nft_failure():
@@ -88,4 +102,47 @@ def test_online_install_marker_disables_the_fail_closed_lifecycle(tmp_path, monk
     SSHController(executor, fs).close()
 
     assert executor.calls == []
+
+
+def test_a_panel_host_never_hardens_sshd(monkeypatch):
+    """ADR-0027: the panel's exclusion is ownership, not a marker or a record.
+
+    The record below is a router-shaped one (a separate management LAN), and the
+    install marker is absent — the two things the old rule keyed off. A panel host
+    still must not touch sshd: it is reached over the network it serves and has no
+    console to recover from.
+    """
+    from vs_router.management import Management
+
+    monkeypatch.setattr('vs_router.agent.ssh.read_profile', lambda: 'panel')
+    state = Management(interface='eth0', mac='02:00:00:00:00:01',
+                       address='192.168.10.2/24', mode='separate-lan')
+    monkeypatch.setattr('vs_router.agent.ssh.read_management', lambda path: state)
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(READY, 'protected\n')
+    controller = SSHController(executor, fs)
+
+    controller.close()
+    controller.activate({'interfaces': ['eth0']})
+
+    assert executor.calls == []
     assert READY in fs.files
+    assert not any(str(name).endswith('.nft') for name in fs.files)
+
+
+def test_a_router_host_without_the_install_marker_still_hardens(monkeypatch):
+    """The panel rule must not leak into the router: it still closes sshd."""
+    from vs_router.management import Management
+
+    monkeypatch.setattr('vs_router.agent.ssh.read_profile', lambda: 'router')
+    state = Management(interface='eth0', mac='02:00:00:00:00:01',
+                       address='192.168.10.2/24', mode='separate-lan')
+    monkeypatch.setattr('vs_router.agent.ssh.read_management', lambda path: state)
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(READY, 'protected\n')
+
+    SSHController(executor, fs).close()
+
+    assert any(call[0] == ['systemctl', 'mask', 'ssh.service', 'ssh.socket']
+               for call in executor.calls)
+    assert READY not in fs.files
