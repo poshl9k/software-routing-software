@@ -1,5 +1,6 @@
 """Pure systemd-networkd configuration and deterministic bundle encoding."""
 from ipaddress import ip_interface
+from typing import Iterable
 import re
 
 from ..schema import ConfigurationVersion
@@ -7,8 +8,13 @@ from ..schema import ConfigurationVersion
 _FILE = re.compile(r"10-vs-router-[a-zA-Z][a-zA-Z0-9_.-]{0,14}\.(?:network|netdev)")
 
 
-def generate_networkd(version: ConfigurationVersion) -> dict[str, str]:
+def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] = ()) -> dict[str, str]:
     """Return one .network per interface and .netdev files for assigned virtual links.
+
+    ``exclude`` names interfaces this product must not write configuration for —
+    on a panel, the uplink whose addressing belongs to the host (ADR-0027). The
+    caller decides the set: whether another owner exists is knowledge about the
+    host, and this function stays free of I/O.
 
     Convention: an interface with addressing="dhcp" uses DHCPv4 (any type or
     zone), including its gateway and routes; DHCP DNS is ignored in favor of the
@@ -21,7 +27,9 @@ def generate_networkd(version: ConfigurationVersion) -> dict[str, str]:
     WAN order is retained: primary keeps its prefix, additional IPv4 addresses use
     /32 (IPv6 uses /128). Static gateways and DNS settings are not generated.
     """
-    interfaces = sorted(version.configuration.interfaces, key=lambda i: i.name)
+    skip = set(exclude)
+    interfaces = sorted((i for i in version.configuration.interfaces if i.name not in skip),
+                        key=lambda i: i.name)
     assigned = {i.name for i in interfaces if i.zone}
     bridges = {}
     for i in interfaces:

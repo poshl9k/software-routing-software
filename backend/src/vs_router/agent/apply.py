@@ -523,10 +523,23 @@ class ApplyEngine:
             except ValueError:
                 ddns_jobs = []
             contents['ddns'] = _json.dumps({'ddns': ddns_jobs})
-            network = generate_networkd(version)
-            if management is not None:
-                name = f'10-vs-router-{management.interface}.network'
-                network[name] = network[name].replace(
+            # The panel owns no uplink addressing (ADR-0027): on that profile the
+            # host's own link keeps its configuration, and its .network file is
+            # dropped from the bundle — the reloader removes the one we wrote
+            # before, so the operator's config (netplan/ifupdown) takes over. The
+            # exclusion requires another owner to exist, which is why the predicate
+            # reads the host rather than assuming it.
+            from ..management import unmanaged_host_interfaces
+            from .network_ownership import foreign_owner, host_config_candidates
+            candidates = list(host_config_candidates())
+            excluded = unmanaged_host_interfaces(
+                profile, management,
+                foreign_owner=lambda name: foreign_owner(name, candidates))
+            network = generate_networkd(version, exclude=excluded)
+            management_file = (f'10-vs-router-{management.interface}.network'
+                               if management is not None else None)
+            if management is not None and management_file in network:
+                network[management_file] = network[management_file].replace(
                     f'Name={management.interface}\n',
                     f'Name={management.interface}\nMACAddress={management.mac}\n', 1)
             contents["networkd"] = serialize_networkd(network)

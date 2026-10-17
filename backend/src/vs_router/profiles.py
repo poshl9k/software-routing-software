@@ -45,6 +45,7 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_router.agent.downloader': 'core',
     'vs_router.agent.engine': 'core',
     'vs_router.agent.management_console': 'panel',
+    'vs_router.agent.network_ownership': 'core',
     'vs_router.agent.policy_route': 'core',
     'vs_router.agent.pppoe_apply': 'router',
     'vs_router.agent.presets': 'core',

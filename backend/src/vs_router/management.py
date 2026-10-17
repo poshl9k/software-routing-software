@@ -114,6 +114,24 @@ def verify_identity(state, sysnet=Path('/sys/class/net')):
         raise ValueError('management.identity_mismatch')
 
 
+def unmanaged_host_interfaces(profile, state, *, foreign_owner=lambda interface: False) -> frozenset:
+    """Interfaces this product must not write networkd configuration for.
+
+    Only a panel: it owns no host addressing (ADR-0027). The uplink pinned by the
+    host record is excluded only when ``foreign_owner(interface)`` says something
+    else already configures that link — writing nothing for a link whose only
+    configuration is ours loses its address at the next reboot, or earlier when a
+    DHCP lease expires unwatched, which is the lockout ADR-0021 exists to prevent.
+    ``foreign_owner`` is a predicate supplied by the caller, so this stays pure.
+    """
+    if profile != 'panel' or state is None:
+        return frozenset()
+    interface = getattr(state, 'interface', None)
+    if not interface or not foreign_owner(interface):
+        return frozenset()
+    return frozenset({interface})
+
+
 def host_management():
     state = read_management()
     if state is not None:
