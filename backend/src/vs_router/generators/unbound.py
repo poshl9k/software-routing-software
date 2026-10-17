@@ -3,6 +3,10 @@ from ipaddress import IPv4Network, ip_interface, ip_network
 from ..schema import ConfigurationVersion, DNSUpstream
 from .dnscrypt import DOH_LISTEN_ADDR, DOH_LISTEN_PORT
 
+#: Rendered into the instance when an encrypted upstream is used. The generated
+#: resolver runs with its own file alone, so the distro's default never applies.
+CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+
 
 def _render_unbound(c, dns, root_forward=None, username: str | None = "unbound") -> str:
     interfaces = {i.name: i for i in c.interfaces}
@@ -20,6 +24,12 @@ def _render_unbound(c, dns, root_forward=None, username: str | None = "unbound")
               f'    log-queries: {"yes" if dns.log_queries else "no"}']
     all_upstreams = (*dns.upstreams, *(u for f in dns.forwards for u in f.upstreams))
     https_present = any(u.mode == "https" for u in all_upstreams)
+    if any(u.mode in ("tls", "https") for u in all_upstreams):
+        # Without a CA bundle unbound cannot verify an encrypted upstream and every
+        # query fails with "unable to get local issuer certificate" — which reaches
+        # the operator as SERVFAIL from a resolver that looks healthy. The generated
+        # instance runs with this file only, so the distro default never applies.
+        lines.append(f"    tls-cert-bundle: {CA_BUNDLE}")
     if root_forward is not None or https_present:
         # Unbound's default refuses loopback upstreams even if checkconf exits 0.
         # ``https`` (DoH) upstreams are forwarded to the local dnscrypt-proxy.

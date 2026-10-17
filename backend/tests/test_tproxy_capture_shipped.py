@@ -10,7 +10,8 @@ import pytest
 
 from vs_router.generators.nftables import (generate_nftables,
                                            generate_tproxy_preauthorization)
-from vs_router.generators.unbound import tproxy_unbound_listener_addresses
+from vs_router.generators.unbound import (generate_unbound,
+                                           tproxy_unbound_listener_addresses)
 from vs_router.schema import ConfigurationVersion
 from vs_router.secrets import encrypt_secret
 
@@ -74,3 +75,20 @@ def test_a_resolver_that_refuses_its_subscribers_is_rejected():
         tproxy_unbound_listener_addresses(configured(access_control=('10.99.0.0/16',)))
     assert tproxy_unbound_listener_addresses(
         configured(access_control=('10.212.1.0/24',)))['selected'] == ('10.212.1.1',)
+
+
+def test_an_encrypted_upstream_carries_a_ca_bundle():
+    """Without it unbound cannot verify the upstream and answers SERVFAIL on a
+    resolver that looks healthy — found on the live panel, where the log said
+    'unable to get local issuer certificate' and the config had no bundle."""
+    def resolver(upstream):
+        return generate_unbound(ConfigurationVersion.model_validate({'configuration': {
+            'interfaces': [{'name': 'lan0', 'zone': 'lan', 'addresses': ['10.212.1.1/24']}],
+            'dns': {'upstreams': [upstream]},
+        }}))
+
+    secure = resolver({'address': '9.9.9.9', 'port': 853, 'mode': 'tls',
+                       'tls_name': 'dns.quad9.net'})
+    assert 'forward-tls-upstream: yes' in secure
+    assert 'tls-cert-bundle: /etc/ssl/certs/ca-certificates.crt' in secure
+    assert 'tls-cert-bundle' not in resolver({'address': '9.9.9.9', 'port': 53})
