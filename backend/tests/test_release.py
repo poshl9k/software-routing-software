@@ -1,5 +1,7 @@
 """Release identity: distinct from configuration versions, read-only."""
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -42,6 +44,9 @@ def test_missing_or_malformed_is_unknown(tmp_path, content):
     ('not-a-commit', '0.1.0', 'iso'),
     (COMMIT, 'v0.1.0', 'iso'),
     (COMMIT, '0.1.0', 'tarball'),
+    # Recorded by the installers, so they must survive the read.
+    (COMMIT, '0.1.0', 'git'),
+    (COMMIT, '0.1.0', 'wheel'),
 ])
 def test_invalid_fields_become_null(tmp_path, commit, semver, source):
     path = tmp_path / 'version.json'
@@ -51,7 +56,25 @@ def test_invalid_fields_become_null(tmp_path, commit, semver, source):
     result = read_release(path)
     assert result['commit'] == (commit if commit == COMMIT else None)
     assert result['semver'] == (semver if semver == '0.1.0' else None)
-    assert result['source'] == (source if source in ('iso', 'online') else 'unknown')
+    assert result['source'] == (source if source in release_module.SOURCES else 'unknown')
+
+
+def test_every_source_the_installers_write_is_accepted():
+    """The API must not turn a recorded fact into 'unknown' (found on the panel).
+
+    A wheel install wrote source=wheel, the endpoint answered 'unknown', and the
+    panel lost the only honest answer to "how was this host installed".
+    """
+    packaging = Path(__file__).resolve().parents[1] / 'packaging'
+    written = set()
+    for name in ('install.sh', 'bootstrap.sh', 'update.sh', 'online-install.sh'):
+        text = (packaging / name).read_text(encoding='utf-8')
+        written |= set(re.findall(r'VS_ROUTER_RELEASE_SOURCE=([A-Za-z0-9_-]+)', text))
+        written |= set(re.findall(r'source=([a-z]+)\n', text))
+    assert written, 'no source literals found: the check would be vacuous'
+    assert 'git' in written and 'wheel' in written  # the ones the panel reported wrong
+    missing = written - set(release_module.SOURCES)
+    assert not missing, f'the installers record sources the API rejects: {sorted(missing)}'
 
 
 async def test_release_endpoint_requires_auth(api, tmp_path, monkeypatch):

@@ -19,7 +19,10 @@ router = APIRouter(dependencies=[Depends(current_user)])
 VERSION_FILE = Path(os.environ.get('VS_ROUTER_VERSION_FILE', '/etc/vs-router/version.json'))
 COMMIT = re.compile(r'^[0-9a-f]{40}$')
 SEMVER = re.compile(r'^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$')
-SOURCES = ('iso', 'online', 'unknown')
+# What the installers can actually record (install.sh: git/wheel/unknown,
+# bootstrap.sh: iso, update.sh: online). A value outside this set means the file
+# was written by something else, so it is reported as unknown rather than echoed.
+SOURCES = ('iso', 'online', 'git', 'wheel', 'unknown')
 UNKNOWN = {'commit': None, 'semver': None, 'installed_at': None, 'source': 'unknown'}
 
 
