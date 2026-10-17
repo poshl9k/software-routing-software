@@ -64,6 +64,81 @@ resolve_profile() {  # sets and exports VS_ROUTER_PROFILE; empty means "installe
     export VS_ROUTER_PROFILE
 }
 
+# An update must not leave a host that answers nothing (ADR-0021). The panel and
+# SSH are the only two ways in, and on a VPS losing both means losing the machine.
+# Both are probed after the restart: the panel through the web app's own socket
+# (not through Caddy in front of it, so a TLS or Caddy problem is not mistaken for
+# a working panel), SSH by its unit and its listening port. A failure restores the
+# tree update.sh kept at $REPO_ROOT.prev.
+PROBE_ATTEMPTS=${VS_ROUTER_UPDATE_PROBE_ATTEMPTS:-15}
+PROBE_INTERVAL=${VS_ROUTER_UPDATE_PROBE_INTERVAL:-2}
+
+panel_answers() {
+    local socket=${VS_ROUTER_WEB_SOCKET:-/run/vs-router/web/web.sock} code
+    [[ -S $socket ]] || return 1
+    code=$(curl --silent --output /dev/null --max-time 5 --write-out '%{http_code}' \
+        --unix-socket "$socket" http://localhost/health 2>/dev/null) || return 1
+    [[ $code == 200 ]]
+}
+
+ssh_answers() {
+    local port=${VS_ROUTER_SSH_PORT:-22} unit=
+    for unit in ssh sshd; do
+        if systemctl is-active --quiet "$unit" 2>/dev/null; then
+            break
+        fi
+        unit=
+    done
+    [[ -n $unit ]] || return 1
+    # A missing `ss` must not be read as "SSH is down": the unit is the signal we
+    # have, and rolling back on an absent tool would be a false alarm.
+    command -v ss >/dev/null 2>&1 || return 0
+    ss -H -tln 2>/dev/null | grep -qE "[:.]${port}[[:space:]]"
+}
+
+verify_update() {
+    local attempts=$PROBE_ATTEMPTS
+    while (( attempts > 0 )); do
+        if panel_answers && ssh_answers; then
+            log 'Post-update check: the panel answers and SSH is up'
+            return 0
+        fi
+        attempts=$((attempts - 1))
+        (( attempts > 0 )) && sleep "$PROBE_INTERVAL"
+    done
+    warn 'Post-update check failed: the panel or SSH is not answering'
+    return 1
+}
+
+rollback_update() {
+    local prev=$REPO_ROOT.prev
+    if [[ ! -d $prev ]]; then
+        warn "no previous tree at ${prev}: nothing to roll back to"
+        return 1
+    fi
+    log "Rolling back to ${prev}"
+    rm -rf "$REPO_ROOT.broken" || return 1
+    mv "$REPO_ROOT" "$REPO_ROOT.broken" || return 1
+    mv "$prev" "$REPO_ROOT" || return 1
+    local wheel_dir="$REPO_ROOT/backend/dist"
+    if compgen -G "$wheel_dir"/*.whl >/dev/null; then
+        python3 -m pip install --break-system-packages --force-reinstall --no-deps \
+            "$wheel_dir"/*.whl || warn 'could not reinstall the previous wheel'
+    else
+        warn "no wheel in ${wheel_dir}: the previous Python package is still installed"
+    fi
+    # The database is deliberately left migrated: alembic runs forward here, and
+    # the previous release is expected to tolerate a newer schema. Saying so is
+    # better than implying the rollback undid everything.
+    resolve_profile
+    VS_ROUTER_RELEASE_SOURCE=online bash "$REPO_ROOT/backend/packaging/install.sh" \
+        || warn 'the previous installer did not complete'
+    systemctl daemon-reload || true
+    systemctl restart vs-router-agent vs-router-web \
+        || warn 'the previous release did not restart cleanly'
+    log "Rolled back; the tree that failed is kept at ${REPO_ROOT}.broken"
+}
+
 usage() {
     cat <<'EOF'
 Usage: update.sh [--release <40-hex-commit> | --manifest <url>]
@@ -227,8 +302,19 @@ main() {
 
     log 'Restarting runtime services'
     systemctl daemon-reload
-    systemctl restart vs-router-agent vs-router-web \
-        || fail 'one or more runtime services failed to restart; check systemctl status'
+    if ! systemctl restart vs-router-agent vs-router-web; then
+        warn 'the runtime services did not restart'
+        rollback_update || true
+        fail 'the update could not restart the services; the previous release was restored'
+    fi
+
+    # ADR-0021: the update must not leave a host with no way in. A failure here is
+    # the one an operator cannot repair from outside, so it rolls itself back.
+    if ! verify_update; then
+        rollback_update \
+            || fail 'the update left the host unreachable and the rollback failed; the previous tree is kept where the log above says'
+        fail 'the panel or SSH did not come back after the update; the previous release was restored'
+    fi
 
     log 'Update complete. Verify: systemctl status vs-router-web vs-router-agent'
 }

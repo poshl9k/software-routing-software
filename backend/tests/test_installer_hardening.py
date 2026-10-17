@@ -693,8 +693,14 @@ def test_updater_downloads_a_verified_pinned_release():
     # A failed install step must be fatal, never a warning that still reports
     # success (a broken migration or restart silently leaves stale code).
     assert "|| fail 'alembic upgrade failed" in updater
-    assert "|| fail 'one or more runtime services failed to restart" in updater
     assert "|| warn 'alembic upgrade failed" not in updater
+    # The restart is fatal too, and now takes the previous release back with it
+    # (ADR-0021): the failure branch must end in `fail`, and must roll back.
+    restart = updater.split('if ! systemctl restart vs-router-agent vs-router-web; then')[1]
+    restart = restart.split('\n    fi')[0]
+    assert 'rollback_update' in restart
+    assert 'fail ' in restart
+    assert 'warn ' not in restart.replace('warn \'the runtime services did not restart\'', '')
 
 
 def test_install_records_release_identity(tmp_path):

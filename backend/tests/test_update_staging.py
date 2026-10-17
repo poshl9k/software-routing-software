@@ -204,3 +204,150 @@ def test_an_explicit_profile_wins_over_the_marker(tmp_path):
     result = _profile(tmp_path, 'panel\n', env={'VS_ROUTER_PROFILE': 'router'})
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'profile=[router]' in result.stdout
+
+
+# --- post-update verification and rollback (ADR-0021) ----------------------
+def _fake_bin(tmp_path, *, curl_code='200', active=0,
+              ss_output='LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*'):
+    """A PATH with fake curl/systemctl/ss: the probes must not touch the host."""
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir(exist_ok=True)
+    for name, body in {
+        'curl': f'#!/bin/sh\nprintf %s {curl_code}\n',
+        'systemctl': f'#!/bin/sh\n[ "$1" = is-active ] && exit {active}\nexit 0\n',
+        'ss': f'#!/bin/sh\nprintf %s\\n "{ss_output}"\n',
+    }.items():
+        path = bin_dir / name
+        path.write_text(body)
+        path.chmod(0o755)
+    return bin_dir
+
+
+def _web_socket(tmp_path):
+    """A real listening UNIX socket: the probe checks that the socket exists."""
+    import socket
+    import sys
+    import time
+
+    path = tmp_path / 'web.sock'
+    code = f'import socket,time; s=socket.socket(socket.AF_UNIX); s.bind("{path}"); time.sleep(60)'
+    holder = subprocess.Popen([sys.executable, '-c', code])
+    for _ in range(100):
+        if path.exists():
+            break
+        time.sleep(0.02)
+    assert path.exists(), 'the fake web socket was not created'
+    return path, holder
+
+
+def _probe(tmp_path, bin_dir, *, socket_path, body):
+    code = f'''set -euo pipefail
+source "{PACKAGING}/update.sh"
+export PATH="{bin_dir}:$PATH"
+VS_ROUTER_WEB_SOCKET="{socket_path}"
+{body}
+'''
+    return bash(code)
+
+
+def test_the_panel_probe_asks_the_web_app_itself(tmp_path):
+    """A healthy panel answers /health on its own socket."""
+    socket_path, holder = _web_socket(tmp_path)
+    try:
+        ok = _probe(tmp_path, _fake_bin(tmp_path, curl_code='200'), socket_path=socket_path,
+                    body='panel_answers && echo PANEL_OK || echo PANEL_DOWN')
+        assert 'PANEL_OK' in ok.stdout, ok.stdout + ok.stderr
+
+        bad = _probe(tmp_path, _fake_bin(tmp_path, curl_code='503', ss_output='x'),
+                     socket_path=socket_path,
+                     body='panel_answers && echo PANEL_OK || echo PANEL_DOWN')
+        assert 'PANEL_DOWN' in bad.stdout, bad.stdout + bad.stderr
+    finally:
+        holder.terminate()
+
+
+def test_a_missing_web_socket_is_not_a_working_panel(tmp_path):
+    result = _probe(tmp_path, _fake_bin(tmp_path), socket_path=tmp_path / 'absent.sock',
+                    body='panel_answers && echo PANEL_OK || echo PANEL_DOWN')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'PANEL_DOWN' in result.stdout
+
+
+def test_the_ssh_probe_needs_a_running_unit_and_a_listening_port(tmp_path):
+    socket_path, holder = _web_socket(tmp_path)
+    try:
+        up = _probe(tmp_path, _fake_bin(tmp_path, active=0), socket_path=socket_path,
+                    body='ssh_answers && echo SSH_OK || echo SSH_DOWN')
+        assert 'SSH_OK' in up.stdout, up.stdout + up.stderr
+
+        unit_dead = _probe(tmp_path, _fake_bin(tmp_path, active=1), socket_path=socket_path,
+                           body='ssh_answers && echo SSH_OK || echo SSH_DOWN')
+        assert 'SSH_DOWN' in unit_dead.stdout, unit_dead.stdout + unit_dead.stderr
+
+        # The unit is up but nothing listens on the port: that is a lockout too.
+        no_port = _probe(tmp_path, _fake_bin(tmp_path, ss_output='LISTEN 0 4096 127.0.0.1:443 0.0.0.0:*'),
+                         socket_path=socket_path,
+                         body='ssh_answers && echo SSH_OK || echo SSH_DOWN')
+        assert 'SSH_DOWN' in no_port.stdout, no_port.stdout + no_port.stderr
+    finally:
+        holder.terminate()
+
+
+def test_verification_fails_when_either_way_in_is_gone(tmp_path):
+    socket_path, holder = _web_socket(tmp_path)
+    try:
+        healthy = _probe(tmp_path, _fake_bin(tmp_path), socket_path=socket_path,
+                         body='PROBE_ATTEMPTS=1 PROBE_INTERVAL=0\nverify_update && echo VERIFIED || echo UNVERIFIED')
+        assert 'VERIFIED' in healthy.stdout, healthy.stdout + healthy.stderr
+
+        broken = _probe(tmp_path, _fake_bin(tmp_path, curl_code='000'), socket_path=socket_path,
+                        body='PROBE_ATTEMPTS=1 PROBE_INTERVAL=0\nverify_update && echo VERIFIED || echo UNVERIFIED')
+        assert 'UNVERIFIED' in broken.stdout, broken.stdout + broken.stderr
+    finally:
+        holder.terminate()
+
+
+def test_rollback_restores_the_previous_tree_and_runs_its_installer(tmp_path):
+    """The tree update.sh kept at .prev goes back, and its installer deploys it."""
+    bin_dir = _fake_bin(tmp_path)
+    current = tmp_path / 'tree'
+    previous = tmp_path / 'tree.prev'
+    current.mkdir()
+    (current / 'state.txt').write_text('new release\n')
+    (previous / 'backend/packaging').mkdir(parents=True)
+    (previous / 'state.txt').write_text('previous release\n')
+    # No wheel and no backend/dist in the previous tree: the rollback then warns
+    # instead of reinstalling a Python package it does not have.
+    (previous / 'backend/packaging/install.sh').write_text('#!/bin/sh\necho PREV_INSTALL_RAN\n')
+
+    code = f'''set -euo pipefail
+source "{PACKAGING}/update.sh"
+export PATH="{bin_dir}:$PATH"
+REPO_ROOT="{current}"
+rollback_update
+'''
+    result = bash(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The previous tree is live again, with its own installer having run...
+    assert (current / 'state.txt').read_text() == 'previous release\n'
+    assert 'PREV_INSTALL_RAN' in result.stdout + result.stderr
+    # ...and the tree that failed is kept, not deleted.
+    assert (tmp_path / 'tree.broken' / 'state.txt').read_text() == 'new release\n'
+    assert not previous.exists()
+
+
+def test_rollback_without_a_previous_tree_reports_instead_of_guessing(tmp_path):
+    bin_dir = _fake_bin(tmp_path)
+    current = tmp_path / 'tree'
+    current.mkdir()
+    (current / 'state.txt').write_text('only tree\n')
+    code = f'''set -euo pipefail
+source "{PACKAGING}/update.sh"
+export PATH="{bin_dir}:$PATH"
+REPO_ROOT="{current}"
+rollback_update && echo ROLLED_BACK || echo NOTHING_TO_ROLL_BACK
+'''
+    result = bash(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'NOTHING_TO_ROLL_BACK' in result.stdout
+    assert (current / 'state.txt').read_text() == 'only tree\n'
