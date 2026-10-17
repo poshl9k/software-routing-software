@@ -272,6 +272,48 @@ async def test_versions_crud_diff_and_persistence(api):
     assert (await client.post('/api/draft/validate')).status_code == 404
     assert (await client.get('/api/versions/1')).json()['status'] == 'confirmed'
 
+
+async def test_an_empty_draft_body_does_not_clear_the_configuration(api):
+    """Found on the live panel: `{}` produced a configuration with no interfaces.
+
+    The merge layers only look at the keys they receive, so an empty object meant
+    "every collection empty" — a configuration `validate()` calls valid and only
+    the management guard refuses, much later, with a code that does not name the
+    mistake.
+    """
+    client, engine, _ = api
+    await sign_in(client)
+    with Session(engine) as db:
+        save_version(db, ConfigurationVersion(id=1, status='confirmed', configuration={
+            'interfaces': [{'name': 'eth0', 'type': 'physical', 'zone': 'wan',
+                            'addressing': 'dhcp'}],
+        }))
+        db.commit()
+    created = await client.post('/api/draft', json={})
+    assert created.status_code == 201
+    assert [i['name'] for i in created.json()['configuration']['interfaces']] == ['eth0']
+    # An explicit empty list still clears: the rule is about a body that says
+    # nothing, not about refusing an empty section.
+    cleared = await client.put('/api/draft', json={'interfaces': []})
+    assert cleared.status_code == 200
+    assert cleared.json()['configuration']['interfaces'] == []
+
+
+async def test_an_empty_body_leaves_an_existing_draft_alone(api):
+    client, engine, _ = api
+    await sign_in(client)
+    with Session(engine) as db:
+        save_version(db, ConfigurationVersion(id=1, status='confirmed', configuration={
+            'interfaces': [{'name': 'eth0', 'type': 'physical', 'zone': 'wan',
+                            'addressing': 'dhcp'}],
+        }))
+        db.commit()
+    created = await client.post('/api/draft', json={})
+    before = created.json()['configuration']
+    updated = await client.put('/api/draft', json={})
+    assert updated.status_code == 200
+    assert updated.json()['configuration'] == before
+
 async def test_validation_and_generators(api, monkeypatch):
     from vs_router.api import configuration
     client, _, _ = api

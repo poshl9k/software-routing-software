@@ -117,7 +117,14 @@ def create_draft(body: dict | None = Body(default=None), db: Session = Depends(g
         raise APIError(409, "draft.exists")
     previous = db.scalars(select(ConfigurationRow).order_by(ConfigurationRow.id.desc())).first()
     old = previous.configuration if previous else Configuration()
-    configuration = parse_configuration(body, old.model_dump(mode="json")) if body is not None else old
+    # An empty body means "nothing given", not "clear everything". The merge layers
+    # only look at the keys they receive, so `{}` used to produce a configuration
+    # with no interfaces and no tunnels at all — one that validate() calls valid,
+    # and that only the management guard refuses, much later and with a code that
+    # does not name the real mistake. A caller that means to clear a section sends
+    # it explicitly (`{"interfaces": []}`), which still clears it.
+    configuration = (parse_configuration(body, old.model_dump(mode="json"))
+                     if body else old)
     check_roles(configuration, old)
     # Store the deterministic tunnel/peer addresses so every client (any
     # browser build) sees them; explicit values are preserved.
@@ -144,7 +151,10 @@ def create_draft(body: dict | None = Body(default=None), db: Session = Depends(g
 def update_draft(body: dict = Body(), db: Session = Depends(get_db)):
     row = draft(db)
     old = row.configuration
-    configuration = parse_configuration(body, old.model_dump(mode="json"))
+    # Same rule as creating a draft: an empty body changes nothing, rather than
+    # writing a configuration with every collection empty.
+    configuration = (parse_configuration(body, old.model_dump(mode="json"))
+                     if body else old)
     check_roles(configuration, old)
     configuration = materialize_addresses(configuration)
     row.configuration = configuration
