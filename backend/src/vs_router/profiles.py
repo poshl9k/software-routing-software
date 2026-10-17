@@ -12,9 +12,12 @@ profile selection; host capabilities and the installer marker remain unchanged.
 Mixed modules keep their current public entrypoints. Management/schema/service
 orchestration remain core; the console with single-uplink/domain provisioning is
 assigned to panel, with its legacy router dependencies recorded explicitly.
-Unbound and interface-scoped SSH ownership follow the router split target even
-though the shared pipeline still invokes them today. Proxy subscription imports
-are shared outbound functionality, not the future panel-only subscriber model.
+Interface-scoped SSH ownership follows the router split target even though the
+shared pipeline still invokes it today. The DNS generator is core, not router:
+ADR-0020 makes the panel the subscriber resolver, and the panel host runs Unbound
+with its own applied configuration, so both products share the generator while the
+policy they compose into it differs. Proxy subscription imports are shared
+outbound functionality, not the future panel-only subscriber model.
 """
 from typing import Literal
 
@@ -90,7 +93,7 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_router.generators.pppoe': 'router',
     'vs_router.generators.singbox': 'core',
     'vs_router.generators.tproxy_dns': 'core',
-    'vs_router.generators.unbound': 'router',
+    'vs_router.generators.unbound': 'core',
     'vs_router.generators.wireguard': 'core',
 }
 
@@ -105,14 +108,10 @@ KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
         'The existing generator facade re-exports router network configuration.',
     ('vs_router.generators', 'vs_router.generators.pppoe'):
         'The existing generator facade re-exports the router PPPoE generator.',
-    ('vs_router.generators', 'vs_router.generators.unbound'):
-        'The existing generator facade re-exports the router DNS generator.',
     ('vs_router.agent.apply', 'vs_router.generators.kea'):
         'The shared apply pipeline renders DHCP and gates its phase by host capability.',
     ('vs_router.agent.apply', 'vs_router.generators.networkd'):
         'The shared apply pipeline still renders and serializes router interfaces.',
-    ('vs_router.agent.apply', 'vs_router.generators.unbound'):
-        'The shared apply pipeline still renders the router DNS configuration.',
     ('vs_router.agent.apply', 'vs_router.agent.pppoe_apply'):
         'Apply and rollback still own router PPPoE artifact validation and readiness.',
     ('vs_router.agent.apply', 'vs_router.agent.unbound_service'):
@@ -121,12 +120,6 @@ KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
         'Shared configuration validation still exercises the DHCP generator.',
     ('vs_router.api.configuration', 'vs_router.generators.networkd'):
         'Shared configuration validation still exercises the interface generator.',
-    ('vs_router.api.configuration', 'vs_router.generators.unbound'):
-        'Shared configuration validation still exercises the DNS generator.',
-    ('vs_router.generators.nftables', 'vs_router.generators.unbound'):
-        'TProxy firewall rules require the same validated Unbound listener addresses.',
-    ('vs_router.generators.tproxy_dns', 'vs_router.generators.unbound'):
-        'The shared TProxy DNS bundle still composes router Unbound split configs.',
     ('vs_router.agent.boot_restore', 'vs_router.agent.pppoe_apply'):
         'Boot restoration still decodes and restores router PPPoE artifacts.',
     ('vs_router.agent.boot_restore', 'vs_router.agent.unbound_service'):
