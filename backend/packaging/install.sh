@@ -330,6 +330,16 @@ else
         /etc/systemd/system/vs-router-bootrestore.service.d/kea.conf
 fi
 systemctl enable vs-router-bootrestore.service vs-router-tproxy-postboot.service vs-router-pppoe-postboot.service
+# Everything this product runs has to be enabled, or a reboot leaves the host with
+# a tunnel and no panel. Observed on a panel installed over SSH: web and agent
+# carried WantedBy=multi-user.target but had no enable symlink, because only the
+# ISO path (bootstrap.sh) enabled them. Each unit is enabled only if this build
+# installed it, so a profile that does not ship one does not fail the install.
+for unit in vs-router-web.service vs-router-agent.service \
+            vs-router-rollback.timer vs-router-ddns.timer vs-router-source-update.timer; do
+    [ -f "/etc/systemd/system/$unit" ] || continue
+    systemctl enable "$unit"
+done
 if [ "$PROFILE" = router ]; then
     # Replace the physical tty1 login on the next boot, not the active installer
     # session: stopping getty here would kill an operator running bootstrap on

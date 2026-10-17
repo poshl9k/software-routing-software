@@ -80,6 +80,36 @@ def test_criterion_7_the_router_still_gets_its_console():
     assert re.search(r'else\s*\n\s*systemctl disable vs-router-console\.service', install)
 
 
+def test_criterion_9_both_install_paths_enable_the_same_units():
+    """A unit the ISO path enables must not be missing from the network path.
+
+    Observed on the live panel: web and agent were restarted but never enabled, so
+    a reboot brought up the tunnel, Caddy and SSH, and no panel at all.
+    """
+    install = _read('install.sh')
+    bootstrap = _read('bootstrap.sh')
+
+    def enabled(text):
+        # Join line continuations first: a unit list may be wrapped, and a parser
+        # that only reads the first physical line would miss half of it.
+        joined = re.sub(r'\\\n\s*', ' ', text)
+        units = set()
+        for line in joined.splitlines():
+            if line.lstrip().startswith('#'):
+                continue
+            if 'systemctl enable' in line or line.strip().startswith('for unit in'):
+                units |= set(re.findall(r'vs-router-[a-z0-9@._-]+', line))
+        return {name.split('.')[0] for name in units}
+
+    iso = enabled(bootstrap)
+    network = enabled(install)
+    # Everything the product runs, whichever path installed it.
+    for name in ('vs-router-web', 'vs-router-agent', 'vs-router-rollback',
+                 'vs-router-ddns', 'vs-router-source-update'):
+        assert name in iso, f'{name} is not enabled by the ISO path either'
+        assert name in network, f'the network install never enables {name}'
+
+
 def test_criterion_8_a_host_without_kea_is_not_warned_about_kea():
     install = _read('install.sh')
     # The warning used to fire on every panel install and told the operator the
