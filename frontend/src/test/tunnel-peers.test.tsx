@@ -55,7 +55,12 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
-function blobText(blob: Blob) {
+async function blobText(blob: Blob): Promise<string> {
+  // Which Blob the app hands over depends on the environment: jsdom's Blob has no
+  // text(), while Node's Blob is refused by jsdom's FileReader ("parameter 1 is
+  // not of type 'Blob'"), and which one wins varies with the Node build — that is
+  // how this test passed locally and failed on CI. Neither path is wrong; try both.
+  if (typeof blob.text === "function") return blob.text();
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
