@@ -237,8 +237,8 @@
 профиль AWG 3+ при создании туннеля (ADR-0024); вкладка «Пиры» с активностью и
 экспортом.
 
-**Проверка на момент записи:** backend 1304 passed / 2 skipped, frontend 334
-passed, tsc и build чистые. VPS `rg3.poshl9k.ru` (= `92.51.36.131`), 17 окт,
+**Проверка на момент записи:** backend 1379 passed / 2 skipped, frontend 334
+passed, tsc и build чистые, CI (`.github/workflows/ci.yml`) зелёный на каждом пуше. VPS `rg3.poshl9k.ru` (= `92.51.36.131`), 17 окт,
 прогон **живого применения панели**: `POST /api/draft` → `validate` → `apply` →
 `confirmed` за 1.2 с, все фазы `applied` (nftables, unbound, networkd, wireguard,
 caddy, ddns, ssh). После применения: **SSH цел** (`ssh_selected` для `eth0`, счётчик
