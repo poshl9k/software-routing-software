@@ -27,7 +27,7 @@ _DIFF_TITLES = {
     'sites': 'Входящие сайты', 'ddns': 'DDNS', 'ssh': 'Доступ по SSH',
     'tproxy': 'Выборочная маршрутизация (TProxy)', 'proxies': 'Прокси-выходы',
     'rule_sets': 'Источники списков', 'anti_lockout': 'Доступ к панели',
-    'panel_port': 'Доступ к панели',
+    'panel_port': 'Доступ к панели', 'subscribers': 'Абоненты',
 }
 _DIFF_CONSEQUENCES = {
     **dict.fromkeys(('interfaces', 'panel_port', 'anti_lockout'),

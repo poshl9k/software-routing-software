@@ -179,6 +179,11 @@ class DNS(Model):
     log_queries: bool = False
 
 
+class Subscriber(Model):
+    name: Name
+    label: str | None = None
+
+
 class Peer(Model):
     name: Name
     public_key: str
@@ -187,6 +192,9 @@ class Peer(Model):
     # empty when the client brings its own key pair and shares only the public one.
     private_key: EncryptedSecret | None = None
     allowed_ips: tuple[str, ...] = ()
+    #: The subscriber this peer belongs to as a device, or None for a service peer
+    #: (CONTEXT.md allows a peer without a subscriber).
+    subscriber: Name | None = None
 
 
 # AmneziaWG obfuscation parameters. Classic values are integers; AWG 3+ adds the
@@ -682,6 +690,7 @@ class Configuration(Model):
     rule_sets: tuple[RuleSetSource, ...] = ()
     anti_lockout: bool = True
     panel_port: Port = 443
+    subscribers: tuple[Subscriber, ...] = ()
 
     @model_validator(mode="after")
     def validate_domain(self):

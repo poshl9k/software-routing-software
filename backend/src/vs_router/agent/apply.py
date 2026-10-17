@@ -447,6 +447,10 @@ class ApplyEngine:
             conflict = capability_conflict(profile, all(name in available for name in PHASE_TOOLS))
             if conflict is not None:
                 raise ApplyError(conflict)
+            # Subscribers belong to vs-panel only. Use the host marker, not
+            # the document's legacy default; unmarked hosts keep their policy.
+            if profile == 'router' and version.configuration.subscribers:
+                raise ApplyError('profile.subscribers_not_supported')
         tproxy_files, tproxy_validators = _tproxy_branch(version)
         doh_files, doh_validators = _doh_branch(version)
         from . import pppoe_apply

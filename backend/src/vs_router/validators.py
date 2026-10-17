@@ -288,9 +288,15 @@ def validate_configuration(c):
             fail("dns.invalid_record")
         if r.type in ("A", "AAAA") and ip_address(r.value).version != (4 if r.type == "A" else 6):
             fail("dns.record_family")
+    subscribers = {s.name for s in c.subscribers}
+    if len(subscribers) != len(c.subscribers):
+        fail("subscriber.duplicate_name")
     for t in c.tunnels:
         if t.interface not in interfaces:
             fail("tunnel.interface")
+        for peer in t.peers:
+            if peer.subscriber is not None and peer.subscriber not in subscribers:
+                fail("peer.subscriber_reference")
         for value in (*t.allowed_ips, *(a for p in t.peers for a in p.allowed_ips)):
             ip_network(value)
     wan_addresses = {str(ip_interface(a).ip) for i in c.interfaces if i.zone == "wan" for a in i.addresses}
