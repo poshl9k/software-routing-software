@@ -3,8 +3,9 @@
 The TProxy inbounds/route skeleton is always rendered for offline validation.
 The disabled-by-default ``proxies`` section adds sing-box ``outbounds`` (local
 direct/block plus contract proxy types) and ``outbounds`` groups (selector /
-urltest) *only when* ``proxies.enabled`` is true; a disabled or empty section
-produces the exact legacy output.
+urltest) when ``proxies.enabled`` is true. Product routing exits also render
+explicitly referenced proxy outbounds and interface-bound client-tunnel exits.
+Without product rules, a disabled or empty proxies section keeps legacy output.
 
 Generators stay I/O-free and never read a key. Without an injected provider,
 secret-bearing fields carry fixed placeholders (safe for previews). The agent
@@ -13,7 +14,7 @@ injects decrypted credentials only when staging the apply artifact.
 from ipaddress import ip_address
 from typing import Callable
 
-from vs_router.schema import ConfigurationVersion, ProxyOutbound
+from vs_router.schema import Configuration, ConfigurationVersion, ProxyOutbound
 
 # Fixed, non-secret stand-ins so a preview is structurally valid for
 # ``sing-box check`` without ever exposing encrypted material. They are not
@@ -153,13 +154,67 @@ def _render_rule_match(rule):
     return _rule_matchers(rule)
 
 
+def _render_product_routing(configuration: Configuration) -> tuple[list[dict], list[dict]]:
+    """Render validated egress policy without capturing traffic or allocating addresses."""
+    if not configuration.routing_rules:
+        return [], []
+    tunnels = {tunnel.name: tunnel for tunnel in configuration.tunnels}
+    devices = {(peer.subscriber, peer.name): peer
+               for tunnel in configuration.tunnels for peer in tunnel.peers
+               if peer.subscriber is not None}
+    rules = []
+    tunnel_outbounds = {}
+    for rule in configuration.routing_rules:
+        match = {}
+        if rule.subject.kind == "device":
+            # Guaranteed by RoutingSubject validation, before generation.
+            assert rule.subject.subscriber is not None and rule.subject.peer is not None
+            peer = devices[(rule.subject.subscriber, rule.subject.peer)]
+            if not peer.allowed_ips:
+                raise ValueError("routing.device_address_required")
+            match["source_ip_cidr"] = list(peer.allowed_ips)
+        for field, key in (("ip_cidr", "ip_cidr"), ("domain_suffix", "domain_suffix"),
+                           ("domain_exact", "domain")):
+            if values := getattr(rule, field):
+                match[key] = list(values)
+        # Domain matching needs DNS visibility (ADR-0020). Do not pretend that
+        # sniffing implements the subscriber resolver, or enable it implicitly.
+        target = rule.exit
+        if target.kind == "tunnel":
+            assert target.name is not None  # Guaranteed by Exit validation.
+            tunnel = tunnels[target.name]
+            # ':' cannot occur in contract Name tags; generated tags cannot
+            # collide with a proxy/group or an implicit outbound.
+            tag = f"routing-tunnel:{tunnel.name}"
+            tunnel_outbounds.setdefault(tag, {"type": "direct", "tag": tag,
+                                               "bind_interface": tunnel.interface})
+        elif target.kind == "outbound":
+            tag = target.tag
+        else:
+            tag = IMPLICIT_DIRECT_TAG
+        rules.append({**match, "action": "route", "outbound": tag})
+
+    # Unmatched devices are rejected BEFORE legacy bypass/routing/defaults,
+    # including devices with no individual rule. The final outbound remains for
+    # non-device traffic only. Use the route reject action, not a legacy block
+    # outbound. Runtime fail-closed remains agent.tproxy_apply's guards/readiness
+    # ordering and the existing containment/kill-switch machinery; bind_interface
+    # is not a replacement for those protections if a tunnel/engine goes down.
+    device_addresses = sorted({address for tunnel in configuration.tunnels
+                               for peer in tunnel.peers if peer.subscriber is not None
+                               for address in peer.allowed_ips})
+    if device_addresses:
+        rules.append({"source_ip_cidr": device_addresses, "action": "reject"})
+    return rules, list(tunnel_outbounds.values())
+
+
 def generate_singbox(version: ConfigurationVersion,
                      secret_provider: Callable[[ProxyOutbound], dict] | None = None) -> dict:
     """Render sing-box policy. No provider means redacted preview; provider means apply only.
 
-    A guarded-off TProxy configuration is still rendered for preview. The
-    ``proxies`` section is only expanded while it is enabled; this function does
-    not change nftables, policy routing or service state.
+    A guarded-off TProxy configuration is still rendered for preview. Legacy
+    proxy groups/defaults require ``proxies.enabled``; product rules explicitly
+    select their own exits. No nftables, policy routing or service changes.
     """
     configuration = version.configuration
     proxies = configuration.proxies
@@ -206,11 +261,28 @@ def generate_singbox(version: ConfigurationVersion,
             match.update({"action": "route", "outbound": IMPLICIT_DIRECT_TAG})
         rules.append(match)
 
+    product_rules, tunnel_outbounds = _render_product_routing(configuration)
+    if product_rules:
+        # Interception is the host's job. Nonterminal sniff/options prepare the
+        # captured stream; product rules decide egress in configuration order.
+        # Only traffic left after product policy and device rejection reaches
+        # legacy bypass/TProxy rules. Keep their relative order unchanged.
+        preparation = [r for r in rules if r.get("action") in ("sniff", "route-options")]
+        legacy = [r for r in rules if r.get("action") not in ("sniff", "route-options")]
+        rules = preparation + product_rules + legacy
+
     outbounds = [{"type": "direct", "tag": IMPLICIT_DIRECT_TAG}]
     final = IMPLICIT_DIRECT_TAG
+    # Product exits explicitly select declared outbounds even when the legacy
+    # proxies switch is off. Emit only referenced ones in that case; no groups
+    # or legacy default selection are implicitly enabled.
+    referenced = {r.exit.tag for r in configuration.routing_rules if r.exit.kind == "outbound"}
+    outbounds.extend(_render_outbound(o, secret_provider)
+                     for o in sorted(proxies.outbounds, key=lambda o: o.tag)
+                     if proxies.enabled or o.tag in referenced)
     if proxies.enabled:
-        outbounds.extend(_render_outbound(o, secret_provider) for o in sorted(proxies.outbounds, key=lambda o: o.tag))
         outbounds.extend(_render_group(g) for g in sorted(proxies.groups, key=lambda g: g.tag))
+    outbounds.extend(tunnel_outbounds)
     # TProxy final action overrides the default outbound selection
     tproxy = configuration.tproxy
     if tproxy.final == "block":

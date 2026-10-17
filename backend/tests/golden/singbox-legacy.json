@@ -1,0 +1,29 @@
+{
+  "inbounds": [
+    {
+      "type": "tproxy",
+      "tag": "tproxy-udp",
+      "listen": "127.0.0.1",
+      "listen_port": 51271,
+      "network": "udp"
+    },
+    {
+      "type": "tproxy",
+      "tag": "tproxy-tcp",
+      "listen": "127.0.0.1",
+      "listen_port": 51272,
+      "network": "tcp"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [],
+    "final": "direct",
+    "auto_detect_interface": true
+  }
+}
