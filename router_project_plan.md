@@ -232,14 +232,22 @@
 профиль AWG 3+ при создании туннеля (ADR-0024); вкладка «Пиры» с активностью и
 экспортом.
 
-**Проверка на момент записи:** backend 1293 passed / 2 skipped, frontend 334
-passed, tsc и build чистые. VPS `92.51.36.131`: профиль `panel` (маркер, записи
-БД и `version.json` совпадают — последний написан повторным прогоном
-`online-install.sh`, `ONLINE_INSTALL_OK`, sshd не тронут), Kea удалён, консольный
-юнит снят, `getty@tty1` размаскирован,
-`vs-router-web` / `vs-router-agent` / `caddy` / `ssh` — active, слушают 22 и 443;
-запись управления `single-uplink`, `hostname=92.51.36.131.nip.io`,
-`custom_hostname=rg3.poshl9k.ru`. Ветка `main`
+**Проверка на момент записи:** backend 1304 passed / 2 skipped, frontend 334
+passed, tsc и build чистые. VPS `rg3.poshl9k.ru` (= `92.51.36.131`), 17 окт,
+прогон **живого применения панели**: `POST /api/draft` → `validate` → `apply` →
+`confirmed` за 1.2 с, все фазы `applied` (nftables, unbound, networkd, wireguard,
+caddy, ddns, ssh). После применения: **SSH цел** (`ssh_selected` для `eth0`, счётчик
+растёт), **аплинк цел** (`eth0` UP `92.51.36.131/24`, `default via 92.51.36.1`),
+AWG-туннель `tun1` поднят с параметрами обфускации, панель отвечает по своему
+домену (`https://rg3.poshl9k.ru/health` → 200, сертификат Let's Encrypt на это имя),
+`/api/host/profile` → `{"profile":"panel","declared":true,"dhcp":false}`. Профиль
+`panel` сходится во всех трёх местах: маркер, БД, `version.json`. Обновление
+данных с хоста: `vs-router-web` / `vs-router-agent` / `caddy` / `ssh` — active,
+слушают 22 и 443; запись управления `single-uplink`,
+`hostname=92.51.36.131.nip.io`, `custom_hostname=rg3.poshl9k.ru`. Канал
+обновлений на панели не настроен (`/etc/vs-router/update.json` отсутствует),
+поэтому `POST /api/update` там ответит `update.not_configured` — это ожидаемо.
+Ветка `main`
 **общая**: параллельный агент пушит в `origin/main` — перед началом работы делать
 `git pull`, чтобы не строить на устаревшем статусе.
 
