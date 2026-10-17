@@ -195,6 +195,9 @@ class Peer(Model):
     #: The subscriber this peer belongs to as a device, or None for a service peer
     #: (CONTEXT.md allows a peer without a subscriber).
     subscriber: Name | None = None
+    #: Panel resolvers allow domain rules; own resolvers allow address rules only
+    #: for this device (ADR-0020).
+    dns_mode: Literal['panel', 'own'] = 'panel'
 
 
 # AmneziaWG obfuscation parameters. Classic values are integers; AWG 3+ adds the
@@ -670,6 +673,65 @@ class RuleSetSource(Model):
         return self
 
 
+class Exit(Model):
+    """A way out: the direct internet, another VPN server, or a proxy protocol."""
+    kind: Literal['direct', 'outbound', 'tunnel'] = 'direct'
+    #: ProxyOutbound tag, required when kind == 'outbound'.
+    tag: Name | None = None
+    #: Tunnel name, required when kind == 'tunnel'.
+    name: Name | None = None
+
+    @model_validator(mode="after")
+    def check_fields(self):
+        if self.kind == 'outbound' and self.tag is None:
+            raise ValueError('routing.outbound_tag_required')
+        if self.kind == 'tunnel' and self.name is None:
+            raise ValueError('routing.tunnel_name_required')
+        if ((self.kind != 'outbound' and self.tag is not None)
+                or (self.kind != 'tunnel' and self.name is not None)):
+            raise ValueError('routing.exit_fields_unexpected')
+        return self
+
+
+class RoutingSubject(Model):
+    """Whose traffic: the server itself, or one device of one subscriber."""
+    kind: Literal['server', 'device'] = 'server'
+    subscriber: Name | None = None
+    peer: Name | None = None
+
+    @model_validator(mode="after")
+    def check_fields(self):
+        if self.kind == 'device' and (self.subscriber is None or self.peer is None):
+            raise ValueError('routing.device_required')
+        if self.kind == 'server' and (self.subscriber is not None or self.peer is not None):
+            raise ValueError('routing.subject_fields_unexpected')
+        return self
+
+
+class RoutingRule(Model):
+    name: Name
+    subject: RoutingSubject = Field(default_factory=RoutingSubject)
+    ip_cidr: tuple[str, ...] = ()
+    domain_suffix: tuple[str, ...] = ()
+    domain_exact: tuple[str, ...] = ()
+    exit: Exit = Field(default_factory=Exit)
+
+    @model_validator(mode="after")
+    def check_destination(self):
+        from ipaddress import ip_network
+        if not (self.ip_cidr or self.domain_suffix or self.domain_exact):
+            raise ValueError('routing.destination_required')
+        for cidr in self.ip_cidr:
+            try:
+                ip_network(cidr)
+            except ValueError:
+                raise ValueError('routing.ip_cidr_invalid') from None
+        if any(not re.fullmatch(r"(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+", domain)
+               for domain in (*self.domain_suffix, *self.domain_exact)):
+            raise ValueError('routing.domain_invalid')
+        return self
+
+
 class Configuration(Model):
     schema_version: Literal[1] = 1
     interfaces: tuple[Interface, ...] = ()
@@ -691,6 +753,7 @@ class Configuration(Model):
     anti_lockout: bool = True
     panel_port: Port = 443
     subscribers: tuple[Subscriber, ...] = ()
+    routing_rules: tuple[RoutingRule, ...] = ()
 
     @model_validator(mode="after")
     def validate_domain(self):

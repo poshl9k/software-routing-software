@@ -28,6 +28,7 @@ _DIFF_TITLES = {
     'tproxy': 'Выборочная маршрутизация (TProxy)', 'proxies': 'Прокси-выходы',
     'rule_sets': 'Источники списков', 'anti_lockout': 'Доступ к панели',
     'panel_port': 'Доступ к панели', 'subscribers': 'Абоненты',
+    'routing_rules': 'Правила маршрутизации',
 }
 _DIFF_CONSEQUENCES = {
     **dict.fromkeys(('interfaces', 'panel_port', 'anti_lockout'),

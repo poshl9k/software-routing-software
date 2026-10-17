@@ -306,6 +306,42 @@ def validate_configuration(c):
     if len({r.name for r in c.rule_sets}) != len(c.rule_sets):
         fail("ruleset.duplicate_name")
     validate_proxies(c)
+    validate_routing(c)
+
+
+def validate_routing(c):
+    """Resolve routing data only; capture and egress generation are separate."""
+    if len({rule.name for rule in c.routing_rules}) != len(c.routing_rules):
+        fail('routing.duplicate_name')
+    outbound_tags = {outbound.tag for outbound in c.proxies.outbounds}
+    tunnels = {tunnel.name: tunnel for tunnel in c.tunnels}
+    subscribers = {subscriber.name for subscriber in c.subscribers}
+    devices = {}
+    for tunnel in c.tunnels:
+        for peer in tunnel.peers:
+            if peer.subscriber is not None:
+                devices.setdefault((peer.subscriber, peer.name), []).append(peer)
+    for rule in c.routing_rules:
+        if rule.exit.kind == 'outbound' and rule.exit.tag not in outbound_tags:
+            fail('routing.outbound_reference')
+        if rule.exit.kind == 'tunnel':
+            tunnel = tunnels.get(rule.exit.name)
+            if tunnel is None:
+                fail('routing.tunnel_reference')
+            elif tunnel.role != 'client':
+                fail('routing.tunnel_client_required')
+        if rule.subject.kind == 'device':
+            if rule.subject.subscriber not in subscribers:
+                fail('routing.subscriber_reference')
+            matches = devices.get((rule.subject.subscriber, rule.subject.peer), ())
+            if not matches:
+                fail('routing.device_reference')
+            # Peer names are not globally unique. A rule must resolve one device,
+            # without tightening the legacy contract for unrelated peers.
+            if len(matches) != 1:
+                fail('routing.device_ambiguous')
+            if matches[0].dns_mode == 'own' and (rule.domain_suffix or rule.domain_exact):
+                fail('routing.domain_rule_own_resolvers')
 
 
 IMPLICIT_DIRECT_TAG = "direct"
