@@ -241,8 +241,15 @@ caddy, ddns, ssh). После применения: **SSH цел** (`ssh_selecte
 AWG-туннель `tun1` поднят с параметрами обфускации, панель отвечает по своему
 домену (`https://rg3.poshl9k.ru/health` → 200, сертификат Let's Encrypt на это имя),
 `/api/host/profile` → `{"profile":"panel","declared":true,"dhcp":false}`. Профиль
-`panel` сходится во всех трёх местах: маркер, БД, `version.json`. Обновление
-данных с хоста: `vs-router-web` / `vs-router-agent` / `caddy` / `ssh` — active,
+`panel` сходится во всех трёх местах: маркер, БД, `version.json`. **Пункт 1
+ADR-0027 проверен на живой панели**: после применения
+`10-vs-router-eth0.network` из `/etc/systemd/network` **удалён** (в бандле остался
+только `tun1`), `networkctl status eth0` показывает
+`Network File: /run/systemd/network/10-netplan-eth0.network`, `State: routable
+(configured)` — аплинк ведёт netplan, а не мы; адрес `92.51.36.131/24` и
+`default via 92.51.36.1` на месте, SSH и панель целы. Перезагрузка **не** делалась.
+Обновление данных с хоста: `vs-router-web` / `vs-router-agent` / `caddy` / `ssh`
+— active,
 слушают 22 и 443; запись управления `single-uplink`,
 `hostname=92.51.36.131.nip.io`, `custom_hostname=rg3.poshl9k.ru`. Канал
 обновлений на панели не настроен (`/etc/vs-router/update.json` отсутствует),
