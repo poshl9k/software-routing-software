@@ -231,9 +231,11 @@
 профиль AWG 3+ при создании туннеля (ADR-0024); вкладка «Пиры» с активностью и
 экспортом.
 
-**Проверка на момент записи:** backend 1292 passed / 2 skipped, frontend 334
-passed, tsc и build чистые. VPS `92.51.36.131`: профиль `panel` (маркер и записи
-БД совпадают), Kea удалён, консольный юнит снят, `getty@tty1` размаскирован,
+**Проверка на момент записи:** backend 1293 passed / 2 skipped, frontend 334
+passed, tsc и build чистые. VPS `92.51.36.131`: профиль `panel` (маркер, записи
+БД и `version.json` совпадают — последний написан повторным прогоном
+`online-install.sh`, `ONLINE_INSTALL_OK`, sshd не тронут), Kea удалён, консольный
+юнит снят, `getty@tty1` размаскирован,
 `vs-router-web` / `vs-router-agent` / `caddy` / `ssh` — active, слушают 22 и 443;
 запись управления `single-uplink`, `hostname=92.51.36.131.nip.io`,
 `custom_hostname=rg3.poshl9k.ru`. Ветка `main`
