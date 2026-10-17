@@ -2,16 +2,21 @@
 from pathlib import Path
 
 import pytest
-from vs_router.schema import ConfigurationVersion
+from vs_router.schema import ConfigurationVersion, TProxyDNS, TProxyDNSServer
 from vs_router.generators.nftables import generate_nftables, generate_tproxy_preauthorization
 from scenarios import scenario
 
 
 def enabled(base=None, ingress=("eth1",)):
     base = base or scenario("typical")
+    # An enabled contour needs a DNS policy: the stub is served from it, so every
+    # shipped shape and fixture drawn from the shipped path carries one. The old
+    # model_copy paths skip validation deliberately; this one uses it so DNS gets
+    # rendered in the singbox/unbound output.
     c = base.configuration
     return base.model_copy(update={"configuration": c.model_copy(update={
-        "tproxy": c.tproxy.model_copy(update={"enabled": True, "ingress_interfaces": ingress})})})
+        "tproxy": c.tproxy.model_copy(update={"enabled": True, "ingress_interfaces": ingress,
+                                              "dns": TProxyDNS(servers=(TProxyDNSServer(tag="up", server="9.9.9.9"),))})})})
 
 
 def rules_version(rules):

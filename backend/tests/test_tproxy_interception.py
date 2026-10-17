@@ -36,7 +36,8 @@ def bypass_version(rows, ingress=("lan0",)):
     version = ConfigurationVersion.model_validate({"configuration": {
         "interfaces": BYPASS_INTERFACES,
         "dns": {"interfaces": ["lan0"], "access_control": ["10.212.0.0/16"]},
-        "tproxy": {"ingress_interfaces": list(ingress), "bypass": rows},
+        "tproxy": {"ingress_interfaces": list(ingress), "bypass": rows,
+                   "dns": {"servers": [{"tag": "up", "server": "9.9.9.9"}]}},
     }})
     tproxy = version.configuration.tproxy.model_copy(update={"enabled": True})
     return version.model_copy(update={"configuration": version.configuration.model_copy(
@@ -51,7 +52,8 @@ def base(ingress=("lan0",)):
             {"name": "wan0", "zone": "wan", "addresses": ["192.0.2.1/24"]},
         ],
         "dns": {"interfaces": ["lan0"], "access_control": ["10.212.0.0/16"]},
-        "tproxy": {"ingress_interfaces": list(ingress)},
+        "tproxy": {"ingress_interfaces": list(ingress),
+                   "dns": {"servers": [{"tag": "up", "server": "9.9.9.9"}]}},
     }})
 
 
@@ -446,7 +448,10 @@ def test_no_bypass_emits_no_bypass_lines():
 def test_singbox_preview_bypass_direct_rule_is_first():
     rules = generate_singbox(bypass_version(
         [{"name": "corp", "ip_cidr": ["10.9.0.0/16"]}]))["route"]["rules"]
-    assert rules[0] == {"ip_cidr": ["10.9.0.0/16"], "action": "route",
+    # The two leading rules are the DNS stub's, scoped to that inbound: they must
+    # precede route rules so a catch-all cannot route the stub's own query away.
+    assert [r.get("inbound") for r in rules[:2]] == [["dns-in"], ["dns-in"]]
+    assert rules[2] == {"ip_cidr": ["10.9.0.0/16"], "action": "route",
                         "outbound": "direct"}
 
 
@@ -455,7 +460,7 @@ def test_singbox_preview_bypass_multiple_fields_are_one_and_rule():
         "name": "selected", "source_ip_cidr": ["192.0.2.0/24"],
         "ip_cidr": ["10.10.10.103/32"], "ports": ["18874", "18880-18890"],
         "protocol": "tcp",
-    }]))["route"]["rules"]
+    }]))["route"]["rules"][2:]
     assert rules == [{
         "source_ip_cidr": ["192.0.2.0/24"], "ip_cidr": ["10.10.10.103/32"],
         "port": [18874], "port_range": ["18880:18890"], "network": ["tcp"],

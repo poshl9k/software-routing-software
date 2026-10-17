@@ -29,7 +29,8 @@ def enabled_version(ingress=("lan0",)):
             {"name": "wan0", "zone": "wan", "addresses": ["192.0.2.1/24"]},
         ],
         "dns": {"interfaces": ["lan0"], "access_control": ["10.212.0.0/16"]},
-        "tproxy": {"ingress_interfaces": list(ingress)},
+        "tproxy": {"ingress_interfaces": list(ingress),
+                   "dns": {"servers": [{"tag": "up", "server": "9.9.9.9"}]}},
     }})
     tproxy = base.configuration.tproxy.model_copy(update={"enabled": True})
     return base.model_copy(update={"configuration": base.configuration.model_copy(
@@ -165,7 +166,7 @@ def test_enabled_apply_installs_guards_before_engine():
     assert "cache-max-ttl: 0" in selected
     assert "forward-addr: 127.0.0.1@15353" not in ordinary
     engine_json = json.loads(fs.read(APPLIED_DIR / tproxy_apply.TPROXY_FILES["singbox"]))
-    assert {i["type"] for i in engine_json["inbounds"]} == {"tproxy"}
+    assert {i["type"] for i in engine_json["inbounds"]} == {"tproxy", "direct"}  # direct for DNS server
     capture = fs.read(APPLIED_DIR / tproxy_apply.TPROXY_FILES["tproxy_interception"])
     assert "vs_router_tproxy_interception" in capture
     assert "tproxy ip to 127.0.0.1:51272" in capture

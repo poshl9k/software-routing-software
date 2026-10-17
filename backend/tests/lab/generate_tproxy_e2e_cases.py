@@ -21,7 +21,8 @@ from vs_router.generators.nftables import (generate_nftables,
                                            generate_tproxy_interception,
                                            generate_tproxy_preauthorization)
 from vs_router.generators.singbox import generate_singbox
-from vs_router.schema import ConfigurationVersion
+from vs_router.schema import ConfigurationVersion, TProxyDNS, TProxyDNSServer
+POLICY_DNS = TProxyDNS(servers=(TProxyDNSServer(tag='up', server='9.9.9.9'),))
 
 #: Selected LAN holds the TProxy-selected client; ordinary LAN is unselected.
 SELECTED_SUBNET = "10.212.1"
@@ -54,7 +55,7 @@ def _base_version(*, firewall_rules, with_dns=True):
 
 def _enabled(version):
     """Offline fixture: enable the prevalidated draft for artifact generation."""
-    policy = version.configuration.tproxy.model_copy(update={"enabled": True})
+    policy = version.configuration.tproxy.model_copy(update={"enabled": True, "dns": POLICY_DNS})
     configuration = version.configuration.model_copy(update={"tproxy": policy})
     return version.model_copy(update={"configuration": configuration})
 

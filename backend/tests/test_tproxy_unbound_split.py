@@ -20,7 +20,8 @@ def version(dns=None, ingress=("lan0",)):
             "forwards": [{"domain": "corp.test.", "upstreams": ["198.18.0.2"]}],
             "upstreams": ["198.18.0.3"],
         },
-        "tproxy": {"ingress_interfaces": list(ingress)},
+        "tproxy": {"ingress_interfaces": list(ingress),
+                   "dns": {"servers": [{"tag": "up", "server": "9.9.9.9"}]}},
     }})
     tproxy = base.configuration.tproxy.model_copy(update={"enabled": True})
     return base.model_copy(update={"configuration": base.configuration.model_copy(

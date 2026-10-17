@@ -8,7 +8,11 @@ from vs_router.generators.nftables import (generate_nftables,
                                           generate_tproxy_dns_ingress_guard,
                                           generate_tproxy_dns_listener_guard,
                                           generate_tproxy_preauthorization)
-from vs_router.schema import ConfigurationVersion
+from vs_router.schema import ConfigurationVersion, TProxyDNS, TProxyDNSServer
+
+# An enabled contour needs a DNS policy: the stub is served from it, so the
+# shipped shape (and every fixture drawn from the shipped path) carries one.
+POLICY_DNS = TProxyDNS(servers=(TProxyDNSServer(tag='up', server='9.9.9.9'),))
 
 
 def generate_cases():
@@ -30,7 +34,7 @@ def generate_cases():
         'dns': {'interfaces': ['lan0', 'lan1'], 'access_control': ['10.212.0.0/16']},
         'tproxy': {'enabled': False, 'ingress_interfaces': ['lan0']},
     }})
-    policy = version.configuration.tproxy.model_copy(update={'enabled': True})
+    policy = version.configuration.tproxy.model_copy(update={'enabled': True, 'dns': POLICY_DNS})
     enabled = version.model_copy(update={'configuration': version.configuration.model_copy(
         update={'tproxy': policy})})
     return {'kind': 'tproxy_dns_boundary_vm_v1',

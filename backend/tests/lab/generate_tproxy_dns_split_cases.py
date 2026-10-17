@@ -14,7 +14,8 @@ from pathlib import Path
 from vs_router.agent import tproxy_apply
 from vs_router.generators import tproxy_dns
 from vs_router.generators.nftables import generate_nftables
-from vs_router.schema import ConfigurationVersion
+from vs_router.schema import ConfigurationVersion, TProxyDNS, TProxyDNSServer
+POLICY_DNS = TProxyDNS(servers=(TProxyDNSServer(tag='up', server='9.9.9.9'),))
 
 
 def generate_cases():
@@ -40,7 +41,7 @@ def generate_cases():
         "outbound_nat_mode": "disabled", "anti_lockout": False,
         "tproxy": {"ingress_interfaces": ["lan0"]},
     }})
-    policy = version.configuration.tproxy.model_copy(update={"enabled": True})
+    policy = version.configuration.tproxy.model_copy(update={"enabled": True, "dns": POLICY_DNS})
     enabled = version.model_copy(update={"configuration": version.configuration.model_copy(
         update={"tproxy": policy})})
     plan = tproxy_dns.plan_tproxy_dns(enabled, tproxy_dns.selected_uid_for(enabled))

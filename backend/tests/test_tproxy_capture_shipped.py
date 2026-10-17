@@ -12,7 +12,7 @@ from vs_router.generators.nftables import (generate_nftables,
                                            generate_tproxy_preauthorization)
 from vs_router.generators.unbound import (generate_unbound,
                                            tproxy_unbound_listener_addresses)
-from vs_router.schema import ConfigurationVersion
+from vs_router.schema import ConfigurationVersion, TProxyDNS
 from vs_router.secrets import encrypt_secret
 
 SECRET = encrypt_secret('private-test-key-material', base64.urlsafe_b64encode(b's' * 32)).model_dump()
@@ -27,7 +27,8 @@ def configured(*, ingress=('lan0',), access_control=('10.212.0.0/16',), tunnel=T
             {'name': 'tun0', 'zone': 'lan', 'addresses': ['10.212.2.1/24']},
         ],
         'dns': {'interfaces': list(ingress), 'access_control': list(access_control)},
-        'tproxy': {'ingress_interfaces': list(ingress)},
+        'tproxy': {'ingress_interfaces': list(ingress),
+                   'dns': {'servers': [{'tag': 'up', 'server': '9.9.9.9'}]}},
     }
     if tunnel:
         config['tunnels'] = [{'name': 'vpn', 'interface': 'tun0', 'role': 'server',
@@ -75,6 +76,18 @@ def test_a_resolver_that_refuses_its_subscribers_is_rejected():
         tproxy_unbound_listener_addresses(configured(access_control=('10.99.0.0/16',)))
     assert tproxy_unbound_listener_addresses(
         configured(access_control=('10.212.1.0/24',)))['selected'] == ('10.212.1.1',)
+
+
+def test_an_enabled_contour_without_a_dns_policy_is_refused():
+    """The stub is only served when a policy says how to answer; without one the
+    contour would come up enabled and resolve nothing, which reads as a dead
+    resolver rather than a missing decision."""
+    version = configured()
+    stripped = version.model_copy(update={'configuration': version.configuration.model_copy(
+        update={'tproxy': version.configuration.tproxy.model_copy(
+            update={'dns': TProxyDNS()})})})
+    with pytest.raises(ValueError, match='tproxy.dns_policy_required'):
+        tproxy_unbound_listener_addresses(stripped)
 
 
 def test_an_encrypted_upstream_carries_a_ca_bundle():

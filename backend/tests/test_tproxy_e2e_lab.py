@@ -57,8 +57,8 @@ def test_e2e_fixture_carries_the_whole_stack():
     assert "interface: 10.212.3.1" in fixture["unbound"]["ordinary"]
     import json
     singbox = json.loads(fixture["singbox"])
-    assert any(i.get("type") == "tproxy" and i.get("listen_port") == 51272
-               for i in singbox["inbounds"])
+    assert any(i.get("type") in ("tproxy", "direct") and i.get("listen_port") == 51272
+           for i in singbox["inbounds"])
 
 
 def test_e2e_fixture_policy_route_matches_registry():

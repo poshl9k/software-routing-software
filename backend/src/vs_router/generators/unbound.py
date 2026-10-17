@@ -88,6 +88,12 @@ def tproxy_unbound_listener_addresses(version: ConfigurationVersion) -> dict[str
     ConfigurationVersion.model_validate(data)
     if any(name not in c.dns.interfaces for name in sources):
         raise ValueError("tproxy.dns_split_missing_listener")
+    # The subscriber resolver forwards its unmatched queries to the engine's loopback
+    # stub, and the stub is only served when a policy says how to answer. Without one
+    # the contour comes up "enabled" and resolves nothing — a silent state that reads
+    # as a broken resolver. Refuse to generate instead, with the two siblings above.
+    if not c.tproxy.dns.servers:
+        raise ValueError("tproxy.dns_policy_required")
     if c.dns.recursive or any(f.domain == "." for f in c.dns.forwards):
         raise ValueError("tproxy.dns_split_root_unsupported")
     addresses = [ip_interface(a).ip for name in c.dns.interfaces
