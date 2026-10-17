@@ -206,14 +206,13 @@
 
 **Следующие шаги по порядку**
 
-1. Фаза B (остаток): 20 рёбер в `profiles.py`. Сгруппированы вокруг
-   `generators.{kea,networkd,pppoe}` (их зовёт общее ядро: `agent.apply`,
-   `api.configuration`, `agent.services`, фасад `generators/__init__`) и вокруг
-   `agent.ssh` / `agent.management_console` / `agent.unbound_service`. Прежде чем
-   переносить файлы, нужно решить три вопроса из `docs/panel-router-split.md`
-   (адресация `eth0` в `networkd.conf` панели, «маршрутное» правило в её
-   nftables, смешанное владение SSH-фазой): каждый из них меняет ответ на вопрос
-   «чей модуль».
+1. Фаза B: 20 рёбер в `profiles.py` (сгруппированы вокруг
+   `generators.{kea,networkd,pppoe}` и `agent.ssh`/`agent.management_console`/
+   `agent.unbound_service`). Перед переносом файлов нужно закрыть то, что в
+   `docs/panel-router-split.md`: **дефект** с `eth0` (панель переопределяет
+   адресацию аплинка — нужна VM), «маршрутное» правило в её nftables, смешанное
+   владение SSH-фазой и конфликт ADR про подпись выпуска. Каждый пункт меняет
+   ответ на вопрос «чей модуль».
 2. Фаза C (остаток): CI на оба профиля. Workflow готов в рабочем дереве
    (`.github/workflows/ci.yml`, не закоммичен) — пуш отклонён: у токена `gh` нет
    scope `workflow`. Нужен `gh auth refresh -s workflow`, дальше обычный пуш.
