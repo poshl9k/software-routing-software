@@ -37,6 +37,16 @@ log()  { printf '[vs-router-update] %s\n' "$*" >&2; }
 warn() { printf '[vs-router-update] WARNING: %s\n' "$*" >&2; }
 fail() { printf '[vs-router-update] ERROR: %s\n' "$*" >&2; exit 1; }
 
+# An update is not an install: it must never re-decide how SSH is exposed on the
+# host. install.sh's non-KEEP_SSH branch masks ssh.service/ssh.socket and repoints
+# sshd at /etc/vs-router-ssh behind a /run marker that only an apply creates, so an
+# update that ran it plainly stranded a console-less panel: measured live, the
+# release update left :22 refusing for good while :443 stayed open. The host's SSH
+# policy was decided at install time; the updater leaves it exactly as it found it.
+run_installer() {  # path to the tree's install.sh
+    VS_ROUTER_RELEASE_SOURCE=online VS_ROUTER_KEEP_SSH=1 bash "$1"
+}
+
 # The product identity is installer-owned (ADR-0026), and an update must not
 # change it: install.sh derives the profile from VS_ROUTER_PROFILE and defaults
 # to `router`, so an update that passed nothing would silently relabel a panel
@@ -147,7 +157,7 @@ rollback_update() {
         warn 'the database revision before the update was not recorded; the schema is left as it is'
     fi
     resolve_profile
-    VS_ROUTER_RELEASE_SOURCE=online bash "$REPO_ROOT/backend/packaging/install.sh" \
+    run_installer "$REPO_ROOT/backend/packaging/install.sh" \
         || warn 'the previous installer did not complete'
     systemctl daemon-reload || true
     systemctl restart vs-router-agent vs-router-web \
@@ -321,7 +331,7 @@ main() {
     log 'Deploying UI bundle and systemd units'
     resolve_profile
     log "Product profile: ${VS_ROUTER_PROFILE:-decided by host capability}"
-    VS_ROUTER_RELEASE_SOURCE=online bash "$SCRIPT_DIR/install.sh"
+    run_installer "$SCRIPT_DIR/install.sh"
 
     log 'Restarting runtime services'
     systemctl daemon-reload

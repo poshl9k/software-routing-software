@@ -353,6 +353,40 @@ rollback_update && echo ROLLED_BACK || echo NOTHING_TO_ROLL_BACK
     assert (current / 'state.txt').read_text() == 'only tree\n'
 
 
+# --- the update must never re-decide SSH exposure ---------------------------
+def test_the_updater_never_remasks_ssh(tmp_path):
+    """A release update ran install.sh plainly and stranded a console-less panel.
+
+    Measured live: the update left :22 refusing for good while :443 stayed open,
+    because install.sh's non-KEEP_SSH branch masks ssh.service/ssh.socket and
+    repoints sshd at a /run marker only an apply creates. Both call sites — the
+    deploy step and the rollback — go through run_installer, which passes the flag
+    the online installer already passes.
+    """
+    recorder = tmp_path / 'env.txt'
+    installer = tmp_path / 'install.sh'
+    installer.write_text(
+        '#!/bin/sh\n'
+        f'printf "keep=%s source=%s\\n" "${{VS_ROUTER_KEEP_SSH:-unset}}" '
+        f'"${{VS_ROUTER_RELEASE_SOURCE:-unset}}" > "{recorder}"\n')
+    code = f'''set -euo pipefail
+source "{PACKAGING}/update.sh"
+run_installer "{installer}"
+'''
+    result = bash(code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert recorder.read_text() == 'keep=1 source=online\n'
+
+    updater = (PACKAGING / 'update.sh').read_text()
+    assert updater.count('run_installer "') == 2, 'both call sites must use it'
+    assert 'bash "$SCRIPT_DIR/install.sh"' not in updater
+    assert 'bash "$REPO_ROOT/backend/packaging/install.sh"' not in updater
+
+    install = (PACKAGING / 'install.sh').read_text()
+    assert 'if [ "${VS_ROUTER_KEEP_SSH:-0}" = "1" ]' in install
+    assert 'systemctl mask ssh.service ssh.socket' in install
+
+
 # --- the database half of a rollback (ADR-0010) ----------------------------
 def _alembic_stub(tmp_path, *, answer='abc123 (head)'):
     """A fake python3 that answers `alembic current` and records its argv."""
