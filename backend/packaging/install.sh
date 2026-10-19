@@ -11,8 +11,8 @@
 # client profile compatibility are validated against 3.1).
 # Caddy must include caddy-l4 and caddy-dns/cloudflare; its service must run
 # `caddy run --config /etc/caddy/caddy.json` (JSON, never Caddyfile).
-# Set VS_ROUTER_SECRET_KEY in the web API and agent service environments using a protected
-# EnvironmentFile; never put the encryption key into generated bundles.
+# Provision the shared web/agent encryption key once in a protected EnvironmentFile;
+# never rotate it on updates or put it into generated bundles.
 set -eu
 umask 022
 # The product profile decides what this host owns (ADR-0021, ADR-0026), so it is
@@ -24,6 +24,28 @@ case "$PROFILE" in
     *) echo "ERROR: VS_ROUTER_PROFILE must be router or panel, got '$PROFILE'" >&2; exit 1 ;;
 esac
 command -v pppd >/dev/null 2>&1 || { echo 'ERROR: Debian ppp package is required' >&2; exit 1; }
+# Both ISO and online installs enter here, as do updates. A non-empty key file
+# must survive byte-for-byte: replacing it would orphan all encrypted secrets.
+(
+    # Keep key material out of even an explicitly enabled shell trace. The
+    # subshell restores the caller's trace setting and discards the variable.
+    set +x
+    if [ ! -s /etc/vs-router/secrets.env ]; then
+        install -d -m 0700 /etc/vs-router
+        secret_key=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')
+        [ -n "$secret_key" ] || { echo 'ERROR: secret-encryption key generator returned no key' >&2; exit 1; }
+        # Generate successfully before creating anything; publish atomically so
+        # a failed generator or write never leaves a new empty/partial key file.
+        secret_file=$(mktemp /etc/vs-router/.secrets.env.XXXXXXXXXX)
+        trap 'rm -f "$secret_file"' EXIT
+        install -m 0600 -o root -g root /dev/null "$secret_file"
+        printf 'VS_ROUTER_SECRET_KEY=%s\n' "$secret_key" > "$secret_file"
+        mv -f "$secret_file" /etc/vs-router/secrets.env
+        echo 'Secret-encryption key: created'
+    else
+        echo 'Secret-encryption key: kept existing'
+    fi
+)
 # Listener remains closed until the agent has installed the interface firewall.
 # The ISO/bootstrap path masks SSH and repoints sshd at /etc/vs-router-ssh with a
 # /run marker that only an apply creates. A remote (online) install over SSH must

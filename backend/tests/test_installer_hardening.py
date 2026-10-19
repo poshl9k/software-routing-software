@@ -613,6 +613,144 @@ run_stage networkd stage_networkd
             assert retry.returncode == 0, retry.stdout + retry.stderr
 
 
+def secret_key_install_prefix(tmp_path):
+    """Run the real installer prefix, stopping before any host-service changes."""
+    source = (PACKAGING / 'install.sh').read_text()
+    prefix = source[:source.index('# Listener remains closed')]
+    assert 'Fernet.generate_key()' in prefix
+    # Real install/chmod/rename and real Fernet; only root ownership is elided.
+    assert 'install -m 0600 -o root -g root /dev/null' in prefix
+    prefix = prefix.replace(' -o root -g root ', ' ')
+    prefix = prefix.replace('/etc/', str(tmp_path / 'etc') + '/')
+    return 'pppd() { :; }\n' + prefix + '\necho INSTALL_CONTINUED\n'
+
+
+def assert_installed_secret_key(tmp_path, result):
+    from cryptography.fernet import Fernet
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    target = tmp_path / 'etc/vs-router/secrets.env'
+    content = target.read_text()
+    assert content.startswith('VS_ROUTER_SECRET_KEY=')
+    assert content.endswith('\n') and len(content.splitlines()) == 1
+    key = content.strip().split('=', 1)[1]
+    cipher = Fernet(key.encode())
+    assert cipher.decrypt(cipher.encrypt(b'installer regression')) == b'installer regression'
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert key not in result.stdout + result.stderr
+    assert not list(target.parent.glob('.secrets.env.*'))
+    return target
+
+
+@pytest.mark.parametrize('shell', ['sh', 'bash'])
+def test_secret_key_criterion_1_missing_file_is_created_privately(tmp_path, shell):
+    result = subprocess.run(
+        [shell, '-xc', secret_key_install_prefix(tmp_path)],
+        env={**os.environ, 'VS_ROUTER_PROFILE': 'panel'},
+        text=True, capture_output=True, timeout=10,
+    )
+    target = assert_installed_secret_key(tmp_path, result)
+    assert target.parent.stat().st_mode & 0o777 == 0o700
+    assert 'Secret-encryption key: created' in result.stdout
+    assert 'INSTALL_CONTINUED' in result.stdout
+
+
+def test_secret_key_criterion_2_update_keeps_existing_bytes(tmp_path):
+    target = tmp_path / 'etc/vs-router/secrets.env'
+    target.parent.mkdir(parents=True)
+    # Arbitrary non-empty contents must be preserved, not "repaired"/rotated.
+    original = b'# retained environment\nVS_ROUTER_SECRET_KEY=existing-test-value\nEXTRA=kept\n'
+    target.write_bytes(original)
+    target.chmod(0o600)
+    before = target.stat()
+    code = 'python3() { echo GENERATOR_CALLED; return 19; }\n' + secret_key_install_prefix(tmp_path)
+    result = bash('set -x\n' + code)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert target.read_bytes() == original
+    assert target.stat().st_mtime_ns == before.st_mtime_ns
+    assert target.stat().st_mode == before.st_mode
+    assert 'Secret-encryption key: kept existing' in result.stdout
+    assert 'GENERATOR_CALLED' not in result.stdout + result.stderr
+    assert 'existing-test-value' not in result.stdout + result.stderr
+
+
+def test_secret_key_criterion_3_empty_file_is_filled(tmp_path):
+    target = tmp_path / 'etc/vs-router/secrets.env'
+    target.parent.mkdir(parents=True)
+    target.touch(mode=0o644)
+    result = bash('set -x\n' + secret_key_install_prefix(tmp_path))
+    assert_installed_secret_key(tmp_path, result)
+    assert 'Secret-encryption key: created' in result.stdout
+
+
+@pytest.mark.parametrize('generator', [
+    'printf partial-output-must-not-be-published; return 19',
+    'return 0',  # Even a successful process must not publish an empty key.
+])
+def test_secret_key_criterion_4_generator_failure_is_fatal(tmp_path, generator):
+    code = f'python3() {{ {generator}; }}\n' + secret_key_install_prefix(tmp_path)
+    result = bash('set -x\n' + code)
+    assert result.returncode != 0
+    assert not (tmp_path / 'etc/vs-router/secrets.env').exists()
+    assert not list((tmp_path / 'etc/vs-router').glob('.secrets.env.*'))
+    assert 'Secret-encryption key: created' not in result.stdout
+    assert 'INSTALL_CONTINUED' not in result.stdout
+    assert 'partial-output-must-not-be-published' not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('generator_fails', [False, True])
+def test_secret_key_criterion_5_iso_uses_shared_installer(tmp_path, generator_fails):
+    script = (PACKAGING / 'bootstrap.sh').read_text()
+    assert 'Fernet.generate_key()' not in script
+    for prefix in ('/etc/', '/var/lib/'):
+        script = script.replace(prefix, str(tmp_path) + prefix)
+    source = tmp_path / 'bootstrap.sh'
+    source.write_text(script)
+    # Bootstrap invokes this real prefix, not a mocked key-producing installer.
+    (tmp_path / 'install.sh').write_text(secret_key_install_prefix(tmp_path))
+    (tmp_path / 'backend/dist').mkdir(parents=True)
+    (tmp_path / 'backend/dist/backend.whl').touch()
+    (tmp_path / 'etc/kea').mkdir(parents=True)
+    (tmp_path / 'etc/kea/kea-api-password').write_text('kea fixture\n')
+    code = f'''set -x
+source "{source}"
+REPO_ROOT="{tmp_path}"
+logger() {{ :; }}
+python3() {{
+    if [[ $1 == -m && $2 == pip ]]; then return 0; fi
+    if [[ "{generator_fails}" == True && $1 == -c && $2 == *Fernet* ]]; then return 19; fi
+    command python3 "$@"
+}}
+export -f python3
+bash() {{
+    case "$1" in
+        "$SCRIPT_DIR/install.sh") command bash "$@" ;;
+        "$SCRIPT_DIR/install-runtime-deps.sh") : ;;
+        *) return 99 ;;
+    esac
+}}
+chown() {{ :; }}
+systemctl() {{
+    if [[ $1 == restart && "$*" == *vs-router-* ]]; then
+        test -s "{tmp_path}/etc/vs-router/secrets.env"
+        echo SERVICES_RESTARTED_WITH_KEY
+    fi
+}}
+runuser() {{ :; }}
+curl() {{ :; }}
+run_stage install stage_install
+'''
+    result = bash(code)
+    if generator_fails:
+        assert result.returncode != 0
+        assert not (tmp_path / 'etc/vs-router/secrets.env').exists()
+        assert 'SERVICES_RESTARTED_WITH_KEY' not in result.stdout
+    else:
+        assert_installed_secret_key(tmp_path, result)
+        assert 'Secret-encryption key: created' in result.stdout
+        assert 'SERVICES_RESTARTED_WITH_KEY' in result.stdout
+
+
 def test_kea_secret_never_enters_trace_or_unit(tmp_path):
     source = tmp_path / 'bootstrap.sh'
     script = (PACKAGING / 'bootstrap.sh').read_text()

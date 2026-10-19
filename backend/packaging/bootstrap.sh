@@ -317,15 +317,6 @@ stage_install() {
     # Runtime wheel hashes come from the committed uv.lock export.
     bash "$SCRIPT_DIR/install-runtime-deps.sh" "$REPO_ROOT/backend/requirements-runtime.txt"
 
-    install -d -m 0700 /etc/vs-router
-    if [[ ! -s /etc/vs-router/secrets.env ]]; then
-        install -m 0600 /dev/null /etc/vs-router/secrets.env
-        local secret_key
-        secret_key=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')
-        printf 'VS_ROUTER_SECRET_KEY=%s\n' "$secret_key" > /etc/vs-router/secrets.env
-        chmod 0600 /etc/vs-router/secrets.env
-    fi
-
     if [[ ! -s /etc/kea/kea-api-password ]]; then
         install -m 0600 /dev/null /etc/kea/kea-api-password
         python3 -c 'import secrets; from pathlib import Path; Path("/etc/kea/kea-api-password").write_text(secrets.token_urlsafe(32) + "\n")'
