@@ -7,6 +7,7 @@ set -eu
 umask 022
 
 HOSTNAME_ARG=''
+CUSTOM_HOSTNAME_ARG=''
 PATH_PREFIX=''
 ADDRESS=''
 SSH_PORT=22
@@ -18,7 +19,9 @@ usage() {
     cat <<'EOF'
 Usage: online-install.sh [options]
 
-  --hostname H      public name for the ACME certificate, e.g. 203.0.113.9.nip.io
+  --hostname H      RESERVE panel name (<ip>.nip.io), e.g. 203.0.113.9.nip.io
+  --custom-hostname H  your own panel domain; does not replace the reserve
+                      Both names are published at once with ACME (ADR-0025).
   --path-prefix P   secret panel path, e.g. /uOE3flWG7hvM (root then answers 404)
   --address A/P     panel address; default: the uplink's live lease
   --ssh-port N      SSH port to keep open (default 22)
@@ -31,6 +34,7 @@ EOF
 while [ $# -gt 0 ]; do
     case "$1" in
         --hostname) HOSTNAME_ARG=${2:?}; shift 2 ;;
+        --custom-hostname) CUSTOM_HOSTNAME_ARG=${2:?}; shift 2 ;;
         --path-prefix) PATH_PREFIX=${2:?}; shift 2 ;;
         --address) ADDRESS=${2:?}; shift 2 ;;
         --ssh-port) SSH_PORT=${2:?}; shift 2 ;;
@@ -173,6 +177,7 @@ fi
 if [ "$DRY_RUN" != 1 ]; then
     set -- --single-uplink --ssh-port "$SSH_PORT"
     if [ -n "$HOSTNAME_ARG" ]; then set -- "$@" --hostname "$HOSTNAME_ARG"; fi
+    if [ -n "$CUSTOM_HOSTNAME_ARG" ]; then set -- "$@" --custom-hostname "$CUSTOM_HOSTNAME_ARG"; fi
     if [ -n "$PATH_PREFIX" ]; then set -- "$@" --path-prefix "$PATH_PREFIX"; fi
     if [ -n "$ADDRESS" ]; then set -- "$@" --address "$ADDRESS"; fi
     if provisioning=$(python3 -m vs_router.agent.management_console "$@" 2>&1); then
@@ -187,7 +192,7 @@ if [ "$DRY_RUN" != 1 ]; then
         esac
     fi
 else
-    echo "+ management_console --single-uplink --ssh-port $SSH_PORT ${HOSTNAME_ARG:+--hostname $HOSTNAME_ARG}"
+    echo "+ management_console --single-uplink --ssh-port $SSH_PORT ${HOSTNAME_ARG:+--hostname $HOSTNAME_ARG} ${CUSTOM_HOSTNAME_ARG:+--custom-hostname $CUSTOM_HOSTNAME_ARG}"
 fi
 
 # --- 7. Verify: SSH must still be reachable, and so must the panel -----------

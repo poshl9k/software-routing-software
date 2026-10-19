@@ -489,6 +489,158 @@ def test_single_uplink_provision_uses_the_live_lease_and_keeps_ssh(tmp_path):
     assert any(c[0] == 'curl' for c in calls)
 
 
+def test_single_uplink_provision_stores_both_public_names(tmp_path, capsys):
+    from vs_router.management import publication_names, read_management
+
+    vps_host(tmp_path)
+    calls = []
+    state, _ = Console(tmp_path, vps_runner(calls), os.getgid()).provision_single_uplink(
+        hostname='92.51.36.131.nip.io', custom_hostname='panel.example.com')
+    stored = read_management(tmp_path / 'var/lib/vs-router-bootstrap/management.json')
+    assert stored is not None
+    assert stored == state
+    assert stored.hostname == '92.51.36.131.nip.io'
+    assert stored.custom_hostname == 'panel.example.com'
+    assert publication_names(stored) == ('92.51.36.131.nip.io', 'panel.example.com')
+    assert next(c for c in calls if c[0] == 'curl')[-1] == 'https://panel.example.com/health'
+    assert capsys.readouterr().err == ''
+
+
+def test_single_uplink_provision_refuses_duplicate_names_before_writing(tmp_path):
+    vps_host(tmp_path)
+    calls = []
+    console = Console(tmp_path, vps_runner(calls), os.getgid())
+    with pytest.raises(ValueError, match='^management.hostname_duplicate$'):
+        console.provision_single_uplink(address=VPS.address, hostname='panel.example.com',
+                                        custom_hostname='panel.example.com')
+    assert not (tmp_path / 'var/lib/vs-router-bootstrap/management.json').exists()
+    assert not (tmp_path / 'etc/caddy/caddy.json').exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize('hostname', ['panel.example.com', '203.0.113.9.nip.io'])
+def test_single_uplink_provision_warns_about_non_host_reserve(tmp_path, capsys, hostname):
+    vps_host(tmp_path)
+    state, _ = Console(tmp_path, vps_runner([]), os.getgid()).provision_single_uplink(
+        hostname=hostname)
+    warning = capsys.readouterr().err
+    assert 'WARNING' in warning
+    assert f'--custom-hostname {hostname}' in warning
+    assert '--hostname 92.51.36.131.nip.io' in warning
+    record = json.loads((tmp_path / 'var/lib/vs-router-bootstrap/management.json').read_text())
+    assert record['hostname'] == state.hostname == hostname
+    assert record['custom_hostname'] is None
+
+
+def test_single_uplink_provision_does_not_warn_about_host_reserve(tmp_path, capsys):
+    vps_host(tmp_path)
+    state, _ = Console(tmp_path, vps_runner([]), os.getgid()).provision_single_uplink(
+        hostname='92.51.36.131.nip.io')
+    assert capsys.readouterr().err == ''
+    assert state.custom_hostname is None
+
+
+@pytest.mark.parametrize('field', ['hostname', 'custom_hostname'])
+def test_single_uplink_provision_validates_both_names_before_writing(tmp_path, field):
+    from pydantic import ValidationError
+
+    vps_host(tmp_path)
+    calls = []
+    console = Console(tmp_path, vps_runner(calls), os.getgid())
+    with pytest.raises(ValidationError):
+        console.provision_single_uplink(address=VPS.address, **{field: 'not a name'})
+    assert not (tmp_path / 'var/lib/vs-router-bootstrap/management.json').exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize('extra', [[], ['--check']])
+def test_management_cli_refuses_custom_name_without_single_uplink(monkeypatch, capsys, extra):
+    from vs_router.agent import management_console
+
+    monkeypatch.setattr('sys.argv', ['management_console', '--custom-hostname',
+                                    'panel.example.com', *extra])
+    monkeypatch.setattr(management_console, 'Console',
+                        lambda: pytest.fail('invalid CLI must not construct a host console'))
+    monkeypatch.setattr(management_console, 'check',
+                        lambda: pytest.fail('invalid CLI must not check host identity'))
+    assert management_console.main() == 1
+    assert 'management.custom_hostname_requires_single_uplink' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('hostname,custom_hostname,primary', [
+    ('92.51.36.131.nip.io', 'panel.example.com', 'panel.example.com'),
+    ('92.51.36.131.nip.io', None, '92.51.36.131.nip.io'),
+    (None, 'panel.example.com', 'panel.example.com'),
+    (None, None, '92.51.36.131'),
+])
+def test_management_cli_prints_both_name_slots_and_primary_url(
+        tmp_path, monkeypatch, capsys, hostname, custom_hostname, primary):
+    from vs_router.agent import management_console
+
+    vps_host(tmp_path)
+    console = Console(tmp_path, vps_runner([]), os.getgid())
+    monkeypatch.setattr(management_console, 'Console', lambda: console)
+    monkeypatch.setattr(management_console.os, 'geteuid', lambda: 0)
+    argv = ['management_console', '--single-uplink', '--path-prefix', '/panelpath']
+    if hostname is not None:
+        argv += ['--hostname', hostname]
+    if custom_hostname is not None:
+        argv += ['--custom-hostname', custom_hostname]
+    monkeypatch.setattr('sys.argv', argv)
+    assert management_console.main() == 0
+    output = capsys.readouterr()
+    assert f'Reserve hostname: {hostname or "(none)"}' in output.out
+    assert f'Custom hostname: {custom_hostname or "(none)"}' in output.out
+    assert f'Panel: https://{primary}/panelpath/' in output.out
+    assert output.err == ''
+
+
+def test_single_uplink_provision_publishes_both_acme_subjects(tmp_path):
+    vps_host(tmp_path)
+    state, _ = Console(tmp_path, vps_runner([]), os.getgid()).provision_single_uplink(
+        hostname='92.51.36.131.nip.io', custom_hostname='panel.example.com')
+    caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
+    assert caddy == generate_caddy_json(ConfigurationVersion(), state)
+    names = ['92.51.36.131.nip.io', 'panel.example.com']
+    assert caddy['apps']['tls']['certificates']['automate'] == names
+    policy = caddy['apps']['tls']['automation']['policies'][0]
+    assert policy['subjects'] == names
+    assert policy['issuers'][0]['module'] == 'acme'
+    # Both subjects use the same HTTP-01 listener and firewall opening.
+    assert caddy['apps']['http']['servers']['management_acme']['listen'] == ['92.51.36.131:80']
+    rules = (tmp_path / 'var/lib/vs-router-bootstrap/management.nft').read_text()
+    assert 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 accept' in rules
+
+
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_online_installer_forwards_custom_hostname_without_host_actions(dry_run):
+    from pathlib import Path
+
+    source = (Path(__file__).parents[1] / 'packaging/online-install.sh').read_text()
+    # Run only argument parsing and the publication block, with python3 replaced
+    # by an argv recorder. Never execute the privileged installer or console.
+    arguments = source[:source.index('\nrun() {')]
+    publish = source[source.index('# --- 6. Publish'):source.index('# --- 7. Verify')]
+    code = arguments + '\npython3() { printf "ARG:%s\\n" "$@"; }\n' + publish
+    argv = ['sh', '-c', code, 'online-install.sh', '--hostname', '92.51.36.131.nip.io',
+            '--custom-hostname', 'panel.example.com']
+    if dry_run:
+        argv.append('--dry-run')
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    if dry_run:
+        assert '+ management_console --single-uplink --ssh-port 22' in result.stdout
+        assert '--hostname 92.51.36.131.nip.io' in result.stdout
+        assert '--custom-hostname panel.example.com' in result.stdout
+        assert 'ARG:' not in result.stdout
+    else:
+        assert result.stdout.splitlines() == [
+            'ARG:-m', 'ARG:vs_router.agent.management_console', 'ARG:--single-uplink',
+            'ARG:--ssh-port', 'ARG:22', 'ARG:--hostname', 'ARG:92.51.36.131.nip.io',
+            'ARG:--custom-hostname', 'ARG:panel.example.com',
+        ]
+
+
 def test_single_uplink_provision_refuses_a_second_port(tmp_path):
     host(tmp_path)  # two wired ports
     console = Console(tmp_path, recording_runner([]), os.getgid())

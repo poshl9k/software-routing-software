@@ -227,7 +227,7 @@ class Console:
         return None
 
     def provision_single_uplink(self, interface=None, address=None, hostname=None,
-                                path_prefix=None, ssh_port=22):
+                                custom_hostname=None, path_prefix=None, ssh_port=22):
         """One-NIC (VPS) provisioning, run over SSH: no console, no ISO markers.
 
         The uplink keeps its own addressing (DHCP or static); only the panel is
@@ -245,7 +245,16 @@ class Console:
             if address is None:
                 raise ValueError('management.address_unavailable')
         state = Management(interface=name, mac=mac, address=address,
-                           mode='single-uplink', hostname=hostname, path_prefix=path_prefix)
+                           mode='single-uplink', hostname=hostname,
+                           custom_hostname=custom_hostname, path_prefix=path_prefix)
+        if state.hostname is not None and state.hostname == state.custom_hostname:
+            raise ValueError('management.hostname_duplicate')
+        if (state.hostname is not None and state.custom_hostname is None
+                and state.hostname != f'{state.ip}.nip.io'):
+            print(f'WARNING: --hostname {state.hostname} sets the reserve name, '
+                  f'not your own panel domain. Use --custom-hostname {state.hostname} '
+                  f'for your own domain and --hostname {state.ip}.nip.io for the reserve; '
+                  'both names will be published.', file=sys.stderr)
         previous = read_management(self.path(STATE_PATH))
         if previous is not None and previous != state:
             raise ValueError('management.migration_not_supported')
@@ -447,13 +456,17 @@ def main():
                         help='one-NIC VPS: publish the panel on the uplink over SSH (keeps SSH open)')
     parser.add_argument('--interface', help='uplink interface for --single-uplink '
                                             '(default: the only wired port)')
-    parser.add_argument('--hostname', help='public hostname for an ACME certificate, e.g. <ip>.nip.io')
+    parser.add_argument('--hostname', help='reserve panel name for ACME, e.g. <ip>.nip.io; '
+                                          'published alongside --custom-hostname')
+    parser.add_argument('--custom-hostname', help='your own panel domain; the reserve stays as it is')
     parser.add_argument('--path-prefix', dest='path_prefix', help='secret panel path, e.g. /uOE3flWG7hvM')
     parser.add_argument('--ssh-port', type=int, default=22,
                         help='SSH port kept open on a --single-uplink host (default 22)')
     parser.add_argument('--check', action='store_true', help='identity gate used at service startup')
     args = parser.parse_args()
     try:
+        if args.custom_hostname is not None and not args.single_uplink:
+            raise ValueError('management.custom_hostname_requires_single_uplink')
         if args.check:
             check()
             return 0
@@ -462,9 +475,12 @@ def main():
         if args.single_uplink:
             state, fingerprint = Console().provision_single_uplink(
                 interface=args.interface, address=args.address,
-                hostname=args.hostname, path_prefix=args.path_prefix,
-                ssh_port=args.ssh_port)
-            print(f'Panel: https://{state.hostname or state.ip}{state.path_prefix or ""}/')
+                hostname=args.hostname, custom_hostname=args.custom_hostname,
+                path_prefix=args.path_prefix, ssh_port=args.ssh_port)
+            print(f'Reserve hostname: {state.hostname or "(none)"}')
+            print(f'Custom hostname: {state.custom_hostname or "(none)"}')
+            print(f'Panel: https://{state.custom_hostname or state.hostname or state.ip}'
+                  f'{state.path_prefix or ""}/')
             print(f'CA SHA-256: {fingerprint}')
             print('SSH and the panel are open on the uplink; '
                   'everything else is dropped until the first apply.')
