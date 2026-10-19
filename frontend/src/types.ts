@@ -99,12 +99,18 @@ export interface DNS {
   recursive: boolean;
   log_queries: boolean;
 }
+export interface Subscriber {
+  name: string;
+  label: string | null;
+}
 export interface Peer {
   name: string;
   public_key: string;
   preshared_key: Secret | null;
   private_key?: Secret | null;
   allowed_ips: string[];
+  subscriber?: string | null;
+  dns_mode?: "panel" | "own";
 }
 export interface Tunnel {
   name: string;
@@ -377,6 +383,8 @@ export interface Configuration {
   outbound_nat: OutboundNAT[];
   dns: DNS;
   tunnels: Tunnel[];
+  /** Optional in legacy snapshots; backend defaults to an empty tuple. */
+  subscribers?: Subscriber[];
   sites: CaddySite[];
   ddns: DDNSUpdate[];
   ssh: { interfaces: string[]; wan_confirmed_interfaces: string[] };

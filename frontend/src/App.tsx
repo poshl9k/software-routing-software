@@ -29,6 +29,7 @@ import Dashboard, { Events } from "./pages/Dashboard";
 import Network from "./pages/Network";
 import Firewall from "./pages/Firewall";
 import Routing from "./pages/Routing";
+import Subscribers from "./pages/Subscribers";
 import SSH from "./pages/SSH";
 import { DHCP, DNS, Proxy, Tunnels } from "./pages/Services";
 import ApplyScreen from "./pages/ApplyScreen";
@@ -119,6 +120,7 @@ export const navigation: { group: string; items: NavigationItem[] }[] = [
     { to: "/network", label: "Подключения и адреса", icon: "network" },
     { to: "/tunnels", label: "Туннели", icon: "tunnels" },
     { to: "/routing", label: "Выборочная маршрутизация", icon: "routing" },
+    { to: "/subscribers", label: "Абоненты", icon: "tunnels" },
   ] },
   { group: "Домашняя сеть", items: [
     { to: "/dhcp", label: "DHCP", icon: "dhcp" },
@@ -336,6 +338,7 @@ export default function App() {
             <Route path="tunnels" element={<Tunnels />} />
             <Route path="proxy" element={<Proxy />} />
             <Route path="routing" element={<Routing />} />
+            <Route path="subscribers" element={<Subscribers />} />
             <Route path="firewall" element={<Firewall />} />
             <Route path="ssh" element={<SSH />} />
             <Route path="apply" element={<ApplyScreen />} />

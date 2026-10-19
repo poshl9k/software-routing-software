@@ -4,6 +4,7 @@ import type { HostProfile } from "./types";
 /** Host facts gate screens, not product names: legacy hosts still use capabilities. */
 export const hostScreenGates = [
   { fact: "dhcp", unavailable: false, screens: ["/dhcp"] },
+  { fact: "profile", unavailable: "router", screens: ["/subscribers"] },
 ] as const satisfies readonly {
   fact: keyof HostProfile;
   unavailable: HostProfile[keyof HostProfile];

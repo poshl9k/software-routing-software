@@ -5,6 +5,7 @@ import { useConfiguration } from "../state";
 import type {
   Tunnel,
   Peer,
+  Subscriber,
   CaddySite,
   DDNSUpdate,
   Configuration,
@@ -652,9 +653,10 @@ function Collection<T extends Row>({
   );
 }
 /** A peer edits a private copy; only Save or confirmed deletion touches the outer draft. */
-function PeerEditor({ peer, peers, disabled, save, remove, cancel }: {
+function PeerEditor({ peer, peers, subscribers, disabled, save, remove, cancel }: {
   peer: Peer;
   peers: Peer[];
+  subscribers: Subscriber[];
   disabled: boolean;
   save: (peer: Peer) => void;
   remove: () => void;
@@ -704,6 +706,11 @@ function PeerEditor({ peer, peers, disabled, save, remove, cancel }: {
             <Field label="Имя пира" value={value.name} valid={nameValid(value.name)}
               hint="Латиница, цифры, «_»; до 31 символа" onChange={(name) => update({ name })} />
           )}
+          <Select label="Абонент" value={value.subscriber ?? ""}
+            options={[{ value: "", label: "— без абонента (служебный пир) —" },
+              ...subscribers.map((subscriber) => ({ value: subscriber.name,
+                label: subscriber.label ? `${subscriber.name} — ${subscriber.label}` : subscriber.name }))]}
+            onChange={(subscriber) => update({ subscriber: subscriber || null })} />
           <Field label="Публичный ключ пира" value={value.public_key} valid={!!value.public_key.trim()}
             hint={value.private_key ? "Сгенерирован панелью вместе с приватным" : "Введён вручную (клиентский)"}
             onChange={(public_key) => update({ public_key, private_key: null })} />
@@ -740,8 +747,9 @@ function peerActivityLabel(seconds: number | null | undefined): string {
 }
 
 /** Mounted only within the existing tunnel draft editor, never a second draft lifecycle. */
-function TunnelEditorTabs({ tunnel, patch, created, disabled, setError, setBusy, showQr, children }: {
+function TunnelEditorTabs({ tunnel, subscribers, patch, created, disabled, setError, setBusy, showQr, children }: {
   tunnel: Tunnel;
+  subscribers: Subscriber[];
   patch: (patch: Partial<Tunnel>) => void;
   created: boolean;
   disabled: boolean;
@@ -850,7 +858,7 @@ function TunnelEditorTabs({ tunnel, patch, created, disabled, setError, setBusy,
           ])} />
         </div>
       </>}
-      {selected && <PeerEditor peer={selected} peers={tunnel.peers} disabled={disabled}
+      {selected && <PeerEditor peer={selected} peers={tunnel.peers} subscribers={subscribers} disabled={disabled}
         cancel={() => setSelected(null)} save={(peer) => {
           replacePeers(latest.current.tunnel.peers.map((item) => item === selected ? peer : item));
           setSelected(null);
@@ -999,7 +1007,7 @@ export function Tunnels() {
           t.protocol,
         ]}
         form={(t, patch, created, disabled, setError, importedAddresses, setBusy) => (
-          <TunnelEditorTabs tunnel={t} patch={patch} created={created} disabled={disabled} setError={setError} setBusy={setBusy} showQr={showQr}>
+          <TunnelEditorTabs tunnel={t} subscribers={c.subscribers ?? []} patch={patch} created={created} disabled={disabled} setError={setError} setBusy={setBusy} showQr={showQr}>
           <PageSection title="Идентификация">
           <FormGrid>
             {created ? (

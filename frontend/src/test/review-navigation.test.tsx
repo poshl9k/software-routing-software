@@ -285,5 +285,9 @@ it("keeps the DHCP section when the host record does not say", async () => {
 it.each([false, true])("criterion_7_other_navigation_unchanged_when_DHCP_is_%s", async (dhcp) => {
   openOn("/", profile(dhcp));
   await screen.findByText(dhcp ? "vs-router" : "vs-panel");
-  expect(navHrefs().filter((to) => to !== "/dhcp")).toEqual(otherHrefs);
+  // Subscribers exist only on the panel (ADR-0018/0026), so a router host hides
+  // exactly that one item — and nothing else moves in either direction.
+  const hidden = dhcp ? ["/subscribers"] : [];
+  expect(navHrefs().filter((to) => to !== "/dhcp"))
+    .toEqual(otherHrefs.filter((to) => !hidden.includes(to)));
 });
