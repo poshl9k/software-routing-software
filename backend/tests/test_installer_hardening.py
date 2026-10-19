@@ -5,6 +5,7 @@ These tests never invoke host service/network/package managers.
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tomllib
 
@@ -277,6 +278,121 @@ def test_iso_requires_verified_inputs(tmp_path):
                             env=env, text=True, capture_output=True)
     assert result.returncode != 0
     assert 'full reviewed source commit' in result.stderr
+
+
+@pytest.fixture
+def online_update_payload(tmp_path):
+    payload = tmp_path / 'payload'
+    packaging = payload / 'backend/packaging'
+    shutil.copytree(PACKAGING, packaging)
+    # Only the copied installer is invoked, never the real privileged script.
+    (packaging / 'install.sh').write_text(
+        '#!/bin/sh\n[ "$VS_ROUTER_KEEP_SSH" = 1 ] && [ "$VS_ROUTER_PROFILE" = panel ]\n')
+    (packaging / 'update-run.sh').chmod(0o644)
+    for item in ('alembic', 'alembic.ini', 'pyproject.toml'):
+        source = ROOT / 'backend' / item
+        target = payload / 'backend' / item
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copyfile(source, target)
+    (payload / 'REVISION').write_text('a' * 40 + '\n')
+    wheel = payload / 'artifacts/vs_router_backend-0.1.0-py3-none-any.whl'
+    wheel.parent.mkdir()
+    wheel.write_bytes(b'wheel fixture: copied, never installed')
+    ui = payload / 'artifacts/ui'
+    ui.mkdir()
+    (ui / 'index.html').write_text('<!doctype html>\n')
+    return payload, tmp_path / 'opt/vs-router', wheel
+
+
+def stage_online_update_tree(payload, tree, wheel, *, dry_run=False):
+    source = (PACKAGING / 'online-install.sh').read_text()
+    # Execute precisely the privileged-install/staging block, with its actual
+    # dry-run helper; all other host-changing installer stages stay unexecuted.
+    run = source[source.index('run() {'):source.index('\n[ "$(id -u)"')]
+    block = source[source.index('if [ -d "${PACKAGING:-}" ]; then'):
+                   source.index('if [ -n "$UI" ]; then')]
+    return bash(f'set -eu\numask 022\n{run}\n{block}', env={
+        **os.environ, 'PACKAGING': str(payload / 'backend/packaging'),
+        'WHEEL': str(wheel), 'UI': str(payload / 'artifacts/ui'),
+        'VS_ROUTER_REPO_ROOT': str(tree),
+        'DRY_RUN': '1' if dry_run else '0',
+    })
+
+
+def test_online_installer_stages_pinned_update_tree(online_update_payload):
+    payload, tree, wheel = online_update_payload
+    result = stage_online_update_tree(payload, tree, wheel)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tree / 'REVISION').read_text() == 'a' * 40 + '\n'
+    entry = tree / 'backend/packaging/update-run.sh'
+    assert entry.read_bytes() == (payload / 'backend/packaging/update-run.sh').read_bytes()
+    assert os.access(entry, os.X_OK)
+    assert entry.stat().st_mode & 0o777 == 0o755
+    assert (tree / 'backend/dist' / wheel.name).read_bytes() == wheel.read_bytes()
+    # The rollback re-runs install.sh, which deploys the UI from frontend/dist.
+    assert (tree / 'frontend/dist/index.html').read_text() == '<!doctype html>\n'
+    for source in (payload / 'backend').rglob('*'):
+        if source.is_file():
+            dest = tree / source.relative_to(payload)
+            assert dest.read_bytes() == source.read_bytes()
+            assert not dest.stat().st_mode & 0o022
+    assert 'Update tree staged' in result.stdout and str(tree) in result.stdout
+    assert not list(tree.rglob('update.json'))
+
+
+def test_online_installer_update_tree_is_idempotent(online_update_payload):
+    payload, tree, wheel = online_update_payload
+    first = stage_online_update_tree(payload, tree, wheel)
+    assert first.returncode == 0, first.stderr
+
+    def snapshot():
+        return {str(p.relative_to(tree)): (p.read_bytes(), p.stat().st_mode)
+                for p in tree.rglob('*') if p.is_file()}
+
+    before = snapshot()
+    second = stage_online_update_tree(payload, tree, wheel)
+    assert second.returncode == 0, second.stderr
+    assert snapshot() == before
+
+
+def test_online_installer_without_revision_stages_nothing(online_update_payload):
+    payload, tree, wheel = online_update_payload
+    (payload / 'REVISION').unlink()
+    result = stage_online_update_tree(payload, tree, wheel)
+    assert result.returncode == 0, result.stderr
+    assert not tree.exists()
+    assert 'WARNING' in result.stderr and 'no REVISION' in result.stderr
+    assert 'Update tree staged' not in result.stdout
+
+
+def test_online_installer_failed_install_stages_nothing(online_update_payload):
+    payload, tree, wheel = online_update_payload
+    (payload / 'backend/packaging/install.sh').write_text('exit 19\n')
+    result = stage_online_update_tree(payload, tree, wheel)
+    assert result.returncode == 19
+    assert not tree.exists()
+
+
+def test_online_installer_update_staging_dry_run(online_update_payload):
+    payload, tree, wheel = online_update_payload
+    result = stage_online_update_tree(payload, tree, wheel, dry_run=True)
+    assert result.returncode == 0, result.stderr
+    assert not tree.exists()
+    assert '+ install ' in result.stdout
+
+
+def test_online_installer_update_staging_without_optional_metadata(online_update_payload):
+    payload, tree, wheel = online_update_payload
+    shutil.rmtree(payload / 'backend/alembic')
+    (payload / 'backend/alembic.ini').unlink()
+    (payload / 'backend/pyproject.toml').unlink()
+    result = stage_online_update_tree(payload, tree, wheel)
+    assert result.returncode == 0, result.stderr
+    assert (tree / 'backend/packaging/update-run.sh').is_file()
+    assert (tree / 'backend/dist' / wheel.name).is_file()
+    assert not (tree / 'backend/alembic').exists()
 
 
 def test_shell_syntax():

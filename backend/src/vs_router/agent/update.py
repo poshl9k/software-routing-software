@@ -133,9 +133,18 @@ def release_status(config_path=None, state_path=None, *, opener=None,
     return status
 
 
+def update_entry() -> Path:
+    """Resolve the host-owned updater entry at call time."""
+    root = Path(os.environ.get('VS_ROUTER_REPO_ROOT', REPO_ROOT))
+    entry = root / 'backend/packaging/update-run.sh'
+    if not entry.is_file():
+        raise ApplyError('update.entry_missing')
+    return entry
+
+
 def _spawn(release: str, manifest_url: str) -> None:
     """Start the detached updater; never block the RPC loop on the build."""
-    script = str(REPO_ROOT / 'backend/packaging/update-run.sh')
+    script = str(update_entry())
     args = ['/bin/bash', script, '--release', release, '--manifest-url', manifest_url]
     systemd_run = ['systemd-run', f'--unit={UNIT.removesuffix(".service")}', '--collect', '--']
     try:
@@ -161,5 +170,6 @@ def apply_update(release: str, *, opener=None, unit_active: bool | None = None,
     manifest = fetch_manifest(manifest_url, opener=opener)
     if manifest['commit'] != release:
         raise ApplyError('update.release_mismatch')
+    update_entry()
     (spawn or _spawn)(release, manifest_url)
     return {'started': True, 'release': release}

@@ -126,6 +126,38 @@ fi
 # online path installs the one-NIC panel, not the router.
 if [ -d "${PACKAGING:-}" ]; then
     run env VS_ROUTER_KEEP_SSH=1 VS_ROUTER_PROFILE=panel sh "$PACKAGING/install.sh"
+    # Keep the entry point and the installed wheel for the release updater and
+    # its rollback. VS_ROUTER_REPO_ROOT overrides /opt/vs-router for staging
+    # tests/custom installations (the agent uses the same override).
+    # Never advertise an unversioned payload as an updatable release tree.
+    payload_root=$(CDPATH= cd -- "$PACKAGING/../.." && pwd)
+    update_root=${VS_ROUTER_REPO_ROOT:-/opt/vs-router}
+    if [ ! -f "$payload_root/REVISION" ]; then
+        echo "WARNING: payload has no REVISION; update tree was not staged at $update_root" >&2
+    else
+        run install -d -m 0755 "$update_root/backend/packaging" "$update_root/backend/dist"
+        run cp -R "$PACKAGING/." "$update_root/backend/packaging/"
+        for item in alembic alembic.ini pyproject.toml; do
+            if [ -e "$payload_root/backend/$item" ]; then
+                run cp -R "$payload_root/backend/$item" "$update_root/backend/"
+            fi
+        done
+        if [ -n "$WHEEL" ]; then
+            run install -m 0644 "$WHEEL" "$update_root/backend/dist/$(basename -- "$WHEEL")"
+        fi
+        # The rollback re-runs install.sh, which deploys the UI from a sibling
+        # frontend/dist: without it a rollback restores the backend and leaves the
+        # failed release's UI in place.
+        if [ -n "$UI" ] && [ -f "$UI/index.html" ]; then
+            run install -d -m 0755 "$update_root/frontend"
+            run rm -rf "$update_root/frontend/dist"
+            run cp -R "$UI" "$update_root/frontend/dist"
+        fi
+        run chmod -R u+rwX,go+rX,go-w "$update_root/backend"
+        run chmod 0755 "$update_root/backend/packaging/update-run.sh"
+        run install -m 0644 "$payload_root/REVISION" "$update_root/REVISION"
+        echo "Update tree staged at $update_root: REVISION, backend/packaging, available migration metadata${WHEEL:+, backend/dist/$(basename -- "$WHEEL")}${UI:+, frontend/dist}"
+    fi
 fi
 if [ -n "$UI" ]; then
     run install -d -m 0755 /var/lib/vs-router/ui

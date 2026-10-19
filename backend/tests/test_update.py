@@ -147,13 +147,61 @@ def test_apply_update_rejects_a_mismatch_and_running_unit(monkeypatch):
     assert spawns == []
 
 
-def test_apply_update_starts_a_verified_update(monkeypatch):
+@pytest.mark.parametrize('directory_entry', [False, True])
+def test_apply_update_requires_file_entry(tmp_path, monkeypatch, directory_entry):
     monkeypatch.setenv('VS_ROUTER_UPDATE_MANIFEST_URL', 'https://example.invalid/release.json')
+    monkeypatch.setenv('VS_ROUTER_REPO_ROOT', str(tmp_path))
+    entry = tmp_path / 'backend/packaging/update-run.sh'
+    if directory_entry:
+        entry.mkdir(parents=True)
+    spawns = []
+    with pytest.raises(update_module.ApplyError) as error:
+        update_module.apply_update(COMMIT, opener=opener_for(manifest()),
+                                   unit_active=False, spawn=lambda *a: spawns.append(a))
+    assert error.value.code == 'update.entry_missing'
+    assert spawns == []
+
+
+def test_apply_update_starts_a_verified_update(tmp_path, monkeypatch):
+    monkeypatch.setenv('VS_ROUTER_UPDATE_MANIFEST_URL', 'https://example.invalid/release.json')
+    monkeypatch.setenv('VS_ROUTER_REPO_ROOT', str(tmp_path))
+    entry = tmp_path / 'backend/packaging/update-run.sh'
+    entry.parent.mkdir(parents=True)
+    entry.touch()
     spawns = []
     result = update_module.apply_update(COMMIT, opener=opener_for(manifest()),
                                         unit_active=False, spawn=lambda *a: spawns.append(a))
     assert result == {'started': True, 'release': COMMIT}
     assert spawns == [(COMMIT, 'https://example.invalid/release.json')]
+
+
+def test_spawn_missing_entry_never_starts_subprocess(tmp_path, monkeypatch):
+    monkeypatch.setenv('VS_ROUTER_REPO_ROOT', str(tmp_path))
+    calls = []
+    monkeypatch.setattr(update_module.subprocess, 'run', lambda *a, **kw: calls.append(('run', a)))
+    monkeypatch.setattr(update_module.subprocess, 'Popen', lambda *a, **kw: calls.append(('Popen', a)))
+    with pytest.raises(update_module.ApplyError) as error:
+        update_module._spawn(COMMIT, 'https://example.invalid/release.json')
+    assert error.value.code == 'update.entry_missing'
+    assert calls == []
+
+
+def test_spawn_existing_entry_uses_systemd_run(tmp_path, monkeypatch):
+    monkeypatch.setenv('VS_ROUTER_REPO_ROOT', str(tmp_path))
+    entry = tmp_path / 'backend/packaging/update-run.sh'
+    entry.parent.mkdir(parents=True)
+    entry.touch()
+    calls = []
+    monkeypatch.setattr(update_module.subprocess, 'run', lambda *a, **kw: calls.append((a, kw)))
+    monkeypatch.setattr(update_module.subprocess, 'Popen',
+                        lambda *a, **kw: pytest.fail('unexpected fallback subprocess'))
+    update_module._spawn(COMMIT, 'https://example.invalid/release.json')
+    assert calls == [((['systemd-run', '--unit=vs-router-update', '--collect', '--',
+                        '/bin/bash', str(entry), '--release', COMMIT,
+                        '--manifest-url', 'https://example.invalid/release.json'],),
+                      {'check': True, 'timeout': 30,
+                       'stdout': update_module.subprocess.DEVNULL,
+                       'stderr': update_module.subprocess.DEVNULL})]
 
 
 def test_rpc_rejects_a_malformed_release():
