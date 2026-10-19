@@ -64,10 +64,16 @@ sudo ./packaging/install.sh   # каталоги, БД+миграции, AppArmo
 - `vs-router-ddns.timer` — обновления DDNS (5 мин)
 - `vs-router-wg@<iface>.service`, `vs-router-awg@<iface>.service` — userspace-туннели
 
-Ключ шифрования секретов: создайте `/etc/vs-router/secrets.env` (0600, root):
+Ключ шифрования секретов создаёт установщик (`install.sh`, он же запускается
+`online-install.sh` и при обновлении): отсутствующий или пустой
+`/etc/vs-router/secrets.env` получает новый ключ Fernet, 0600 root, а непустой файл
+не перезаписывается — этим ключом расшифровываются все сохранённые секреты.
+Вручную файл нужен только при развёртывании без установщика:
 
 ```sh
 echo "VS_ROUTER_SECRET_KEY=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" | sudo tee /etc/vs-router/secrets.env
+sudo chmod 0600 /etc/vs-router/secrets.env
+sudo systemctl restart vs-router-agent vs-router-web
 ```
 
 Первый вход: `POST /api/setup` (или мастер первого запуска в UI) — работает, пока таблица пользователей пуста. Мастер первого запуска («Базовая сеть») выбирает LAN-интерфейс из реальных портов системы (`GET /api/host/interfaces`, в опциях виден MAC), а не из свободного текста.

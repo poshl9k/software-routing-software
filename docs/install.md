@@ -93,14 +93,26 @@ sudo pip install --break-system-packages backend/dist/vs_router_backend-*.whl
 
 ## 5. Секреты
 
-Ключ шифрования секретов (Fernet) — обязателен до первого запуска:
+Ключ шифрования секретов (Fernet) создаёт **установщик** — `install.sh` (его же
+запускает `online-install.sh`), один раз: нет файла или он пуст → новый ключ,
+`/etc/vs-router/secrets.env`, 0600 root. Непустой файл не перезаписывается никогда,
+в том числе при обновлении: этим ключом расшифровываются все сохранённые секреты
+(туннели, DDNS, ручные сертификаты), и подмена сделала бы их нечитаемыми.
+
+Руками файл нужен только если установщик не запускался (например, панель развёрнута
+копированием wheel):
 
 ```sh
 sudo install -d -m 0700 /etc/vs-router
 echo "VS_ROUTER_SECRET_KEY=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
   | sudo tee /etc/vs-router/secrets.env
 sudo chmod 0600 /etc/vs-router/secrets.env
+sudo systemctl restart vs-router-agent vs-router-web
 ```
+
+Отсутствие файла на первый взгляд безвредно: юниты читают его как
+`EnvironmentFile=-…`, сервисы стартуют, а падает только первая операция с секретом —
+`503 secret.encryption_unavailable` (например, сохранение туннеля).
 
 Файл подключён к сервисам web и agent через `EnvironmentFile`. Дополнительные переменные (опционально):
 
