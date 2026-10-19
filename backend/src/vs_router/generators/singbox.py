@@ -15,6 +15,7 @@ from ipaddress import ip_address
 from typing import Callable
 
 from vs_router.schema import Configuration, ConfigurationVersion, ProxyOutbound
+from vs_router.validators import derive_dns_detours, routing_exit_tag
 
 from . import marks
 
@@ -184,18 +185,12 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
         # Domain matching needs DNS visibility (ADR-0020). Do not pretend that
         # sniffing implements the subscriber resolver, or enable it implicitly.
         target = rule.exit
+        tag = routing_exit_tag(target) or IMPLICIT_DIRECT_TAG
         if target.kind == "tunnel":
             assert target.name is not None  # Guaranteed by Exit validation.
             tunnel = tunnels[target.name]
-            # ':' cannot occur in contract Name tags; generated tags cannot
-            # collide with a proxy/group or an implicit outbound.
-            tag = f"routing-tunnel:{tunnel.name}"
             tunnel_outbounds.setdefault(tag, {"type": "direct", "tag": tag,
                                                "bind_interface": tunnel.interface})
-        elif target.kind == "outbound":
-            tag = target.tag
-        else:
-            tag = IMPLICIT_DIRECT_TAG
         rules.append({**match, "action": "route", "outbound": tag})
 
     # Unmatched devices are rejected BEFORE legacy bypass/routing/defaults,
@@ -221,6 +216,8 @@ def generate_singbox(version: ConfigurationVersion,
     select their own exits. No nftables, policy routing or service changes.
     """
     configuration = version.configuration
+    # Recheck even for model_copy/model_construct callers that bypass validation.
+    dns_detours = derive_dns_detours(configuration)
     proxies = configuration.proxies
 
     # Bypass (S3b): excluded traffic routed straight out. Emitted before every
@@ -339,8 +336,9 @@ def generate_singbox(version: ConfigurationVersion,
                 rendered["path"] = server.path
             if server.domain_resolver is not None:
                 rendered["domain_resolver"] = server.domain_resolver
-            if server.detour is not None:
-                rendered["detour"] = server.detour
+            detour = server.detour if server.detour is not None else dns_detours.get(server.tag)
+            if detour is not None:
+                rendered["detour"] = detour
             if server.type in ("tls", "https"):
                 rendered["tls"] = {"server_name": server.tls_name} if server.tls_name else {}
             try:

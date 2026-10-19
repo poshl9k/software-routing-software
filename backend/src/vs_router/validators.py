@@ -1,4 +1,9 @@
-"""Domain validation; errors are stable codes suitable for UI localization."""
+"""Domain validation; errors are stable codes suitable for UI localization.
+
+DNS/routing domain intersection is case-insensitive: suffixes overlap when their
+label-boundary subtrees overlap, and an exact name overlaps a DNS suffix only
+when it belongs to that subtree (a leading suffix dot excludes the apex).
+"""
 from ipaddress import ip_address, ip_interface, ip_network
 import re
 import warnings
@@ -307,6 +312,55 @@ def validate_configuration(c):
         fail("ruleset.duplicate_name")
     validate_proxies(c)
     validate_routing(c)
+    derive_dns_detours(c)
+
+
+def routing_exit_tag(target):
+    """One product-exit mapping for traffic routing and DNS; direct needs no detour."""
+    if target.kind == "tunnel":
+        assert target.name is not None  # Guaranteed by Exit validation.
+        # ':' is forbidden in contract Name tags, avoiding proxy/group collisions.
+        return f"routing-tunnel:{target.name}"
+    if target.kind == "outbound":
+        return target.tag
+    return None
+
+
+def _domain_in_suffix(domain, suffix):
+    domain, suffix = domain.lower(), suffix.lower()
+    if suffix.startswith("."):
+        return domain.endswith(suffix)
+    return domain == suffix or domain.endswith("." + suffix)
+
+
+def derive_dns_detours(c):
+    """Derive only omitted detours; reject conflicting exits before rendering.
+
+    Inspect explicit domain text only, never expand rule sets or resolve IPs.
+    All matching rules contribute, regardless of order or routing subject, since
+    a DNS server has one shared detour rather than a per-device/per-query exit.
+    """
+    derived = {}
+    for server in c.tproxy.dns.servers:
+        if server.detour is not None:
+            continue
+        suffixes = [suffix for rule in c.tproxy.dns.rules if rule.server == server.tag
+                    for suffix in rule.domain_suffix]
+        tags = set()
+        for rule in c.routing_rules:
+            overlaps = any(
+                _domain_in_suffix(suffix.lstrip("."), other.lstrip("."))
+                or _domain_in_suffix(other.lstrip("."), suffix.lstrip("."))
+                for suffix in suffixes for other in rule.domain_suffix
+            ) or any(_domain_in_suffix(domain, suffix)
+                     for suffix in suffixes for domain in rule.domain_exact)
+            if overlaps and (tag := routing_exit_tag(rule.exit)) is not None:
+                tags.add(tag)
+        if len(tags) > 1:
+            fail("tproxy.dns_detour_ambiguous")
+        if tags:
+            derived[server.tag] = next(iter(tags))
+    return derived
 
 
 def validate_routing(c):
