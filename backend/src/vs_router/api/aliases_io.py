@@ -15,7 +15,7 @@ from ..schema import Alias, Configuration
 from ..validators import port_range
 from .auth import admin, get_db
 from .errors import APIError
-from .versions import draft
+from .versions import draft, profile_default
 
 router = APIRouter()
 
@@ -173,7 +173,7 @@ def import_aliases(body: dict = Body(), db: Session = Depends(get_db)):
         previous = db.scalars(select(ConfigurationRow).where(ConfigurationRow.status == 'confirmed')
                               .order_by(ConfigurationRow.id.desc())).first()
         row = ConfigurationRow(id=(db.scalar(select(func.max(ConfigurationRow.id))) or 0) + 1,
-                               status='draft', profile=previous.profile if previous else 'router',
+                               status='draft', profile=previous.profile if previous else profile_default(),
                                configuration=previous.configuration if previous else Configuration())
         db.add(row)
         db.flush()

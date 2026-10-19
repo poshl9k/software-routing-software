@@ -6,7 +6,7 @@ import {
   Switch,
 } from "@mui/material";
 import { Link } from "react-router-dom";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
 import { useApplyCommands, statusLabels, useRouterState } from "../state";
@@ -60,6 +60,15 @@ const reasonTexts: Record<string, string> = {
     "домен не подтвердился: Let's Encrypt не выдал сертификат (проверьте, что DNS указывает на этот хост и порт 80 доступен). Прежний домен панели сохранён",
   "management.ssh_unprotected":
     "публикация пересобрала бы firewall без SSH на интерфейсе управления — сначала разрешите SSH на этом интерфейсе в разделе «SSH», иначе доступ к хосту будет потерян",
+  // Product identity (ADR-0026): the document's product must match the host's
+  // marker, which the installer fixes and the panel cannot change. The
+  // operator's action is on the host, not in the draft.
+  "configuration.profile_mismatch":
+    "черновик сохранён для другого продукта (router/panel), а хост помечен иначе — профиль задаётся установщиком и в панели не меняется, примените конфигурацию на подходящем хосте",
+  "profile.capability_mismatch":
+    "профиль продукта на хосте противоречит его возможностям (наличие DHCP-сервера) — переустановите продукт, соответствующий машине",
+  "profile.subscribers_not_supported":
+    "абоненты есть только у панели (vs-panel) — на хосте-роутере их применить нельзя",
 };
 const reasonText = (code: string) => reasonTexts[code] ?? code;
 
@@ -120,10 +129,17 @@ export default function ApplyScreen() {
     queryFn: () => api.diff(confirmed!.id, shownDraft!.id),
     enabled: !!confirmed && !!shownDraft,
   });
+  // A guard code arrives as an ApiError whose message IS the code, so the
+  // panel used to show `configuration.profile_mismatch` with no next step.
+  // Route it through the same labels the marker path uses.
+  const apiError =
+    error instanceof ApiError && reasonTexts[error.code]
+      ? new Error(applyErrorText(error))
+      : error;
   return (
     <div className="apply-wrap">
       <PageHeader>Применение изменений</PageHeader>
-      <ErrorNotice error={error || (state?.error ?
+      <ErrorNotice error={apiError || (state?.error ?
         new Error(applyErrorText(state.error)) : null)} />
       {!confirmed && (
         <Alert severity="warning">

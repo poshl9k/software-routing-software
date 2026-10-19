@@ -19,6 +19,7 @@ from ..schema import Configuration, ConfigurationVersion
 from .auth import admin, get_db
 from .configuration import encrypt_inputs, redact
 from .errors import APIError
+from .versions import profile_default
 
 router = APIRouter()
 
@@ -160,7 +161,7 @@ def restore(body: dict = Body(), db: Session = Depends(get_db)):
                            if x.get('certificate_mode') != 'manual'
                            or (x.get('certificate') and x.get('private_key'))]
         configuration = Configuration.model_validate(config)
-        profile = ConfigurationVersion(profile=item.get('profile', 'router')).profile
+        profile = ConfigurationVersion(profile=item.get('profile') or profile_default()).profile
     except APIError:
         raise
     except Exception:

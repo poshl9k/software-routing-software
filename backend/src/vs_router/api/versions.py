@@ -1,5 +1,5 @@
 import os
-from typing import Annotated
+from typing import Annotated, cast
 from fastapi import APIRouter, Body, Depends, Path, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -10,7 +10,8 @@ from ..agent.daemon import UnixSocketTransport
 from ..db import ConfigurationRow
 from ..generators.singbox import generate_singbox
 from ..generators.wireguard import materialize_addresses
-from ..schema import Configuration
+from ..profile import read_profile
+from ..schema import Configuration, Profile
 from .auth import admin, current_user, get_db
 from .configuration import check_roles, parse_configuration, redact, structural_diff, validate
 from .errors import APIError
@@ -94,6 +95,18 @@ def view(row):
     return redact(row.snapshot().model_dump(mode="json"))
 
 
+def profile_default() -> Profile:
+    """The product this host declares, for a version created with no predecessor.
+
+    A hardcoded `router` here stamped the first draft of a freshly installed
+    panel as the other product, and the apply gate then refused it with
+    `configuration.profile_mismatch` — the panel could not be applied at all
+    (ADR-0026). An unmarked or unreadable host keeps the schema default, which
+    is the pre-marker behaviour.
+    """
+    return cast(Profile, read_profile() or 'router')
+
+
 @router.get("/versions")
 def versions(db: Session = Depends(get_db)):
     return [view(row) for row in db.scalars(select(ConfigurationRow).order_by(ConfigurationRow.id.desc()))]
@@ -133,7 +146,7 @@ def create_draft(body: dict | None = Body(default=None), db: Session = Depends(g
     # Explicit monotonic allocation matches save_version's persisted snapshots.
     next_id = (db.scalar(select(func.max(ConfigurationRow.id))) or 0) + 1
     row = ConfigurationRow(id=next_id, status="draft", configuration=configuration,
-                           profile=previous.profile if previous else 'router')
+                           profile=previous.profile if previous else profile_default())
     db.add(row)
     try:
         db.commit()

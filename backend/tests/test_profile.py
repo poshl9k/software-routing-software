@@ -228,6 +228,33 @@ def test_profile_migration_existing_rows_and_storage_roundtrip(tmp_path, monkeyp
         database.dispose()
 
 
+async def test_criterion_9_first_draft_carries_the_host_marker(api, monkeypatch):
+    """A fresh panel stamped `router`, and the apply gate then refused it."""
+    from vs_router.api import versions
+
+    client, database, _ = api
+    await sign_in(client)
+    monkeypatch.setattr(versions, 'read_profile', lambda: 'panel')
+    response = await client.post('/api/draft')
+    assert response.status_code == 201
+    assert response.json()['profile'] == 'panel'
+    # The document the panel itself creates now passes the marker gate.
+    with Session(database) as session:
+        row = session.get(ConfigurationRow, 1)
+        assert row is not None
+        document = row.snapshot().model_dump(mode='json')
+    monkeypatch.setattr(apply_mod, 'read_profile', lambda: 'panel')
+    engine = ApplyEngine(filesystem=FakeFS(), executor=FakeExecutor(),
+                         files=host_files(which=lambda name: None))
+    assert engine.apply_version(document).status == 'confirmed'
+    assert (await client.delete('/api/draft')).status_code == 204
+    # An unmarked host keeps the schema default, exactly as before ADR-0026.
+    monkeypatch.setattr(versions, 'read_profile', lambda: None)
+    response = await client.post('/api/draft')
+    assert response.status_code == 201
+    assert response.json()['profile'] == 'router'
+
+
 async def test_profile_survives_draft_alias_import_and_backup(api):
     client, database, _ = api
     await sign_in(client)

@@ -7,6 +7,10 @@ import tempfile
 
 PROFILE_PATH = Path('/etc/vs-router/profile')
 PROFILES = ('router', 'panel')
+# Readable by the unprivileged web process: the product identity is not a secret
+# (version.json publishes the same value) and the panel must stamp it on a new
+# draft, which it cannot do by reading a root-only file.
+PROFILE_MODE = 0o644
 
 
 def read_profile(path=PROFILE_PATH) -> str | None:
@@ -26,6 +30,7 @@ def record_profile(profile: str, path=PROFILE_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=path.parent)
     try:
+        os.fchmod(fd, PROFILE_MODE)
         with os.fdopen(fd, 'w', encoding='utf-8') as stream:
             stream.write(profile + '\n')
             stream.flush()

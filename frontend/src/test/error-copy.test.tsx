@@ -49,6 +49,18 @@ describe("error copy", () => {
     }
   });
 
+  it("explains every product-identity guard the backend can raise", () => {
+    for (const code of [
+      "configuration.profile_mismatch",
+      "profile.capability_mismatch",
+      "profile.subscribers_not_supported",
+    ]) {
+      const text = applyErrorText({ code, message: code });
+      expect(text, code).not.toBe(code);
+      expect(text, code).toContain(code);
+    }
+  });
+
   it("shows an unknown code once, with the server message when it says more", () => {
     expect(applyErrorText({ code: "agent.some_new_code", message: "agent.some_new_code" }))
       .toBe("agent.some_new_code");
