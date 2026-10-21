@@ -15,6 +15,14 @@ export default defineConfig({
           react: ["react", "react-dom", "react-router-dom"],
           mui: ["@mui/material", "@emotion/react", "@emotion/styled"],
           query: ["@tanstack/react-query"],
+          // The routing screens carry the rule masters and the proxy editors.
+          // They are visited apart, so keeping them out of the app chunk stops
+          // the 500 kB warning from reappearing when the routing model grows.
+          routing: [
+            "src/pages/Routing.tsx",
+            "src/pages/RoutingMaster.tsx",
+            "src/pages/RoutingProxy.tsx",
+          ],
         },
       },
     },
