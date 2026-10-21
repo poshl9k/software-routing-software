@@ -280,3 +280,75 @@ sh packaging/online-install.sh \
 Проверено вживую (Debian 13, один NIC, `92.51.36.131`): сертификат Let's Encrypt
 по HTTP-01 для `<ip>.nip.io`, редирект `80 → 443`, `/health` → `200`, SPA и
 `/assets/*` отдаются, `/api/auth/login` без сессии → `401`, SSH не тронут.
+
+## Автономная установка панели одной командой (`install-release.sh`)
+
+`backend/packaging/install-release.sh` — обёртка над `online-install.sh`: сама
+добывает исходник, собирает backend wheel и UI, затем передаёт готовые артефакты
+установщику. Предсобранные файлы приносить не нужно. Требуется чистая Debian 13,
+root, сеть, публичный IPv4; порты 80 и 443 свободны.
+
+Из клона репозитория:
+
+```sh
+git clone https://github.com/poshl9k/software-routing-software.git
+cd software-routing-software
+sudo backend/packaging/install-release.sh        # резервное имя выведется из публичного IP
+```
+
+Закреплённый выпуск, без git (нужен curl: `sudo apt-get install -y curl`):
+
+```sh
+commit=<40-hex-commit>
+base=https://github.com/poshl9k/software-routing-software/releases/download/vs-router-$commit
+curl -fLO "$base/vs-router-$commit.tar.gz" && tar -xzf "vs-router-$commit.tar.gz" && cd "vs-router-$commit"
+sudo backend/packaging/install-release.sh --release "$commit" --manifest "$base/release.json"
+```
+
+Порядок работы: проверка источника (https-манифест, `sha256` артефакта,
+`REVISION` == commit) → сборка `backend/dist/*.whl` (`uv build`, при отсутствии
+`uv` — `pip wheel --no-build-isolation`) и `frontend/dist` (`npm ci && npm run
+build`) → вывод резервного имени `<ip>.nip.io` из локального маршрута (внешний
+`api.ipify.org` — только если локально не получилось) → запуск `online-install.sh`
+с `PACKAGING` и `--wheel/--ui`. В конце печатается URL панели.
+
+| Флаг | Назначение |
+|---|---|
+| `--source DIR` | дерево-источник вместо собственного репозитория |
+| `--release SHA` / `--manifest URL` | закреплённый выпуск; URL манифеста также берётся из `VS_ROUTER_INSTALL_MANIFEST_URL` или `manifest_url` в `/etc/vs-router/update.json` |
+| `--hostname H` / `--custom-hostname H` | резервное имя и свой домен (оба публикуются, ADR-0025) |
+| `--path-prefix P`, `--address A/P`, `--ssh-port N` | передаются установщику без изменений |
+| `--work DIR` / `--fresh` | рабочий каталог (по умолчанию `/root/vs-router-install`) и его очистка |
+| `--skip-build` | не собирать: использовать уже готовые wheel и `frontend/dist` (node тогда не нужен) |
+| `--dry-run` | проверить источник и напечатать план, ничего не собирая и не ставя |
+
+Чего скрипт не делает: не маскирует sshd и не пишет его drop-in, не задаёт
+профиль продукта (`VS_ROUTER_PROFILE=panel` остаётся за установщиком, ADR-0026),
+не ставит Kea, не пишет firewall и `/etc/vs-router/profile`.
+
+Ограничения, проверенные не полностью: юнит-тесты (`backend/tests/test_install_release.py`)
+работают на фейковом PATH и изолированных деревьях — реальная установка, ACME,
+запуск сервисов и сохранность SSH на чистом хосте **не проверялись**. Node из
+Debian 13 (20.19.2) ниже документированного минимума 22.12: скрипт предупреждает
+и продолжает, поскольку сборка на 20.19.2 ранее проверена. `--release`/`--manifest`
+и вывод публичного адреса требуют `curl` **или** `python3`: curl предпочтителен,
+без него загрузка и проба адреса идут через python3 (он есть в базовой установке
+Debian, curl — нет).
+
+**Хост за NAT (серый адрес на интерфейсе).** Автоматический вывод имени берёт
+публичный адрес из локального маршрута, а если его нет — из внешнего echo-сервиса;
+во втором случае печатается предупреждение, потому что за NAT это **egress**-адрес
+и он может не совпадать с тем, по которому хост доступен: на тестовом VPS
+`185.160.216.214` интерфейс держит `10.15.15.15/24`, сам хост видит себя как
+`.212`, а SSH и порты 80/443 приходят на `.214`. Публикуйте то имя, по которому
+хост реально доступен извне: `--hostname 185.160.216.214.nip.io`, а свой домен —
+через `--custom-hostname`. Проброс 80 и 443 обязателен: без них ACME не пройдёт,
+а первый `apply` не состоится.
+
+Хвостовая проверка панели (`management_console`) идёт по **локальному**
+management-адресу с `curl --resolve <имя>:443:<адрес>`: имя остаётся в SNI/Host,
+поэтому сертификат ACME проверяется системным хранилищем, а hairpin NAT не нужен —
+хост, который не может достучаться до своего же публичного адреса, не выглядит
+сломанным. Проверено на живом хосте: `probe_panel` возвращает управление за 0.2 с
+с сообщением `Panel readiness verified via local 10.15.15.15.`
+
