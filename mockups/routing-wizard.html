@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>vs-router — Мастер выборочной маршрутизации</title>
+<style>
+:root{
+  --bg:#08090a; --panel:#0f1011; --surface:#191a1b; --hover:#28282c;
+  --text:#f7f8f8; --text2:#d0d6e0; --text3:#8a8f98; --text4:#62666d;
+  --brand:#5e6ad2; --accent:#7170ff; --accentSoft:rgba(113,112,255,.10);
+  --ok:#10b981; --okSoft:rgba(16,185,129,.14); --warn:#f2c94c; --warnSoft:rgba(242,201,76,.14);
+  --err:#f25656; --errSoft:rgba(242,86,86,.14); --purple:#a78bfa; --purpleSoft:rgba(167,139,250,.14);
+  --border:rgba(255,255,255,.08); --border2:rgba(255,255,255,.12);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 -apple-system,"Segoe UI",Inter,Roboto,Arial,sans-serif;}
+.app{display:flex;min-height:100vh}
+.side{width:220px;background:var(--panel);border-right:1px solid var(--border);padding:16px 12px;flex:0 0 auto}
+.brand{font-weight:700;font-size:15px;letter-spacing:.2px;padding:6px 10px 16px;color:var(--text)}
+.grp{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text4);padding:14px 10px 6px}
+.nav{display:block;padding:8px 10px;border-radius:8px;color:var(--text2);text-decoration:none;font-size:13.5px;margin-bottom:2px}
+.nav:hover{background:var(--hover)}
+.nav.on{background:var(--accentSoft);color:var(--text);box-shadow:inset 2px 0 0 var(--accent)}
+.main{flex:1;padding:24px 28px;max-width:1100px}
+h1{font-size:22px;margin:0 0 4px;font-weight:650}
+.sub{color:var(--text3);font-size:13px;margin:0 0 20px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 12px;font-weight:600;display:flex;align-items:center;gap:8px}
+.card h2 .n{font-size:11px;color:var(--text4);font-weight:500}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--border2);color:var(--text2);background:var(--panel)}
+.badge.ok{color:var(--ok);border-color:rgba(16,185,129,.3);background:var(--okSoft)}
+.badge.warn{color:var(--warn);border-color:rgba(242,201,76,.3);background:var(--warnSoft)}
+.badge.blue{color:var(--accent);border-color:rgba(113,112,255,.3);background:var(--accentSoft)}
+.badge.purple{color:var(--purple);border-color:rgba(167,139,250,.3);background:var(--purpleSoft)}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border2);background:var(--hover);color:var(--text);
+  padding:8px 14px;border-radius:8px;font-size:13.5px;cursor:pointer}
+.btn.p{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.g{background:transparent}
+.stepper{display:flex;gap:0;margin:0 0 20px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--panel)}
+.step{flex:1;padding:12px 16px;border-right:1px solid var(--border);display:flex;gap:10px;align-items:center;opacity:.55}
+.step:last-child{border-right:0}
+.step .dot{width:22px;height:22px;border-radius:50%;border:1px solid var(--border2);display:grid;place-items:center;font-size:11px;color:var(--text3);flex:0 0 auto}
+.step .t{font-size:13px}
+.step .t small{display:block;color:var(--text4);font-size:11.5px}
+.step.done{opacity:.9}.step.done .dot{background:var(--okSoft);border-color:rgba(16,185,129,.35);color:var(--ok)}
+.step.now{opacity:1;background:var(--accentSoft)}.step.now .dot{background:var(--accent);border-color:var(--accent);color:#fff}
+.step.now .t{font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.opt{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;cursor:pointer}
+.opt.sel{border-color:var(--accent);background:var(--accentSoft)}
+.opt b{display:block;font-size:14px;margin-bottom:4px}
+.opt span{color:var(--text3);font-size:12.5px}
+.list{display:flex;flex-direction:column;gap:8px}
+.item{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 14px}
+.item.on{border-color:var(--accent);background:var(--accentSoft)}
+.item .ico{width:30px;height:30px;border-radius:8px;background:var(--hover);display:grid;place-items:center;font-size:14px;color:var(--text2)}
+.item .meta{flex:1;min-width:0}
+.item .meta b{font-size:13.5px;font-weight:550}
+.item .meta span{display:block;color:var(--text4);font-size:12px}
+.presets{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.preset{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center;cursor:pointer}
+.preset.on{border-color:var(--accent);background:var(--accentSoft)}
+.preset .em{font-size:20px}
+.preset b{display:block;font-size:13px;margin:6px 0 2px}
+.preset span{color:var(--text4);font-size:11.5px}
+input,select,textarea{background:var(--bg);border:1px solid var(--border2);color:var(--text);border-radius:8px;padding:8px 10px;font:inherit;font-size:13.5px;width:100%}
+label.fl{display:block;font-size:12px;color:var(--text3);margin:0 0 6px}
+.summary{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;font-size:13.5px}
+.chain{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0 4px}
+.chip{background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:6px 11px;font-size:13px}
+.chip.blue{border-color:rgba(113,112,255,.4);color:var(--accent);background:var(--accentSoft)}
+.chip.ok{border-color:rgba(16,185,129,.4);color:var(--ok);background:var(--okSoft)}
+.arrow{color:var(--text4)}
+.foot{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
+.hint{color:var(--text3);font-size:12.5px;margin-top:8px}
+.warnbox{border:1px solid rgba(242,201,76,.3);background:var(--warnSoft);color:var(--warn);border-radius:10px;padding:12px 14px;font-size:13px;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--text4);font-weight:500;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid var(--border)}
+td{padding:10px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.sys{color:var(--text4)}
+.note{font-size:12.5px;color:var(--text3);margin-top:10px}
+.tabs{display:flex;gap:6px;margin-bottom:16px}
+.tab{padding:7px 14px;border-radius:8px;border:1px solid var(--border);color:var(--text3);font-size:13px;background:var(--panel)}
+.tab.on{color:var(--text);border-color:var(--border2);background:var(--surface);font-weight:600}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side">
+    <div class="brand">vs-router</div>
+    <div class="grp">Обзор</div>
+    <a class="nav">Обзор</a>
+    <div class="grp">Интернет</div>
+    <a class="nav">Подключения и адреса</a>
+    <a class="nav">Туннели</a>
+    <a class="nav on">Выборочная маршрутизация</a>
+    <a class="nav">Абоненты</a>
+    <div class="grp">Домашняя сеть</div>
+    <a class="nav">DHCP</a>
+    <a class="nav">DNS</a>
+    <div class="grp">Безопасность</div>
+    <a class="nav">Правила</a>
+    <a class="nav">SSH</a>
+  </nav>
+
+  <main class="main">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div>
+        <h1>Выборочная маршрутизация</h1>
+        <p class="sub">Выберите, чей трафик и куда он пойдёт. Правила применяются сверху вниз, первое совпадение выигрывает.</p>
+      </div>
+      <div class="row">
+        <span class="badge warn">Выключено · черновик</span>
+        <span class="badge">sing-box 1.14.2 · остановлен</span>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <span class="tab on">Мастер</span>
+      <span class="tab">Расширенные настройки</span>
+    </div>
+
+    <div class="stepper">
+      <div class="step done"><div class="dot">✓</div><div class="t">Кому<small>источник трафика</small></div></div>
+      <div class="step now"><div class="dot">2</div><div class="t">Что маршрутизировать<small>домены, сервисы, устройства</small></div></div>
+      <div class="step"><div class="dot">3</div><div class="t">Куда<small>выход трафика</small></div></div>
+      <div class="step"><div class="dot">4</div><div class="t">Проверка<small>итог и применение</small></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Шаг 1. Кому маршрутизируем <span class="n">можно изменить</span></h2>
+      <div class="grid2">
+        <div class="opt sel"><b>Все устройства в сети</b><span>Любой клиент LAN попадёт в перехват</span></div>
+        <div class="opt"><b>Только выбранные устройства</b><span>Отдельные адреса или абоненты</span></div>
+      </div>
+      <div class="list" style="margin-top:12px">
+        <div class="item on"><div class="ico">▤</div><div class="meta"><b>Все клиенты LAN (192.168.1.0/24)</b><span>интерфейс lan0</span></div><span class="badge blue">выбрано</span></div>
+        <div class="item"><div class="ico">◈</div><div class="meta"><b>Телефон Анны (192.168.1.50)</b><span>абонент «Анна» · peer iphone</span></div><span class="badge">добавить</span></div>
+        <div class="item"><div class="ico">◈</div><div class="meta"><b>Ноутбук в офисе (192.168.1.77)</b><span>без абонента</span></div><span class="badge">добавить</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Шаг 2. Что маршрутизировать <span class="n">можно оставить пустым — тогда сработает шаг 3 для всего</span></h2>
+      <div class="presets">
+        <div class="preset on"><div class="em">▶</div><b>YouTube</b><span>набор geosite</span></div>
+        <div class="preset"><div class="em">◉</div><b>RuTube</b><span>набор geosite</span></div>
+        <div class="preset"><div class="em">✉</div><b>Почта</b><span>набор geosite</span></div>
+        <div class="preset"><div class="em">＋</div><b>Свой набор</b><span>URL или файл</span></div>
+      </div>
+      <div class="grid2" style="margin-top:14px">
+        <div>
+          <label class="fl">Свои домены (по одному в строке)</label>
+          <textarea rows="4">rutube.ru
+youtube.com</textarea>
+          <div class="hint">Совпадение по суффиксу: «rutube.ru» покроет и www.rutube.ru</div>
+        </div>
+        <div>
+          <label class="fl">Свои адреса и сети (CIDR)</label>
+          <textarea rows="4">203.0.113.0/24</textarea>
+          <div class="hint">Только IPv4. Оставьте пустым, если адреса не нужны</div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <span class="badge purple">Условие: домены из набора YouTube</span>
+        <span class="badge purple">домены rutube.ru, youtube.com</span>
+        <span class="badge">+ добавить условие</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Шаг 3. Куда направить</h2>
+      <div class="grid2">
+        <div class="opt"><b>Как обычно — напрямую</b><span>мимо туннеля, обычный маршрут</span></div>
+        <div class="opt sel"><b>Через туннель</b><span>весь выбранный трафик уходит в VPN</span></div>
+        <div class="opt"><b>Через прокси-выход</b><span>VLESS / Trojan / Shadowsocks</span></div>
+        <div class="opt"><b>Заблокировать</b><span>запрос отклоняется</span></div>
+      </div>
+      <div style="margin-top:12px">
+        <label class="fl">Туннель</label>
+        <select><option>AWG · awg-sys-Wireguard0 (Frankfurt)</option></select>
+        <div class="hint">Если туннель недоступен, трафик блокируется, а не уходит напрямую в интернет</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Шаг 4. Проверка</h2>
+      <div class="summary">
+        <div class="chain">
+          <span class="chip">Все клиенты LAN</span><span class="arrow">→</span>
+          <span class="chip">перехват sing-box</span><span class="arrow">→</span>
+          <span class="chip blue">YouTube, rutube.ru</span><span class="arrow">→</span>
+          <span class="chip ok">туннель awg-sys-Wireguard0</span>
+        </div>
+        <div class="chain">
+          <span class="chip">Остальной трафик</span><span class="arrow">→</span>
+          <span class="chip">напрямую (как сейчас)</span>
+        </div>
+        <div class="note">Правило 1 из 1. Совпадение по первому правилу: YouTube, rutube.ru, youtube.com → через туннель. Остальное — напрямую.</div>
+      </div>
+      <div class="warnbox" style="margin-top:14px">Политика пока выключена. После сохранения черновика её нужно применить — иначе перехват не начнётся.</div>
+      <div class="foot">
+        <span class="hint">Черновик сохраняется отдельно и не применяется без вашего действия.</span>
+        <div class="row">
+          <button class="btn g">Отмена</button>
+          <button class="btn">Сохранить черновик</button>
+          <button class="btn p">Включить и применить</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Что будет дальше <span class="n">правила</span></h2>
+      <table>
+        <thead><tr><th>#</th><th>Куда</th><th>Условие</th><th>Порядок</th></tr></thead>
+        <tbody>
+          <tr><td class="sys">—</td><td class="sys">определение домена</td><td class="sys">системное правило</td><td class="sys">всегда первое</td></tr>
+          <tr><td class="sys">—</td><td class="sys">перехват DNS</td><td class="sys">порт 53</td><td class="sys">системное</td></tr>
+          <tr><td>1</td><td><span class="badge ok">через туннель</span></td><td>YouTube, rutube.ru, youtube.com</td><td>первое совпадение</td></tr>
+        </tbody>
+      </table>
+      <div class="note">Другие правила, наборы, DNS и параметры движка — в разделе «Расширенные настройки».</div>
+    </div>
+  </main>
+</div>
+</body>
+</html>
