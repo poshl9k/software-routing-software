@@ -8,7 +8,8 @@ when a DHCP lease expires and nobody renews it. That is the lockout ADR-0021
 exists to prevent, so the check comes before the exclusion, not after it.
 
 ``foreign_owner`` is pure: it is given every candidate file as (path, content) and
-reads nothing. ``host_config_candidates`` does the reading and stays thin.
+reads nothing. ``host_config_candidates`` reads networkd, netplan and ifupdown
+sources so a panel cannot reconfigure an uplink already owned by the host.
 """
 import re
 from fnmatch import fnmatchcase
@@ -20,19 +21,27 @@ OURS = re.compile(r'10-vs-router-')
 NETWORK_DIRS = (Path('/etc/systemd/network'), Path('/run/systemd/network'),
                 Path('/usr/lib/systemd/network'))
 NETPLAN_DIR = Path('/etc/netplan')
+IFUPDOWN_DIR = Path('/etc/network')
 _SUFFIXES = ('.network', '.link', '.netdev', '.yaml', '.yml')
 
 
 def foreign_owner(interface: str, candidates) -> bool:
     """True when a file that is not ours configures this interface.
 
-    A netplan source names the link anywhere in the document; a networkd file
-    names it in ``Name=``, where a wildcard counts because it would take the link
-    over just the same.
+    A netplan source names the link anywhere in the document; an ifupdown
+    source names it as a whole word; a networkd file names it in ``Name=``,
+    where a wildcard counts because it would take the link over just the same.
     """
     for path, content in candidates:
-        name = Path(path).name
+        source = Path(path)
+        name = source.name
         if OURS.match(name):
+            continue
+        if ((name == 'interfaces' and source.parent.name == 'network') or
+                (source.parent.name == 'interfaces.d' and
+                 source.parent.parent.name == 'network')):
+            if re.search(rf'\b{re.escape(interface)}\b', content):
+                return True
             continue
         if name.endswith(('.yaml', '.yml')):
             if re.search(rf'\b{re.escape(interface)}\b', content):
@@ -49,7 +58,8 @@ def foreign_owner(interface: str, candidates) -> bool:
     return False
 
 
-def host_config_candidates(netplan_dir: Path = NETPLAN_DIR, dirs=NETWORK_DIRS):
+def host_config_candidates(netplan_dir: Path = NETPLAN_DIR, dirs=NETWORK_DIRS,
+                           *, ifupdown_dir: Path = IFUPDOWN_DIR):
     """Every host config file that could own a link, as (path, content).
 
     Unreadable files are skipped: this decides whether to leave a link alone, and
@@ -67,3 +77,19 @@ def host_config_candidates(netplan_dir: Path = NETPLAN_DIR, dirs=NETWORK_DIRS):
                 yield str(entry), entry.read_text(encoding='utf-8')
             except (OSError, UnicodeDecodeError):
                 continue
+    for entry in (ifupdown_dir / 'interfaces',):
+        try:
+            if entry.is_file():
+                yield str(entry), entry.read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            continue
+    try:
+        entries = sorted((ifupdown_dir / 'interfaces.d').iterdir())
+    except OSError:
+        entries = ()
+    for entry in entries:
+        try:
+            if entry.is_file():
+                yield str(entry), entry.read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            continue

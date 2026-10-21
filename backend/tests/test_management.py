@@ -17,12 +17,13 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from vs_router.management import (Management, verify_identity, validate_management,
-                                  validate_site_bindings)
+                                  validate_site_bindings, unmanaged_host_interfaces)
 from vs_router.schema import Configuration, ConfigurationVersion
 from vs_router.generators.caddy import generate_caddy_json
 from vs_router.generators.nftables import generate_nftables
 from vs_router.agent.management_console import Console
 from vs_router.agent.apply import ApplyEngine, ApplyError, APPLIED_DIR
+from vs_router.agent.network_ownership import foreign_owner, host_config_candidates
 from test_agent_apply import FakeFS, FakeExecutor
 
 STATE = Management(interface='eth1', mac='02:00:00:00:00:02', address='192.168.10.1/24')
@@ -447,6 +448,55 @@ def test_wrong_actual_lan_address_never_starts_caddy(tmp_path):
         Console(tmp_path, recording_runner(calls, '192.168.99.1'), os.getgid()).provision(
             STATE.mac, STATE.address)
     assert ['systemctl', 'restart', 'caddy'] not in calls
+
+
+def test_ifupdown_uplink_is_foreign_only_when_named_in_host_config(tmp_path):
+    """A Debian ifupdown lease must not be replaced by panel networkd config."""
+    etc = tmp_path / 'etc'
+    netplan = etc / 'netplan'  # Absent on the affected Debian host.
+    networkd = etc / 'systemd/network'
+    networkd.mkdir(parents=True)
+    ifupdown = etc / 'network'
+    ifupdown.mkdir()
+    interfaces = ifupdown / 'interfaces'
+    snippets = ifupdown / 'interfaces.d'
+    snippets.mkdir()
+    ours = networkd / '10-vs-router-ens192.network'
+    ours.write_text('[Match]\nName=ens192\n')
+
+    def candidates():
+        return list(host_config_candidates(netplan, (networkd,), ifupdown_dir=ifupdown))
+
+    # Our existing networkd file is never mistaken for an outside owner.
+    assert dict(candidates()) == {str(ours): '[Match]\nName=ens192\n'}
+    assert foreign_owner('ens192', candidates()) is False
+    interfaces.write_text('allow-hotplug ens192\niface ens192 inet dhcp\n')
+    found = candidates()
+    assert dict(found)[str(interfaces)] == interfaces.read_text()
+    assert foreign_owner('ens192', found) is True
+    assert foreign_owner('ens19', found) is False
+    record = SimpleNamespace(interface='ens192')
+    assert unmanaged_host_interfaces('panel', record,
+                                     foreign_owner=lambda name: foreign_owner(name, found)) == \
+        frozenset({'ens192'})
+
+    interfaces.write_text('iface eth0 inet dhcp\n')
+    assert foreign_owner('ens192', candidates()) is False
+    interfaces.write_text('iface ens19 inet dhcp\n')
+    assert foreign_owner('ens192', candidates()) is False
+    interfaces.unlink()
+    snippet = snippets / 'uplink'
+    snippet.write_text('allow-hotplug ens192\niface ens192 inet dhcp\n')
+    found = candidates()
+    assert dict(found)[str(snippet)] == snippet.read_text()
+    assert foreign_owner('ens192', found) is True
+    snippet.unlink()
+    found = candidates()
+    assert found == [(str(ours), ours.read_text())]
+    assert foreign_owner('ens192', found) is False
+    assert unmanaged_host_interfaces('panel', record,
+                                     foreign_owner=lambda name: foreign_owner(name, found)) == \
+        frozenset()
 
 
 # --- ADR-0017: single-uplink (one-NIC VPS) management -----------------------
