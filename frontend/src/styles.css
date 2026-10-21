@@ -557,6 +557,38 @@ pre {
   }
 }
 
+/* Routing choices share one responsive primitive; colours stay in theme.ts. */
+.choice-grid { display: grid; gap: 12px; }
+.choice-grid--cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.choice-grid--rows { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.choice-grid--presets { grid-template-columns: repeat(4, minmax(0, 1fr)); max-height: 310px; overflow-y: auto; padding: 4px; }
+.choice-card.MuiButtonBase-root { min-width: 0; padding: 14px 16px; text-align: left; justify-content: flex-start; gap: 12px; align-items: center; }
+.choice-copy { min-width: 0; flex: 1; }
+.choice-copy > span { display: block; }
+.choice-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; overflow-wrap: anywhere; }
+.choice-card--presets.MuiButtonBase-root { flex-direction: column; text-align: center; padding: 12px; gap: 6px; }
+.choice-card--rows.MuiButtonBase-root { padding: 10px 14px; }
+.choice-card .MuiSvgIcon-root { flex-shrink: 0; }
+.flow-chain { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 12px; }
+.flow-chain .MuiSvgIcon-root { flex-shrink: 0; }
+.flow-chain .MuiChip-root { max-width: 100%; }
+.routing-summary { padding: 14px 16px; }
+.routing-subtitle { margin-bottom: 16px !important; }
+.routing-subject-summary { margin-bottom: 12px !important; }
+.routing-surface { max-width: 1120px; }
+.routing-surface nav ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; overflow: hidden; }
+.routing-surface nav li { align-self: stretch; padding: 12px; }
+.routing-surface .form-actions { margin-top: 12px; }
+.routing-surface .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 700px) {
+  .routing-surface .form-grid { grid-template-columns: minmax(0, 1fr); }
+  /* Natural width measured at 1390px with catalogue domains: scroll, never split words into letters. */
+  .routing-surface table { width: max-content; min-width: 100%; }
+  .choice-grid--cards { grid-template-columns: minmax(0, 1fr); }
+  .choice-grid--presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .routing-surface nav ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .nav a,
   .MuiDrawer-paper,

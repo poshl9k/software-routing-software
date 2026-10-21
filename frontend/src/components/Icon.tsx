@@ -6,7 +6,7 @@ import type { ReactElement } from "react";
  * free — replaces the ad-hoc unicode glyphs and emoji previously used in the
  * sidebar and dashboard.
  */
-const paths: Record<string, ReactElement> = {
+const paths = {
   overview: (
     <>
       <rect x="3" y="3" width="7" height="9" rx="1" />
@@ -71,7 +71,16 @@ const paths: Record<string, ReactElement> = {
   trash: (
     <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
   ),
-};
+  arrowRight: <path d="M4 12h16m-6-6 6 6-6 6" />,
+  device: <><rect x="6" y="2" width="12" height="20" rx="2" /><path d="M10 18h4" /></>,
+  media: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="m10 8 6 4-6 4z" /></>,
+  social: <path d="M4 4h16v12H9l-5 4zM8 8h8M8 12h5" />,
+  developer: <path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18" />,
+  cloud: <path d="M6 18a5 5 0 0 1-1-10 7 7 0 0 1 13-1 5.5 5.5 0 0 1 0 11z" />,
+  gaming: <><path d="M7 7h10c4 0 5 12 2 12l-4-3H9l-4 3C2 19 3 7 7 7zM8 10v4M6 12h4" /><circle cx="16" cy="11" r=".5" /><circle cx="18" cy="13" r=".5" /></>,
+  ai: <><rect x="5" y="5" width="14" height="14" rx="3" /><path d="M9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3M9 9h6v6H9z" /></>,
+  block: <><circle cx="12" cy="12" r="9" /><path d="m6 6 12 12" /></>,
+} satisfies Record<string, ReactElement>;
 
 export type IconName = keyof typeof paths;
 
@@ -90,7 +99,7 @@ export function Icon({
       fontSize="small"
       {...props}
     >
-      {paths[name]}
+      <g fill="none">{paths[name]}</g>
     </SvgIcon>
   );
 }

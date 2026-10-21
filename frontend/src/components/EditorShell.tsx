@@ -7,11 +7,15 @@ export function EditorFooter({
   valid,
   cancel,
   save,
+  saveLabel = "Сохранить",
+  action,
 }: {
   saving: boolean;
   valid: boolean;
   cancel: () => void;
   save: () => void;
+  saveLabel?: string;
+  action?: ReactNode;
 }) {
   return (
     <div className="footer-actions">
@@ -20,8 +24,9 @@ export function EditorFooter({
         Отмена
       </Button>
       <Button variant="contained" disabled={saving || !valid} onClick={save}>
-        {saving ? "Сохранение…" : "Сохранить"}
+        {saving ? "Сохранение…" : saveLabel}
       </Button>
+      {action}
     </div>
   );
 }

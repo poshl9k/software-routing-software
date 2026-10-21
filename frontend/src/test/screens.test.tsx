@@ -264,7 +264,11 @@ describe("screens", () => {
     open("/routing");
     await screen.findByText("admin");
     await userEvent.click(screen.getByRole("tab", { name: "Правила sing-box (TProxy)" }));
-    await userEvent.click(screen.getByRole("button", { name: "Предпросмотр сохранённого черновика" }));
+    // The preview button stays disabled until the draft version arrives, so a
+    // click before that is a no-op and the error never appears.
+    const previewButton = screen.getByRole("button", { name: "Предпросмотр сохранённого черновика" });
+    await waitFor(() => expect(previewButton).toBeEnabled());
+    await userEvent.click(previewButton);
     expect(await screen.findByText(/Предпросмотр недоступен/)).toBeVisible();
     expect(screen.queryByLabelText("Конфигурация sing-box")).not.toBeInTheDocument();
     expect(screen.queryByText("Включено в черновике")).not.toBeInTheDocument();
