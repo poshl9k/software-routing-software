@@ -28,6 +28,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The preset catalogue is data the package reads at runtime, not code. Without
+# this it is missing from the wheel and /api/presets/catalog fails with 500 on
+# every installed host.
+[tool.setuptools.package-data]
+vs_router = ["**/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
