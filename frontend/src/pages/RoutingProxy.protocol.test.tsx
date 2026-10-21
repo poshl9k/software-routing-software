@@ -33,7 +33,7 @@ function setup(proxies: ProxySettings, preview?: unknown) {
 }
 
 async function editProxies(user: ReturnType<typeof userEvent.setup>) {
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await user.click(screen.getByRole("tab", { name: "Прокси-выходы" }));
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
 }

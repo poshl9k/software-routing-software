@@ -26,6 +26,7 @@ import { Select, SelectField, interfaceLabel } from "../components/Select";
 import { ValueTabs } from "../components/Tabs";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { ProxiesEditor, RuleSets } from "./RoutingProxy";
+import RoutingMasterPage from "./RoutingMaster";
 import { ServiceCatalog } from "../components/ServiceCatalog";
 import { parseShareLinks } from "../shareLinks";
 
@@ -753,12 +754,12 @@ function TProxyEditor({ onOpenProxies }: { onOpenProxies: () => void }) {
   );
 }
 
-type RoutingTab = "tproxy" | "proxies" | "rulesets";
+type RoutingTab = "master" | "tproxy" | "proxies" | "rulesets";
 
-/** The «Маршрутизация» section: TProxy policy, proxy exits and rule-set sources. */
+/** The «Маршрутизация» section: master wizard + legacy TProxy + proxy exits + rule-set sources. */
 export default function Routing() {
   const { error: apiError } = useConfiguration();
-  const [tab, setTab] = useState<RoutingTab>("tproxy");
+  const [tab, setTab] = useState<RoutingTab>("master");
   return (
     <>
       <PageHeader>Маршрутизация</PageHeader>
@@ -767,11 +768,13 @@ export default function Routing() {
         value={tab}
         change={setTab}
         tabs={[
-          { value: "tproxy", label: "sing-box TProxy" },
+          { value: "master", label: "Мастер маршрутизации" },
+          { value: "tproxy", label: "Правила sing-box (TProxy)" },
           { value: "proxies", label: "Прокси-выходы" },
           { value: "rulesets", label: "Источники списков" },
         ]}
       />
+      {tab === "master" && <RoutingMasterPage />}
       {tab === "tproxy" && <TProxyEditor onOpenProxies={() => setTab("proxies")} />}
       {tab === "proxies" && <ProxiesEditor />}
       {tab === "rulesets" && <RuleSets />}

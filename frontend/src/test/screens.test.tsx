@@ -127,6 +127,8 @@ describe("screens", () => {
     ))));
     open("/routing");
     expect(await screen.findByText("operator")).toBeVisible();
+    // The legacy TProxy editor lives behind its own tab now.
+    await userEvent.click(screen.getByRole("tab", { name: "Правила sing-box (TProxy)" }));
     expect(screen.getByRole("button", { name: "Редактировать" })).toBeDisabled();
     expect(fetch.mock.calls.filter(([, init]) => init?.method)).toHaveLength(0);
   });
@@ -243,6 +245,7 @@ describe("screens", () => {
     ))));
     open("/routing");
     await screen.findByText("admin");
+    await userEvent.click(screen.getByRole("tab", { name: "Правила sing-box (TProxy)" }));
     await userEvent.click(screen.getByRole("button", { name: "Предпросмотр сохранённого черновика" }));
     expect(await screen.findByText(/"tproxy-udp"/)).toBeVisible();
     expect(fetch.mock.calls.some(([path]) => path === "/api/draft/tproxy/preview")).toBe(true);
@@ -260,6 +263,7 @@ describe("screens", () => {
     ), { status: path === "/api/draft/tproxy/preview" ? 503 : 200 })));
     open("/routing");
     await screen.findByText("admin");
+    await userEvent.click(screen.getByRole("tab", { name: "Правила sing-box (TProxy)" }));
     await userEvent.click(screen.getByRole("button", { name: "Предпросмотр сохранённого черновика" }));
     expect(await screen.findByText(/Предпросмотр недоступен/)).toBeVisible();
     expect(screen.queryByLabelText("Конфигурация sing-box")).not.toBeInTheDocument();

@@ -111,7 +111,7 @@ const sentProxies = (fetch: ReturnType<typeof setup>) => {
 it("saves proxy outbound, subscription and group as a draft with a write-only secret", async () => {
   const fetch = setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
 
@@ -167,7 +167,7 @@ it("saves proxy outbound, subscription and group as a draft with a write-only se
 it("imports pasted links into the saved draft and clears the input", async () => {
   const fetch = setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   const input = screen.getByLabelText("Ссылки для импорта (по одной в строке)");
@@ -213,7 +213,7 @@ it("removes selected outbounds from the saved draft", async () => {
   } });
   const user = userEvent.setup();
   vi.spyOn(window, "confirm").mockReturnValue(true);
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("checkbox", { name: "Выбрать выход first" }));
@@ -239,7 +239,7 @@ it("duplicates selected outbounds with unique backend-valid tags", async () => {
     outbounds: [base, { ...base, tag: "first_copy" }],
   } });
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("checkbox", { name: "Выбрать выход first" }));
@@ -253,7 +253,7 @@ it("duplicates selected outbounds with unique backend-valid tags", async () => {
 it("blocks saving an outbound without a server/port and a non-https subscription", async () => {
   setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
@@ -277,7 +277,7 @@ it("blocks saving an outbound without a server/port and a non-https subscription
 it("validates inline subscription content and header and filter syntax", async () => {
   setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
@@ -306,7 +306,7 @@ it("validates inline subscription content and header and filter syntax", async (
 it("saves subscription selection, URL test, filters and member fields", async () => {
   const fetch = setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
@@ -347,7 +347,7 @@ it("hides stored subscription headers and preserves them unless replaced", async
     enabled: false, headers: ["Authorization: Bearer private-token"],
   }] } });
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   expect(screen.queryByText(/private-token/)).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
@@ -362,7 +362,7 @@ it("hides stored subscription headers and preserves them unless replaced", async
 it("saves inline content without requiring a subscription URL", async () => {
   const fetch = setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Подписка по URL" }));
@@ -377,7 +377,7 @@ it("saves inline content without requiring a subscription URL", async () => {
 it("shows group tolerance only for urltest and enforces the 0..5000 ms bounds", async () => {
   const fetch = setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
@@ -409,7 +409,7 @@ it("shows group tolerance only for urltest and enforces the 0..5000 ms bounds", 
 it("rejects duplicate outbound tags and a reserved direct tag", async () => {
   setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
@@ -431,7 +431,7 @@ it("rejects duplicate outbound tags and a reserved direct tag", async () => {
 it("shows empty-state prompts for every proxy collection and the rule-set list", async () => {
   setup();
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   expect(screen.getByText(/TProxy настраивается отдельно и меняет трафик только после общего применения/)).toBeVisible();
   expect(screen.getByText("Нет прокси-выходов")).toBeVisible();
@@ -446,7 +446,7 @@ it("shows empty-state prompts for every proxy collection and the rule-set list",
 it("surfaces a rejected draft and retains the local outbound for retry", async () => {
   setup({ fail: true });
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Прокси-выходы");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить выход" }));
@@ -558,7 +558,7 @@ const GEO: RuleSetStatus = {
 it("lists rule-set sources with status/stale and refreshes via the typed RPC", async () => {
   const fetch = setup({ rulesets: [GEO] });
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Источники списков");
 
   expect(await screen.findByText("geo")).toBeVisible();
@@ -581,7 +581,7 @@ it("lists rule-set sources with status/stale and refreshes via the typed RPC", a
 it("shows a stale rule-set source with an honest status badge", async () => {
   setup({ rulesets: [{ ...GEO, status: "never", stale: true, sha256: null }] });
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Источники списков");
   expect(await screen.findByText("не обновлялся")).toBeVisible();
   expect(screen.getByText("устарел")).toBeVisible();
@@ -590,7 +590,7 @@ it("shows a stale rule-set source with an honest status badge", async () => {
 it("surfaces a rejected rule-set update", async () => {
   setup({ rulesets: [GEO], updateFails: true });
   const user = userEvent.setup();
-  await screen.findByRole("button", { name: "Предпросмотр сохранённого черновика" });
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
   await openTab(user, "Источники списков");
   await user.click(await screen.findByRole("button", { name: "Обновить geo" }));
   expect(await screen.findByText(/Ошибка загрузки/)).toBeVisible();

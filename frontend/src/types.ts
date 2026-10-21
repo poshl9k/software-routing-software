@@ -156,6 +156,25 @@ export interface DDNSUpdate {
   api_token: Secret;
   wan_interface: string;
 }
+export type RoutingExit =
+  | { kind: "direct" }
+  | { kind: "interface"; interface: string }
+  | { kind: "outbound"; tag: string }
+  | { kind: "group"; tag: string }
+  | { kind: "tunnel"; name: string }
+  | { kind: "block" };
+export type RoutingSubject =
+  | { kind: "server" }
+  | { kind: "device"; subscriber: string; peer: string }
+  | { kind: "interface"; interface: string };
+export interface RoutingRule {
+  name: string;
+  subject: RoutingSubject;
+  ip_cidr: string[];
+  domain_suffix: string[];
+  domain_exact: string[];
+  exit: RoutingExit;
+}
 export interface TProxyUpdateSchedule {
   mode: "interval" | "window";
   interval_hours: number;
@@ -388,6 +407,7 @@ export interface Configuration {
   sites: CaddySite[];
   ddns: DDNSUpdate[];
   ssh: { interfaces: string[]; wan_confirmed_interfaces: string[] };
+  routing_rules: RoutingRule[];
   tproxy: TProxy;
   proxies: ProxySettings;
   rule_sets: RuleSetSource[];

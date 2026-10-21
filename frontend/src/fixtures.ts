@@ -21,6 +21,7 @@ export const emptyConfiguration: Configuration = {
   sites: [],
   ddns: [],
   ssh: { interfaces: [], wan_confirmed_interfaces: [] },
+  routing_rules: [],
   tproxy: {
     enabled: false,
     ingress_interfaces: [],

@@ -40,6 +40,11 @@ function setup(fail = false, rules: TProxyRule[] = [], proxies = emptyConfigurat
   return fetch;
 }
 
+async function openLegacy(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("tab", { name: "Правила sing-box (TProxy)" }));
+  expect(screen.getByRole("tab", { name: "Правила sing-box (TProxy)" })).toHaveAttribute("aria-selected", "true");
+}
+
 function savedDraft(fetch: ReturnType<typeof vi.fn>) {
   const call = fetch.mock.calls.find(([path, init]) => path === "/api/draft" && init?.method === "PUT");
   expect(call).toBeTruthy();
@@ -49,6 +54,7 @@ function savedDraft(fetch: ReturnType<typeof vi.fn>) {
 it("offers the outbound editor from an empty TProxy page", async () => {
   setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   expect(await screen.findByText("Прокси-выходы не настроены")).toBeVisible();
   expect(screen.getByText(/Нет прокси-выходов. Добавьте выход/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Открыть прокси-выходы" }));
@@ -60,6 +66,7 @@ it("offers the outbound editor from an empty TProxy page", async () => {
 it("enables the proxy section when the first outbound is added from TProxy", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Добавить по ссылке" }));
   await user.type(screen.getByLabelText("Ссылка на прокси"), "vless://uuid@exit.example.com:443#first_exit");
   await user.click(screen.getByRole("button", { name: "Добавить в черновик" }));
@@ -74,6 +81,7 @@ it("enables the proxy section when the first outbound is added from TProxy", asy
 it("shows system rows and first-match rule columns in both views", async () => {
   setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await screen.findByText("Выключено · черновик");
   for (const header of ["#", "Куда", "Условия", "Действия"]) {
     expect(screen.getByRole("columnheader", { name: header })).toBeVisible();
@@ -91,6 +99,7 @@ it("shows system rows and first-match rule columns in both views", async () => {
 it("explains fallback when expert has no user rules", async () => {
   setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await screen.findByText("Выключено · черновик");
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   expect(screen.getByText("Пользовательских правил нет — выбранный трафик идёт к конечному действию.")).toBeVisible();
@@ -100,6 +109,7 @@ it("explains fallback when expert has no user rules", async () => {
 it("names empty expert rule sets, outbounds and both DNS lists", async () => {
   setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await screen.findByText("Выключено · черновик");
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   for (const text of ["Наборы правил не объявлены.", "Прокси-выходов нет.",
@@ -112,6 +122,7 @@ it("names empty expert rule sets, outbounds and both DNS lists", async () => {
 it("shows one empty bypass notice and keeps one add action in expert edit mode", async () => {
   setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   expect(screen.getAllByText("Исключений нет.")).toHaveLength(1);
@@ -127,6 +138,7 @@ it("shows one empty bypass notice and keeps one add action in expert edit mode",
 it("opens a bypass window on add, keeps its fields out of the page when closed, and reopens it", async () => {
   setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   expect(screen.queryByLabelText("Имя исключения")).not.toBeInTheDocument();
@@ -158,6 +170,7 @@ it("opens a bypass window on add, keeps its fields out of the page when closed, 
 it("adds a direct target rule with no proxy outbounds", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Правило" }));
   await user.type(screen.getByLabelText("Имя правила"), "direct_site");
@@ -178,6 +191,7 @@ it("adds a direct target rule with no proxy outbounds", async () => {
 it("declares a catalog rule-set and adds its direct rule with no outbounds", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Правило" }));
   await user.click(screen.getByRole("button", { name: "Из каталога" }));
@@ -200,6 +214,7 @@ it("declares a catalog rule-set and adds its direct rule with no outbounds", asy
 it("declares a manual HTTPS rule-set in the draft and rejects HTTP", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   expect(screen.queryByLabelText("URL источника")).not.toBeInTheDocument();
@@ -229,6 +244,7 @@ it("declares a manual HTTPS rule-set in the draft and rejects HTTP", async () =>
 it("creates a guided rule with catalog rule-set declarations in the draft only", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await screen.findByText("Выключено · черновик");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "+ Правило" }));
@@ -255,6 +271,7 @@ it("creates a guided rule with catalog rule-set declarations in the draft only",
 it("reports duplicate catalog sets in expert view without declaring twice", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await screen.findByText("Выключено · черновик");
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
@@ -286,6 +303,7 @@ it("warns about DNS rule references before deleting its server", async () => {
   vi.stubGlobal("fetch", fetch);
   render(<MemoryRouter><RouterProvider><Routing /></RouterProvider></MemoryRouter>);
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "Удалить DNS-сервер resolver" }));
@@ -300,6 +318,7 @@ it("warns about DNS rule references before deleting its server", async () => {
 it("saves disabled ingress and an ordered block rule in the draft", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   expect(await screen.findByText("Выключено · черновик")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   expect(screen.getByRole("button", { name: "Включить" })).toBeDisabled();
@@ -326,6 +345,7 @@ it("saves disabled ingress and an ordered block rule in the draft", async () => 
 it("confirms enabling a valid rule in the draft without applying it", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   const enable = screen.getByRole("button", { name: "Включить" });
   expect(enable).toBeDisabled();
@@ -358,6 +378,7 @@ it("blocks enabling a route when its proxy section is off or outbound is missing
     source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [], action: "route", outbound: "proxy_a", order: 0 };
   setup(false, [rule], proxiesWithOutbound, { ...emptyConfiguration.tproxy, ingress_interfaces: ["lan0"] });
   const user = userEvent.setup();
+  await openLegacy(user);
   expect(await screen.findByRole("button", { name: "Включить" })).toBeDisabled();
   expect(screen.getByText(/Включите секцию прокси-выходов/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
@@ -370,6 +391,7 @@ it("labels confirmed enabled configuration as applied without claiming live heal
     source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [], action: "direct", outbound: null, order: 0 };
   setup(false, [rule], emptyConfiguration.proxies,
     { ...emptyConfiguration.tproxy, enabled: true, ingress_interfaces: ["lan0"] }, "confirmed");
+  await openLegacy(userEvent.setup());
   expect(await screen.findByText("Включено · применено")).toBeVisible();
   expect(await screen.findByText(/Движок: остановлен · версия 1.2.3/)).toBeVisible();
 });
@@ -380,6 +402,7 @@ it("keeps the header enable action visible and confirms a valid draft change", a
   const fetch = setup(false, [rule], emptyConfiguration.proxies,
     { ...emptyConfiguration.tproxy, ingress_interfaces: ["lan0"] });
   const user = userEvent.setup();
+  await openLegacy(user);
   const enable = await screen.findByRole("button", { name: "Включить" });
   expect(enable).toBeEnabled();
   expect(await screen.findByText(/Движок: остановлен · версия 1.2.3/)).toBeVisible();
@@ -402,6 +425,7 @@ it("retains unsaved rule edits after a rejected draft", async () => {
     source_ip_cidr: [], rule_sets: [], protocol: "any", ports: [], action: "direct", outbound: null, order: 0 };
   setup(true, [rule]);
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("button", { name: "Редактировать" }));
   await user.clear(screen.getByLabelText("Имя правила"));
@@ -414,6 +438,7 @@ it("retains unsaved rule edits after a rejected draft", async () => {
 it("saves daily update window as an alternative to six-hour interval", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.selectOptions(screen.getByLabelText("Режим обновления"), "window");
@@ -438,6 +463,7 @@ it("shows configured first-match order and updates it on move", async () => {
       rule_sets: [], protocol: "any", ports: [], action: "direct", outbound: null, order: 10 },
   ]);
   const user = userEvent.setup();
+  await openLegacy(user);
   expect(await screen.findByRole("cell", { name: /first: домен first.test/ })).toBeVisible();
   expect(screen.getByRole("cell", { name: /later: домен later.test/ })).toBeVisible();
   expect(screen.getByRole("cell", { name: "Обычный маршрут" })).toBeVisible();
@@ -477,6 +503,7 @@ async function openNewExpertRule(user: ReturnType<typeof userEvent.setup>) {
 it("routes a rule to a chosen outbound on save", async () => {
   const fetch = setup(false, [], proxiesWithOutbound);
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await openNewExpertRule(user);
   await user.type(screen.getByLabelText("Имя правила"), "via_proxy");
@@ -499,6 +526,7 @@ it("routes a rule to a chosen outbound on save", async () => {
 it("clears the outbound when a routing rule stops routing", async () => {
   const fetch = setup(false, [], proxiesWithOutbound);
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await openNewExpertRule(user);
   await user.type(screen.getByLabelText("Имя правила"), "sw");
@@ -519,6 +547,7 @@ it("clears the outbound when a routing rule stops routing", async () => {
 it("saves the policy final action and its outbound", async () => {
   const fetch = setup(false, [], proxiesWithOutbound);
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.selectOptions(screen.getByLabelText("Для несовпавшего трафика"), "route");
@@ -535,6 +564,7 @@ it("saves the policy final action and its outbound", async () => {
 it("shows the simple rule flow and keeps engine fields in expert view", async () => {
   setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   expect(await screen.findByRole("tab", { name: "Простой" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("heading", { name: "Правила · первое совпадение" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Включить" })).toBeDisabled();
@@ -551,6 +581,7 @@ it("shows the simple rule flow and keeps engine fields in expert view", async ()
 it("adds, reorders and deletes rules while preserving first-match and final", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("checkbox", { name: "lan0" }));
   for (const [name, domain, action] of [["first", "first.test", "direct"], ["second", "second.test", "block"]]) {
@@ -581,6 +612,7 @@ it("shows read-only system rules and reports a failed runtime read honestly", as
       path === "/api/runtime/engine" ? { code: "agent.unavailable", message: "Недоступен", details: [] } : {},
   ), { status: path === "/api/runtime/engine" ? 503 : 200 })));
   const user = userEvent.setup();
+  await openLegacy(user);
   expect(await screen.findByText(/Движок: состояние недоступно/)).toBeVisible();
   expect(screen.queryByText(/Движок: работает/)).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Показать дополнительные настройки" }));
@@ -594,6 +626,7 @@ it("shows read-only system rules and reports a failed runtime read honestly", as
 it("selects all LAN sources and saves a domain block without enabling traffic", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("radio", { name: "Все устройства (LAN)" }));
   expect(screen.getByRole("radio", { name: "Выбранные интерфейсы" })).not.toBeChecked();
@@ -615,6 +648,7 @@ it("selects all LAN sources and saves a domain block without enabling traffic", 
 it("saves a TProxy bypass exclusion in the draft", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Добавить исключение" }));
@@ -639,6 +673,7 @@ it("saves a TProxy bypass exclusion in the draft", async () => {
 it("saves an expert UDP DNS server and its matching DNS rule", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("button", { name: "+ Сервер" }));
@@ -671,6 +706,7 @@ it("saves an expert UDP DNS server and its matching DNS rule", async () => {
 it("saves expert matchers and engine parameters only to draft", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("tab", { name: "Эксперт" }));
   await user.click(screen.getByRole("switch", { name: "Sniff" }));
@@ -699,6 +735,7 @@ it("saves expert matchers and engine parameters only to draft", async () => {
 it("rejects conflicting domain matchers and invalid regex with visible backend codes", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await openNewExpertRule(user);
   await user.type(screen.getByLabelText("Имя правила"), "conflict");
@@ -717,6 +754,7 @@ it("rejects conflicting domain matchers and invalid regex with visible backend c
 it("saves a single-level logical OR with two distinct child matchers", async () => {
   const fetch = setup();
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await openNewExpertRule(user);
   await user.type(screen.getByLabelText("Имя правила"), "combined");
@@ -742,6 +780,7 @@ it("keeps an existing policy while importing an outbound into the draft", async 
   const fetch = setup(false, [rule], emptyConfiguration.proxies,
     { ...emptyConfiguration.tproxy, ingress_interfaces: ["lan0"] });
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Добавить по ссылке" }));
   await user.type(screen.getByLabelText("Ссылка на прокси"), "vless://uuid@exit.example.com:443#new_exit");
   await user.click(screen.getByRole("button", { name: "Добавить в черновик" }));
@@ -760,6 +799,7 @@ it("saves a three-step outbound route without replacing DNS policy", async () =>
   const fetch = setup(false, [], { ...proxiesWithOutbound, enabled: true },
     { ...emptyConfiguration.tproxy, dns });
   const user = userEvent.setup();
+  await openLegacy(user);
   await user.click(await screen.findByRole("button", { name: "Редактировать" }));
   await user.click(screen.getByRole("checkbox", { name: "lan0" }));
   await user.click(screen.getByRole("button", { name: "+ Правило" }));
