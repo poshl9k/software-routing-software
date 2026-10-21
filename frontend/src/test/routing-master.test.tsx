@@ -393,20 +393,59 @@ it("criterion_S3_4_chosen_subject_is_a_sentence_above_rows", async () => {
   expect(screen.getByText("Трафик интерфейса eth0")).toBeVisible();
 });
 
-it("criterion_S3_5_catalog_presets_replace_clear_and_filter_domains", async () => {
-  setup(); const user = userEvent.setup(); await openMaster(user);
+it("criterion_S3_5_catalog_presets_add_their_domains_without_showing_the_list", async () => {
+  const fetch = setup(); const user = userEvent.setup(); await openMaster(user);
   await user.click(screen.getByRole("button", { name: "Далее" }));
   const youtube = await screen.findByRole("button", { name: "YouTube" });
-  expect(youtube).toHaveTextContent("Заменит список своих доменов");
+  // The tile says how many domains it brings, not the list itself.
+  expect(youtube).toHaveTextContent("2 домена");
   expect(youtube.querySelector("svg")).not.toBeNull();
   expect(screen.queryByRole("button", { name: "Все видео" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Без доменов" })).not.toBeInTheDocument();
   const field = screen.getByLabelText("Свои домены (по одному в строке)");
-  await user.type(field, "old.test"); await user.click(youtube);
-  expect(field).toHaveValue("youtube.com\ngooglevideo.com");
+  // Choosing a service must not dump its domains into the manual field.
+  await user.click(youtube);
+  expect(field).toHaveValue("");
   expect(youtube).toHaveAttribute("aria-pressed", "true");
-  await user.click(youtube); expect(field).toHaveValue("");
-  await user.click(screen.getByRole("button", { name: "RuTube" })); expect(field).toHaveValue("rutube.ru");
+  expect(screen.getByText(/Выбрано сервисов: 1/)).toBeVisible();
+  // The domains are in the rule; the field stays the operator's own list.
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await waitFor(() => expect(savedDraft(fetch).routing_rules[0].domain_suffix)
+    .toEqual(["youtube.com", "googlevideo.com"]));
+});
+
+it("criterion_S3_5_several_services_can_be_chosen_at_once", async () => {
+  const fetch = setup(); const user = userEvent.setup(); await openMaster(user);
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  const youtube = await screen.findByRole("button", { name: "YouTube" });
+  const rutube = screen.getByRole("button", { name: "RuTube" });
+  await user.click(youtube);
+  await user.click(rutube);
+  expect(youtube).toHaveAttribute("aria-pressed", "true");
+  expect(rutube).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText(/Выбрано сервисов: 2/)).toBeVisible();
+  // The manual field still holds only what the operator typed.
+  const field = screen.getByLabelText("Свои домены (по одному в строке)");
+  expect(field).toHaveValue("");
+  await user.type(field, "own.test");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await waitFor(() => expect(savedDraft(fetch).routing_rules[0].domain_suffix)
+    .toEqual(["own.test", "youtube.com", "googlevideo.com", "rutube.ru"]));
+});
+
+it("criterion_S3_5_unchecking_a_service_removes_only_its_own_domains", async () => {
+  setup(); const user = userEvent.setup(); await openMaster(user);
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  const youtube = await screen.findByRole("button", { name: "YouTube" });
+  await user.click(youtube);
+  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "own.test");
+  await user.click(youtube);
+  expect(youtube).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByLabelText("Свои домены (по одному в строке)")).toHaveValue("own.test");
 });
 
 it("criterion_S3_5_loading_and_failure_leave_manual_fields_available", async () => {
@@ -497,7 +536,39 @@ it("criterion_S3_11_failed_save_never_applies_and_keeps_input", async () => {
   await user.click(screen.getByRole("button", { name: "Сохранить и применить" }));
   expect(await screen.findByText(/имя домена указано неверно/)).toBeVisible();
   expect(fetch.mock.calls.some(([path]) => path === "/api/apply")).toBe(false);
-  expect(screen.getByLabelText("Имя правила")).toHaveValue("rule_1");
+  expect(screen.getByLabelText("Имя правила")).toHaveValue("example_org");
+});
+
+it("criterion_S3_21_rule_name_is_generated_from_the_destination_and_unique", async () => {
+  const configuration = baseConfiguration();
+  configuration.routing_rules = [{ name: "example_org", subject: { kind: "server" },
+    domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], exit: { kind: "direct" } }];
+  setup(configuration); const user = userEvent.setup(); await openMaster(user);
+  await fillWizard(user, { exitKind: "direct", domains: "example.org" });
+  // The name is not an ordinal counter and not a repeat of an existing rule.
+  const name = (screen.getByLabelText("Имя правила") as HTMLInputElement).value;
+  expect(name).not.toBe("rule_1");
+  expect(name).not.toBe("rule_2");
+  expect(name).toMatch(/^example/);
+  expect(name).not.toBe("example_org");
+  expect(screen.getByText(/Создано по назначению/)).toBeVisible();
+});
+
+it("criterion_S3_21_a_name_written_by_hand_survives_a_destination_change", async () => {
+  setup(); const user = userEvent.setup(); await openMaster(user);
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "first.test");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  const field = screen.getByLabelText("Имя правила");
+  await user.clear(field);
+  await user.type(field, "my_own_name");
+  await user.click(screen.getByRole("button", { name: "Назад" }));
+  await user.click(screen.getByRole("button", { name: "Назад" }));
+  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "second.test");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  expect(screen.getByLabelText("Имя правила")).toHaveValue("my_own_name");
 });
 
 it("criterion_S3_12_preview_has_readonly_system_rows_and_candidate", async () => {
@@ -508,7 +579,7 @@ it("criterion_S3_12_preview_has_readonly_system_rows_and_candidate", async () =>
   expect(rows[1]).toHaveTextContent("системное правило");
   expect(rows[1]).toHaveTextContent("После пользовательских правил");
   expect(rows[2]).toHaveTextContent("Конечный выход");
-  expect(rows[3]).toHaveTextContent("rule_1"); expect(rows[3]).toHaveTextContent("example.org");
+  expect(rows[3]).toHaveTextContent("example_org"); expect(rows[3]).toHaveTextContent("example.org");
   expect(within(table).queryByRole("button")).not.toBeInTheDocument();
   expect(table).not.toHaveTextContent("перехват DNS");
 });
@@ -555,14 +626,24 @@ it("criterion_S3_16_reference_palette_matches_theme_without_new_hex_literals", (
     expect(repoSource(`frontend/src/${path}`)).not.toMatch(/#[0-9a-fA-F]{6}/);
 });
 
+it("criterion_S3_22_routing_tables_keep_words_whole_and_scroll", () => {
+  // A squeezed column used to split a word into single letters
+  // ("Защ|ита|уст|рой"). The table must keep words whole and scroll instead.
+  const css = repoSource("frontend/src/styles.css");
+  expect(css).toMatch(/\.routing-surface \.MuiTableCell-root\s*\{[^}]*word-break:\s*normal/);
+  expect(css).toMatch(/\.routing-surface table\s*\{[^}]*min-width/);
+  const page = repoSource("frontend/src/pages/RoutingMaster.tsx");
+  expect(page).toContain("routing-table-wide");
+});
+
 it("criterion_S3_17_card_choices_are_keyboard_operable_and_chains_static", async () => {
   const change = vi.fn(); const user = userEvent.setup();
-  render(<><ChoiceCards label="Источник" value="server" onChange={change} options={[
+  render(<><ChoiceCards label="Источник" value={["server"]} onChange={change} options={[
     { value: "server", label: "Сервер", description: "Исходящий трафик" },
     { value: "device", label: "Устройство", description: "Выбранное устройство" },
   ]} /><FlowChain label="Описание" items={[{ text: "Источник" }, { text: "Выход" }]} /></>);
   await user.tab(); expect(screen.getByRole("button", { name: "Сервер" })).toHaveFocus();
-  await user.tab(); await user.keyboard("{Enter}"); expect(change).toHaveBeenCalledWith("device");
+  await user.tab(); await user.keyboard("{Enter}"); expect(change).toHaveBeenCalledWith("device", ["device"]);
   expect(screen.getByRole("button", { name: "Сервер" })).toHaveAttribute("aria-pressed", "true");
   expect(within(screen.getByRole("group", { name: "Описание" })).queryByRole("button")).not.toBeInTheDocument();
 });

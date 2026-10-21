@@ -580,6 +580,15 @@ pre {
 .routing-surface nav li { align-self: stretch; padding: 12px; }
 .routing-surface .form-actions { margin-top: 12px; }
 .routing-surface .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* The routing tables carry long Russian phrases. The theme lets a cell break
+   anywhere, so a squeezed column splits a word into single letters
+   ("Защ|ита|уст|рой"). Keep words whole and let the table scroll instead. */
+.routing-surface .MuiTableCell-root {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+.routing-surface table { min-width: 1000px; }
+.routing-table-wide table { min-width: 1240px; }
 @media (max-width: 700px) {
   .routing-surface .form-grid { grid-template-columns: minmax(0, 1fr); }
   /* Natural width measured at 1390px with catalogue domains: scroll, never split words into letters. */

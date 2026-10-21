@@ -218,9 +218,14 @@ export function exitLabel(exit: RoutingExit): string {
 
 export function destinationLabel(rule: RoutingRule): string {
   const parts: string[] = [];
-  if (rule.domain_suffix.length) parts.push(`домены ${rule.domain_suffix.join(", ")}`);
-  if (rule.domain_exact.length) parts.push(`точный домен ${rule.domain_exact.join(", ")}`);
-  if (rule.ip_cidr.length) parts.push(`сеть ${rule.ip_cidr.join(", ")}`);
+  // A long list must not fill the cell: the table would grow unreadable and
+  // push the other columns off the screen.
+  const brief = (items: string[], limit = 3) => items.length <= limit
+    ? items.join(", ")
+    : `${items.slice(0, limit).join(", ")} и ещё ${items.length - limit}`;
+  if (rule.domain_suffix.length) parts.push(`домены ${brief(rule.domain_suffix)}`);
+  if (rule.domain_exact.length) parts.push(`точный домен ${brief(rule.domain_exact)}`);
+  if (rule.ip_cidr.length) parts.push(`сеть ${brief(rule.ip_cidr)}`);
   return parts.join("; ") || "назначение не задано";
 }
 
@@ -232,6 +237,16 @@ const domainListValid = (list: readonly string[]) =>
   list.every((item) => item.trim() !== "" && domainValid(item));
 const cidrListValid = (list: readonly string[]) =>
   list.every((item) => !item.includes(":") && addressValid(item));
+
+/** Russian plural for a counted noun: 1 домен, 2 домена, 5 доменов. */
+function plural(count: number, one: string, few: string, many: string): string {
+  const mod100 = Math.abs(count) % 100;
+  const mod10 = mod100 % 10;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+}
 
 /** The exit names a target; an exit without one is not a rule. */
 export function exitComplete(exit: RoutingExit): boolean {
@@ -251,15 +266,42 @@ export function ruleComplete(rule: RoutingRule): boolean {
     cidrListValid(rule.ip_cidr) && exitComplete(rule.exit);
 }
 
-function emptyRule(index: number): RoutingRule {
+function emptyRule(): RoutingRule {
   return {
-    name: `rule_${index + 1}`,
+    name: "",
     subject: { kind: "server" },
     domain_suffix: [],
     domain_exact: [],
     ip_cidr: [],
     exit: { kind: "direct" },
   };
+}
+
+/**
+ * A name for a rule that says what it does and is free among the rules.
+ *
+ * The operator does not choose a name; a name that repeats is a data problem,
+ * not a style question. The base comes from the destination (the first domain
+ * or the first network), and a numeric suffix makes it unique.
+ */
+export function suggestRuleName(rule: RoutingRule, taken: readonly string[]): string {
+  const domain = rule.domain_suffix[0] ?? rule.domain_exact[0];
+  const network = rule.ip_cidr[0];
+  let base = domain
+    ? domain.replace(/^www\./, "").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+    : network
+      ? `net_${network.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`
+      : "rule";
+  base = base.slice(0, 24) || "rule";
+  // The backend accepts a name that starts with a letter only.
+  if (!/^[a-zA-Z]/.test(base)) base = `rule_${base}`;
+  const free = (candidate: string) => !taken.includes(candidate);
+  if (free(base)) return base;
+  for (let index = 2; index < 100; index++) {
+    const candidate = `${base.slice(0, 28)}_${index}`;
+    if (free(candidate)) return candidate;
+  }
+  return `${base.slice(0, 26)}_${Date.now().toString(36).slice(-4)}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -282,7 +324,7 @@ function SubjectFields({ rule, change, peers, interfaces }: {
   const zones: Record<string, string> = { lan: "локальная сеть", wan: "интернет", dmz: "демилитаризованная зона" };
   return <FormGrid>
     <FormWide>
-      <ChoiceCards label="Источник трафика" value={subject.kind}
+      <ChoiceCards label="Источник трафика" value={[subject.kind]}
         options={subjectKindOptions.map((item) => ({ ...item,
           description: item.value === "server" ? "Исходящий трафик самого сервера"
             : item.value === "device" ? peers.length ? "Одно устройство конкретного абонента" : "Абонентских устройств нет — добавьте абонента и его устройство на странице «Абоненты»."
@@ -298,7 +340,7 @@ function SubjectFields({ rule, change, peers, interfaces }: {
     <FormWide>
       <Typography variant="body2" className="routing-subject-summary">{summary}</Typography>
       <ChoiceCards label="Устройства и интерфейсы" layout="rows"
-        value={subject.kind === "device" ? `device:${peerIndex}` : subject.kind === "interface" ? `interface:${subject.interface}` : ""}
+        value={[subject.kind === "device" ? `device:${peerIndex}` : subject.kind === "interface" ? `interface:${subject.interface}` : ""]}
         options={[
           ...peers.map((peer, index) => ({ value: `device:${index}`, label: peer.peer, icon: "device" as const,
             description: `${peer.addresses.join(", ") || "адресов нет"} · абонент «${peer.subscriber}» · пир ${peer.peer}` })),
@@ -334,22 +376,42 @@ function DestinationFields({ rule, change }: {
       const rank = (id: string) => featured.includes(id) ? featured.indexOf(id) : featured.length;
       return rank(a.id) - rank(b.id);
     });
-  const selected = services.find((item) => item.dns_domains.length === rule.domain_suffix.length &&
-    item.dns_domains.every((domain, index) => domain === rule.domain_suffix[index]));
+  // A chosen service contributes its own domains; the operator adds nothing by
+  // hand, so the list of domains is NOT shown under the tiles. Several services
+  // can be chosen at once: their domains are alternatives (ADR-0029), so the
+  // union of their domains is the rule's destination.
+  const chosen = services.filter((item) => item.dns_domains.every((domain) => rule.domain_suffix.includes(domain)));
+  const chosenIds = chosen.map((item) => item.id);
+  const serviceDomains = new Set(chosen.flatMap((item) => item.dns_domains));
+  // Domains the operator typed by hand: everything in the list that no chosen
+  // service contributes.
+  const manualDomains = rule.domain_suffix.filter((domain) => !serviceDomains.has(domain));
   const empty = rule.domain_suffix.length + rule.domain_exact.length + rule.ip_cidr.length === 0;
+  const applyChosen = (ids: string[]) => {
+    const next = new Set(services.filter((item) => ids.includes(item.id)).flatMap((item) => item.dns_domains));
+    // Keep the hand-written domains, replace the service-contributed ones.
+    const keep = rule.domain_suffix.filter((domain) => !chosen.some((item) => item.dns_domains.includes(domain)));
+    change({ domain_suffix: [...new Set([...keep, ...next])] });
+  };
   return <FormGrid>
     {catalog.isPending ? <FormWide><LoadingSkeleton height={110} /></FormWide>
       : !catalog.error && services.length > 0 && <FormWide>
-        <ChoiceCards label="Готовые сервисы" layout="presets" value={selected?.id ?? ""}
+        <ChoiceCards label="Готовые сервисы" layout="presets" multiple value={chosenIds}
           options={services.map((item) => ({ value: item.id, label: item.name,
             icon: item.icon_slug ? categoryIcons[item.category] ?? "network" : undefined,
-            description: "Заменит список своих доменов; повторный выбор очистит его",
+            description: `${item.dns_domains.length} ${plural(item.dns_domains.length, "домен", "домена", "доменов")}`,
           }))}
-          onChange={(id) => change({ domain_suffix: id === selected?.id ? [] : [...services.find((item) => item.id === id)!.dns_domains] })} />
+          onChange={(_id, selected) => applyChosen(selected)} />
+        {chosen.length > 0 && <Typography variant="body2" color="text.secondary" className="routing-subtitle">
+          Выбрано сервисов: {chosen.length}. Их домены — альтернативы назначения; свой список — ниже.
+        </Typography>}
       </FormWide>}
-    <Field label="Свои домены (по одному в строке)" multiline value={rule.domain_suffix.join("\n")}
-      valid={domainListValid(rule.domain_suffix)} hint="Совпадение по суффиксу: «rutube.ru» покроет и www.rutube.ru"
-      onChange={(text) => change({ domain_suffix: text.split("\n").map((item) => item.trim()).filter(Boolean) })} />
+    <Field label="Свои домены (по одному в строке)" multiline value={manualDomains.join("\n")}
+      valid={domainListValid(manualDomains)} hint="Совпадение по суффиксу: «rutube.ru» покроет и www.rutube.ru"
+      onChange={(text) => {
+        const typed = text.split("\n").map((item) => item.trim()).filter(Boolean);
+        change({ domain_suffix: [...new Set([...typed, ...rule.domain_suffix.filter((domain) => serviceDomains.has(domain))])] });
+      }} />
     <Field label="Свои адреса и сети (CIDR)" multiline value={rule.ip_cidr.join("\n")}
       valid={cidrListValid(rule.ip_cidr)} hint="Только IPv4. Оставьте пустым, если адреса не нужны"
       onChange={(text) => change({ ip_cidr: text.split("\n").map((item) => item.trim()).filter(Boolean) })} />
@@ -389,7 +451,7 @@ function ExitFields({
   };
   return (
       <FormGrid>
-        <FormWide><ChoiceCards label="Выход" value={exit.kind}
+        <FormWide><ChoiceCards label="Выход" value={[exit.kind]}
           options={exitKindOptions.map((option) => ({ ...option,
             description: reasons[option.value as RoutingExit["kind"]] ?? exitExplanation[option.value as RoutingExit["kind"]],
             disabled: !!reasons[option.value as RoutingExit["kind"]],
@@ -467,18 +529,31 @@ export default function RoutingMasterPage() {
   const editor = useDraftEditor<RoutingRule[]>();
   const [mode, setMode] = useState<MasterMode>("wizard");
   const [step, setStep] = useState<WizardStep>(0);
-  const [rule, setRule] = useState<RoutingRule>(() => emptyRule(0));
+  const [rule, setRule] = useState<RoutingRule>(() => emptyRule());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<{ index: number; name: string } | null>(null);
   const [saveIntent, setSaveIntent] = useState<"draft" | "apply" | null>(null);
   const saveLock = useRef(false);
+  // The operator may type a name of their own; then the automatic one stops
+  // following the destination.
+  const [nameEdited, setNameEdited] = useState(false);
   const peers = devicePeers(configuration);
   const interfaces = subjectInterfaces(configuration);
   const choices = exitChoices(configuration);
   const rules = editor.value ?? configuration.routing_rules ?? [];
   const readOnly = user?.role === "operator";
   const disabled = readOnly || editor.saving || busy || saveIntent !== null;
-  const change = (update: Partial<RoutingRule>) => setRule((current) => ({ ...current, ...update }));
+  const change = (update: Partial<RoutingRule>) => setRule((current) => {
+    const next = { ...current, ...update };
+    const destinationChanged = update.domain_suffix !== undefined ||
+      update.domain_exact !== undefined || update.ip_cidr !== undefined;
+    if (destinationChanged && !nameEdited) {
+      // The name follows the destination until the operator writes their own.
+      const taken = rules.filter((item) => item.name !== current.name).map((item) => item.name);
+      next.name = suggestRuleName(next, taken);
+    }
+    return next;
+  });
   const subject = rule.subject;
   const validSubject = subject.kind === "server" ||
     (subject.kind === "device" && peers.some((peer) => peer.subscriber === subject.subscriber && peer.peer === subject.peer)) ||
@@ -491,8 +566,9 @@ export default function RoutingMasterPage() {
   const wizardValid = validSubject && ruleComplete(rule) && unique && pageValid;
   const resetWizard = () => {
     setStep(0);
-    setRule(emptyRule(rules.length));
+    setRule(emptyRule());
     setEditingIndex(null);
+    setNameEdited(false);
   };
 
   // useDraftEditor owns persistence and errors. Only a successful save clears
@@ -508,10 +584,8 @@ export default function RoutingMasterPage() {
     setSaveIntent(null);
     saveLock.current = false;
     setStep(0);
-    const savedRules = saved.configuration.routing_rules ?? [];
-    let index = savedRules.length;
-    while (savedRules.some((item) => item.name === `rule_${index + 1}`)) index++;
-    setRule(emptyRule(index));
+    setRule(emptyRule());
+    setNameEdited(false);
     if (intent === "apply") {
       // Reuse the same command, preferences, guards and shared observation as
       // the topbar. The Apply screen alone presents confirmation/countdown.
@@ -578,8 +652,12 @@ export default function RoutingMasterPage() {
               </Typography>
             </SummaryPanel></FormWide>
             <Field label="Имя правила" value={rule.name} valid={nameValid(rule.name) && unique}
-              hint={unique ? "Латиница, цифры и _, до 31 символа" : "Имя уже занято другим правилом"}
-              onChange={(name) => change({ name })} />
+              hint={unique
+                ? nameEdited
+                  ? "Латиница, цифры и _, до 31 символа"
+                  : "Создано по назначению; можно изменить"
+                : "Имя уже занято другим правилом"}
+              onChange={(name) => { setNameEdited(true); change({ name }); }} />
             <FormWide><InfoNote severity="warning">
               Сохранение записывает только черновик. Изменения не действуют до отдельного применения.
               «Сохранить и применить» запускает общее применение всего черновика и открывает страницу «Применение».
@@ -600,9 +678,9 @@ export default function RoutingMasterPage() {
             onClick={() => saveWizard("apply")}>Сохранить и применить</Button>} />}
       </Card>
       <Card title="Что будет дальше">
-        <DataTable heads={["Порядок", "Кто / правило", "Условие", "Куда"]}
+        <div className="routing-table-wide"><DataTable heads={["Порядок", "Кто / правило", "Условие", "Куда"]}
           rows={[...systemRows.map((row) => row.slice(0, 4)), ...previewRules.map((item, index) => [String(index + 1), `${item.name} · ${subjectLabel(item.subject)}`,
-            destinationLabel(item), exitLabel(item.exit)])]} />
+            destinationLabel(item), exitLabel(item.exit)])]} /></div>
         {!previewRules.length && <EmptyState>Правил маршрутизации пока нет. Создайте первое правило в мастере.</EmptyState>}
         <Typography variant="body2" color="text.secondary" className="routing-subtitle">{fallback}</Typography>
       </Card>
@@ -622,7 +700,7 @@ export default function RoutingMasterPage() {
         <Typography variant="body2" color="text.secondary" className="routing-subtitle">
           Первое совпадение выигрывает. Системные строки показаны для справки и не редактируются.
         </Typography>
-        <DataTable heads={["# / правило", "Кто", "Что", "Куда", "Действия"]} rows={[
+        <div className="routing-table-wide"><DataTable heads={["# / правило", "Кто", "Что", "Куда", "Действия"]} rows={[
           ...systemRows,
           ...rules.map((item, index) => [ `${index + 1}. ${item.name}`, subjectLabel(item.subject), destinationLabel(item), exitLabel(item.exit),
             <FormActions key={item.name}>
@@ -632,7 +710,7 @@ export default function RoutingMasterPage() {
               <DeleteButton label={`Удалить правило ${item.name}`} disabled={disabled} onClick={() => setDeleting({ index, name: item.name })} />
             </FormActions>,
           ]),
-        ]} />
+        ]} /></div>
         {!rules.length && <EmptyState>Правил маршрутизации пока нет. Создайте первое правило в мастере.</EmptyState>}
         {!readOnly && <FormActions><Button disabled={disabled} onClick={() => { resetWizard(); setMode("wizard"); }}>+ Правило</Button></FormActions>}
         {editor.isEdit && <EditorFooter saving={editor.saving} valid={pageValid && !readOnly} cancel={editor.cancel} save={save} />}
