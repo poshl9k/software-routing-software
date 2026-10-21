@@ -319,3 +319,24 @@ outbounds/subscriptions/groups (`RoutingProxy.tsx`). The state that carried one-
 Two defects were caught by looking at the screenshots rather than at the diff: the firewall rule
 dialog duplicated the row's delete action, and the TProxy bypass section left a delete icon
 floating in the page flow.
+
+## Routing master — approved HTML references
+
+- [x] `ChoiceCards`: two-column choices, read-only identity rows, four-column
+  catalogue tiles; keyboard accessible, selected state and disabled reasons.
+- [x] `FlowChain`: wrapping `Badge` chips with `Icon` arrows, static description.
+- [x] `RoutingSurface` / `SummaryPanel`: scoped routing layout and inset summary.
+- [x] `EditorFooter`: optional `saveLabel` and `action`, defaults unchanged.
+- [x] `Icon`: device, arrow and seven category icons; literal `IconName` union.
+- [x] Numbered step cards, real service DNS presets, OR wording, six exit cards,
+  preview/system rows, expert engine block, existing modal item editor.
+- [x] Save uses `useDraftEditor`; success resolves the saved context version,
+  invokes the existing `useApplyCommands` global command, opens `/apply` for
+  confirmation/status. Save-only never invokes apply.
+- Deliberate reference corrections: destinations cannot be empty; presets are
+  concrete domains, not geosite links; unmatched devices fail closed and the
+  remaining traffic follows configured final/group selection, not always direct.
+  System rows are shown first for reference, but their conditions explicitly
+  place them AFTER the applicable user rules. No fabricated TProxy stages.
+- Catalogue tiles scroll inside a bounded four-column surface rather than
+  pushing manual fields below dozens of rows. Small screens use two columns.

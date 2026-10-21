@@ -92,3 +92,24 @@ renders caller-provided status and time values, invents no timestamps, and its
 countdown announces phase changes rather than each tick. Expert disclosure is
 keyboard accessible. New risk actions use the MUI confirmation dialog instead
 of `window.confirm`.
+
+## Routing reference alignment
+
+`ChoiceCards` owns selectable cards, identity rows and catalogue tiles: native
+buttons, visible names, `aria-pressed`, keyboard focus and disabled reasons.
+`FlowChain` is a static chain of `Badge` chips and SVG `Icon` separators.
+`RoutingSurface` scopes layout; `SummaryPanel` is the inset summary surface.
+All colours come from the existing theme. `IconName` preserves literal keys;
+category icons replace brand glyphs without dependencies.
+
+`EditorFooter` gains optional `saveLabel` and `action`, preserving defaults.
+The routing master saves via `useDraftEditor`, then passes the saved version
+from context to the existing `useApplyCommands().command("apply", id)` and
+opens `/apply`. No local confirmation or countdown UI is introduced.
+`useConfiguration` does not expose `command`; the hook does not return the
+saved ID, so success is observed only after its working copy is cleared.
+
+System rows appear first as reference material, explicitly labelled as running
+AFTER product rules (unmatched devices) and AFTER all rules (final outbound).
+Fallback reflects actual configured final/group selection. Presets copy
+concrete DNS domains, not geosite sets; composites are excluded.
