@@ -266,9 +266,90 @@ def test_runtime_installer_cleans_pip_copies_and_uses_hash_lock():
     assert 'install-runtime-deps.sh' in bootstrap
     assert 'install-runtime-deps.sh' in updater
     assert str(lock.name) in bootstrap and str(lock.name) in updater
-    assert "installer.strip().lower() == 'pip'" in helper
-    assert "'pip', 'uninstall', '--break-system-packages', '--yes'" in helper
+    assert 'metadata.distributions(path=' in helper
+    assert "strip().lower() == 'pip'" in helper
     assert '--require-hashes' in helper
+
+
+def test_runtime_installer_removes_all_pip_versions_in_isolated_target(tmp_path):
+    """Actual offline pip install over conflicting metadata and mixed package files."""
+    import hashlib
+    import zipfile
+    from importlib import metadata
+
+    target = tmp_path / 'site-packages'
+    target.mkdir()
+    wheels = tmp_path / 'wheels'
+    wheels.mkdir()
+    venv = tmp_path / 'venv'
+    subprocess.run(['/usr/bin/python3', '-m', 'venv', '--system-site-packages',
+                    '--without-pip', str(venv)], check=True)
+
+    def stale(name, version, files):
+        package = target / name
+        package.mkdir(exist_ok=True)
+        version_dir = package / ('release_' + version.replace('.', '_'))
+        version_dir.mkdir()
+        for filename in files:
+            (version_dir / filename).write_text(f'{version}: {filename}\n')
+        info = target / f'{name}-{version}.dist-info'
+        info.mkdir()
+        (info / 'METADATA').write_text(f'Name: {name}\nVersion: {version}\n')
+        (info / 'INSTALLER').write_text('pip\n')
+        (info / 'RECORD').write_text(''.join(
+            f'{name}/{version_dir.name}/{filename},,\n' for filename in files))
+
+    stale('fastapi', '0.156.4', ['__init__.py', 'old_one.py'])
+    stale('fastapi', '0.157.0', ['__init__.py', 'old_two.py'])
+    stale('click', '8.3.0', ['__init__.py', 'old_click.py'])
+    stale('unrelated', '1.0', ['__init__.py', 'keep.py'])
+
+    lock = tmp_path / 'requirements.txt'
+    pins = []
+    for name, version in [('fastapi', '0.116.1'), ('click', '8.3.3')]:
+        filename = f'{name}-{version}-py3-none-any.whl'
+        wheel = wheels / filename
+        info = f'{name}-{version}.dist-info'
+        with zipfile.ZipFile(wheel, 'w') as archive:
+            archive.writestr(f'{name}/__init__.py', f'PINNED = "{version}"\n')
+            archive.writestr(f'{info}/METADATA', f'Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n')
+            archive.writestr(f'{info}/WHEEL', 'Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n')
+            archive.writestr(f'{info}/RECORD', '')
+        pins.append(f'{name}=={version} --hash=sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}')
+    lock.write_text('\n'.join(pins) + '\n')
+    env = {**os.environ, 'PATH': f'{venv / "bin"}:{os.environ["PATH"]}',
+           'VS_ROUTER_DEPS_SITE_DIRS': str(target), 'PIP_NO_INDEX': '1',
+           'PIP_FIND_LINKS': str(wheels), 'PYTHONNOUSERSITE': '1'}
+    env.pop('PYTHONPATH', None)
+    script = PACKAGING / 'install-runtime-deps.sh'
+    for _ in range(2):
+        result = subprocess.run(['bash', str(script), str(lock)], env=env,
+                                text=True, capture_output=True, timeout=60)
+        assert result.returncode == 0, result.stdout + result.stderr
+        distributions = list(metadata.distributions(path=[str(target)]))
+        for name, version in [('fastapi', '0.116.1'), ('click', '8.3.3')]:
+            assert [(dist.metadata['Name'], dist.version) for dist in distributions
+                    if dist.metadata['Name'].lower() == name] == [(name, version)]
+            assert (target / name / '__init__.py').read_text() == f'PINNED = "{version}"\n'
+            assert not list((target / name).glob('release_*'))
+            assert not list((target / name).rglob('old_*.py'))
+        assert (target / 'unrelated/release_1_0/keep.py').read_text() == '1.0: keep.py\n'
+        assert (target / 'unrelated-1.0.dist-info').is_dir()
+
+    clean = tmp_path / 'clean-site-packages'
+    clean.mkdir()
+    clean_result = subprocess.run(['bash', str(script), str(lock)],
+                                  env={**env, 'VS_ROUTER_DEPS_SITE_DIRS': str(clean)},
+                                  text=True, capture_output=True, timeout=60)
+    assert clean_result.returncode == 0, clean_result.stdout + clean_result.stderr
+    assert {(dist.metadata['Name'].lower(), dist.version)
+            for dist in metadata.distributions(path=[str(clean)])} == {
+                ('fastapi', '0.116.1'), ('click', '8.3.3')}
+
+    missing = subprocess.run(['bash', str(script), str(tmp_path / 'absent')],
+                             env=env, text=True, capture_output=True, timeout=10)
+    assert missing.returncode != 0
+    assert 'Missing dependency lock' in missing.stderr
 
 
 def test_iso_requires_verified_inputs(tmp_path):
