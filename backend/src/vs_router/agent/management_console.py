@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from ipaddress import IPv4Address
 
-from ..management import (Management, STATE_DIR, STATE_PATH, TLS_DIR, panel_probe_target,
+from ..management import (Management, STATE_DIR, STATE_PATH, TLS_DIR, panel_probe_targets,
                           read_management, verify_identity, with_custom_hostname,
                           wired_ports)
 from ..schema import ConfigurationVersion
@@ -290,20 +290,26 @@ class Console:
         certificate may still be issuing); the local-CA endpoint is verified
         against the host CA. ``/health`` sits outside any secret path prefix.
         """
-        url, ca_file = panel_probe_target(state)
-        probe = ['curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
-                 '--max-time', '5']
-        if ca_file is not None:
-            probe += ['--cacert', str(self.path(ca_file))]
-        probe.append(url)
+        targets = panel_probe_targets(state)
         for attempt in range(attempts):
-            try:
-                self.runner(probe)
-                return
-            except subprocess.CalledProcessError:
-                if attempt == attempts - 1:
-                    raise
-                time.sleep(delay)
+            for index, (url, ca_file, resolve) in enumerate(targets):
+                probe = ['curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
+                         '--max-time', '5']
+                if ca_file is not None:
+                    probe += ['--cacert', str(self.path(ca_file))]
+                if resolve is not None:
+                    probe += ['--resolve', resolve]
+                probe.append(url)
+                try:
+                    self.runner(probe)
+                except subprocess.CalledProcessError:
+                    if attempt == attempts - 1 and index == len(targets) - 1:
+                        raise
+                else:
+                    path = f'local {state.ip}' if resolve is not None or ca_file is not None else 'public'
+                    print(f'Panel readiness verified via {path}.', file=sys.stderr)
+                    return
+            time.sleep(delay)
 
     def applied_version(self):
         """The configuration currently in force, or an empty one before first apply."""

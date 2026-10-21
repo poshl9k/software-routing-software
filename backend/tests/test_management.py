@@ -22,6 +22,10 @@ from vs_router.agent.apply import ApplyEngine, ApplyError, APPLIED_DIR
 from test_agent_apply import FakeFS, FakeExecutor
 
 STATE = Management(interface='eth1', mac='02:00:00:00:00:02', address='192.168.10.1/24')
+# The operator's own panel domain in these tests. Our server's name, deliberately
+# NOT the work machine's: a live-looking domain in a fixture is a name someone
+# will eventually point a probe at.
+CUSTOM = 'rg4.poshl9k.ru'
 
 
 def recording_runner(calls, address='192.168.10.1'):
@@ -502,8 +506,15 @@ def test_single_uplink_provision_stores_both_public_names(tmp_path, capsys):
     assert stored.hostname == '92.51.36.131.nip.io'
     assert stored.custom_hostname == 'panel.example.com'
     assert publication_names(stored) == ('92.51.36.131.nip.io', 'panel.example.com')
-    assert next(c for c in calls if c[0] == 'curl')[-1] == 'https://panel.example.com/health'
-    assert capsys.readouterr().err == ''
+    probes = [c for c in calls if c[0] == 'curl']
+    assert len(probes) == 1
+    # The name being published is the one verified — the operator's own domain
+    # here — reached over the local management address so NAT cannot hide it.
+    assert probes[0][-1] == 'https://panel.example.com/health'
+    assert probes[0][probes[0].index('--resolve') + 1] == 'panel.example.com:443:92.51.36.131'
+    stderr = capsys.readouterr().err
+    assert stderr == 'Panel readiness verified via local 92.51.36.131.\n'
+    assert 'WARNING' not in stderr
 
 
 def test_single_uplink_provision_refuses_duplicate_names_before_writing(tmp_path):
@@ -536,7 +547,9 @@ def test_single_uplink_provision_does_not_warn_about_host_reserve(tmp_path, caps
     vps_host(tmp_path)
     state, _ = Console(tmp_path, vps_runner([]), os.getgid()).provision_single_uplink(
         hostname='92.51.36.131.nip.io')
-    assert capsys.readouterr().err == ''
+    stderr = capsys.readouterr().err
+    assert stderr == 'Panel readiness verified via local 92.51.36.131.\n'
+    assert 'WARNING' not in stderr
     assert state.custom_hostname is None
 
 
@@ -592,7 +605,8 @@ def test_management_cli_prints_both_name_slots_and_primary_url(
     assert f'Reserve hostname: {hostname or "(none)"}' in output.out
     assert f'Custom hostname: {custom_hostname or "(none)"}' in output.out
     assert f'Panel: https://{primary}/panelpath/' in output.out
-    assert output.err == ''
+    assert output.err == 'Panel readiness verified via local 92.51.36.131.\n'
+    assert 'WARNING' not in output.err
 
 
 def test_single_uplink_provision_publishes_both_acme_subjects(tmp_path):
@@ -693,7 +707,169 @@ def panel_runner(calls, *, reachable=True):
     return run
 
 
-def vps_applied(tmp_path, ssh_interfaces=('eth0',)):
+def test_criterion_1_nat_local_probe_before_public(tmp_path, capsys):
+    nat = RESERVE.model_copy(update={'address': '10.15.15.15/24',
+                                     'hostname': '185.160.216.214.nip.io'})
+    calls = []
+    def run(argv):
+        calls.append(argv)
+        if '--resolve' not in argv:
+            raise subprocess.CalledProcessError(28, argv)
+        return SimpleNamespace(stdout='')
+
+    Console(tmp_path, run, os.getgid()).probe_panel(nat, attempts=1)
+    assert calls == [[
+        'curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
+        '--max-time', '5', '--resolve', '185.160.216.214.nip.io:443:10.15.15.15',
+        'https://185.160.216.214.nip.io/health',
+    ]]
+    assert all('--cacert' not in call and '-k' not in call and '--insecure' not in call
+               for call in calls)
+    assert capsys.readouterr().err == 'Panel readiness verified via local 10.15.15.15.\n'
+
+
+def test_criterion_2_all_targets_fail_then_publication_rolls_back(tmp_path, monkeypatch):
+    _applied, state_dir = vps_applied(tmp_path)
+    management_path = state_dir / 'management.json'
+    caddy_path = tmp_path / 'etc/caddy/caddy.json'
+    original_caddy = b'{ "prior": "retain exact bytes" }\n'
+    caddy_path.write_bytes(original_caddy)
+    original_record = management_path.read_bytes()
+    calls, failures, sleeps, resolved = [], [], [], []
+    def run(argv):
+        calls.append(argv)
+        if argv[0] == 'curl':
+            error = subprocess.CalledProcessError(28, argv)
+            failures.append(error)
+            raise error
+        return SimpleNamespace(stdout='')
+
+    monkeypatch.setattr('vs_router.agent.management_console.time.sleep', sleeps.append)
+    console = Console(tmp_path, run, os.getgid(), resolver=resolved.append)
+    with pytest.raises(subprocess.CalledProcessError) as exc:
+        console.probe_panel(RESERVE, attempts=60, delay=2)
+    assert exc.value is failures[-1]
+    probes = [call for call in calls if call[0] == 'curl']
+    assert len(probes) == 120
+    assert [('--resolve' in call) for call in probes] == [True, False] * 60
+    assert all(call[-1] == 'https://92.51.36.131.nip.io/health' for call in probes)
+    assert all(call[call.index('--resolve') + 1] == '92.51.36.131.nip.io:443:92.51.36.131'
+               for call in probes[::2])
+    assert sleeps == [2] * 59
+
+    calls.clear()
+    failures.clear()
+    sleeps.clear()
+    with pytest.raises(ValueError, match='^management.domain_unverified$') as exc:
+        console.publish_panel_domain(CUSTOM)
+    assert exc.value.__cause__ is failures[-1]
+    assert resolved == [CUSTOM]
+    probes = [call for call in calls if call[0] == 'curl']
+    assert len(probes) == 180
+    assert [('--resolve' in call) for call in probes] == [True, False, True] * 60
+    # The newly published name first (locally, then as published), the reserve
+    # afterwards over the local address: a second name that stopped answering
+    # must not pass as a healthy publication.
+    assert [call[-1] for call in probes[:3]] == [f'https://{CUSTOM}/health'] * 2 + \
+        ['https://92.51.36.131.nip.io/health']
+    assert probes[0][probes[0].index('--resolve') + 1] == f'{CUSTOM}:443:92.51.36.131'
+    # The reserve is checked over the local address as well, so a published name
+    # whose certificate or routing broke cannot pass unnoticed behind a healthy one.
+    assert probes[2][probes[2].index('--resolve') + 1] == '92.51.36.131.nip.io:443:92.51.36.131'
+    assert sleeps == [2] * 59
+    assert management_path.read_bytes() == original_record
+    assert caddy_path.read_bytes() == original_caddy
+    assert calls.count(['systemctl', 'restart', 'caddy']) == 2
+
+
+def test_criterion_3_publish_nat_success_keeps_custom_domain(tmp_path, capsys):
+    nat = RESERVE.model_copy(update={'address': '10.15.15.15/24',
+                                     'hostname': '185.160.216.214.nip.io'})
+    _applied, state_dir = vps_applied(tmp_path, state=nat)
+    calls, resolved = [], []
+    def run(argv):
+        calls.append(argv)
+        if argv[0] == 'curl' and '--resolve' not in argv:
+            raise subprocess.CalledProcessError(28, argv)
+        return SimpleNamespace(stdout='')
+
+    console = Console(tmp_path, run, os.getgid(), resolver=resolved.append)
+    updated = console.publish_panel_domain(CUSTOM)
+    assert resolved == [CUSTOM]
+    assert updated.hostname == nat.hostname
+    assert updated.custom_hostname == CUSTOM
+    assert json.loads((state_dir / 'management.json').read_text()) == updated.model_dump()
+    caddy_path = tmp_path / 'etc/caddy/caddy.json'
+    assert json.loads(caddy_path.read_text()) == generate_caddy_json(
+        console.applied_version(), updated)
+    assert calls.count(['systemctl', 'restart', 'caddy']) == 1
+    probes = [call for call in calls if call[0] == 'curl']
+    assert len(probes) == 1
+    # The domain just published is what gets verified, not the untouched reserve.
+    assert probes[0][-1] == f'https://{CUSTOM}/health'
+    assert probes[0][probes[0].index('--resolve') + 1] == f'{CUSTOM}:443:10.15.15.15'
+    assert capsys.readouterr().err == 'Panel readiness verified via local 10.15.15.15.\n'
+
+
+def test_criterion_4_separate_lan_uses_one_ca_probe(tmp_path, capsys):
+    calls = []
+    Console(tmp_path, panel_runner(calls), os.getgid()).probe_panel(STATE, attempts=1)
+    assert calls == [[
+        'curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
+        '--max-time', '5', '--cacert', str(tmp_path / 'etc/caddy/management/ca.crt'),
+        'https://192.168.10.1/health',
+    ]]
+    assert '--resolve' not in calls[0]
+    assert capsys.readouterr().err == 'Panel readiness verified via local 192.168.10.1.\n'
+
+
+def test_criterion_5_panel_probe_targets_preserve_publication_contract():
+    from vs_router.management import TLS_DIR, panel_probe_target, panel_probe_targets
+
+    both = RESERVE.model_copy(update={'custom_hostname': CUSTOM})
+    reserve_url = 'https://92.51.36.131.nip.io/health'
+    custom_url = f'https://{CUSTOM}/health'
+    # The name that was just published is probed first (locally, then as
+    # published); the reserve then follows over the local address.
+    assert panel_probe_targets(both) == (
+        (custom_url, None, f'{CUSTOM}:443:92.51.36.131'),
+        (custom_url, None, None),
+        (reserve_url, None, '92.51.36.131.nip.io:443:92.51.36.131'),
+    )
+    assert panel_probe_targets(RESERVE) == (
+        (reserve_url, None, '92.51.36.131.nip.io:443:92.51.36.131'),
+        (reserve_url, None, None),
+    )
+    assert panel_probe_target(both) == (custom_url, None)
+    custom = VPS.model_copy(update={'custom_hostname': CUSTOM})
+    assert panel_probe_targets(custom) == (
+        (custom_url, None, f'{CUSTOM}:443:92.51.36.131'),
+        (custom_url, None, None),
+    )
+    assert panel_probe_targets(VPS) == ((panel_probe_target(VPS)[0], TLS_DIR / 'ca.crt', None),)
+    assert panel_probe_targets(STATE) == ((panel_probe_target(STATE)[0], TLS_DIR / 'ca.crt', None),)
+    # One name repeated in both slots is one name, probed once.
+    assert panel_probe_targets(both.model_copy(update={
+        'custom_hostname': both.hostname})) == panel_probe_targets(RESERVE)
+
+
+def test_panel_probe_public_fallback_and_retry_order(tmp_path, monkeypatch, capsys):
+    calls, sleeps = [], []
+    def run(argv):
+        calls.append(argv)
+        if len(calls) <= 3:
+            raise subprocess.CalledProcessError(28, argv)
+        return SimpleNamespace(stdout='')
+
+    monkeypatch.setattr('vs_router.agent.management_console.time.sleep', sleeps.append)
+    Console(tmp_path, run, os.getgid()).probe_panel(RESERVE, attempts=2, delay=7)
+    assert [('--resolve' in call) for call in calls] == [True, False, True, False]
+    assert all(call[-1] == 'https://92.51.36.131.nip.io/health' for call in calls)
+    assert sleeps == [7]
+    assert capsys.readouterr().err == 'Panel readiness verified via public.\n'
+
+
+def vps_applied(tmp_path, ssh_interfaces=('eth0',), state=RESERVE):
     """A one-NIC record (with the nip.io reserve) plus an applied snapshot.
 
     ``ssh_interfaces`` is what the applied configuration allows SSH on: a real
@@ -705,13 +881,13 @@ def vps_applied(tmp_path, ssh_interfaces=('eth0',)):
     applied.mkdir(parents=True)
     version = ConfigurationVersion(configuration=Configuration.model_validate({
         'interfaces': [{'name': 'eth0', 'zone': 'wan', 'addressing': 'static',
-                        'addresses': ['92.51.36.131/24']}],
+                        'addresses': [state.address]}],
         'ssh': {'interfaces': list(ssh_interfaces),
                 'wan_confirmed_interfaces': list(ssh_interfaces)}}))
     (applied / 'snapshot.json').write_text(version.model_dump_json())
     state_dir = tmp_path / 'var/lib/vs-router-bootstrap'
     state_dir.mkdir(parents=True)
-    (state_dir / 'management.json').write_text(RESERVE.model_dump_json())
+    (state_dir / 'management.json').write_text(state.model_dump_json())
     return applied, state_dir
 
 
@@ -730,24 +906,31 @@ def test_publish_panel_domain_refuses_when_the_applied_rules_close_ssh(tmp_path)
     assert not (tmp_path / 'etc/caddy/caddy.json').exists()
 
 
-def test_publish_panel_domain_serves_the_custom_name_beside_the_reserve(tmp_path):
+def test_publish_panel_domain_serves_the_custom_name_beside_the_reserve(tmp_path, capsys):
     applied, state_dir = vps_applied(tmp_path)
     calls = []
     console = Console(tmp_path, panel_runner(calls), os.getgid(),
                       resolver=lambda name: None)
-    updated = console.publish_panel_domain('rg3.poshl9k.ru')
-    assert updated.custom_hostname == 'rg3.poshl9k.ru'
+    updated = console.publish_panel_domain(CUSTOM)
+    assert updated.custom_hostname == CUSTOM
     record = json.loads((state_dir / 'management.json').read_text())
     # The install-time reserve name (nip.io) is kept, the custom name is added.
     assert record['hostname'] == '92.51.36.131.nip.io'
-    assert record['custom_hostname'] == 'rg3.poshl9k.ru'
+    assert record['custom_hostname'] == CUSTOM
     caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
     automate = caddy['apps']['tls']['certificates']['automate']
-    assert set(automate) == {'92.51.36.131.nip.io', 'rg3.poshl9k.ru'}
+    assert set(automate) == {'92.51.36.131.nip.io', CUSTOM}
     assert set(caddy['apps']['tls']['automation']['policies'][0]['subjects']) == set(automate)
     assert caddy['apps']['http']['servers']['management_acme']['listen'] == ['92.51.36.131:80']
     assert 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 counter accept comment "management_acme"' in (applied / 'nftables.conf').read_text()
-    assert any(c[0] == 'curl' and any('rg3.poshl9k.ru' in part for part in c) for c in calls)
+    probes = [c for c in calls if c[0] == 'curl']
+    assert len(probes) == 1
+    # The name that was just published is the one verified.
+    assert probes[0][-1] == f'https://{CUSTOM}/health'
+    assert probes[0][probes[0].index('--resolve') + 1] == f'{CUSTOM}:443:92.51.36.131'
+    stderr = capsys.readouterr().err
+    assert stderr == 'Panel readiness verified via local 92.51.36.131.\n'
+    assert 'WARNING' not in stderr
     # Clearing the custom name keeps the reserve: still ACME, still :80.
     back = console.publish_panel_domain(None)
     assert back.custom_hostname is None

@@ -81,6 +81,34 @@ def panel_probe_target(state):
     return f'https://{state.ip}/health', TLS_DIR / 'ca.crt'
 
 
+def panel_probe_targets(state):
+    """Ordered panel probe targets: the published name over the local address first.
+
+    Each item is ``(url, ca_file, resolve)``: ``resolve`` is a
+    ``host:port:address`` string for curl ``--resolve`` (or None). Behind NAT a
+    host cannot reach its own public name at all (measured live: curl exit 28),
+    while the name served on the management address with a trusted ACME
+    certificate proves the same fact. When there are no publication names
+    (IP-only panel, local CA) there is exactly one target and no resolve.
+
+    The name checked first is the one ``panel_probe_target`` picks — the
+    operator's own domain when it is set, else the reserve — because that is the
+    name the caller just published; the other publication names are checked
+    afterwards over the local address, so a second name that stopped answering is
+    not reported as a healthy publication.
+    """
+    names = publication_names(state)
+    if not names:
+        url, ca_file = panel_probe_target(state)
+        return ((url, ca_file, None),)
+    url, ca_file = panel_probe_target(state)
+    primary = state.custom_hostname or names[0]
+    return ((url, ca_file, f'{primary}:443:{state.ip}'),
+            (url, ca_file, None),
+            *((f'https://{name}/health', ca_file, f'{name}:443:{state.ip}')
+              for name in names if name != primary))
+
+
 def with_custom_hostname(state, hostname):
     """A copy of the record with the operator's own panel name set or cleared (pure).
 
