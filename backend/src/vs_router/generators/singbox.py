@@ -162,6 +162,60 @@ def _render_rule_match(rule):
     return _rule_matchers(rule)
 
 
+def _render_destination_disjunction(rule):
+    """The rule's destination is a disjunction, not a set of AND-ed matchers.
+
+    ``ip_cidr``, ``domain_suffix`` and ``domain_exact`` are three ways to name
+    where the traffic goes, and the panel presents them as alternatives. Inside
+    one sing-box rule every matcher key is AND-ed by the engine, so a flat rule
+    that lists a network and a domain matches traffic that is *both* — an
+    operator who meant OR gets an intersection that matches almost nothing and
+    silently fails to route. The three destination families therefore form a
+    logical OR: one family stays flat, two or more become
+    ``{"type": "logical", "mode": "or", "rules": [...]}``.
+
+    Returns ``None`` when the rule names no destination at all (the whole
+    address space is the destination, as before).
+    """
+    matchers = []
+    if rule.ip_cidr:
+        matchers.append({"ip_cidr": list(rule.ip_cidr)})
+    if rule.domain_suffix:
+        matchers.append({"domain_suffix": list(rule.domain_suffix)})
+    if rule.domain_exact:
+        matchers.append({"domain": list(rule.domain_exact)})
+    if not matchers:
+        return None
+    if len(matchers) == 1:
+        return matchers[0]
+    return {"type": "logical", "mode": "or", "rules": matchers}
+
+
+def _wrap_subject_and_destination(subject_match, destination, action):
+    """Subject matcher is AND-ed with the destination, never part of its OR.
+
+    A product routing rule means traffic *from* the subject *and* to any one of
+    the listed destinations *and* through the chosen exit. The subject's
+    ``source_ip_cidr`` is an outer matcher beside the destination; the
+    destination disjunction is nested inside it. With no subject, or a single
+    destination family, the rule stays flat and no ``logical`` wrapper appears.
+    """
+    if destination is None:
+        # No destination names the whole address space, so the subject alone
+        # decides. Keeping the subject here matters: dropping it would widen
+        # the rule to every source on the host.
+        return {**subject_match, **action}
+    if not subject_match:
+        return {**destination, **action}
+    if destination.get("type") == "logical":
+        # sing-box 1.14.2 rejects a flat rule that mixes ``source_ip_cidr`` with
+        # a ``logical`` matcher (unknown field), so the subject and the
+        # destination disjunction are themselves nested in an AND node.
+        return {"type": "logical", "mode": "and",
+                "rules": [subject_match, destination], **action}
+    return {**subject_match, **destination, **action}
+
+
 def _render_product_routing(configuration: Configuration) -> tuple[list[dict], list[dict]]:
     """Render validated egress policy without capturing traffic or allocating addresses."""
     if not configuration.routing_rules:
@@ -176,26 +230,24 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
     rules = []
     bound_outbounds = {}
     for rule in configuration.routing_rules:
-        match = {}
+        subject_match = {}
         if rule.subject.kind == "device":
             # Guaranteed by RoutingSubject validation, before generation.
             assert rule.subject.subscriber is not None and rule.subject.peer is not None
             peer = devices[(rule.subject.subscriber, rule.subject.peer)]
             if not peer.allowed_ips:
                 raise ValueError("routing.device_address_required")
-            match["source_ip_cidr"] = list(peer.allowed_ips)
+            subject_match["source_ip_cidr"] = list(peer.allowed_ips)
         elif rule.subject.kind == "interface":
-            match["source_ip_cidr"] = list(routing_subject_interface_cidrs(
+            subject_match["source_ip_cidr"] = list(routing_subject_interface_cidrs(
                 configuration, rule.subject.interface))
-        for field, key in (("ip_cidr", "ip_cidr"), ("domain_suffix", "domain_suffix"),
-                           ("domain_exact", "domain")):
-            if values := getattr(rule, field):
-                match[key] = list(values)
+        destination = _render_destination_disjunction(rule)
         # Domain matching needs DNS visibility (ADR-0020). Do not pretend that
         # sniffing implements the subscriber resolver, or enable it implicitly.
         target = rule.exit
         if target.kind == "block":
-            rules.append({**match, "action": "reject"})
+            rules.append(_wrap_subject_and_destination(
+                subject_match, destination, {"action": "reject"}))
             continue
         tag = routing_exit_tag(target) or IMPLICIT_DIRECT_TAG
         if target.kind in ("tunnel", "interface"):
@@ -203,7 +255,8 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
                          else target.interface)
             bound_outbounds.setdefault(tag, {"type": "direct", "tag": tag,
                                              "bind_interface": interface})
-        rules.append({**match, "action": "route", "outbound": tag})
+        rules.append(_wrap_subject_and_destination(
+            subject_match, destination, {"action": "route", "outbound": tag}))
 
     # Unmatched devices are rejected BEFORE legacy bypass/routing/defaults,
     # including devices with no individual rule. The final outbound remains for

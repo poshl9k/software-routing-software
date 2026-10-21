@@ -340,12 +340,16 @@ def test_criterion_2_render_device_all_addresses_and_server_without_source():
         render_document(data)
 
 
-def test_criterion_3_render_destination_matchers_and_mixed_fields():
+def test_criterion_3_render_destination_matchers_and_mixed_fields() -> None:
     data = minimal_render_document()
     data['routing_rules'] = [
         rule('ip', ip_cidr=['192.0.2.0/24']),
         rule('suffix', ip_cidr=[], domain_suffix=['example.org']),
         rule('exact', ip_cidr=[], domain_exact=['api.example.org']),
+        # Two destination families -> sing-box AND-s everything inside one flat
+        # rule, so "network AND domain" matches nothing intentionally. The fix
+        # makes the destination families a logical OR nested behind the subject
+        # matcher, see Slice 3b / B3-2:
         rule('mixed', ip_cidr=['2001:db8::/32'], domain_suffix=['example.net'],
              domain_exact=['api.example.net']),
     ]
@@ -354,8 +358,12 @@ def test_criterion_3_render_destination_matchers_and_mixed_fields():
         {'ip_cidr': ['192.0.2.0/24'], 'action': 'route', 'outbound': 'direct'},
         {'domain_suffix': ['example.org'], 'action': 'route', 'outbound': 'direct'},
         {'domain': ['api.example.org'], 'action': 'route', 'outbound': 'direct'},
-        {'ip_cidr': ['2001:db8::/32'], 'domain_suffix': ['example.net'],
-         'domain': ['api.example.net'], 'action': 'route', 'outbound': 'direct'},
+        {
+            'type': 'logical', 'mode': 'or',
+            'rules': [{'ip_cidr': ['2001:db8::/32']}, {'domain_suffix': ['example.net']},
+                      {'domain': ['api.example.net']}],
+            'action': 'route', 'outbound': 'direct',
+        },
         {'source_ip_cidr': ['10.66.66.2/32'], 'action': 'reject'},
     ]
     assert not any(r.get('action') == 'sniff' for r in rules)
