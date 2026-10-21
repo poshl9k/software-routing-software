@@ -288,6 +288,31 @@ sh packaging/online-install.sh \
 установщику. Предсобранные файлы приносить не нужно. Требуется чистая Debian 13,
 root, сеть, публичный IPv4; порты 80 и 443 свободны.
 
+Опубликованный однострочник — `get.sh` лежит ассетом **того же выпуска**, что и
+архив, поэтому URL неизменяем, а внутрь вшиты commit, URL архива и его sha256.
+Ни ветка, ни `latest` не используются (ADR-0005): `curl .../main/install.sh | sh`
+выполнял бы как root то, что сейчас лежит в ветке.
+
+```sh
+base=https://github.com/poshl9k/software-routing-software/releases/download/vs-router-<commit>
+# curl есть:
+curl -fsSL "$base/get.sh" | sudo sh
+# голый Debian: curl нет, python3 есть
+sudo python3 -c "import urllib.request as u,subprocess; subprocess.run(['sh'],input=u.urlopen('$base/get.sh').read(),check=True)"
+```
+
+`get.sh` скачивает архив выпуска, сверяет его sha256 с вшитым значением,
+извлекает из проверенного архива **только** `backend/packaging/install-release.sh`
+(проверяя, что это обычный файл без `..` и ссылок) и передаёт управление ему через
+его shebang. Дальше `install-release.sh` скачивает архив ещё раз, сверяет sha256 по
+`release.json`, проверяет `REVISION == commit` и безопасно распаковывает дерево —
+две независимые проверки одного пина. Аргументы панели
+(`--hostname`/`--custom-hostname`/`--path-prefix`/`--address`/`--ssh-port`/`--work`/
+`--fresh`/`--skip-build`/`--dry-run`) можно дописать после `sh -s --`, а
+каталог загрузки меняется через `VS_ROUTER_FETCH_DIR` (по умолчанию
+`/root/vs-router-bootstrap`; `install-release.sh` использует свой
+`/root/vs-router-install`).
+
 Из клона репозитория:
 
 ```sh

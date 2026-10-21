@@ -5,6 +5,7 @@
 #                               at the archive root, and
 #   release.json                {commit, semver, source_url, source_sha256,
 #                                min_os}
+#   get.sh                      public entry with the same baked release pins
 # The artifact format matches what the ISO vendors (ADR-0008): a `git archive`
 # of one commit; the added REVISION lets a guest cross-check the archive
 # against the manifest commit without any git history.
@@ -103,20 +104,47 @@ with open(os.environ['RELEASE_OUT'], 'w', encoding='utf-8') as handle:
     handle.write('\n')
 PY
 
+# Bake the same artifact pins into the public entry, never a moving source ref.
+VS_ROUTER_COMMIT="$COMMIT" VS_ROUTER_BASE_URL="${BASE_URL%/}" \
+VS_ROUTER_SOURCE_SHA256="$sha256" python3 - "$SCRIPT_DIR/get.sh" "$OUT/get.sh" <<'PY'
+import os, pathlib, re
+import sys
+
+template = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')
+values = {}
+for name in ('VS_ROUTER_COMMIT', 'VS_ROUTER_BASE_URL', 'VS_ROUTER_SOURCE_SHA256'):
+    value = os.environ[name]
+    if not value:
+        sys.exit('cannot publish get.sh: ' + name + ' is empty')
+    placeholder = '__' + name + '__'
+    if template.count(placeholder) != 1:
+        sys.exit('cannot publish get.sh: expected exactly one ' + placeholder)
+    # Placeholders sit inside single quotes; keep URL punctuation literal shell data.
+    values[placeholder] = value.replace("'", "'\"'\"'")
+rendered = re.sub('|'.join(re.escape(key) for key in values),
+                  lambda match: values[match.group()], template)
+if '__VS_ROUTER_' in rendered:
+    sys.exit('cannot publish get.sh: unreplaced placeholder')
+output = pathlib.Path(sys.argv[2])
+output.write_text(rendered, encoding='utf-8')
+output.chmod(0o755)
+PY
+
 echo "Artifact: $OUT/$name"
 echo "Manifest: $OUT/release.json"
+echo "Entry:    $OUT/get.sh"
 echo "Commit:   $COMMIT   semver: $semver"
 echo "SHA-256:  $sha256"
 
 if [[ $UPLOAD == 1 ]]; then
     tag="vs-router-${COMMIT}"
     if gh release view "$tag" >/dev/null 2>&1; then
-        gh release upload "$tag" --clobber "$OUT/$name" "$OUT/release.json"
+        gh release upload "$tag" --clobber "$OUT/$name" "$OUT/release.json" "$OUT/get.sh"
     else
         gh release create "$tag" --target "$COMMIT" \
             --title "vs-router ${semver} (${COMMIT:0:7})" \
             --notes "Pinned vs-router release ${COMMIT}." \
-            "$OUT/$name" "$OUT/release.json"
+            "$OUT/$name" "$OUT/release.json" "$OUT/get.sh"
     fi
     echo "Uploaded to GitHub Release ${tag}"
 fi

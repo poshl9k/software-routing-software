@@ -1004,6 +1004,7 @@ def test_make_release_builds_a_verified_manifest(tmp_path):
     assert manifest['commit'] == revision
     assert manifest['semver'] and manifest['min_os'] == 'debian-13'
     assert hashlib.sha256(artifact.read_bytes()).hexdigest() == manifest['source_sha256']
+    assert (out / 'get.sh').is_file()
     # REVISION is inside the archive and equals the commit the manifest names.
     revision_in_tar = subprocess.run(['tar', '-xzOf', str(artifact), './REVISION'],
                                      capture_output=True, text=True, check=True).stdout.strip()
