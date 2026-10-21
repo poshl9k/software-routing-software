@@ -83,6 +83,10 @@ Add `PageSection`, `StatTile`, `InlineStatus`, `StatusHero`,
 `ApplyStatusRail`, `ServiceStatusHeader`, `WizardProgress`, `LoadingSkeleton`,
 `ExpertDisclosure` and `ConfirmDialog` as one shared primitive per job. Keep
 `PageHeader` as the page's single `h1`; sections use subordinate headings.
+The wizard step list numbers its items with a CSS counter, not the native
+decimal marker: a list marker is painted outside its own item box, so the
+number of the next step landed in the gap of the previous one and the row read
+as «Кому2. Что».
 Unknown status remains unknown, never healthy by default. The apply rail only
 renders caller-provided status and time values, invents no timestamps, and its
 countdown announces phase changes rather than each tick. Expert disclosure is

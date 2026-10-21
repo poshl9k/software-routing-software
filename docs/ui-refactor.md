@@ -28,7 +28,7 @@ except where a change was explicitly agreed (TODO-API copy, `demo` rename).
 - [x] `StatusHero` — prominent page state, including unknown without implying healthy
 - [x] `ApplyStatusRail` — prop-only apply lifecycle display; caller owns status and timestamps; countdown `aria-live` changes only with phase
 - [x] `ServiceStatusHeader` — shared service heading and honest state
-- [x] `WizardProgress` — accessible wizard step progress
+- [x] `WizardProgress` — accessible wizard step progress; the decimal marker is a CSS counter, because a native list marker of the next step is painted outside its own box and lands in the gap of the previous one (the row read as «Кому2. Что»)
 - [x] `LoadingSkeleton` — loading placeholder without fabricated data
 - [x] `ExpertDisclosure` — keyboard-accessible optional controls with expanded state
 - [x] `ConfirmDialog` — MUI confirmation for new destructive or other risk actions
