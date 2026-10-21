@@ -128,12 +128,12 @@ def download_events(events):
 
 
 def extraction_events(events):
-    return [x for x in events if x.startswith('PYTHON ') and 'bootstrap/install-release.sh' in x]
+    return [x for x in events if x.startswith('PYTHON ') and 'wrapper/backend/packaging/install-release.sh' in x]
 
 
 def assert_exec(events, fetch):
     assert [x for x in events if x.startswith(('EXEC=', 'ARG='))] == [
-        f'EXEC={fetch}/bootstrap/install-release.sh',
+        f'EXEC={fetch}/wrapper/backend/packaging/install-release.sh',
         'ARG=--release', f'ARG={COMMIT}', 'ARG=--manifest',
         f'ARG={BASE}/release.json', 'ARG=--hostname', 'ARG=reserve.example']
 
@@ -172,7 +172,38 @@ def test_criterion_4_hash_mismatch_stops_before_extraction(rig):
     blocked(run(generated(sha='f' * 64)), events)
     assert any(x.startswith('SHA ') for x in events())
     assert not extraction_events(events())
-    assert not (fetch / 'bootstrap/install-release.sh').exists()
+    assert not (fetch / 'wrapper/backend/packaging/install-release.sh').exists()
+
+
+def test_criterion_5_extraction_layout_spares_the_wrapper_repo_root():
+    """The wrapper's repo root (dirname/../..) must not contain the work directory.
+
+    Live failure: extracted at <fetch>/bootstrap/, the wrapper's root resolved to
+    the fetch directory's parent — `/root` in production — which contains the
+    default work directory `/root/vs-router-install`, so the wrapper's own guard
+    refused the whole run with "unsafe --work path". Keeping the archive's
+    backend/packaging layout under a wrapper/ root fixes the geometry, and this
+    test pins the geometry itself rather than a string.
+    """
+    text = TEMPLATE.read_text()
+    assert 'wrapper/backend/packaging/install-release.sh' in text
+    assert 'bootstrap/install-release.sh' not in text
+
+    fetch = Path('/root/vs-router-bootstrap')
+    work = Path('/root/vs-router-install')
+
+    def overlaps(root, path):
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    old = (fetch / 'bootstrap/install-release.sh').parent.parent.parent
+    new = (fetch / 'wrapper/backend/packaging/install-release.sh').parent.parent.parent
+    assert old == Path('/root')
+    assert overlaps(old, work)  # the defect this test exists for
+    assert not overlaps(new, work)
 
 
 def test_criterion_5_curl_https_hash_extraction_and_shebang(rig):
@@ -190,11 +221,11 @@ def test_criterion_5_curl_https_hash_extraction_and_shebang(rig):
     extraction = extraction_events(log)
     assert len(extraction) == 1
     assert log.index(curl) < sha_index < log.index(extraction[0])
-    assert log.index(extraction[0]) < log.index(f'EXEC={fetch}/bootstrap/install-release.sh')
-    assert fetch.joinpath('bootstrap/install-release.sh').read_text() == WRAPPER
+    assert log.index(extraction[0]) < log.index(f'EXEC={fetch}/wrapper/backend/packaging/install-release.sh')
+    assert fetch.joinpath('wrapper/backend/packaging/install-release.sh').read_text() == WRAPPER
     assert {p.relative_to(fetch).as_posix() for p in fetch.rglob('*') if p.is_file()} == {
-        f'vs-router-{COMMIT}.tar.gz', 'bootstrap/install-release.sh'}
-    assert fetch.joinpath('bootstrap/install-release.sh').stat().st_mode & 0o777 == 0o755
+        f'vs-router-{COMMIT}.tar.gz', 'wrapper/backend/packaging/install-release.sh'}
+    assert fetch.joinpath('wrapper/backend/packaging/install-release.sh').stat().st_mode & 0o777 == 0o755
     assert_exec(log, fetch)
     assert '[vs-router-get]' in result.stderr and COMMIT in result.stderr
 
@@ -268,7 +299,7 @@ def test_criterion_7_unsafe_member_rejected(rig, kind, member):
     result = run(generated(sha=digest))
     blocked(result, events)
     assert not (tmp / 'outside').exists()
-    assert not (fetch / 'bootstrap/install-release.sh').exists()
+    assert not (fetch / 'wrapper/backend/packaging/install-release.sh').exists()
     assert any(x.startswith('PYTHON ') for x in events())
 
 
@@ -347,7 +378,7 @@ def test_criterion_9_real_builder_archive_extracts_dot_backend_member(rig):
                  ARTIFACT_URL=f'{base}/vs-router-{commit}.tar.gz')
     assert result.returncode == 0, result.stdout + result.stderr
     assert extraction_events(events())
-    assert (fetch / 'bootstrap/install-release.sh').read_text() == WRAPPER
+    assert (fetch / 'wrapper/backend/packaging/install-release.sh').read_text() == WRAPPER
     assert [x for x in events() if x.startswith('ARG=')] == [
         'ARG=--release', f'ARG={commit}', 'ARG=--manifest',
         f'ARG={base}/release.json', 'ARG=--hostname', 'ARG=reserve.example']

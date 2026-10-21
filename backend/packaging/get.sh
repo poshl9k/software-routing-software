@@ -120,7 +120,14 @@ log 'Extracting only backend/packaging/install-release.sh from the verified arch
 # This second extractor cannot reuse archive_tree: the wrapper does not exist
 # on the host yet; it is the file we extract. The wrapper safely extracts the
 # rest of the tree itself in its own work path after independent verification.
-python3 - "$archive" "$fetch_dir/bootstrap/install-release.sh" <<'PY' || fail 'unsafe bootstrap archive or extraction failed'
+#
+# The extraction path keeps the archive's own layout, under a wrapper/ root:
+# install-release.sh derives its repository root as `$(dirname $0)/../..`, so a
+# wrapper extracted into `<fetch>/bootstrap/` resolved that root to `/root` and
+# its own work-directory guard then refused the run ("unsafe --work path",
+# observed live on the first network install). Landing it at
+# `<fetch>/wrapper/backend/packaging/` keeps the assumption true.
+python3 - "$archive" "$fetch_dir/wrapper/backend/packaging/install-release.sh" <<'PY' || fail 'unsafe bootstrap archive or extraction failed'
 import os, pathlib, shutil, sys, tarfile, tempfile
 archive, dest = sys.argv[1:]
 target = pathlib.Path(dest).absolute()
@@ -152,5 +159,7 @@ with tarfile.open(archive, 'r:gz') as tar:
             os.unlink(temporary)
 PY
 log "Installing commit $VS_ROUTER_COMMIT"
-exec "$fetch_dir/bootstrap/install-release.sh" --release "$VS_ROUTER_COMMIT" \
+wrapper="$fetch_dir/wrapper/backend/packaging/install-release.sh"
+[ -f "$wrapper" ] || fail "the wrapper was not extracted: $wrapper"
+exec "$wrapper" --release "$VS_ROUTER_COMMIT" \
     --manifest "${VS_ROUTER_BASE_URL%/}/release.json" "$@"
