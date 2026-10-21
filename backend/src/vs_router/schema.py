@@ -674,37 +674,56 @@ class RuleSetSource(Model):
 
 
 class Exit(Model):
-    """A way out: the direct internet, another VPN server, or a proxy protocol."""
-    kind: Literal['direct', 'outbound', 'tunnel'] = 'direct'
-    #: ProxyOutbound tag, required when kind == 'outbound'.
+    """Product egress: direct internet, bound interface, outbound, group, tunnel or block.
+
+    Outbound/group require exactly one tag, tunnel exactly one name, and
+    interface exactly one interface field. Direct/block carry no target fields;
+    fields belonging to another kind are forbidden.
+    """
+    kind: Literal['direct', 'interface', 'outbound', 'group', 'tunnel', 'block'] = 'direct'
+    #: ProxyOutbound or ProxyGroup tag, required for outbound/group only.
     tag: Name | None = None
-    #: Tunnel name, required when kind == 'tunnel'.
+    #: Client Tunnel name, required for tunnel only.
     name: Name | None = None
+    #: Host interface name, required for interface only.
+    interface: InterfaceName | None = None
 
     @model_validator(mode="after")
     def check_fields(self):
+        if ((self.kind not in ('outbound', 'group') and self.tag is not None)
+                or (self.kind != 'tunnel' and self.name is not None)
+                or (self.kind != 'interface' and self.interface is not None)):
+            raise ValueError('routing.exit_fields_unexpected')
         if self.kind == 'outbound' and self.tag is None:
             raise ValueError('routing.outbound_tag_required')
         if self.kind == 'tunnel' and self.name is None:
             raise ValueError('routing.tunnel_name_required')
-        if ((self.kind != 'outbound' and self.tag is not None)
-                or (self.kind != 'tunnel' and self.name is not None)):
-            raise ValueError('routing.exit_fields_unexpected')
+        if ((self.kind == 'group' and self.tag is None)
+                or (self.kind == 'interface' and self.interface is None)):
+            raise ValueError('routing.exit_field_required')
         return self
 
 
 class RoutingSubject(Model):
-    """Whose traffic: the server itself, or one device of one subscriber."""
-    kind: Literal['server', 'device'] = 'server'
+    """Traffic from the server, a subscriber device, or an interface's sources.
+
+    Server has no reference fields; device requires subscriber and peer only;
+    interface requires exactly one interface field and no device fields.
+    """
+    kind: Literal['server', 'device', 'interface'] = 'server'
     subscriber: Name | None = None
     peer: Name | None = None
+    interface: InterfaceName | None = None
 
     @model_validator(mode="after")
     def check_fields(self):
+        if ((self.kind != 'device' and (self.subscriber is not None or self.peer is not None))
+                or (self.kind != 'interface' and self.interface is not None)):
+            raise ValueError('routing.subject_fields_unexpected')
         if self.kind == 'device' and (self.subscriber is None or self.peer is None):
             raise ValueError('routing.device_required')
-        if self.kind == 'server' and (self.subscriber is not None or self.peer is not None):
-            raise ValueError('routing.subject_fields_unexpected')
+        if self.kind == 'interface' and self.interface is None:
+            raise ValueError('routing.exit_field_required')
         return self
 
 

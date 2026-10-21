@@ -321,9 +321,66 @@ def routing_exit_tag(target):
         assert target.name is not None  # Guaranteed by Exit validation.
         # ':' is forbidden in contract Name tags, avoiding proxy/group collisions.
         return f"routing-tunnel:{target.name}"
-    if target.kind == "outbound":
+    if target.kind in ("outbound", "group"):
         return target.tag
+    if target.kind == "interface":
+        assert target.interface is not None  # Guaranteed by Exit validation.
+        return "exit_" + re.sub(r"[^a-zA-Z0-9_]", "_", target.interface)
     return None
+
+
+def routing_referenced_tags(c):
+    """Resolve product proxy/group exits, including every transitive group member.
+
+    Do not enable legacy proxies or tolerate an incomplete referenced group.
+    Legacy validation remains responsible for empty groups and cycles.
+    """
+    groups = {group.tag: group for group in c.proxies.groups}
+    outbounds = {outbound.tag for outbound in c.proxies.outbounds}
+    referenced = {rule.exit.tag for rule in c.routing_rules if rule.exit.kind == 'outbound'}
+    pending = []
+    for rule in c.routing_rules:
+        if rule.exit.kind == 'group':
+            if rule.exit.tag not in groups:
+                fail('routing.exit_group_reference')
+            pending.append(rule.exit.tag)
+    visited = set()
+    while pending:
+        tag = pending.pop()
+        if tag in visited:
+            continue
+        visited.add(tag)
+        referenced.add(tag)
+        for member in groups[tag].outbounds:
+            if member not in groups and member not in outbounds:
+                fail('routing.exit_group_member_missing')
+            referenced.add(member)
+            if member in groups:
+                pending.append(member)
+    return referenced
+
+
+def routing_subject_interface_cidrs(c, name):
+    """Resolve interface sources without I/O; tunnel subscriber peers take priority.
+
+    A tunnel interface is also declared in interfaces, but its local address is
+    not its devices' source range. Physical/configured interfaces use IPv4
+    network CIDRs; tunnel interfaces use subscriber peers' IPv4 AllowedIPs.
+    Empty sources fail closed rather than becoming an unrestricted rule.
+    """
+    tunnels = [tunnel for tunnel in c.tunnels if tunnel.interface == name]
+    if tunnels:
+        networks = [ip_network(cidr) for tunnel in tunnels for peer in tunnel.peers
+                    if peer.subscriber is not None for cidr in peer.allowed_ips]
+    else:
+        interface = next((item for item in c.interfaces if item.name == name), None)
+        if interface is None:
+            fail('routing.subject_interface_reference')
+        networks = [ip_interface(address).network for address in interface.addresses]
+    sources = tuple(dict.fromkeys(str(network) for network in networks if network.version == 4))
+    if not sources:
+        fail('routing.subject_interface_no_address')
+    return sources
 
 
 def _domain_in_suffix(domain, suffix):
@@ -368,6 +425,10 @@ def validate_routing(c):
     if len({rule.name for rule in c.routing_rules}) != len(c.routing_rules):
         fail('routing.duplicate_name')
     outbound_tags = {outbound.tag for outbound in c.proxies.outbounds}
+    group_tags = {group.tag for group in c.proxies.groups}
+    interfaces = {interface.name for interface in c.interfaces}
+    routing_referenced_tags(c)
+    generated_tags = {}
     tunnels = {tunnel.name: tunnel for tunnel in c.tunnels}
     subscribers = {subscriber.name for subscriber in c.subscribers}
     devices = {}
@@ -384,6 +445,20 @@ def validate_routing(c):
                 fail('routing.tunnel_reference')
             elif tunnel.role != 'client':
                 fail('routing.tunnel_client_required')
+        if rule.exit.kind == 'interface' and rule.exit.interface not in interfaces:
+            fail('routing.exit_interface_reference')
+        if rule.exit.kind in ('interface', 'tunnel'):
+            tag = routing_exit_tag(rule.exit)
+            # Track original exit source to detect colliding sanitized names
+            # (two different interfaces may sanitize to the same tag).
+            source = (rule.exit.interface
+                      if rule.exit.kind == 'interface' else rule.exit.name)
+            if tag in outbound_tags | group_tags or (
+                    tag in generated_tags and generated_tags[tag] != source):
+                fail('proxy.tag_collision')
+            generated_tags[tag] = source
+        if rule.subject.kind == 'interface':
+            routing_subject_interface_cidrs(c, rule.subject.interface)
         if rule.subject.kind == 'device':
             if rule.subject.subscriber not in subscribers:
                 fail('routing.subscriber_reference')
@@ -450,6 +525,9 @@ def validate_proxies(c):
                 if not listen.is_loopback:
                     fail("proxy.admin_inbound_open")
     group_refs = {g.tag: tuple(g.outbounds) for g in proxies.groups}
+    # This validator runs before validate_routing: give product-referenced
+    # incomplete groups their own error, leaving unrelated legacy errors intact.
+    routing_referenced_tags(c)
 
     def visit(tag, stack):
         if tag in stack:

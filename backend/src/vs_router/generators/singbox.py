@@ -15,7 +15,10 @@ from ipaddress import ip_address
 from typing import Callable
 
 from vs_router.schema import Configuration, ConfigurationVersion, ProxyOutbound
-from vs_router.validators import derive_dns_detours, routing_exit_tag
+from vs_router.validators import (
+    derive_dns_detours, routing_exit_tag, routing_referenced_tags,
+    routing_subject_interface_cidrs, validate_routing,
+)
 
 from . import marks
 
@@ -163,12 +166,15 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
     """Render validated egress policy without capturing traffic or allocating addresses."""
     if not configuration.routing_rules:
         return [], []
+    # model_copy/model_construct can bypass the contract; never emit dangling
+    # exits, colliding tags or an addressless interface as an unrestricted rule.
+    validate_routing(configuration)
     tunnels = {tunnel.name: tunnel for tunnel in configuration.tunnels}
     devices = {(peer.subscriber, peer.name): peer
                for tunnel in configuration.tunnels for peer in tunnel.peers
                if peer.subscriber is not None}
     rules = []
-    tunnel_outbounds = {}
+    bound_outbounds = {}
     for rule in configuration.routing_rules:
         match = {}
         if rule.subject.kind == "device":
@@ -178,6 +184,9 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
             if not peer.allowed_ips:
                 raise ValueError("routing.device_address_required")
             match["source_ip_cidr"] = list(peer.allowed_ips)
+        elif rule.subject.kind == "interface":
+            match["source_ip_cidr"] = list(routing_subject_interface_cidrs(
+                configuration, rule.subject.interface))
         for field, key in (("ip_cidr", "ip_cidr"), ("domain_suffix", "domain_suffix"),
                            ("domain_exact", "domain")):
             if values := getattr(rule, field):
@@ -185,12 +194,15 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
         # Domain matching needs DNS visibility (ADR-0020). Do not pretend that
         # sniffing implements the subscriber resolver, or enable it implicitly.
         target = rule.exit
+        if target.kind == "block":
+            rules.append({**match, "action": "reject"})
+            continue
         tag = routing_exit_tag(target) or IMPLICIT_DIRECT_TAG
-        if target.kind == "tunnel":
-            assert target.name is not None  # Guaranteed by Exit validation.
-            tunnel = tunnels[target.name]
-            tunnel_outbounds.setdefault(tag, {"type": "direct", "tag": tag,
-                                               "bind_interface": tunnel.interface})
+        if target.kind in ("tunnel", "interface"):
+            interface = (tunnels[target.name].interface if target.kind == "tunnel"
+                         else target.interface)
+            bound_outbounds.setdefault(tag, {"type": "direct", "tag": tag,
+                                             "bind_interface": interface})
         rules.append({**match, "action": "route", "outbound": tag})
 
     # Unmatched devices are rejected BEFORE legacy bypass/routing/defaults,
@@ -204,7 +216,7 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
                                for address in peer.allowed_ips})
     if device_addresses:
         rules.append({"source_ip_cidr": device_addresses, "action": "reject"})
-    return rules, list(tunnel_outbounds.values())
+    return rules, list(bound_outbounds.values())
 
 
 def generate_singbox(version: ConfigurationVersion,
@@ -262,7 +274,7 @@ def generate_singbox(version: ConfigurationVersion,
             match.update({"action": "route", "outbound": IMPLICIT_DIRECT_TAG})
         rules.append(match)
 
-    product_rules, tunnel_outbounds = _render_product_routing(configuration)
+    product_rules, bound_outbounds = _render_product_routing(configuration)
     if product_rules:
         # Interception is the host's job. Nonterminal sniff/options prepare the
         # captured stream; product rules decide egress in configuration order.
@@ -274,16 +286,15 @@ def generate_singbox(version: ConfigurationVersion,
 
     outbounds = [{"type": "direct", "tag": IMPLICIT_DIRECT_TAG}]
     final = IMPLICIT_DIRECT_TAG
-    # Product exits explicitly select declared outbounds even when the legacy
-    # proxies switch is off. Emit only referenced ones in that case; no groups
-    # or legacy default selection are implicitly enabled.
-    referenced = {r.exit.tag for r in configuration.routing_rules if r.exit.kind == "outbound"}
+    # Product exits render referenced outbounds/groups and their transitive
+    # members even with legacy proxies off, without changing the legacy final.
+    referenced = routing_referenced_tags(configuration)
     outbounds.extend(_render_outbound(o, secret_provider)
                      for o in sorted(proxies.outbounds, key=lambda o: o.tag)
                      if proxies.enabled or o.tag in referenced)
-    if proxies.enabled:
-        outbounds.extend(_render_group(g) for g in sorted(proxies.groups, key=lambda g: g.tag))
-    outbounds.extend(tunnel_outbounds)
+    outbounds.extend(_render_group(g) for g in sorted(proxies.groups, key=lambda g: g.tag)
+                     if proxies.enabled or g.tag in referenced)
+    outbounds.extend(bound_outbounds)
     # TProxy final action overrides the default outbound selection
     tproxy = configuration.tproxy
     if tproxy.final == "block":
