@@ -1,4 +1,5 @@
 """Length-framed JSON RPC on a peer-authenticated Unix socket."""
+import http.client
 import json
 import logging
 import os
@@ -9,6 +10,8 @@ import shutil
 import socket
 import struct
 import subprocess
+import threading
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 from sqlalchemy import create_engine
@@ -146,24 +149,73 @@ def serve(socket_path, handlers, allowed_uids=None, *, stop_event=None, ready_ev
             path.unlink(missing_ok=True)
 
 
+class _ResolvedHTTPSConnection(http.client.HTTPSConnection):
+    """Dial the management address while authenticating the published name."""
+
+    def __init__(self, host, port, address, *, context, timeout):
+        super().__init__(host, port, context=context, timeout=timeout)
+        self.address = address
+        self.context = context
+
+    def connect(self):
+        with socket.create_connection((self.address, self.port), self.timeout) as raw:
+            self.sock = self.context.wrap_socket(raw, server_hostname=self.host)
+
+
+def _probe_panel_target(url, ca, resolve):
+    """Bound DNS, TLS and HTTP together; DNS has no socket-level timeout."""
+    import ssl
+
+    result = []
+
+    def request():
+        connection = None
+        try:
+            target = urlsplit(url)
+            if target.scheme != 'https' or not target.hostname:
+                return
+            host, port = target.hostname, target.port or 443
+            context = (ssl.create_default_context() if ca is None
+                       else ssl.create_default_context(cafile=str(ca)))
+            if resolve is None:
+                connection = http.client.HTTPSConnection(host, port, context=context, timeout=5)
+            else:
+                name, mapped_port, address = resolve.split(':', 2)
+                if name != host or int(mapped_port) != port:
+                    return
+                connection = _ResolvedHTTPSConnection(host, port, address,
+                                                       context=context, timeout=5)
+            connection.request('GET', target.path or '/', headers={'Connection': 'close'})
+            result.append(connection.getresponse().status == 200)
+        except (OSError, ValueError, http.client.HTTPException):
+            pass
+        finally:
+            if connection is not None:
+                connection.close()
+
+    # getaddrinfo is not governed by HTTPSConnection's socket timeout.
+    worker = threading.Thread(target=request, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    return not worker.is_alive() and bool(result and result[0])
+
+
 def panel_probe():
-    """Probe provisioned HTTPS only; Unix API health is not LAN access."""
-    from ..management import host_management, panel_probe_target
+    """Probe HTTPS on ordered addresses; Unix API health is not panel access."""
+    from ..management import host_management, panel_probe_targets
+
     try:
         management = host_management()
         if management is None:
             return False
-        import ssl
-        from urllib.request import build_opener, ProxyHandler, HTTPSHandler
-        url, ca = panel_probe_target(management)
-        context = (ssl.create_default_context() if ca is None
-                   else ssl.create_default_context(cafile=str(ca)))
-        opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context))
-        # A hostname adds a DNS lookup to the handshake; 3 s was too tight.
-        with opener.open(url, timeout=8) as response:
-            return response.status == 200
+        targets = panel_probe_targets(management)
     except (OSError, ValueError):
         return False
+
+    for url, ca, resolve in targets:
+        if _probe_panel_target(url, ca, resolve):
+            return True
+    return False
 
 
 def list_interfaces() -> list[dict[str, str | None]]:

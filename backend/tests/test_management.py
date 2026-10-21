@@ -1,7 +1,11 @@
 """All host effects use temporary trees or injected executors; no live services."""
 import json
 import os
+import socket
+import ssl
 import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta, timezone
 from ipaddress import IPv4Address
 from types import SimpleNamespace
@@ -220,8 +224,6 @@ def test_panel_probe_without_management_never_uses_unix_socket(monkeypatch):
 
 
 def test_panel_probe_requires_https_with_management_ca(monkeypatch):
-    import ssl
-    from urllib import request
     from vs_router.agent import daemon
     from vs_router.management import TLS_DIR
     monkeypatch.setattr('vs_router.management.host_management', lambda: STATE)
@@ -229,17 +231,117 @@ def test_panel_probe_requires_https_with_management_ca(monkeypatch):
     context = object()
     monkeypatch.setattr(ssl, 'create_default_context',
                         lambda cafile: calls.append(cafile) or context)
-    response = MagicMock()
-    response.__enter__.return_value.status = 200
-    opener = MagicMock()
-    opener.open.return_value = response
-    monkeypatch.setattr(request, 'build_opener',
-                        lambda *handlers: calls.append(handlers) or opener)
+    connection = MagicMock()
+    connection.getresponse.return_value.status = 200
+    factory = MagicMock(return_value=connection)
+    monkeypatch.setattr(daemon.http.client, 'HTTPSConnection', factory)
     assert daemon.panel_probe() is True
-    assert calls[0] == str(TLS_DIR / 'ca.crt')
-    assert len(calls[1]) == 2
-    assert calls[1][1]._context is context
-    opener.open.assert_called_once_with('https://192.168.10.1/health', timeout=8)
+    assert calls == [str(TLS_DIR / 'ca.crt')]
+    factory.assert_called_once_with('192.168.10.1', 443, context=context, timeout=5)
+    connection.request.assert_called_once_with('GET', '/health', headers={'Connection': 'close'})
+    connection.close.assert_called_once()
+
+
+def test_panel_probe_natted_hostname_uses_resolve_and_verifies_tls(tmp_path, monkeypatch):
+    """A public name need not resolve locally when its management IP serves TLS."""
+    from vs_router.agent import daemon
+    from vs_router.management import panel_probe_targets
+
+    name = 'panel.invalid'  # RFC 6761: DNS never points this name at localhost.
+    state = STATE.model_copy(update={'address': '127.0.0.1/24',
+                                     'mode': 'single-uplink', 'hostname': 'reserve.invalid',
+                                     'custom_hostname': name})
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    now = datetime.now(timezone.utc)
+    certificate = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+                   .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                   .not_valid_before(now - timedelta(minutes=1))
+                   .not_valid_after(now + timedelta(days=1))
+                   .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+                   .add_extension(x509.SubjectAlternativeName([x509.DNSName(name)]), False)
+                   .sign(key, hashes.SHA256()))
+    ca_file = tmp_path / 'ca.crt'
+    ca_file.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_file = tmp_path / 'server.key'
+    key_file.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                           serialization.PrivateFormat.PKCS8,
+                                           serialization.NoEncryption()))
+    received, sni, statuses = [], [], [200]
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            received.append((self.path, self.headers['Host']))
+            self.send_response(statuses[0])
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    server = HTTPServer(('127.0.0.1', 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(ca_file), str(key_file))
+    context.set_servername_callback(lambda _sock, host, _ctx: sni.append(host))
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_port
+        original = list(panel_probe_targets(state))
+        assert original[0][2] == f'{name}:443:127.0.0.1'
+        assert original[1][2] is None
+        assert original[2][2] == 'reserve.invalid:443:127.0.0.1'
+        # The shipped target uses :443; translate only its port for an unprivileged server.
+        targets = tuple((url.replace('/health', f':{port}/health'), ca_file,
+                         resolve.replace(':443:', f':{port}:') if resolve else None)
+                        for url, _ca, resolve in original)
+        monkeypatch.setattr('vs_router.management.host_management', lambda: state)
+        monkeypatch.setattr('vs_router.management.panel_probe_targets', lambda _state: targets)
+        lookup = socket.getaddrinfo
+
+        def no_published_name_lookup(host, *args, **kwargs):
+            assert host not in (name, 'reserve.invalid')
+            return lookup(host, *args, **kwargs)
+
+        monkeypatch.setattr(socket, 'getaddrinfo', no_published_name_lookup)
+        monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:1')
+        assert daemon.panel_probe() is True
+        assert received == [('/health', f'{name}:{port}')]
+        assert sni == [name]
+
+        # Keep just one failing target so neither DNS nor a reserve name can rescue it.
+        with socket.socket() as unused:
+            unused.bind(('127.0.0.1', 0))
+            closed_port = unused.getsockname()[1]
+        failed = (f'https://{name}:{closed_port}/health', ca_file,
+                  f'{name}:{closed_port}:127.0.0.1')
+        monkeypatch.setattr('vs_router.management.panel_probe_targets', lambda _state: (failed,))
+        assert daemon.panel_probe() is False
+        assert len(received) == 1
+        monkeypatch.setattr('vs_router.management.panel_probe_targets',
+                            lambda _state: (failed, targets[0]))
+        assert daemon.panel_probe() is True  # Keep target order; stop on first 200.
+        assert len(received) == 2
+        statuses[0] = 503
+        monkeypatch.setattr('vs_router.management.panel_probe_targets', lambda _state: (targets[0],))
+        assert daemon.panel_probe() is False
+        assert len(received) == 3
+        statuses[0] = 200
+
+        monkeypatch.setattr('vs_router.management.panel_probe_targets',
+                            lambda _state: ((targets[0][0], None, targets[0][2]),))
+        assert daemon.panel_probe() is False  # The system store does not trust this cert.
+        assert len(received) == 3
+
+        mismatch = (f'https://wrong.invalid:{port}/health', ca_file,
+                    f'wrong.invalid:{port}:127.0.0.1')
+        monkeypatch.setattr('vs_router.management.panel_probe_targets', lambda _state: (mismatch,))
+        assert daemon.panel_probe() is False
+        assert len(received) == 3
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_guarded_first_apply_and_rollback_preserve_panel():
