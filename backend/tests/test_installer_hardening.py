@@ -271,6 +271,69 @@ def test_runtime_installer_cleans_pip_copies_and_uses_hash_lock():
     assert '--require-hashes' in helper
 
 
+def online_installer_dry_run(tmp_path, *, packaging=None, script=None):
+    """Run the real dash entry point with fake host probes; no writes occur."""
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    # The installer checks root even in dry-run. Only spoof that check; every
+    # host-changing command remains behind run(), and service probes are fake.
+    identity = bin_dir / 'id'
+    identity.write_text('#!/bin/sh\n[ "$1" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n')
+    identity.chmod(0o755)
+    for command in ('nft', 'unbound', 'awg', 'caddy'):
+        probe = bin_dir / command
+        probe.write_text('#!/bin/sh\nexit 1\n' if command == 'nft' else '#!/bin/sh\nexit 0\n')
+        probe.chmod(0o755)
+    # nft is needed by command -v, but list-table must report no SSH lock.
+    (bin_dir / 'systemctl').write_text('#!/bin/sh\nexit 0\n')
+    (bin_dir / 'systemctl').chmod(0o755)
+    (bin_dir / 'ss').write_text('#!/bin/sh\nprintf "LISTEN 0 1 0.0.0.0:22 0.0.0.0:*\\n"\n')
+    (bin_dir / 'ss').chmod(0o755)
+    env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
+    env.pop('PACKAGING', None)
+    if packaging is not None:
+        env['PACKAGING'] = str(packaging)
+    result = subprocess.run(
+        ['sh', str(script or PACKAGING / 'online-install.sh'), '--wheel', str(tmp_path / 'fixture.whl'),
+         '--ui', str(tmp_path / 'ui'), '--dry-run'],
+        cwd=tmp_path, env=env, text=True, capture_output=True, timeout=10,
+    )
+    return result
+
+
+def test_online_installer_uses_pinned_helper_not_floating_ranges(tmp_path):
+    script = (PACKAGING / 'online-install.sh').read_text()
+    assert 'fastapi>=' not in script
+    result = online_installer_dry_run(tmp_path, packaging=PACKAGING)
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = result.stdout.splitlines()
+    helper = next(line for line in lines if 'install-runtime-deps.sh' in line)
+    assert helper == f'+ bash {PACKAGING}/install-runtime-deps.sh {ROOT}/backend/requirements-runtime.txt'
+    assert lines.index(helper) < next(i for i, line in enumerate(lines) if '--force-reinstall' in line)
+    assert not any('fastapi>=' in line or 'pip install --break-system-packages --ignore-installed' in line
+                   for line in lines)
+
+
+def test_online_installer_dry_run_resolves_lock_without_packaging(tmp_path):
+    result = online_installer_dry_run(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f'+ bash {PACKAGING}/install-runtime-deps.sh {ROOT}/backend/requirements-runtime.txt' in result.stdout
+    assert 'fastapi>=' not in result.stdout
+
+
+def test_online_installer_missing_lock_fails_closed(tmp_path):
+    isolated = tmp_path / 'backend/packaging'
+    isolated.mkdir(parents=True)
+    script = isolated / 'online-install.sh'
+    shutil.copyfile(PACKAGING / 'online-install.sh', script)
+    result = online_installer_dry_run(tmp_path, packaging=isolated, script=script)
+    assert result.returncode != 0
+    assert 'ERROR: missing runtime dependency lock (backend/requirements-runtime.txt)' in result.stderr
+    assert 'install-runtime-deps.sh' not in result.stdout
+    assert '--force-reinstall' not in result.stdout
+    assert 'fastapi>=' not in result.stdout + result.stderr
+
+
 def test_runtime_installer_removes_all_pip_versions_in_isolated_target(tmp_path):
     """Actual offline pip install over conflicting metadata and mixed package files."""
     import hashlib

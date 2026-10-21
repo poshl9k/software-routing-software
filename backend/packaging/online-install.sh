@@ -116,10 +116,17 @@ fi
 
 # --- 4. Panel (wheel + built UI) --------------------------------------------
 if [ -n "$WHEEL" ]; then
-    run python3 -m pip install --break-system-packages --ignore-installed \
-        "fastapi>=0.115,<1" "sqlalchemy>=2.0,<3" "alembic>=1.13,<2" \
-        "pydantic>=2.9,<3" "cryptography>=43" "argon2-cffi>=23" \
-        "uvicorn>=0.30,<1" "qrcode>=8.2" "pillow>=12.3.0"
+    # Prefer the caller's source tree; direct invocations use this script's tree.
+    runtime_packaging=${PACKAGING:-}
+    if [ ! -f "$runtime_packaging/../requirements-runtime.txt" ]; then
+        runtime_packaging=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    fi
+    if [ ! -f "$runtime_packaging/../requirements-runtime.txt" ]; then
+        echo 'ERROR: missing runtime dependency lock (backend/requirements-runtime.txt)' >&2
+        exit 1
+    fi
+    runtime_backend=$(CDPATH= cd -- "$runtime_packaging/.." && pwd)
+    run bash "$runtime_packaging/install-runtime-deps.sh" "$runtime_backend/requirements-runtime.txt"
     run python3 -m pip install --break-system-packages --no-deps \
         --force-reinstall "$WHEEL"
 fi
