@@ -534,6 +534,44 @@
     }
   },
   {
+    "id": "geoip-ru",
+    "name": "GeoIP Россия (адреса РФ)",
+    "iconSlug": "rkn",
+    "category": "block",
+    "notice": "Все IPv4/IPv6-адреса, закреплённые за РФ (SagerNet sing-geoip). Удобно для правила «российские адреса — напрямую».",
+    "origin": "",
+    "engines": {
+      "singbox": {
+        "ruleSets": [
+          {
+            "tag": "geoip-ru",
+            "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs"
+          }
+        ],
+        "action": "direct"
+      }
+    }
+  },
+  {
+    "id": "geoip-cn",
+    "name": "GeoIP Китай (адреса CN)",
+    "iconSlug": "lucide-globe",
+    "category": "block",
+    "notice": "Все IPv4/IPv6-адреса, закреплённые за Китаем (SagerNet sing-geoip).",
+    "origin": "",
+    "engines": {
+      "singbox": {
+        "ruleSets": [
+          {
+            "tag": "geoip-cn",
+            "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs"
+          }
+        ],
+        "action": "direct"
+      }
+    }
+  },
+  {
     "id": "akamai",
     "name": "Akamai",
     "iconSlug": "akamai",
