@@ -90,7 +90,10 @@ it("criterion_3_blocks_referenced_subscriber_deletion_and_names_every_device", a
 it("criterion_4_peer_editor_saves_subscriber_and_null_for_service_peer", async () => {
   const fetch = setup("/tunnels");
   const user = userEvent.setup();
+  await user.click(await screen.findByRole("tab", { name: "Серверы" }));
   await user.click((await screen.findAllByRole("button", { name: "Открыть" }))[0]);
+  expect(screen.getByRole("dialog", { name: /Туннель: / }).querySelector("input, select, textarea")).toBeNull();
+  await user.click(within(screen.getByRole("dialog", { name: /Туннель: / })).getByRole("button", { name: "Изменить" }));
   await user.click(screen.getByRole("tab", { name: "Пиры" }));
   const peerRow = within(screen.getByRole("row", { name: /phone/ }));
   await user.click(peerRow.getByRole("button", { name: "Изменить" }));
@@ -100,7 +103,10 @@ it("criterion_4_peer_editor_saves_subscriber_and_null_for_service_peer", async (
   await user.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === "/api/draft")).toBe(true));
   expect(saved(fetch).tunnels[0].peers.find((peer) => peer.name === "phone")?.subscriber).toBe("bob");
+  await user.click(await screen.findByRole("tab", { name: "Серверы" }));
   await user.click((await screen.findAllByRole("button", { name: "Открыть" }))[0]);
+  expect(screen.getByRole("dialog", { name: /Туннель: / }).querySelector("input, select, textarea")).toBeNull();
+  await user.click(within(screen.getByRole("dialog", { name: /Туннель: / })).getByRole("button", { name: "Изменить" }));
   await user.click(screen.getByRole("tab", { name: "Пиры" }));
   await user.click(within(screen.getByRole("row", { name: /laptop/ })).getByRole("button", { name: "Изменить" }));
   const second = screen.getByRole("dialog", { name: "Пир: laptop" });

@@ -2,8 +2,8 @@
  * Master wizard for the product routing model (`Configuration.routing_rules`).
  *
  * The product model is the one that actually routes traffic on the panel
- * (ADR-0019); the legacy `tproxy` rules live in their own tab. This surface
- * therefore speaks the ADR-0029 vocabulary: a subject (server / subscriber
+ * (ADR-0019); the legacy tproxy configuration has no dedicated UI surface.
+ * This speaks the ADR-0029 vocabulary: a subject (server / subscriber
  * device / interface), a destination and one exit.
  */
 import { useEffect, useRef, useState } from "react";

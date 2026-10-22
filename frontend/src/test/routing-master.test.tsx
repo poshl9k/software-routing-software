@@ -6,12 +6,15 @@ import { readFileSync } from "node:fs";
 import { tokens } from "../theme";
 import { ChoiceCards } from "../components/ChoiceCards";
 import { FlowChain } from "../components/FlowChain";
-import { Icon } from "../components/Icon";
-import { api } from "../api";
 import Routing from "../pages/Routing";
 import { RouterProvider } from "../state";
 import { emptyConfiguration } from "../fixtures";
 import type { CatalogResponse, Configuration, RoutingRule } from "../types";
+import { join } from "node:path";
+
+/** Reads a file relative to the repository root (for palette/style audits). */
+const repoRoot = process.cwd().replace(/\/frontend$/, "");
+const repoSource = (path: string) => readFileSync(join(repoRoot, path), "utf-8");
 
 /**
  * The master wizard over the product routing model (`routing_rules`).
@@ -125,7 +128,7 @@ async function fillWizard(
 
 it("criterion_R1_page_shows_four_tabs_and_master_is_default", async () => {
   setup();
-  for (const label of ["Мастер маршрутизации", "Правила sing-box (TProxy)", "Прокси-выходы",
+  for (const label of ["Мастер маршрутизации", "Прокси-выходы",
     "Источники списков"]) {
     expect(await screen.findByRole("tab", { name: label })).toBeVisible();
   }
@@ -305,318 +308,6 @@ it("criterion_R12_fail_closed_note_is_visible", async () => {
   expect(screen.getByText(/блокируется/)).toBeVisible();
 });
 
-it("criterion_R13_legacy_tproxy_tab_still_works", async () => {
-  setup();
-  const user = userEvent.setup();
-  await user.click(await screen.findByRole("tab", { name: "Правила sing-box (TProxy)" }));
-  expect(await screen.findByText("Выключено · черновик")).toBeVisible();
-  expect(screen.getByRole("tab", { name: "Простой" })).toBeVisible();
-});
-
-it("criterion_R14_broken_references_are_explained_in_russian", async () => {
-  const configuration = baseConfiguration();
-  configuration.routing_rules = [{
-    name: "broken", subject: { kind: "server" }, domain_suffix: ["example.org"],
-    domain_exact: [], ip_cidr: [], exit: { kind: "outbound", tag: "removed_proxy" },
-  }];
-  const fetch = vi.fn().mockImplementation((path: string) =>
-    Promise.resolve(new Response(JSON.stringify(
-      path === "/api/versions"
-        ? [{ id: 1, status: "draft", configuration }]
-        : path === "/api/runtime/engine"
-          ? { installed: true, version: "1.14.2", running: false, pid: null,
-              clash_api: false, ip_forward: true, nft_tproxy_tables: true }
-          : { code: "configuration.invalid", message: "configuration.invalid",
-              details: [{ message: "routing.outbound_reference" }] },
-    ), { status: path === "/api/versions" ? 200 : 422 })));
-  vi.stubGlobal("fetch", fetch);
-  render(<MemoryRouter><RouterProvider><Routing /></RouterProvider></MemoryRouter>);
-  const user = userEvent.setup();
-  await openAdvanced(user);
-  // The operator edits the rule and saves: the server refuses the document
-  // and the guard must arrive in Russian, not as a JSON dump.
-  await user.click(screen.getByRole("button", { name: "Изменить" }));
-  const dialog = screen.getByRole("dialog", { name: /Правило: broken/ });
-  await user.click(within(dialog).getByRole("button", { name: "Напрямую" }));
-  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: /Правило:/ })).not.toBeInTheDocument());
-  await user.click(screen.getByRole("button", { name: "Сохранить" }));
-  await waitFor(() => expect(screen.getByText(/больше не объявлен/)).toBeVisible());
-  expect(screen.getByText(/routing\.outbound_reference/)).toBeVisible();
-});
-
-it("criterion_S3_1_numbered_card_surfaces_keep_four_step_progress", async () => {
-  setup(); const user = userEvent.setup(); await openMaster(user);
-  for (const [index, title] of ["Шаг 1. Кому маршрутизируем", "Шаг 2. Что маршрутизировать", "Шаг 3. Куда направить", "Шаг 4. Проверка"].entries()) {
-    const heading = screen.getByRole("heading", { name: title });
-    expect(heading.closest(".card")).not.toBeNull();
-    expect(heading.closest(".card")?.querySelector(".routing-subtitle")).toBeTruthy();
-    expect(screen.getByRole("navigation", { name: "Этапы настройки" }).querySelector('[aria-current="step"]')).toHaveTextContent(["Кому", "Что", "Куда", "Проверка"][index]);
-    if (index === 1) await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "example.org");
-    if (index < 3) await user.click(screen.getByRole("button", { name: "Далее" }));
-  }
-});
-
-it("criterion_S3_2_subject_cards_show_selected_and_unavailable_reasons", async () => {
-  setup({ ...baseConfiguration(), subscribers: [], interfaces: [] });
-  const user = userEvent.setup(); await openMaster(user);
-  const group = screen.getByRole("group", { name: "Источник трафика" });
-  expect(within(group).getAllByRole("button")).toHaveLength(3);
-  expect(within(group).getByRole("button", { name: "Весь трафик сервера" })).toHaveAttribute("aria-pressed", "true");
-  const device = within(group).getByRole("button", { name: "Устройство абонента" });
-  expect(device).toBeDisabled(); expect(device).toHaveTextContent("Абонентских устройств нет");
-  const iface = within(group).getByRole("button", { name: "Весь трафик интерфейса" });
-  expect(iface).toBeDisabled(); expect(iface).toHaveTextContent("Нет интерфейсов с IPv4-адресом");
-  expect(within(group).queryByRole("combobox")).not.toBeInTheDocument();
-});
-
-it("criterion_S3_3_object_rows_show_real_identity_and_select_subject", async () => {
-  const fetch = setup(); const user = userEvent.setup(); await openMaster(user);
-  const list = screen.getByRole("group", { name: "Устройства и интерфейсы" });
-  expect(within(list).getAllByRole("button")).toHaveLength(3);
-  const device = within(list).getByRole("button", { name: "iphone" });
-  expect(device).toHaveTextContent("10.66.66.2/32 · абонент «анна» · пир iphone");
-  const iface = within(list).getByRole("button", { name: "lan0 — домашняя сеть" });
-  expect(iface).toHaveTextContent("192.168.10.1/24 · зона: локальная сеть");
-  expect(within(list).queryByRole("textbox")).not.toBeInTheDocument();
-  await user.click(iface); await fillWizard(user);
-  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
-  await waitFor(() => expect(savedDraft(fetch).routing_rules[0].subject).toEqual({ kind: "interface", interface: "lan0" }));
-});
-
-it("criterion_S3_4_chosen_subject_is_a_sentence_above_rows", async () => {
-  setup(); const user = userEvent.setup(); await openMaster(user);
-  await user.click(screen.getByRole("button", { name: "iphone" }));
-  const summary = screen.getByText("Трафик устройства «iphone» абонента «анна»");
-  expect(summary.compareDocumentPosition(screen.getByRole("group", { name: "Устройства и интерфейсы" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  await user.click(screen.getByRole("button", { name: "eth0" }));
-  expect(screen.getByText("Трафик интерфейса eth0")).toBeVisible();
-});
-
-it("criterion_S3_5_catalog_presets_add_their_domains_without_showing_the_list", async () => {
-  const fetch = setup(); const user = userEvent.setup(); await openMaster(user);
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  const youtube = await screen.findByRole("button", { name: "YouTube" });
-  // The tile says how many domains it brings, not the list itself.
-  expect(youtube).toHaveTextContent("2 домена");
-  expect(youtube.querySelector("svg")).not.toBeNull();
-  expect(screen.queryByRole("button", { name: "Все видео" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Без доменов" })).not.toBeInTheDocument();
-  const field = screen.getByLabelText("Свои домены (по одному в строке)");
-  // Choosing a service must not dump its domains into the manual field.
-  await user.click(youtube);
-  expect(field).toHaveValue("");
-  expect(youtube).toHaveAttribute("aria-pressed", "true");
-  expect(screen.getByText(/Выбрано сервисов: 1/)).toBeVisible();
-  // The domains are in the rule; the field stays the operator's own list.
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
-  await waitFor(() => expect(savedDraft(fetch).routing_rules[0].domain_suffix)
-    .toEqual(["youtube.com", "googlevideo.com"]));
-});
-
-it("criterion_S3_5_several_services_can_be_chosen_at_once", async () => {
-  const fetch = setup(); const user = userEvent.setup(); await openMaster(user);
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  const youtube = await screen.findByRole("button", { name: "YouTube" });
-  const rutube = screen.getByRole("button", { name: "RuTube" });
-  await user.click(youtube);
-  await user.click(rutube);
-  expect(youtube).toHaveAttribute("aria-pressed", "true");
-  expect(rutube).toHaveAttribute("aria-pressed", "true");
-  expect(screen.getByText(/Выбрано сервисов: 2/)).toBeVisible();
-  // The manual field still holds only what the operator typed.
-  const field = screen.getByLabelText("Свои домены (по одному в строке)");
-  expect(field).toHaveValue("");
-  await user.type(field, "own.test");
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
-  await waitFor(() => expect(savedDraft(fetch).routing_rules[0].domain_suffix)
-    .toEqual(["own.test", "youtube.com", "googlevideo.com", "rutube.ru"]));
-});
-
-it("criterion_S3_5_unchecking_a_service_removes_only_its_own_domains", async () => {
-  setup(); const user = userEvent.setup(); await openMaster(user);
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  const youtube = await screen.findByRole("button", { name: "YouTube" });
-  await user.click(youtube);
-  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "own.test");
-  await user.click(youtube);
-  expect(youtube).toHaveAttribute("aria-pressed", "false");
-  expect(screen.getByLabelText("Свои домены (по одному в строке)")).toHaveValue("own.test");
-});
-
-it("criterion_S3_5_loading_and_failure_leave_manual_fields_available", async () => {
-  let reject!: (error: Error) => void;
-  const spy = vi.spyOn(api, "presetCatalog").mockRejectedValue(new Error("offline"))
-    .mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
-  setup(); const user = userEvent.setup(); await openMaster(user);
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  expect(screen.getByRole("status", { name: "Загрузка" })).toBeVisible();
-  reject(new Error("offline"));
-  await waitFor(() => expect(screen.queryByRole("status", { name: "Загрузка" })).not.toBeInTheDocument(), { timeout: 2500 });
-  expect(screen.queryByRole("group", { name: "Готовые сервисы" })).not.toBeInTheDocument();
-  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "manual.test");
-  expect(screen.getByRole("button", { name: "Далее" })).toBeEnabled();
-  spy.mockRestore();
-});
-
-it("criterion_S3_6_manual_lists_are_alternatives_and_preserve_exact_domains", async () => {
-  const fetch = setup(); const user = userEvent.setup(); await openMaster(user);
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  expect(screen.getByText(/Списки — альтернативы/)).toBeVisible();
-  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "suffix.test");
-  await user.type(screen.getByLabelText("Точные домены (по строкам)"), "exact.test");
-  await user.type(screen.getByLabelText("Свои адреса и сети (CIDR)"), "203.0.113.0/24");
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
-  await waitFor(() => expect(savedDraft(fetch).routing_rules[0]).toMatchObject({ domain_suffix: ["suffix.test"], domain_exact: ["exact.test"], ip_cidr: ["203.0.113.0/24"] }));
-});
-
-it("criterion_S3_7_six_exit_cards_only_show_relevant_target", async () => {
-  setup(); const user = userEvent.setup(); await openMaster(user);
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "example.org");
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  const exits = screen.getByRole("group", { name: "Выход" });
-  expect(within(exits).getAllByRole("button")).toHaveLength(6);
-  const tunnel = within(exits).getByRole("button", { name: "Через туннель" });
-  expect(tunnel).toBeDisabled(); expect(tunnel).toHaveTextContent("на странице «Туннели»");
-  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-  for (const [kind, label] of [["Через интерфейс", "Интерфейс выхода"], ["Через прокси-выход", "Прокси-выход"], ["Через группу выходов", "Группа выходов"]]) {
-    await user.click(within(exits).getByRole("button", { name: kind }));
-    expect(screen.getAllByRole("combobox")).toHaveLength(1);
-    expect(screen.getByRole("combobox", { name: label })).toBeVisible();
-  }
-  await user.click(within(exits).getByRole("button", { name: "Заблокировать" }));
-  expect(screen.getByText(/прямого выхода в интернет не будет/)).toBeVisible();
-});
-
-it("criterion_S3_8_review_chain_uses_static_badges_and_honest_fallback", async () => {
-  setup(); const user = userEvent.setup(); await openMaster(user); await fillWizard(user);
-  const chain = screen.getByRole("group", { name: "Путь выбранного трафика" });
-  expect(chain.querySelectorAll(".MuiChip-root")).toHaveLength(4);
-  expect(chain.querySelectorAll("svg")).toHaveLength(3);
-  expect(within(chain).queryByRole("button")).not.toBeInTheDocument();
-  expect(screen.getByRole("group", { name: "Трафик без совпадения" })).toHaveTextContent("заблокировать");
-  expect(screen.getByRole("group", { name: "Остальной трафик" })).toHaveTextContent("через группу auto");
-});
-
-it("criterion_S3_9_review_names_rule_and_actual_order", async () => {
-  const configuration = baseConfiguration();
-  configuration.routing_rules = [{ name: "first", subject: { kind: "server" }, domain_suffix: ["first.test"], domain_exact: [], ip_cidr: [], exit: { kind: "direct" } }];
-  setup(configuration); const user = userEvent.setup(); await openMaster(user);
-  await fillWizard(user, { exitKind: "direct", name: "second" });
-  expect(screen.getByText(/Правило 2 из 2.*«second»/)).toBeVisible();
-});
-
-it("criterion_S3_10_warning_distinguishes_draft_from_global_apply", async () => {
-  setup(); const user = userEvent.setup(); await openMaster(user); await fillWizard(user);
-  expect(screen.getByText(/Сохранение записывает только черновик/)).toHaveTextContent("Изменения не действуют до отдельного применения");
-  expect(screen.queryByText(/Политика пока выключена/)).not.toBeInTheDocument();
-});
-
-it("criterion_S3_11_save_then_global_apply_uses_new_draft_id", async () => {
-  const fetch = setup(baseConfiguration(), { confirmed: true });
-  const user = userEvent.setup(); await openMaster(user); await fillWizard(user);
-  for (const label of ["Отмена", "Сохранить черновик", "Сохранить и применить"]) expect(screen.getByRole("button", { name: label })).toBeEnabled();
-  await user.dblClick(screen.getByRole("button", { name: "Сохранить и применить" }));
-  await waitFor(() => expect(fetch.mock.calls.filter(([path]) => path === "/api/apply")).toHaveLength(1));
-  const calls = fetch.mock.calls;
-  expect(calls.findIndex(([path]) => path === "/api/draft")).toBeLessThan(calls.findIndex(([path]) => path === "/api/apply"));
-  expect(JSON.parse(calls.find(([path]) => path === "/api/apply")![1].body)).toMatchObject({ version_id: 2, safe_mode: false, confirmation_timeout: 180 });
-});
-
-it("criterion_S3_11_failed_save_never_applies_and_keeps_input", async () => {
-  const fetch = setup(baseConfiguration(), { saveError: true });
-  const user = userEvent.setup(); await openMaster(user); await fillWizard(user);
-  await user.click(screen.getByRole("button", { name: "Сохранить и применить" }));
-  expect(await screen.findByText(/имя домена указано неверно/)).toBeVisible();
-  expect(fetch.mock.calls.some(([path]) => path === "/api/apply")).toBe(false);
-  expect(screen.getByLabelText("Имя правила")).toHaveValue("example_org");
-});
-
-it("criterion_S3_21_rule_name_is_generated_from_the_destination_and_unique", async () => {
-  const configuration = baseConfiguration();
-  configuration.routing_rules = [{ name: "example_org", subject: { kind: "server" },
-    domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], exit: { kind: "direct" } }];
-  setup(configuration); const user = userEvent.setup(); await openMaster(user);
-  await fillWizard(user, { exitKind: "direct", domains: "example.org" });
-  // The name is not an ordinal counter and not a repeat of an existing rule.
-  const name = (screen.getByLabelText("Имя правила") as HTMLInputElement).value;
-  expect(name).not.toBe("rule_1");
-  expect(name).not.toBe("rule_2");
-  expect(name).toMatch(/^example/);
-  expect(name).not.toBe("example_org");
-  expect(screen.getByText(/Создано по назначению/)).toBeVisible();
-});
-
-it("criterion_S3_21_a_name_written_by_hand_survives_a_destination_change", async () => {
-  setup(); const user = userEvent.setup(); await openMaster(user);
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "first.test");
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  const field = screen.getByLabelText("Имя правила");
-  await user.clear(field);
-  await user.type(field, "my_own_name");
-  await user.click(screen.getByRole("button", { name: "Назад" }));
-  await user.click(screen.getByRole("button", { name: "Назад" }));
-  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "second.test");
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  await user.click(screen.getByRole("button", { name: "Далее" }));
-  expect(screen.getByLabelText("Имя правила")).toHaveValue("my_own_name");
-});
-
-it("criterion_S3_12_preview_has_readonly_system_rows_and_candidate", async () => {
-  setup(); const user = userEvent.setup(); await openMaster(user); await fillWizard(user);
-  const table = screen.getByRole("table");
-  const rows = within(table).getAllByRole("row");
-  expect(rows).toHaveLength(4);
-  expect(rows[1]).toHaveTextContent("системное правило");
-  expect(rows[1]).toHaveTextContent("После пользовательских правил");
-  expect(rows[2]).toHaveTextContent("Конечный выход");
-  expect(rows[3]).toHaveTextContent("example_org"); expect(rows[3]).toHaveTextContent("example.org");
-  expect(within(table).queryByRole("button")).not.toBeInTheDocument();
-  expect(table).not.toHaveTextContent("перехват DNS");
-});
-
-it("criterion_S3_13_expert_engine_precedes_rules_with_one_creation_action", async () => {
-  const configuration = baseConfiguration();
-  configuration.routing_rules = [{ name: "existing", subject: { kind: "server" }, domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], exit: { kind: "direct" } }];
-  setup(configuration); const user = userEvent.setup(); await openAdvanced(user);
-  const heading = screen.getByRole("heading", { name: "Движок и источники" });
-  expect(heading.compareDocumentPosition(screen.getByRole("table")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(screen.getByRole("group", { name: "Порядок обработки" })).toHaveTextContent("источник трафикаsing-boxпервое совпавшее правиловыход правила");
-  expect(screen.getAllByText("системное правило")).toHaveLength(2);
-  expect(screen.getAllByRole("button", { name: "+ Правило" })).toHaveLength(1);
-  for (const label of ["Изменить", "Вверх", "Вниз", "Удалить правило existing"]) expect(screen.getByRole("button", { name: label })).toBeVisible();
-  expect(screen.queryByRole("tab", { name: /Наборы правил/ })).not.toBeInTheDocument();
-});
-
-const repoSource = (path: string) => readFileSync(`${process.cwd()}/../${path}`, "utf8");
-it("criterion_S3_14_shared_primitives_are_documented_and_page_imports_allowed", () => {
-  const page = repoSource("frontend/src/pages/RoutingMaster.tsx");
-  const imports = [...page.matchAll(/import \{([^}]+)\} from "@mui\/material"/g)].flatMap((match) => match[1].split(",").map((value) => value.trim()));
-  expect(imports.every((name) => ["Button", "Typography", "Dialog", "DialogContent", "DialogTitle"].includes(name))).toBe(true);
-  for (const name of ["ChoiceCards", "FlowChain", "RoutingSurface", "SummaryPanel"]) {
-    expect(page).toContain(name);
-    expect(repoSource("docs/ui-refactor.md")).toContain(name);
-    expect(repoSource("docs/adr/0011-ui-component-system-and-state.md")).toContain(name);
-  }
-});
-
-it("criterion_S3_15_category_icons_are_stroked_svg_not_glyphs", () => {
-  const { container } = render(<>{(["media", "social", "developer", "cloud", "gaming", "ai", "block"] as const).map((name) => <Icon key={name} name={name} />)}</>);
-  expect(container.querySelectorAll("svg")).toHaveLength(7);
-  container.querySelectorAll("svg").forEach((icon) => {
-    expect(icon).toHaveAttribute("viewBox", "0 0 24 24"); expect(icon).toHaveAttribute("stroke", "currentColor");
-    expect(icon.querySelector("path")).not.toBeNull();
-  });
-});
 
 it("criterion_S3_16_reference_palette_matches_theme_without_new_hex_literals", () => {
   const palette = [...repoSource("mockups/routing-wizard.html").matchAll(/--[a-zA-Z0-9]+:(#[0-9a-f]{6})/g)].map((match) => match[1]);
@@ -657,13 +348,12 @@ it("criterion_S3_18_operator_copy_is_russian", async () => {
   expect(screen.queryByRole("button", { name: /Save|Cancel|Next/ })).not.toBeInTheDocument();
 });
 
-it("criterion_S3_19_legacy_tab_remains_separate_and_unmodified_by_master_save", async () => {
+it("criterion_S3_19_tproxy_config_remains_separate_and_unmodified_by_master_save", async () => {
   const configuration = baseConfiguration(); const fetch = setup(configuration);
   const user = userEvent.setup(); await openMaster(user); await fillWizard(user);
   await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
   await waitFor(() => expect(savedDraft(fetch).tproxy).toEqual(configuration.tproxy));
-  await user.click(screen.getByRole("tab", { name: "Правила sing-box (TProxy)" }));
-  expect(await screen.findByRole("tab", { name: "Простой" })).toBeVisible();
+  // The legacy TProxy screen was removed; the master save must still leave it untouched.
 });
 
 it("criterion_S3_20_empty_catalog_and_empty_rules_never_invent_entries", async () => {

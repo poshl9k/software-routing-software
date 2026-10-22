@@ -25,8 +25,11 @@ it("loads runtime leases in the DHCP leases tab",async()=>{
 });
 it("opens the tunnel peer QR dialog from a blob response",async()=>{
   Object.defineProperty(URL,"createObjectURL",{configurable:true,value:vi.fn(()=>"blob:qr")});Object.defineProperty(URL,"revokeObjectURL",{configurable:true,value:vi.fn()});const fetch=setup(sampleConfiguration,(path)=>path.includes("/qr")?new Response("png",{headers:{"Content-Type":"image/png"}}):new Response("{}"));
-  const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("button",{name:"Открыть"}));
+  const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("tab",{name:"Серверы"}));await user.click(await screen.findByRole("button",{name:"Открыть"}));
   const editor=screen.getByRole("dialog",{name:"Туннель: wg_office · WireGuard · Сервер"});
+  expect(editor.querySelector("input, select, textarea")).toBeNull();
+  expect(within(editor).queryByRole("tab",{name:"Пиры"})).not.toBeInTheDocument();
+  await user.click(within(editor).getByRole("button",{name:"Изменить"}));
   await user.click(within(editor).getByRole("tab",{name:"Пиры"}));
   await user.click(within(editor).getByRole("button",{name:"QR"}));
   expect(await screen.findByRole("img",{name:/QR-код пира/})).toBeVisible();
@@ -44,8 +47,11 @@ it("generates tunnel keys and fills private key plus AWG parameters",async()=>{
 });
 it("generates and fills a peer PSK",async()=>{
   const fetch=setup(sampleConfiguration,(path)=>path==="/api/keygen/peer"?new Response(JSON.stringify({preshared_key:"p".repeat(44)})):new Response("{}"));
-  const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("button",{name:"Открыть"}));
+  const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("tab",{name:"Серверы"}));await user.click(await screen.findByRole("button",{name:"Открыть"}));
   const editor=screen.getByRole("dialog",{name:"Туннель: wg_office · WireGuard · Сервер"});
+  expect(editor.querySelector("input, select, textarea")).toBeNull();
+  expect(within(editor).queryByRole("tab",{name:"Пиры"})).not.toBeInTheDocument();
+  await user.click(within(editor).getByRole("button",{name:"Изменить"}));
   await user.click(within(editor).getByRole("tab",{name:"Пиры"}));
   await user.click(within(editor).getByRole("button",{name:"Изменить"}));
   const peer=screen.getByRole("dialog",{name:"Пир: alina_laptop"});

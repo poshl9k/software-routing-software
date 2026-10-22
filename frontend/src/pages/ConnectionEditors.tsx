@@ -339,6 +339,7 @@ function Collection<T extends Row>({
   configPatch,
   importRow,
   tunnelStatus,
+  filter,
 }: {
   kind: "tunnels" | "sites" | "ddns";
   title: string;
@@ -350,6 +351,8 @@ function Collection<T extends Row>({
   form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean, setError: (error: unknown) => void, importedAddresses: Record<string, string>, setBusy: (busy: boolean) => void) => ReactNode;
   summary: (v: T) => ReactNode[];
   rowActions?: (row: T) => ReactNode;
+  /** Optional list filter (e.g. tunnels split by client/server role). */
+  filter?: (rows: T[]) => T[];
   /** Extra configuration derived from the edited rows (e.g. auto-created
    * tunnel interfaces). Merged into the whole-configuration save. */
   configPatch?: (rows: T[], importedAddresses: Record<string, string>) => Partial<Configuration>;
@@ -369,14 +372,22 @@ function Collection<T extends Row>({
   const [scenario, setScenario] = useState<"client" | "server" | null>(null);
   const [protocol, setProtocol] = useState<Tunnel["protocol"]>("wg");
   const [selected, setSelected] = useState<number | null>(null);
+  const [viewing, setViewing] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const creatingRef = useRef(false);
   const editEpoch = useRef(0);
   const currentEditing = useRef<EditableRow<T>[] | null>(null);
   const collection = c[kind] as T[];
+  const list = filter ? filter(collection) : collection;
   const editing = editor.value;
   currentEditing.current = editing;
   const isEdit = editor.isEdit;
+  useEffect(() => {
+    if (!isEdit) {
+      setSelected(null);
+      setViewing(true);
+    }
+  }, [isEdit]);
   const allValid =
     !!editing &&
     editing.every(({ row }) => valid(row)) &&
@@ -400,6 +411,7 @@ function Collection<T extends Row>({
     if (!create) {
       editor.setValue([...initial, { id, created: true, row: empty(initial.map((v) => v.row)) }]);
       setSelected(id);
+      setViewing(false);
       setNext(id + 1);
       return;
     }
@@ -412,6 +424,7 @@ function Collection<T extends Row>({
       if (epoch === editEpoch.current && latest) {
         editor.setValue([...latest, { id, created: true, row }]);
         setSelected(id);
+        setViewing(false);
         setNext(id + 1);
         setScenario(null);
       }
@@ -446,6 +459,7 @@ function Collection<T extends Row>({
     const id = rows.reduce((max, item) => Math.max(max, item.id + 1), 0);
     if (result.address && "interface" in result.row) setImportAddresses((old) => ({ ...old, [String((result.row as Tunnel).interface)]: result.address! }));
     setSelected(id);
+    setViewing(false);
     if (!isEdit) {
       editEpoch.current += 1;
       editor.begin([...rows, { id, created: true, row: result.row }]);
@@ -459,6 +473,7 @@ function Collection<T extends Row>({
     editEpoch.current += 1;
     editor.cancel();
     setSelected(null);
+    setViewing(true);
   };
   const renderEdit = () => editing ? (
     <>
@@ -533,13 +548,14 @@ function Collection<T extends Row>({
         }
       >
         {kind === "tunnels" ? (
-            collection.length ? collection.map((row, id) => {
+            list.length ? list.map((row) => {
+              const id = collection.indexOf(row);
               const tunnel = row as Tunnel;
               const service = tunnelStatus?.services.find((item) => item.name === `tunnel:${tunnel.interface}`);
               return <Card key={id} title={`${tunnel.name} · ${tunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"} · ${tunnel.role === "server" ? "Сервер" : "Клиент"}`}
                 action={<Button disabled={!version} onClick={() => {
                   editor.begin(collection.map((item, index) => ({ id: index, created: false, row: item })));
-                  setNext(collection.length); setSelected(id);
+                  setNext(collection.length); setSelected(id); setViewing(true);
                 }}>Открыть</Button>}>
                 <dl className="kv">
                   <dt>Интерфейс</dt><dd>{tunnel.interface}</dd>
@@ -602,10 +618,23 @@ function Collection<T extends Row>({
           : "Туннель удалён из черновика"}</DialogTitle>
         <DialogContent>
           <ErrorNotice error={editor.error} />
-          {selectedTunnel && <FormActions><DeleteButton label={`Удалить ${selectedTunnel.name || "запись"}`} onClick={() => setDeleteTarget(selected!)} /></FormActions>}
+          {!viewing && selectedTunnel && <FormActions><DeleteButton label={`Удалить ${selectedTunnel.name || "запись"}`} onClick={() => setDeleteTarget(selected!)} /></FormActions>}
+          {viewing && selectedTunnel ? (
+            <>
+              <div className="toolbar-actions"><Button variant="contained" onClick={() => setViewing(false)}>Изменить</Button></div>
+              <dl className="kv">
+                <dt>Имя</dt><dd>{selectedTunnel.name}</dd>
+                <dt>Роль</dt><dd>{selectedTunnel.role === "server" ? "сервер" : "клиент"}</dd>
+                <dt>Протокол</dt><dd>{selectedTunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"}</dd>
+                <dt>Интерфейс</dt><dd>{selectedTunnel.interface}</dd>
+              </dl>
+            </>
+          ) : (
           <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating && !formBusy}
             onCancel={cancel} onSave={() => void save()} view={null} edit={renderEdit} />
+          )}
         </DialogContent>
+        {viewing && selectedTunnel && <DialogActions><Button onClick={cancel}>Отмена</Button></DialogActions>}
       </Dialog>}
       {kind === "tunnels" && <ConfirmDialog open={deleteTarget !== null} title="Удалить туннель?"
         body="Туннель, его пиры и автоматически созданный интерфейс будут удалены из черновика. Вместе с интерфейсом удаляются ссылки на него: статические маршруты, подсети DHCP, проброс портов, DNS, SSH и вход TProxy."
@@ -873,6 +902,7 @@ function TunnelEditorTabs({ tunnel, subscribers, patch, created, disabled, setEr
 
 export function Tunnels() {
   const { configuration: c } = useConfiguration();
+  const [roleTab, setRoleTab] = useState<"clients" | "servers">("clients");
   const telemetry = useQuery({
     queryKey: queryKeys.serviceStatus(),
     queryFn: async ({ signal }) => {
@@ -941,8 +971,17 @@ export function Tunnels() {
   return (
     <>
       <PageHeader>Туннели</PageHeader>
+      <ValueTabs
+        value={roleTab}
+        change={setRoleTab}
+        tabs={[
+          { value: "clients", label: "Клиенты" },
+          { value: "servers", label: "Серверы" },
+        ]}
+      />
       <Collection<Tunnel>
         kind="tunnels"
+        filter={(rows) => rows.filter((t) => t.role === (roleTab === "clients" ? "client" : "server"))}
         tunnelStatus={telemetry.isSuccess ? telemetry.data : undefined}
         title="Туннели"
         addLabel="+ Добавить туннель"

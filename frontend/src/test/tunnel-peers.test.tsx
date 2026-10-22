@@ -37,8 +37,20 @@ async function mount(configuration = config(), extra: Extra = () => json({})) {
 const calls = (fetch: ReturnType<typeof vi.fn>, path: string) => fetch.mock.calls.filter(([url]) => url === path);
 const saved = (fetch: ReturnType<typeof vi.fn>) => JSON.parse(String(calls(fetch, "/api/draft")[0]?.[1]?.body)) as Configuration;
 async function openServer() {
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
   await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
-  return screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
+  const editor = await screen.findByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
+  expect(editor.querySelector("input, select, textarea")).toBeNull();
+  expect(within(editor).queryByRole("tab", { name: "Пиры" })).not.toBeInTheDocument();
+  await userEvent.click(within(editor).getByRole("button", { name: "Изменить" }));
+  return editor;
+}
+/** Opens a client tunnel from the default "Клиенты" tab and enters edit mode. */
+async function openClient() {
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
+  await userEvent.click(within(editor).getByRole("button", { name: "Изменить" }));
+  return editor;
 }
 async function openPeers() {
   const editor = await openServer();
@@ -83,8 +95,7 @@ it("criterion_1_server_tabs_client_has_no_strip", async () => {
 
 it("criterion_1_client_editor_is_one_full_form", async () => {
   const fetch = await mount(config([{ ...server, role: "client", peers: [], endpoint: "remote.example:51820", server_public_key: "remote" }]));
-  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
-  const editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
+  const editor = await openClient();
   expect(within(editor).queryByRole("tab")).not.toBeInTheDocument();
   for (const label of ["Имя туннеля", "Endpoint", "AllowedIPs", "Keepalive, с", "Публичный ключ сервера", "Preshared key", "Приватный ключ"])
     expect(within(editor).getByLabelText(label)).toBeVisible();
@@ -123,6 +134,8 @@ it("criterion_2_client_awg_fields_and_notes_survive_one_outer_save", async () =>
   const client = { ...server, role: "client" as const, peers: [], endpoint: "remote.example:51820", server_public_key: "remote", allowed_ips: ["0.0.0.0/0"], preshared_key: { redacted: true } as const };
   const fetch = await mount(config([client]));
   await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const view = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
+  await userEvent.click(within(view).getByRole("button", { name: "Изменить" }));
   const editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
   expect(within(editor).getByText(/AllowedIPs ≠ маршрут/)).toBeVisible();
   expect(within(editor).getByLabelText("Роль")).toHaveValue("клиент");
@@ -238,7 +251,10 @@ it("criterion_6_conf_export_encodes_names_downloads_body_and_releases_url", asyn
   });
   const fetch = await mount(config([named]), (path) => path.endsWith("/conf")
     ? new Response("[Interface]\nPrivateKey = client-key\n[Peer]\nPublicKey = server-key\n", { headers: { "Content-Type": "text/plain" } }) : json({}));
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
   await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const view = screen.getByRole("dialog", { name: /Туннель: vpn \/ офис/ });
+  await userEvent.click(within(view).getByRole("button", { name: "Изменить" }));
   const editor = screen.getByRole("dialog", { name: /Туннель: vpn \/ офис/ });
   await userEvent.click(within(editor).getByRole("tab", { name: "Пиры" }));
   await userEvent.click(within(peerRow(editor, "телефон / 1")).getByRole("button", { name: "Экспорт конфигурации" }));
@@ -486,7 +502,10 @@ it("criterion_11_amnezia_export_downloads_the_vpn_document", async () => {
 it("criterion_11_amnezia_export_is_disabled_for_a_wireguard_tunnel", async () => {
   const wireguard: Tunnel = { ...server, protocol: "wg", obfuscation: {} };
   const fetch = await mount(config([wireguard]));
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
   await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const view = screen.getByRole("dialog", { name: /Туннель: vpn/ });
+  await userEvent.click(within(view).getByRole("button", { name: "Изменить" }));
   const editor = screen.getByRole("dialog", { name: /Туннель: vpn/ });
   await userEvent.click(within(editor).getByRole("tab", { name: "Пиры" }));
   expect(within(peerRow(editor, "phone")).getByRole("button", { name: "Для Amnezia" })).toBeDisabled();
@@ -530,6 +549,8 @@ it("client_without_default_route_saves_explicit_false", async () => {
   };
   const fetch = await mount(config([client]));
   await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const view = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
+  await userEvent.click(within(view).getByRole("button", { name: "Изменить" }));
   const editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
   expect(within(editor).getByRole("checkbox", { name: "Использовать туннель как маршрут по умолчанию" })).not.toBeChecked();
   await userEvent.click(within(editor).getByRole("button", { name: "Сохранить" }));
@@ -549,6 +570,8 @@ it("client_default_route_is_opt_in_saved_and_reloaded_without_changing_allowed_i
   };
   const fetch = await mount(config([client]));
   await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const view = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
+  await userEvent.click(within(view).getByRole("button", { name: "Изменить" }));
   let editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
   const toggle = within(editor).getByRole("checkbox", { name: "Использовать туннель как маршрут по умолчанию" });
   expect(toggle).not.toBeChecked();
@@ -561,6 +584,8 @@ it("client_default_route_is_opt_in_saved_and_reloaded_without_changing_allowed_i
 
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const reopenedView = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
+  await userEvent.click(within(reopenedView).getByRole("button", { name: "Изменить" }));
   editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
   expect(within(editor).getByRole("checkbox", { name: "Использовать туннель как маршрут по умолчанию" })).toBeChecked();
   expect(within(editor).getByText("Весь трафик хоста, включая доступ к панели и SSH, пойдёт через туннель.")).toBeVisible();

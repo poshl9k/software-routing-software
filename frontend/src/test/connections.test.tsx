@@ -37,7 +37,12 @@ async function mount(page: React.ReactNode, config: Configuration = emptyConfigu
 const fill = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 const save = () => screen.getByRole("button", { name: "Сохранить" });
 const draft = (fetch: ReturnType<typeof vi.fn>) => JSON.parse(String(fetch.mock.calls.find(([path]) => path === "/api/draft")?.[1]?.body));
-async function openTunnel() { await userEvent.click(screen.getByRole("button", { name: "Открыть" })); }
+async function openTunnel() {
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  await userEvent.click(within(screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" }))
+    .getByRole("button", { name: "Изменить" }));
+}
 async function choose(role: "client" | "server", protocol: "wg" | "awg" = "wg") {
   await userEvent.click(screen.getByRole("button", { name: /Добавить туннель/ }));
   if (role === "server") await userEvent.click(screen.getByRole("button", { name: "Поднять сервер" }));
@@ -45,8 +50,84 @@ async function choose(role: "client" | "server", protocol: "wg" | "awg" = "wg") 
   await userEvent.click(screen.getByRole("button", { name: "Продолжить" }));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новый туннель" })).not.toBeInTheDocument());
 }
+it("client/server split filters cards and preserves hidden tunnels when saving either tab", async () => {
+  const client: Tunnel = { ...server, name: "remote", interface: "tun1", role: "client",
+    peers: [], endpoint: "remote.example:51820", server_public_key: "remote-public" };
+  const fetch = await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server, client] });
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Клиенты", "Серверы"]);
+  expect(screen.getByRole("tab", { name: "Клиенты" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByText("remote · AmneziaWG · Клиент")).toBeVisible();
+  expect(screen.queryByText("vpn · AmneziaWG · Сервер")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  await userEvent.click(screen.getByRole("button", { name: "Изменить" }));
+  fill("Endpoint", "updated.example:51820");
+  await userEvent.click(save());
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(draft(fetch).tunnels).toEqual([
+    { ...server, default_route: false, dns_servers: [] },
+    { ...client, endpoint: "updated.example:51820", default_route: false, dns_servers: [] },
+  ]);
+  await userEvent.click(screen.getByRole("tab", { name: "Серверы" }));
+  expect(screen.getByRole("tab", { name: "Серверы" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByText("vpn · AmneziaWG · Сервер")).toBeVisible();
+  expect(screen.queryByText("remote · AmneziaWG · Клиент")).not.toBeInTheDocument();
+  await openTunnel();
+  fill("Порт", "51821");
+  await userEvent.click(save());
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  const writes = fetch.mock.calls.filter(([path]) => path === "/api/draft");
+  expect(writes).toHaveLength(2);
+  expect(JSON.parse(String(writes[1][1]?.body)).tunnels).toEqual([
+    { ...server, listen_port: 51821, default_route: false, dns_servers: [] },
+    { ...client, endpoint: "updated.example:51820", default_route: false, dns_servers: [] },
+  ]);
+  await userEvent.click(screen.getByRole("tab", { name: "Клиенты" }));
+  expect(screen.getByText("remote · AmneziaWG · Клиент")).toBeVisible();
+  expect(screen.queryByText("vpn · AmneziaWG · Сервер")).not.toBeInTheDocument();
+});
+it.each(["client", "server"] as const)("view mode for %s has only facts until Изменить and resets after cancel", async (role) => {
+  const tunnel: Tunnel = { ...server, role, ...(role === "client"
+    ? { peers: [], endpoint: "remote.example:51820", server_public_key: "remote-public" } : {}) };
+  const fetch = await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [tunnel] });
+  if (role === "server") await userEvent.click(screen.getByRole("tab", { name: "Серверы" }));
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  let dialog = screen.getByRole("dialog", { name: /Туннель: vpn/ });
+  const facts = dialog.querySelector("dl.kv")!;
+  expect(Array.from(facts.querySelectorAll("dt"), (item) => item.textContent))
+    .toEqual(["Имя", "Роль", "Протокол", "Интерфейс"]);
+  expect(Array.from(facts.querySelectorAll("dd"), (item) => item.textContent))
+    .toEqual(["vpn", role === "server" ? "сервер" : "клиент", "AmneziaWG", "tun0"]);
+  expect(dialog.querySelector("input, select, textarea")).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: "Удалить vpn" })).not.toBeInTheDocument();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Изменить" }));
+  expect(within(dialog).getByLabelText("Имя туннеля")).toBeVisible();
+  const label = role === "server" ? "Порт" : "Endpoint";
+  fill(label, role === "server" ? "51821" : "discarded.example:51820");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(fetch.mock.calls.filter(([path]) => path === "/api/draft")).toHaveLength(0);
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  dialog = screen.getByRole("dialog", { name: /Туннель: vpn/ });
+  expect(dialog.querySelector("input, select, textarea")).toBeNull();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Изменить" }));
+  expect(within(dialog).getByLabelText(label)).toHaveValue(role === "server" ? 51820 : "remote.example:51820");
+});
+it("cancels a read-only view without a write and creates the next tunnel directly in edit mode", async () => {
+  const fetch = await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
+  await userEvent.click(screen.getByRole("tab", { name: "Серверы" }));
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(fetch.mock.calls.filter(([path]) => path === "/api/draft")).toHaveLength(0);
+  await choose("server");
+  expect(screen.getByLabelText("Имя туннеля")).toHaveValue("");
+  expect(screen.getByLabelText("Имя туннеля")).not.toHaveAttribute("readonly");
+  expect(screen.queryByRole("button", { name: "Изменить" })).not.toBeInTheDocument();
+});
 it("shows one tunnel card with honest status; opens one dialog with role locked and secret hidden", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
   expect(screen.getByText("vpn · AmneziaWG · Сервер")).toBeVisible();
   expect(within(screen.getByText("Пиров").closest("dl")!).getByText("1")).toBeVisible();
   expect(await screen.findByText("Статус недоступен")).toBeVisible();
@@ -96,6 +177,7 @@ it("keeps peer and key fields off the page until the editor dialog opens", async
 });
 it("shows two server clients as a number in the read-only facts", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, peers: [...server.peers, { ...server.peers[0], name: "laptop" }] }] });
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
   const facts = screen.getByText("Пиров").closest("dl")!;
   expect(within(facts).getByText("Интерфейс")).toBeVisible();
   expect(within(facts).getByText("tun0")).toBeVisible();
@@ -103,6 +185,7 @@ it("shows two server clients as a number in the read-only facts", async () => {
 });
 it("says no clients instead of zero on an empty server card", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [{ ...server, peers: [] }] });
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
   const facts = screen.getByText("Пиров").closest("dl")!;
   expect(within(facts).getByText("нет пиров")).toBeVisible();
   expect(within(facts).queryByText("0")).not.toBeInTheDocument();
@@ -129,6 +212,7 @@ it.each([
     { name: "tunnel:tun0", state, detail: null },
   ] }));
   const fetch = await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, false, undefined, status);
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
   expect(await screen.findByText(label)).toBeVisible();
   expect(screen.getByText("2026-01-01T00:00:00Z")).toBeVisible();
   expect(fetch.mock.calls.some(([path]) => path === "/api/status/services")).toBe(true);
@@ -137,6 +221,7 @@ it.each([
 it("keeps failed telemetry unknown, never green", async () => {
   await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] }, false, undefined,
     new Response(JSON.stringify({ code: "unavailable", message: "Нет статуса" }), { status: 503 }));
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
   expect(await screen.findByText("Статус недоступен")).toBeVisible();
   expect(screen.queryByText("Работает")).not.toBeInTheDocument();
 });
@@ -200,6 +285,12 @@ it("retains secret and only edits selected tunnel; delete requires confirmation"
   await userEvent.click(save());
   expect(draft(fetch).tunnels[0].private_key).toEqual({ redacted: true });
   expect(draft(fetch).tunnels[0].listen_port).toBe(51821);
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const dialog = screen.getByRole("dialog", { name: /Туннель: vpn/ });
+  expect(dialog.querySelector("input, select, textarea")).toBeNull();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Изменить" }));
+  expect(within(dialog).getByLabelText("Порт")).toHaveValue(51821);
 });
 it("confirmation removes tunnel and auto interface only from draft", async () => {
   const config: Configuration = { ...emptyConfiguration, tunnels: [server], interfaces: [{ name: "tun0", type: "physical", zone: "lan", addressing: "static", addresses: [], description: "vpn", parent: null, vlan_id: null, members: [] }] };
@@ -232,7 +323,9 @@ it("removes a deleted tunnel's device and every reference that named it", async 
     static_routes: [{ destination: "192.0.2.0/24", gateway: null, interface: "tun0", metric: 100, enabled: true }],
   };
   const fetch = await mount(<Tunnels />, config);
+  await userEvent.click(await screen.findByRole("tab", { name: "Серверы" }));
   await userEvent.click((await screen.findAllByRole("button", { name: "Открыть" }))[0]);
+  await userEvent.click(screen.getByRole("button", { name: "Изменить" }));
   await userEvent.click(screen.getByRole("button", { name: "Удалить vpn" }));
   await userEvent.click(within(screen.getByRole("dialog", { name: "Удалить туннель?" }))
     .getByRole("button", { name: "Удалить из черновика" }));
