@@ -18,7 +18,7 @@ import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { EditorFooter, EditorShell } from "../components/EditorShell";
+import { EditorFieldset, EditorFooter, EditorShell } from "../components/EditorShell";
 import { ValueTabs } from "../components/Tabs";
 import { ExpertDisclosure } from "../components/ExpertDisclosure";
 import { PageSection } from "../components/PageSection";
@@ -340,6 +340,7 @@ function Collection<T extends Row>({
   importRow,
   tunnelStatus,
   filter,
+  showQr,
 }: {
   kind: "tunnels" | "sites" | "ddns";
   title: string;
@@ -353,6 +354,8 @@ function Collection<T extends Row>({
   rowActions?: (row: T) => ReactNode;
   /** Optional list filter (e.g. tunnels split by client/server role). */
   filter?: (rows: T[]) => T[];
+  /** Peer QR export; tunnels only (needed by the peers panel outside the edit mode). */
+  showQr?: (tunnel: string, peer: string, current: () => boolean) => Promise<void>;
   /** Extra configuration derived from the edited rows (e.g. auto-created
    * tunnel interfaces). Merged into the whole-configuration save. */
   configPatch?: (rows: T[], importedAddresses: Record<string, string>) => Partial<Configuration>;
@@ -373,6 +376,7 @@ function Collection<T extends Row>({
   const [protocol, setProtocol] = useState<Tunnel["protocol"]>("wg");
   const [selected, setSelected] = useState<number | null>(null);
   const [viewing, setViewing] = useState(true);
+  const [dialogTab, setDialogTab] = useState<"tunnel" | "peers">("tunnel");
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const creatingRef = useRef(false);
   const editEpoch = useRef(0);
@@ -386,8 +390,10 @@ function Collection<T extends Row>({
     if (!isEdit) {
       setSelected(null);
       setViewing(true);
+      setDialogTab("tunnel");
     }
   }, [isEdit]);
+  useEffect(() => { setDialogTab("tunnel"); }, [selected]);
   const allValid =
     !!editing &&
     editing.every(({ row }) => valid(row)) &&
@@ -474,6 +480,16 @@ function Collection<T extends Row>({
     editor.cancel();
     setSelected(null);
     setViewing(true);
+    setDialogTab("tunnel");
+  };
+  /** Patch the selected tunnel row directly; used by the peers panel outside
+   *  the tunnel's edit mode, so peers are managed without entering editing. */
+  const patchSelected = (patch: Partial<Tunnel>) => {
+    const latest = currentEditing.current;
+    if (!latest?.some((v) => v.id === selected)) return;
+    const updated = latest.map((v) => v.id === selected ? { ...v, row: { ...v.row, ...(patch as Partial<T>) } } : v);
+    currentEditing.current = updated;
+    editor.setValue(updated);
   };
   const renderEdit = () => editing ? (
     <>
@@ -618,23 +634,42 @@ function Collection<T extends Row>({
           : "Туннель удалён из черновика"}</DialogTitle>
         <DialogContent>
           <ErrorNotice error={editor.error} />
-          {!viewing && selectedTunnel && <FormActions><DeleteButton label={`Удалить ${selectedTunnel.name || "запись"}`} onClick={() => setDeleteTarget(selected!)} /></FormActions>}
-          {viewing && selectedTunnel ? (
-            <>
-              <div className="toolbar-actions"><Button variant="contained" onClick={() => setViewing(false)}>Изменить</Button></div>
-              <dl className="kv">
-                <dt>Имя</dt><dd>{selectedTunnel.name}</dd>
-                <dt>Роль</dt><dd>{selectedTunnel.role === "server" ? "сервер" : "клиент"}</dd>
-                <dt>Протокол</dt><dd>{selectedTunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"}</dd>
-                <dt>Интерфейс</dt><dd>{selectedTunnel.interface}</dd>
-              </dl>
-            </>
-          ) : (
-          <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating && !formBusy}
-            onCancel={cancel} onSave={() => void save()} view={null} edit={renderEdit} />
+          {selectedTunnel?.role === "server" && <ValueTabs<"tunnel" | "peers">
+            tabs={[{ value: "tunnel", label: "Туннель" }, { value: "peers", label: "Пиры" }]}
+            value={dialogTab} change={setDialogTab} />}
+          {/* Keep the tunnel form mounted so switching tabs cannot replace opaque secret values. */}
+          <div hidden={!!selectedTunnel && dialogTab === "peers"}>
+            {!viewing && selectedTunnel && <FormActions><DeleteButton label={`Удалить ${selectedTunnel.name || "запись"}`} onClick={() => setDeleteTarget(selected!)} /></FormActions>}
+            {viewing && selectedTunnel ? (
+              <>
+                <div className="toolbar-actions"><Button variant="contained" onClick={() => setViewing(false)}>Изменить</Button></div>
+                <dl className="kv">
+                  <dt>Имя</dt><dd>{selectedTunnel.name}</dd>
+                  <dt>Роль</dt><dd>{selectedTunnel.role === "server" ? "сервер" : "клиент"}</dd>
+                  <dt>Протокол</dt><dd>{selectedTunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"}</dd>
+                  <dt>Интерфейс</dt><dd>{selectedTunnel.interface}</dd>
+                </dl>
+              </>
+            ) : (
+            <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating && !formBusy}
+              onCancel={cancel} onSave={() => void save()} view={null} edit={renderEdit} />
+            )}
+          </div>
+          {selectedTunnel?.role === "server" && dialogTab === "peers" && (
+            /* Peers live outside the tunnel edit mode: they are viewed and
+             * added here, in view mode, with only their own save. */
+            <TunnelPeers tunnel={selectedTunnel} subscribers={c.subscribers ?? []}
+              patch={patchSelected} created={!!editing?.find((item) => item.id === selected)?.created}
+              disabled={noConfiguration} setError={editor.setError} setBusy={setFormBusy} showQr={showQr ?? (() => Promise.resolve())} />
           )}
         </DialogContent>
-        {viewing && selectedTunnel && <DialogActions><Button onClick={cancel}>Отмена</Button></DialogActions>}
+        {selectedTunnel && (viewing || dialogTab === "peers") && <DialogActions>
+          {dialogTab === "peers" && selectedTunnel.role === "server" && (
+            <Button variant="contained" disabled={editor.saving || !allValid || !version || creating || formBusy}
+              onClick={() => void save()}>Сохранить</Button>
+          )}
+          <Button onClick={cancel}>Отмена</Button>
+        </DialogActions>}
       </Dialog>}
       {kind === "tunnels" && <ConfirmDialog open={deleteTarget !== null} title="Удалить туннель?"
         body="Туннель, его пиры и автоматически созданный интерфейс будут удалены из черновика. Вместе с интерфейсом удаляются ссылки на него: статические маршруты, подсети DHCP, проброс портов, DNS, SSH и вход TProxy."
@@ -776,8 +811,9 @@ function peerActivityLabel(seconds: number | null | undefined): string {
   return Number.isFinite(date.getTime()) ? date.toLocaleString("ru-RU") : "Активность недоступна";
 }
 
-/** Mounted only within the existing tunnel draft editor, never a second draft lifecycle. */
-function TunnelEditorTabs({ tunnel, subscribers, patch, created, disabled, setError, setBusy, showQr, children }: {
+/** The peers panel of a server tunnel. Mounted inside the edit tabs and directly
+ *  in view mode, so peers are added and viewed without entering edit mode. */
+function TunnelPeers({ tunnel, subscribers, patch, created, disabled, setError, setBusy, showQr }: {
   tunnel: Tunnel;
   subscribers: Subscriber[];
   patch: (patch: Partial<Tunnel>) => void;
@@ -786,9 +822,7 @@ function TunnelEditorTabs({ tunnel, subscribers, patch, created, disabled, setEr
   setError: (error: unknown) => void;
   setBusy: (busy: boolean) => void;
   showQr: (tunnel: string, peer: string, current: () => boolean) => Promise<void>;
-  children: ReactNode;
 }) {
-  const [tab, setTab] = useState<"tunnel" | "peers">("tunnel");
   const [selected, setSelected] = useState<Peer | null>(null);
   const [adding, setAdding] = useState(false);
   const addingRef = useRef(false);
@@ -800,11 +834,10 @@ function TunnelEditorTabs({ tunnel, subscribers, patch, created, disabled, setEr
     return () => { active.current = false; setBusy(false); };
   }, [setBusy]);
   useEffect(() => { setBusy(adding || selected !== null); }, [adding, selected, setBusy]);
-  const peersVisible = tunnel.role === "server" && tab === "peers";
   const activity = useQuery({
     queryKey: queryKeys.tunnelActivity(),
     queryFn: ({ signal }) => api.tunnelActivity(signal),
-    enabled: peersVisible,
+    enabled: true,
     refetchInterval: 30_000,
     // A failed poll must immediately hide the previous successful sample.
     retry: false,
@@ -860,34 +893,27 @@ function TunnelEditorTabs({ tunnel, subscribers, patch, created, disabled, setEr
   };
   return (
     <>
-      {tunnel.role === "server" && <ValueTabs<"tunnel" | "peers">
-        tabs={[{ value: "tunnel", label: "Туннель" }, { value: "peers", label: "Пиры" }]}
-        value={tab} change={setTab} />}
-      {/* Keep secret fields mounted so switching tabs cannot replace their original opaque values. */}
-      <div hidden={peersVisible}>{children}</div>
-      {peersVisible && <>
-        <InfoNote>Добавление и удаление пира применяются на работающем туннеле сразу при сохранении черновика, без общего применения. Изменение ключей или порта самого туннеля вступает в силу только после применения.</InfoNote>
-        <FormActions><Button disabled={disabled || adding} onClick={() => void add()}>+ Добавить пира</Button></FormActions>
-        <div className="table-wide tunnel-peers-table">
-        <DataTable heads={["Имя", "Активность", "Действия"]} empty={<EmptyState>Пиров нет.</EmptyState>}
-          rows={tunnel.peers.map((peer) => [
-            peer.name || "Новый пир",
-            peerActivityLabel(activity.isSuccess ? activity.data?.[tunnel.name]?.[peer.name] : undefined),
-            <FormActions>
-              <Button disabled={created} onClick={() => {
-                setError(null);
-                void showQr(tunnel.name, peer.name, () => active.current).catch((error) => {
-                  if (active.current) latest.current.setError(error);
-                });
-              }}>QR</Button>
-              <Button disabled={created} onClick={() => void exportPeer(peer, "conf")}>Экспорт конфигурации</Button>
-              {/* Amnezia's own container format; its app does not import a bare .conf. */}
-              <Button disabled={created || tunnel.protocol !== "awg"} onClick={() => void exportPeer(peer, "amnezia")}>Для Amnezia</Button>
-              <Button onClick={() => setSelected(peer)}>Изменить</Button>
-            </FormActions>,
-          ])} />
-        </div>
-      </>}
+      <InfoNote>Добавление и удаление пира применяются на работающем туннеле сразу при сохранении черновика, без общего применения. Изменение ключей или порта самого туннеля вступает в силу только после применения.</InfoNote>
+      <FormActions><Button disabled={disabled || adding} onClick={() => void add()}>+ Добавить пира</Button></FormActions>
+      <div className="table-wide tunnel-peers-table">
+      <DataTable heads={["Имя", "Активность", "Действия"]} empty={<EmptyState>Пиров нет.</EmptyState>}
+        rows={tunnel.peers.map((peer) => [
+          peer.name || "Новый пир",
+          peerActivityLabel(activity.isSuccess ? activity.data?.[tunnel.name]?.[peer.name] : undefined),
+          <FormActions>
+            <Button disabled={created} onClick={() => {
+              setError(null);
+              void showQr(tunnel.name, peer.name, () => active.current).catch((error) => {
+                if (active.current) latest.current.setError(error);
+              });
+            }}>QR</Button>
+            <Button disabled={created} onClick={() => void exportPeer(peer, "conf")}>Экспорт конфигурации</Button>
+            {/* Amnezia's own container format; its app does not import a bare .conf. */}
+            <Button disabled={created || tunnel.protocol !== "awg"} onClick={() => void exportPeer(peer, "amnezia")}>Для Amnezia</Button>
+            <Button onClick={() => setSelected(peer)}>Изменить</Button>
+          </FormActions>,
+        ])} />
+      </div>
       {selected && <PeerEditor peer={selected} peers={tunnel.peers} subscribers={subscribers} disabled={disabled}
         cancel={() => setSelected(null)} save={(peer) => {
           replacePeers(latest.current.tunnel.peers.map((item) => item === selected ? peer : item));
@@ -981,6 +1007,7 @@ export function Tunnels() {
       />
       <Collection<Tunnel>
         kind="tunnels"
+        showQr={showQr}
         filter={(rows) => rows.filter((t) => t.role === (roleTab === "clients" ? "client" : "server"))}
         tunnelStatus={telemetry.isSuccess ? telemetry.data : undefined}
         title="Туннели"
@@ -1055,7 +1082,7 @@ export function Tunnels() {
           t.protocol,
         ]}
         form={(t, patch, created, disabled, setError, importedAddresses, setBusy) => (
-          <TunnelEditorTabs tunnel={t} subscribers={c.subscribers ?? []} patch={patch} created={created} disabled={disabled} setError={setError} setBusy={setBusy} showQr={showQr}>
+          <>
           <PageSection title="Идентификация">
           <FormGrid>
             {created ? (
@@ -1165,7 +1192,7 @@ export function Tunnels() {
                 </Card>
             )}
           </ExpertDisclosure></PageSection>
-          </TunnelEditorTabs>
+          </>
         )}
       />
       <Dialog open={!!qr} onClose={closeQr} aria-labelledby="peer-qr-title">

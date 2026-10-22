@@ -41,7 +41,8 @@ async function openServer() {
   await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
   const editor = await screen.findByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
   expect(editor.querySelector("input, select, textarea")).toBeNull();
-  expect(within(editor).queryByRole("tab", { name: "Пиры" })).not.toBeInTheDocument();
+  // The peers tab is available right in view mode, without entering edit mode.
+  expect(within(editor).getByRole("tab", { name: "Пиры" })).toBeInTheDocument();
   await userEvent.click(within(editor).getByRole("button", { name: "Изменить" }));
   return editor;
 }

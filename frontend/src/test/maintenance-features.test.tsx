@@ -28,7 +28,8 @@ it("opens the tunnel peer QR dialog from a blob response",async()=>{
   const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("tab",{name:"Серверы"}));await user.click(await screen.findByRole("button",{name:"Открыть"}));
   const editor=screen.getByRole("dialog",{name:"Туннель: wg_office · WireGuard · Сервер"});
   expect(editor.querySelector("input, select, textarea")).toBeNull();
-  expect(within(editor).queryByRole("tab",{name:"Пиры"})).not.toBeInTheDocument();
+  // The peers tab is available right in view mode, without entering edit mode.
+  expect(within(editor).queryByRole("tab",{name:"Пиры"})).toBeInTheDocument();
   await user.click(within(editor).getByRole("button",{name:"Изменить"}));
   await user.click(within(editor).getByRole("tab",{name:"Пиры"}));
   await user.click(within(editor).getByRole("button",{name:"QR"}));
@@ -50,7 +51,8 @@ it("generates and fills a peer PSK",async()=>{
   const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("tab",{name:"Серверы"}));await user.click(await screen.findByRole("button",{name:"Открыть"}));
   const editor=screen.getByRole("dialog",{name:"Туннель: wg_office · WireGuard · Сервер"});
   expect(editor.querySelector("input, select, textarea")).toBeNull();
-  expect(within(editor).queryByRole("tab",{name:"Пиры"})).not.toBeInTheDocument();
+  // The peers tab is available right in view mode, without entering edit mode.
+  expect(within(editor).queryByRole("tab",{name:"Пиры"})).toBeInTheDocument();
   await user.click(within(editor).getByRole("button",{name:"Изменить"}));
   await user.click(within(editor).getByRole("tab",{name:"Пиры"}));
   await user.click(within(editor).getByRole("button",{name:"Изменить"}));
