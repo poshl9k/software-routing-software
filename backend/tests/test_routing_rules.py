@@ -56,6 +56,24 @@ def invalid(document_value, code):
     assert any(detail['message'] == code for detail in failure.value.details), failure.value.details
 
 
+def test_router_tproxy_accepts_product_policy_without_legacy_rule():
+    data = {
+        'interfaces': [
+            {'name': 'lan0', 'zone': 'lan', 'addresses': ['192.0.2.1/24']},
+            {'name': 'wan0', 'zone': 'wan'},
+        ],
+        'tproxy': {'enabled': True, 'ingress_interfaces': ['lan0']},
+        'routing_rules': [rule(subject={'kind': 'interface', 'interface': 'lan0'})],
+    }
+    version = ConfigurationVersion.model_validate({'profile': 'router', 'configuration': data})
+    assert tproxy_apply.required(version)
+    assert {'source_ip_cidr': ['192.0.2.0/24'], 'ip_cidr': ['203.0.113.0/24'],
+            'action': 'route', 'outbound': 'direct'} in generate_singbox(version)['route']['rules']
+
+    data['routing_rules'] = []
+    invalid(data, 'tproxy.enabled_incomplete')
+
+
 def test_criterion_1_roundtrip_diff_and_tproxy_isolation():
     data = document()
     data['routing_rules'] = [
