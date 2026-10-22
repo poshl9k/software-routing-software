@@ -9,22 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import ConfigurationRow
-from ..generators.amnezia import amnezia_uri
+from ..generators.amnezia import amnezia_uri, tunnel_dns
 from ..generators.wireguard import generate_wg_bundle
 from .auth import current_user, get_db
 from .errors import APIError
 from .versions import agent_call
 
 router = APIRouter(dependencies=[Depends(current_user)])
-
-# The app resolves the inner config's DNS placeholders from these. The panel
-# does not serve DNS on the tunnel yet (its resolver is a local stub), so a
-# public pair is advertised — pointing a client at an address nobody answers on
-# leaves it with no name resolution at all. ADR-0020 replaces this with the
-# subscriber resolver.
-DEFAULT_PRIMARY_DNS = '1.0.0.1'
-DEFAULT_SECONDARY_DNS = '1.1.1.1'
-
 
 def _public_endpoint() -> str | None:
     """The address clients should dial: the panel's published name, else its IP.
@@ -137,8 +128,8 @@ def _amnezia_uri(db: Session, name: str, peer_name: str,
     peer = next((p for p in tunnel.peers if p.name == peer_name), None) if tunnel else None
     if peer is None or tunnel is None:
         raise APIError(404, 'peer.not_found')
-    primary = dns1 or DEFAULT_PRIMARY_DNS
-    for value in (primary, dns2 or DEFAULT_SECONDARY_DNS):
+    resolved_dns = tunnel_dns(tunnel, snapshot.configuration, dns1, dns2)
+    for value in resolved_dns:
         try:
             ip_address(value)
         except ValueError:
@@ -148,7 +139,7 @@ def _amnezia_uri(db: Session, name: str, peer_name: str,
         # fills the gap (a DHCP uplink leaves the tunnel's own endpoint unset).
         return amnezia_uri(tunnel, peer, snapshot.configuration,
                            endpoint=None if tunnel.endpoint else _public_endpoint(),
-                           dns1=primary, dns2=dns2 or DEFAULT_SECONDARY_DNS)
+                           dns1=resolved_dns[0], dns2=resolved_dns[1])
     except ValueError as error:
         raise APIError(400, str(error)) from error
 

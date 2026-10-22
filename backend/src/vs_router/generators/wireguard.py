@@ -6,6 +6,7 @@ server/client devices use .1/.2. Auto peers use host
 collisions raise wireguard.address_collision, never probe by list order.
 Explicit interface addresses and peer AllowedIPs take precedence. Existing
 materialized addresses remain explicit, including those from older schemes.
+Client exports advertise the same DNS pair as Amnezia container exports.
 """
 import base64
 import hashlib
@@ -214,6 +215,29 @@ def materialize_addresses(configuration):
     return filled.model_copy(update={'interfaces': tuple(interfaces)})
 
 
+# The app resolves a client config's ``$PRIMARY_DNS``/``$SECONDARY_DNS`` from its
+# own top-level ``dns1``/``dns2``, so both export shapes must advertise the same
+# pair. An operator-set list wins; otherwise a server offers the resolver it
+# already serves inside the tunnel (its own address), and anything that cannot
+# be computed falls back to a public pair rather than failing the export.
+DEFAULT_PRIMARY_DNS = '1.0.0.1'
+DEFAULT_SECONDARY_DNS = '1.1.1.1'
+
+
+def tunnel_dns(tunnel, configuration, dns1=None, dns2=None) -> tuple[str, str]:
+    """The DNS pair a client export advertises. Deterministic and I/O-free."""
+    servers = tunnel.dns_servers if tunnel.role == 'server' else ()
+    primary = DEFAULT_PRIMARY_DNS
+    if tunnel.role == 'server' and not servers:
+        try:
+            primary = str(ip_interface(tunnel_addresses(tunnel, configuration)[0]).ip)
+        except (ValueError, IndexError):
+            pass
+    return (dns1 if dns1 is not None else (servers[0] if servers else primary),
+            dns2 if dns2 is not None else (servers[1] if len(servers) > 1
+                                           else DEFAULT_SECONDARY_DNS))
+
+
 def client_endpoint(tunnel, configuration, metadata_endpoint=None):
     """``(endpoint, missing)`` for a server's client export.
 
@@ -287,6 +311,7 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
             lines += ['[Interface]', f'PrivateKey = {line(private)}']
             if addresses:
                 lines.append('Address = ' + ', '.join(map(line, addresses)))
+            lines.append('DNS = ' + ', '.join(map(line, tunnel_dns(t, c))))
             lines += obfuscation(t)
             lines += ['', '[Peer]', f'PublicKey = {public}',
                       f'Endpoint = {line(endpoint if endpoint is not None else "<WAN_ENDPOINT>")}',

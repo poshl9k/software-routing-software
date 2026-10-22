@@ -240,6 +240,8 @@ class Tunnel(Model):
     endpoint: str | None = None
     server_public_key: str | None = None
     allowed_ips: tuple[str, ...] = ()
+    # Server only: client export resolvers. Empty selects the tunnel address.
+    dns_servers: tuple[str, ...] = ()
     # Client only: opt in to installing 0.0.0.0/0 and ::/0 as host routes.
     # AllowedIPs remains the full peer contract even when host default routes are off.
     default_route: bool = False
@@ -259,6 +261,18 @@ class Tunnel(Model):
     # Server only: open udp/<listen_port> on the WAN zone so remote clients can
     # reach the server. The panel shows the generated rule on the Firewall page.
     open_port: bool = True
+
+    @field_validator("dns_servers")
+    @classmethod
+    def check_dns_servers(cls, value):
+        if len(value) > 2:
+            raise ValueError("tunnel.dns_server_limit")
+        for address in value:
+            try:
+                ip_address(address)
+            except ValueError:
+                raise ValueError("tunnel.dns_server_invalid") from None
+        return value
 
     @field_validator("obfuscation")
     @classmethod
@@ -281,6 +295,8 @@ class Tunnel(Model):
 
     @model_validator(mode="after")
     def check_role(self):
+        if self.role == "client" and self.dns_servers:
+            raise ValueError("tunnel.dns_servers_server_only")
         # A server may carry an explicit public endpoint (IP or hostname) that is
         # advertised to its clients; without it the WAN address is used, else a
         # template. server_public_key belongs to a client only.

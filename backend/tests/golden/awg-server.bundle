@@ -33,6 +33,7 @@ AllowedIPs = 10.66.66.2/32
 [Interface]
 PrivateKey = <CLIENT_PRIVATE_KEY>
 Address = 10.66.66.2/32
+DNS = 10.66.66.1, 1.1.1.1
 Jc = 4
 Jmin = 40
 Jmax = 70

@@ -13,7 +13,8 @@ import pytest
 from cryptography.fernet import Fernet
 
 from vs_router.generators.amnezia import (CONTAINER, DNS_PLACEHOLDER, amnezia_uri,
-                                          decode_document, encode_document)
+                                          decode_document, encode_document, tunnel_dns,
+                                          DEFAULT_PRIMARY_DNS, DEFAULT_SECONDARY_DNS)
 from vs_router.generators.wireguard import generate_wg_bundle
 from vs_router.schema import ConfigurationVersion, Peer
 from vs_router.secrets import encrypt_secret
@@ -52,8 +53,6 @@ def config(monkeypatch):
 
 def uri_for(config, **kwargs):
     tunnel = config.configuration.tunnels[0]
-    kwargs.setdefault('dns1', '10.66.66.1')
-    kwargs.setdefault('dns2', '1.0.0.1')
     return amnezia_uri(tunnel, tunnel.peers[0], config.configuration, **kwargs)
 
 
@@ -75,7 +74,7 @@ def test_uri_matches_the_app_container_shape(config):
     document = decode_document(uri_for(config))
     assert document['format_version'] == '1'
     assert document['hostName'] == 'rg1.example.net'
-    assert document['dns1'] == '10.66.66.1' and document['dns2'] == '1.0.0.1'
+    assert document['dns1'] == '10.66.66.1' and document['dns2'] == DEFAULT_SECONDARY_DNS
     assert document['defaultContainer'] == CONTAINER
     container = document['containers'][0]
     assert container['container'] == CONTAINER
@@ -126,6 +125,39 @@ def test_export_is_deterministic_and_shares_the_client_private_key(config):
     # use either export without a key mismatch.
     bundle = generate_wg_bundle(config, {})
     assert inner['client_priv_key'] in bundle['vpn.peer-phone.conf']
+    assert 'DNS = 10.66.66.1, 1.1.1.1\n' in bundle['vpn.peer-phone.conf']
+
+
+def test_tunnel_dns_overrides_and_validation(config):
+    data = json.loads(config.model_dump_json())
+    tunnel = data['configuration']['tunnels'][0]
+    tunnel['dns_servers'] = ['2001:db8::53', '10.66.66.53']
+    version = ConfigurationVersion.model_validate(data)
+    selected = version.configuration.tunnels[0]
+    assert tunnel_dns(selected, version.configuration) == ('2001:db8::53', '10.66.66.53')
+    assert (decode_document(uri_for(version))['dns1'], decode_document(uri_for(version))['dns2']) == ('2001:db8::53', '10.66.66.53')
+    assert 'DNS = 2001:db8::53, 10.66.66.53\n' in generate_wg_bundle(version, {})['vpn.peer-phone.conf']
+    tunnel['dns_servers'] = ['10.66.66.53']
+    version = ConfigurationVersion.model_validate(data)
+    assert tunnel_dns(version.configuration.tunnels[0], version.configuration) == ('10.66.66.53', DEFAULT_SECONDARY_DNS)
+    assert tunnel_dns(version.configuration.tunnels[0], version.configuration, dns1='9.9.9.9', dns2='8.8.8.8') == ('9.9.9.9', '8.8.8.8')
+    for servers, error in [(['bad'], 'tunnel.dns_server_invalid'),
+                           (['1.1.1.1', '2.2.2.2', '3.3.3.3'], 'tunnel.dns_server_limit')]:
+        tunnel['dns_servers'] = servers
+        with pytest.raises(ValueError, match=error):
+            ConfigurationVersion.model_validate(data)
+
+
+def test_client_dns_defaults_and_server_only(config):
+    data = json.loads(config.model_dump_json())
+    tunnel = data['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='rg1.example.net:44517',
+                  server_public_key='SERVER', dns_servers=['1.1.1.1'])
+    with pytest.raises(ValueError, match='tunnel.dns_servers_server_only'):
+        ConfigurationVersion.model_validate(data)
+    tunnel['dns_servers'] = []
+    version = ConfigurationVersion.model_validate(data)
+    assert tunnel_dns(version.configuration.tunnels[0], version.configuration) == (DEFAULT_PRIMARY_DNS, DEFAULT_SECONDARY_DNS)
 
 
 def test_dns_and_description_can_be_overridden(config):

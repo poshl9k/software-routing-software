@@ -21,8 +21,9 @@ import json
 import zlib
 from ipaddress import ip_interface, ip_network
 
-from .wireguard import (AWG_ORDER, client_endpoint, line, obfuscation, peer_address, reveal,
-                        server_public_key, tunnel_addresses)
+from .wireguard import (AWG_ORDER, DEFAULT_PRIMARY_DNS, DEFAULT_SECONDARY_DNS, client_endpoint,
+                        line, obfuscation, peer_address, reveal, server_public_key, tunnel_addresses,
+                        tunnel_dns)
 
 # The app's own AWG export carries an MTU. The panel does not model one yet, so
 # the observed default is emitted until a per-tunnel MTU field exists.
@@ -72,12 +73,11 @@ def _client_addresses(tunnel, peer, configuration) -> list[str]:
     return list(peer.allowed_ips) if peer.allowed_ips else list(peer_address(tunnel, peer, configuration))
 
 
-def amnezia_uri(tunnel, peer, configuration, *, dns1: str, dns2: str, endpoint=None,
+def amnezia_uri(tunnel, peer, configuration, *, dns1: str | None = None, dns2: str | None = None, endpoint=None,
                 description=None, mtu: int = DEFAULT_MTU) -> str:
     """A ``vpn://`` document for one server peer, importable into the Amnezia app.
 
-    ``dns1``/``dns2`` resolve the config's DNS placeholders; the caller supplies
-    them (the panel has no per-tunnel DNS field yet). A peer without its own
+    ``dns1``/``dns2`` resolve the config's DNS placeholders. A peer without its own
     private key cannot be exported — the app needs it, and inventing one would
     be a silent mismatch.
     """
@@ -102,6 +102,7 @@ def amnezia_uri(tunnel, peer, configuration, *, dns1: str, dns2: str, endpoint=N
     allowed = tuple(tunnel.allowed_ips) or DEFAULT_ALLOWED_IPS
     parameters = awg_parameters(tunnel)
     psk = reveal(peer.preshared_key) if peer.preshared_key else None
+    dns1, dns2 = tunnel_dns(tunnel, configuration, dns1, dns2)
 
     conf = [
         '[Interface]',

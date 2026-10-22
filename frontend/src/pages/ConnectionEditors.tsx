@@ -38,6 +38,7 @@ import {
   secretValid,
   portValid,
   addressValid,
+  ipValid,
   normalize,
 } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
@@ -920,6 +921,7 @@ export function Tunnels() {
     endpoint: null,
     server_public_key: null,
     allowed_ips: [],
+    dns_servers: [],
     keepalive: 25,
     obfuscation: {},
     preshared_key: null,
@@ -983,6 +985,7 @@ export function Tunnels() {
           ifaceNameValid(t.interface) &&
           secretValid(t.private_key) &&
           ipsValid(t.allowed_ips) &&
+          (t.dns_servers ?? []).length <= 2 && (t.dns_servers ?? []).every((v) => ipValid(v.trim())) &&
           numericValue(t.keepalive) &&
           (t.role === "server"
             ? portValid(t.listen_port ?? 0) &&
@@ -1001,6 +1004,7 @@ export function Tunnels() {
         clean={(t) => ({
           ...t,
           allowed_ips: normalize(t.allowed_ips),
+          dns_servers: normalize(t.dns_servers ?? []),
           peers: t.peers.map((p) => ({
             ...p,
             allowed_ips: normalize(p.allowed_ips),
@@ -1054,6 +1058,10 @@ export function Tunnels() {
                   hint="Домен или IP:порт для клиентов; пусто — адрес WAN, иначе шаблон"
                   onChange={(endpoint) => patch({ endpoint: endpoint || null })}
                 />
+                <Field label="DNS для клиентов" value={(t.dns_servers ?? []).join(", ")}
+                  valid={(t.dns_servers ?? []).length <= 2 && (t.dns_servers ?? []).every((v) => ipValid(v.trim()))}
+                  hint="До двух IP через запятую; пусто — резолвер туннеля"
+                  onChange={(v) => patch({ dns_servers: v ? split(v) : [] })} />
                 <Toggle
                   label="Открыть порт на WAN"
                   value={t.open_port}

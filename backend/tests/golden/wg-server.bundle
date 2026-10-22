@@ -24,6 +24,7 @@ AllowedIPs = 10.66.66.2/32
 [Interface]
 PrivateKey = <CLIENT_PRIVATE_KEY>
 Address = 10.66.66.2/32
+DNS = 10.66.66.1, 1.1.1.1
 
 [Peer]
 PublicKey = j0DFrbaPJWJK5bIU6nZ6bslNgp09e14a0bpvPiE4KF8=

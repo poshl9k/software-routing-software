@@ -123,6 +123,8 @@ export interface Tunnel {
   endpoint: string | null;
   server_public_key: string | null;
   allowed_ips: string[];
+  /** Server only: client export resolvers; empty uses the tunnel address. */
+  dns_servers?: string[];
   /** Seconds, or an AWG 3+ "min-max" range. */
   keepalive: number | string;
   /** AmneziaWG parameters: uint32s / "min-max" ranges, or I1-I5 signature strings. */
