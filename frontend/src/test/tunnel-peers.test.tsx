@@ -559,6 +559,7 @@ it("client_default_route_is_opt_in_saved_and_reloaded_without_changing_allowed_i
   await waitFor(() => expect(calls(fetch, "/api/draft")).toHaveLength(1));
   expect(saved(fetch).tunnels[0]).toMatchObject({ default_route: true, allowed_ips: ["0.0.0.0/0", "::/0"] });
 
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
   editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
   expect(within(editor).getByRole("checkbox", { name: "Использовать туннель как маршрут по умолчанию" })).toBeChecked();

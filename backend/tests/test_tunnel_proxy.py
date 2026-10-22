@@ -116,6 +116,20 @@ def test_server_routes_ignore_default_route_flag(config):
         assert 'AllowedIPs = 10.66.66.2/32, 0.0.0.0/0' in bundle['vpn.conf']
 
 
+def test_client_nondefault_route_is_installed_without_a_default(config):
+    fs, executor = FakeFS(), FakeExecutor()
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='203.0.113.1:51820',
+                  server_public_key='SERVER', allowed_ips=['10.8.1.0/24'])
+    source = APPLIED_DIR / 'wireguard.conf'
+    fs.write(source, serialize_wireguard(generate_wg_bundle(
+        ConfigurationVersion.model_validate(config), {})))
+    WireGuardReloader(executor, fs, kernel_probe=lambda *_: True)(source)
+    routes = [argv for argv, _ in executor.calls if argv[:3] == ['ip', '-4', 'route']]
+    assert ['ip', '-4', 'route', 'replace', '10.8.1.0/24', 'dev', 'wg0'] in routes
+    assert not any('default' in argv for argv in routes)
+
+
 @pytest.mark.parametrize('route', ['0.0.0.0/0', '::/0'])
 @pytest.mark.parametrize('missing', [False, True])
 def test_tunnel_route_opt_out_apply_and_rollback(config, route, missing):
@@ -503,6 +517,40 @@ def test_apply_rollback_restores_opted_in_tunnel_route(config):
     assert engine.rollback('test').status == 'rolled_back'
     assert route_present[0]
     assert [argv for argv, _ in executor.calls].count(route_replace) >= 2
+
+
+def test_apply_rollback_tolerates_route_already_removed(config):
+    fs, executor = FakeFS(), FakeExecutor()
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='203.0.113.1:51820',
+                  server_public_key='SERVER', allowed_ips=['0.0.0.0/0'])
+    route_del = WireGuardReloader.route('del', '0.0.0.0/0', 'wg0')
+    route_replace = WireGuardReloader.route('replace', '0.0.0.0/0', 'wg0')
+    present = [False]
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv == route_replace:
+            present[0] = True
+        elif argv == route_del:
+            if not present[0]:
+                return SimpleNamespace(returncode=2, stderr=b'RTNETLINK answers: No such process\n')
+            present[0] = False
+        if argv[:4] == ['ip', '-4', 'route', 'show']:
+            return SimpleNamespace(returncode=0, stdout=b'default via 203.0.113.254 dev wan0\n')
+        return SimpleNamespace(returncode=0)
+    executor.run = run
+    engine = ApplyEngine(filesystem=fs, executor=executor, reload_commands={
+        'wireguard': WireGuardReloader(executor, fs, kernel_probe=lambda *_: True)})
+    assert engine.apply_version(config).status == 'confirmed'
+    updated = json.loads(json.dumps(config))
+    updated['id'] = 2
+    updated['configuration']['tunnels'][0]['default_route'] = True
+    assert engine.apply_version(updated, True).status == 'pending'
+    assert present[0]
+    present[0] = False  # The kernel or operator removed it before rollback.
+    assert engine.rollback('test').status == 'rolled_back'
+    assert route_del in [argv for argv, _ in executor.calls]
+    assert not present[0]
 
 
 def test_missing_secret_key_is_sanitized(config, monkeypatch):
