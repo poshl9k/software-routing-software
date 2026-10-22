@@ -222,6 +222,22 @@ def checked(executor, argv):
         raise ApplyError('agent.reload_failed')
 
 
+def delete_tunnel_route(executor, argv):
+    """Ignore only iproute2's absent-route response, not other delete failures."""
+    try:
+        result = executor.run(argv, 15)
+    except subprocess.TimeoutExpired as exc:
+        raise ApplyError('agent.command_timeout') from exc
+    if result.returncode == 0:
+        return
+    stderr = getattr(result, 'stderr', b'') or b''
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode('utf-8', 'replace')
+    if result.returncode == 2 and stderr.strip() == 'RTNETLINK answers: No such process':
+        return
+    raise ApplyError('agent.reload_failed')
+
+
 class NftApply:
     def __init__(self, executor=None):
         self.executor = executor or SubprocessExecutor()
@@ -465,7 +481,7 @@ class WireGuardReloader:
                 self.executor.run(['ip', 'link', 'del', iface], 15)
             elif new:
                 for route in sorted(set(old['routes']) - set(new['routes'])):
-                    checked(self.executor, self.route('del', route, iface))
+                    delete_tunnel_route(self.executor, self.route('del', route, iface))
                 for address in sorted(set(old['addresses']) - set(new['addresses'])):
                     checked(self.executor, ['ip', 'addr', 'del', address, 'dev', iface])
                 # A kernel link replaces a userspace device: retire the daemon

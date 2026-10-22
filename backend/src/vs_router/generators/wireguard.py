@@ -248,8 +248,13 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
         if t.interface in manifest:
             raise ValueError('wireguard.duplicate_interface')
         files[f'{t.name}.conf'] = generate_wg_conf(t, key_material, c)
-        routes = t.allowed_ips if t.role == 'client' else tuple(
-            value for peer in t.peers for value in peer_address(t, peer, c))
+        # AllowedIPs in the .conf is the peer's cryptographic contract, not a
+        # request to replace the host's default route. Only client host routes
+        # are gated here; server peer routes are always left intact.
+        routes = (tuple(value for value in t.allowed_ips
+                        if t.default_route or ip_network(value, strict=False).prefixlen != 0)
+                  if t.role == 'client' else tuple(
+                      value for peer in t.peers for value in peer_address(t, peer, c)))
         manifest[t.interface] = {'file': f'{t.name}.conf', 'protocol': t.protocol,
                                  'addresses': tunnel_addresses(t, c),
                                  'routes': sorted({str(ip_network(v, strict=False)) for v in routes})}

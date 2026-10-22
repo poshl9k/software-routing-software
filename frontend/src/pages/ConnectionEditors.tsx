@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
+import { Button, Checkbox, FormControlLabel, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
 import type {
   Tunnel,
@@ -927,6 +927,7 @@ export function Tunnels() {
     random_trailers: false,
     disable_cookies: false,
     open_port: true,
+    default_route: false,
   });
   const createTunnel = async (rows: Tunnel[], role: Tunnel["role"], protocol: Tunnel["protocol"]): Promise<Tunnel> => {
     const row = { ...emptyTunnel(rows), role, protocol, listen_port: role === "server" ? 51820 : null, open_port: false };
@@ -944,13 +945,17 @@ export function Tunnels() {
         title="Туннели"
         addLabel="+ Добавить туннель"
         configPatch={(rows, importedAddresses) => {
-          const patch = reconcileTunnelInterfaces(c, rows);
+          const normalizedRows = rows.map((tunnel) => ({
+            ...tunnel,
+            default_route: tunnel.default_route === true,
+          }));
+          const patch = reconcileTunnelInterfaces(c, normalizedRows);
           const interfaces = (patch.interfaces ?? c.interfaces)
             .map((iface) => importedAddresses[iface.name] ? { ...iface, addresses: [importedAddresses[iface.name]] } : iface);
           return {
             ...patch,
             interfaces,
-            tunnels: materializeTunnels({ ...c, ...patch, interfaces }, rows),
+            tunnels: materializeTunnels({ ...c, ...patch, interfaces }, normalizedRows),
           };
         }}
         empty={emptyTunnel}
@@ -1061,6 +1066,10 @@ export function Tunnels() {
                 <Field label="Keepalive, с" value={String(t.keepalive)} valid={numericValue(t.keepalive)}
                   hint="Секунды или диапазон AWG 3+, например 25-35"
                   onChange={(v) => patch({ keepalive: /^[0-9]+$/.test(v) ? Number(v) : v })} />
+                <FormWide><FormControlLabel label="Использовать туннель как маршрут по умолчанию"
+                  control={<Checkbox checked={t.default_route === true}
+                    onChange={(_, default_route) => patch({ default_route })} />} /></FormWide>
+                {t.default_route === true && <FormWide><InfoNote severity="warning">Весь трафик хоста, включая доступ к панели и SSH, пойдёт через туннель.</InfoNote></FormWide>}
             </>}
           </FormGrid></PageSection>
           <PageSection title="Ключи"><FormGrid>

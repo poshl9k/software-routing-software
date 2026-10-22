@@ -240,6 +240,9 @@ class Tunnel(Model):
     endpoint: str | None = None
     server_public_key: str | None = None
     allowed_ips: tuple[str, ...] = ()
+    # Client only: opt in to installing 0.0.0.0/0 and ::/0 as host routes.
+    # AllowedIPs remains the full peer contract even when host default routes are off.
+    default_route: bool = False
     # A client's persistent keepalive: seconds, or an AWG 3+ ``min-max`` range.
     keepalive: int | str = 0
     # AmneziaWG interface parameters. Values are uint32s or ``min-max`` ranges;

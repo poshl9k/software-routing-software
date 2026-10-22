@@ -46,13 +46,153 @@ def test_tunnel_golden(config, protocol, role):
                             H1=1234567, H2=2345678, H3=3456789, H4=4567890)
     if role == 'client':
         t.update(role=role, peers=[], endpoint='203.0.113.1:51820', server_public_key='SERVER',
-                 allowed_ips=['0.0.0.0/0'], keepalive=25)
+                 allowed_ips=['0.0.0.0/0'], default_route=True, keepalive=25)
     version = ConfigurationVersion.model_validate(config)
     files = generate_wg_bundle(version, {})
     text = serialize_wireguard(files)
     assert deserialize_wireguard(text) == files
     assert 'Address =' not in files['vpn.conf']
     assert text == (Path(__file__).parent / 'golden' / f'{protocol}-{role}.bundle').read_text()
+
+
+def test_client_default_route_is_explicit_opt_in(config):
+    data = json.loads(json.dumps(config))
+    tunnel = data['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='203.0.113.1:51820',
+                  server_public_key='SERVER', allowed_ips=['0.0.0.0/0', '::/0', '10.8.1.0/24'])
+    # Legacy JSON has no new field: it must remain valid and avoid both host defaults.
+    version = ConfigurationVersion.model_validate(data)
+    assert version.configuration.tunnels[0].default_route is False
+    bundle = generate_wg_bundle(version, {})
+    assert json.loads(bundle['manifest.json'])['wg0']['routes'] == ['10.8.1.0/24']
+    assert 'AllowedIPs = 0.0.0.0/0, ::/0, 10.8.1.0/24' in bundle['vpn.conf']
+    tunnel['default_route'] = True
+    bundle = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    assert json.loads(bundle['manifest.json'])['wg0']['routes'] == [
+        '0.0.0.0/0', '10.8.1.0/24', '::/0']
+    assert 'AllowedIPs = 0.0.0.0/0, ::/0, 10.8.1.0/24' in bundle['vpn.conf']
+    tunnel['allowed_ips'] = ['0.0.0.0/0', '::/0']
+    tunnel['default_route'] = False
+    bundle = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    assert json.loads(bundle['manifest.json'])['wg0']['routes'] == []
+    assert 'AllowedIPs = 0.0.0.0/0, ::/0' in bundle['vpn.conf']
+    tunnel['default_route'] = True
+    bundle = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    assert json.loads(bundle['manifest.json'])['wg0']['routes'] == ['0.0.0.0/0', '::/0']
+    assert 'AllowedIPs = 0.0.0.0/0, ::/0' in bundle['vpn.conf']
+    tunnel['allowed_ips'] = ['10.8.1.0/24']
+    bundle = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
+    assert json.loads(bundle['manifest.json'])['wg0']['routes'] == ['10.8.1.0/24']
+    assert 'AllowedIPs = 10.8.1.0/24' in bundle['vpn.conf']
+
+
+def test_default_route_persists_in_configuration_json(config):
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+    from vs_router.db import Base, ConfigurationRow
+    engine = create_engine('sqlite://')
+    Base.metadata.create_all(engine)
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='203.0.113.1:51820',
+                  server_public_key='SERVER', default_route=True)
+    with Session(engine) as session:
+        session.add(ConfigurationRow(id=1, configuration=config['configuration']))
+        session.commit()
+    with Session(engine) as session:
+        stored = session.scalar(select(ConfigurationRow))
+        assert stored is not None
+        assert stored.configuration.tunnels[0].default_route is True
+        assert stored.snapshot().configuration.tunnels[0].default_route is True
+
+
+def test_server_routes_ignore_default_route_flag(config):
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel['peers'][0]['allowed_ips'] = ['10.66.66.2/32', '0.0.0.0/0']
+    for enabled in (False, True):
+        tunnel['default_route'] = enabled
+        bundle = generate_wg_bundle(ConfigurationVersion.model_validate(config), {})
+        assert json.loads(bundle['manifest.json'])['wg0']['routes'] == [
+            '0.0.0.0/0', '10.66.66.2/32']
+        assert 'AllowedIPs = 10.66.66.2/32, 0.0.0.0/0' in bundle['vpn.conf']
+
+
+@pytest.mark.parametrize('route', ['0.0.0.0/0', '::/0'])
+@pytest.mark.parametrize('missing', [False, True])
+def test_tunnel_route_opt_out_apply_and_rollback(config, route, missing):
+    fs, executor = FakeFS(), FakeExecutor()
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='203.0.113.1:51820',
+                  server_public_key='SERVER', allowed_ips=[route], default_route=True)
+    source = APPLIED_DIR / 'wireguard.conf'
+    def bundle():
+        fs.write(source, serialize_wireguard(generate_wg_bundle(
+            ConfigurationVersion.model_validate(config), {})))
+    route_del = WireGuardReloader.route('del', route, 'wg0')
+    route_replace = WireGuardReloader.route('replace', route, 'wg0')
+    route_present = [False]
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv == route_replace:
+            route_present[0] = True
+        if argv == route_del:
+            if missing:
+                route_present[0] = False  # Lost outside the apply cycle.
+            if not route_present[0]:
+                return SimpleNamespace(returncode=2, stderr=b'RTNETLINK answers: No such process\n')
+            route_present[0] = False
+        if argv[:4] == ['ip', '-4', 'route', 'show']:
+            return SimpleNamespace(returncode=0, stdout=b'default via 203.0.113.254 dev wan0\n')
+        if argv[:4] == ['ip', '-6', 'route', 'show']:
+            return SimpleNamespace(returncode=0, stdout=b'default via 2001:db8::fe dev wan0\n')
+        return SimpleNamespace(returncode=0)
+    executor.run = run
+    reloader = WireGuardReloader(executor, fs, sleep=lambda _: None,
+                                 kernel_probe=lambda *_: True)
+    bundle()
+    reloader(source)
+    assert route_present[0]
+    tunnel['default_route'] = False
+    bundle()
+    reloader(source)
+    assert route_del in [argv for argv, _ in executor.calls]
+    assert not route_present[0]
+    assert json.loads(fs.read(reloader.config_dir / 'manifest.json'))['wg0']['routes'] == []
+    # Rollback to the original configuration uses replace, never a best-effort delete.
+    tunnel['default_route'] = True
+    bundle()
+    reloader(source)
+    assert route_present[0]
+    assert [argv for argv, _ in executor.calls].count(route_replace) >= 2
+
+
+@pytest.mark.parametrize('rc,stderr', [(2, b'RTNETLINK answers: Permission denied\n'),
+                                       (1, b'RTNETLINK answers: No such process\n')])
+def test_tunnel_route_delete_rejects_other_failures(config, rc, stderr):
+    fs, executor = FakeFS(), FakeExecutor()
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='203.0.113.1:51820',
+                  server_public_key='SERVER', allowed_ips=['0.0.0.0/0'], default_route=True)
+    source = APPLIED_DIR / 'wireguard.conf'
+    def bundle():
+        fs.write(source, serialize_wireguard(generate_wg_bundle(
+            ConfigurationVersion.model_validate(config), {})))
+    route_del = WireGuardReloader.route('del', '0.0.0.0/0', 'wg0')
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv == route_del:
+            return SimpleNamespace(returncode=rc, stderr=stderr)
+        if argv[:4] == ['ip', '-4', 'route', 'show']:
+            return SimpleNamespace(returncode=0, stdout=b'default via 203.0.113.254 dev wan0\n')
+        return SimpleNamespace(returncode=0)
+    executor.run = run
+    reloader = WireGuardReloader(executor, fs, kernel_probe=lambda *_: True)
+    bundle()
+    reloader(source)
+    tunnel['default_route'] = False
+    bundle()
+    with pytest.raises(ApplyError, match='agent.reload_failed'):
+        reloader(source)
+    assert route_del in [argv for argv, _ in executor.calls]
 
 
 def test_awg3_client_config_roundtrip(config):
@@ -122,6 +262,7 @@ def test_reload_tunnel(config, alive, protocol):
     t = config['configuration']['tunnels'][0]
     t.update(role='client', protocol=protocol, peers=[], endpoint='203.0.113.1:51820',
              server_public_key='SERVER', allowed_ips=['0.0.0.0/0', '2001:db8::/64'],
+             default_route=True,
              obfuscation=dict(Jc=4, S1=15, S2=95, H1=1, H2=2, H3=3, H4=4))
     source = APPLIED_DIR / 'wireguard.conf'
     fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
@@ -201,7 +342,7 @@ def test_client_hostname_resolved_before_setconf(config, monkeypatch):
     fs, executor = FakeFS(), FakeExecutor()
     tunnel = config['configuration']['tunnels'][0]
     tunnel.update(role='client', peers=[], endpoint='vpn.example.org:51820',
-                  server_public_key='SERVER', allowed_ips=['0.0.0.0/0'])
+                  server_public_key='SERVER', allowed_ips=['0.0.0.0/0'], default_route=True)
     source = APPLIED_DIR / 'wireguard.conf'
     fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
     monkeypatch.setattr(WireGuardReloader, 'resolve_endpoint', staticmethod(
@@ -241,7 +382,7 @@ def test_ipv6_client_endpoint_host_route(config):
     fs, executor = FakeFS(), FakeExecutor()
     tunnel = config['configuration']['tunnels'][0]
     tunnel.update(role='client', peers=[], endpoint='[2001:db8::1]:51820',
-                  server_public_key='SERVER', allowed_ips=['::/0'])
+                  server_public_key='SERVER', allowed_ips=['::/0'], default_route=True)
     source = APPLIED_DIR / 'wireguard.conf'
     fs.write(source, serialize_wireguard(generate_wg_bundle(ConfigurationVersion.model_validate(config), {})))
     def run(argv, timeout):
@@ -328,6 +469,40 @@ def test_apply_bundles_and_rollback(config):
     assert engine.apply_version({'id': 2, 'configuration': {}}, True).status == 'pending'
     assert engine.rollback('test').status == 'rolled_back'
     assert fs.read(Path('/etc/vs-router/wireguard/vpn.conf')) == original
+
+
+def test_apply_rollback_restores_opted_in_tunnel_route(config):
+    fs, executor = FakeFS(), FakeExecutor()
+    tunnel = config['configuration']['tunnels'][0]
+    tunnel.update(role='client', peers=[], endpoint='203.0.113.1:51820',
+                  server_public_key='SERVER', allowed_ips=['0.0.0.0/0'], default_route=True)
+    route_del = WireGuardReloader.route('del', '0.0.0.0/0', 'wg0')
+    route_replace = WireGuardReloader.route('replace', '0.0.0.0/0', 'wg0')
+    route_present = [False]
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv == route_replace:
+            route_present[0] = True
+        if argv == route_del:
+            assert route_present[0]
+            route_present[0] = False
+        if argv[:4] == ['ip', '-4', 'route', 'show']:
+            return SimpleNamespace(returncode=0, stdout=b'default via 203.0.113.254 dev wan0\n')
+        return SimpleNamespace(returncode=0)
+    executor.run = run
+    engine = ApplyEngine(filesystem=fs, executor=executor, reload_commands={
+        'wireguard': WireGuardReloader(executor, fs, kernel_probe=lambda *_: True)})
+    assert engine.apply_version(config).status == 'confirmed'
+    assert route_present[0]
+    updated = json.loads(json.dumps(config))
+    updated['id'] = 2
+    updated['configuration']['tunnels'][0]['default_route'] = False
+    assert engine.apply_version(updated, True).status == 'pending'
+    assert route_del in [argv for argv, _ in executor.calls]
+    assert not route_present[0]
+    assert engine.rollback('test').status == 'rolled_back'
+    assert route_present[0]
+    assert [argv for argv, _ in executor.calls].count(route_replace) >= 2
 
 
 def test_missing_secret_key_is_sanitized(config, monkeypatch):

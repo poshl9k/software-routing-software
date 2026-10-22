@@ -127,6 +127,8 @@ export interface Tunnel {
   keepalive: number | string;
   /** AmneziaWG parameters: uint32s / "min-max" ranges, or I1-I5 signature strings. */
   obfuscation: Record<string, number | string>;
+  /** Client only: route host traffic through the tunnel by default. */
+  default_route?: boolean;
   /** Client only: the remote peer's preshared secret. */
   preshared_key: Secret | null;
   /** AmneziaWG 3+ header protection key (must match the remote end). */

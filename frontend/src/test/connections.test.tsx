@@ -157,6 +157,7 @@ it("selects client and protocol before keygen; saves one draft without opening W
   await userEvent.click(save());
   await waitFor(() => expect(fetch.mock.calls.some(([p]) => p === "/api/draft")).toBe(true));
   expect(draft(fetch).tunnels[0]).toMatchObject({ name: "client", role: "client", protocol: "awg", open_port: false,
+    default_route: false,
     endpoint: "vpn.example.org:51820", allowed_ips: ["0.0.0.0/0"], private_key: { plaintext: generated.private_key } });
   expect(draft(fetch).interfaces[0].addresses).toEqual(["10.66.66.2/24"]);
   expect(fetch.mock.calls.filter(([p]) => p === "/api/draft")).toHaveLength(1);
@@ -190,6 +191,7 @@ it("imports client conf with recognized fields, preserves Address and the presha
   expect(draft(fetch).interfaces[0].addresses).toEqual(["10.9.8.7/24"]);
   expect(draft(fetch).tunnels[0].private_key).toEqual({ plaintext: privateKey });
   expect(draft(fetch).tunnels[0].preshared_key).toEqual({ plaintext: presharedKey });
+  expect(draft(fetch).tunnels[0].default_route).toBe(false);
 });
 it("retains secret and only edits selected tunnel; delete requires confirmation", async () => {
   const fetch = await mount(<Tunnels />, { ...emptyConfiguration, tunnels: [server] });

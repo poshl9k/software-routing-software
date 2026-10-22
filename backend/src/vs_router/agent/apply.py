@@ -424,7 +424,7 @@ class ApplyEngine:
                       confirmation_timeout: int = 180, validators=None) -> ApplyResult:
         previous = self.status()
         self._failed_service = None
-        if previous and previous['status'] not in ('confirmed', 'rolled_back', 'failed'):
+        if previous and previous['status'] not in ('confirmed', 'rolled_back', 'failed', 'rollback_failed'):
             raise ApplyError('agent.apply_pending')
         if not 60 <= confirmation_timeout <= 600:
             raise ApplyError('agent.invalid_timeout')
@@ -799,8 +799,10 @@ class ApplyEngine:
                 try:
                     self.ssh_controller.close()
                 except (OSError, subprocess.SubprocessError, ApplyError):
-                    pass  # Preserve retryable rollback failure; never report success.
-            marker.update(status='rollback_failed', deadline=self.clock())
+                    pass  # Preserve rollback failure; never report success.
+            # A failed rollback is terminal: retain the failure marker, but do
+            # not let the deadline checker retry it during the next apply.
+            marker.update(status='rollback_failed', deadline=None)
             self.marker(marker)
             raise ApplyError('agent.rollback_failed') from exc
         if not tproxy_files and tproxy_applied:
@@ -817,7 +819,7 @@ class ApplyEngine:
             try:
                 self._teardown_pppoe(strict=True)
             except (OSError, subprocess.SubprocessError, ValueError, ApplyError) as exc:
-                marker.update(status='rollback_failed', deadline=self.clock())
+                marker.update(status='rollback_failed', deadline=None)
                 self.marker(marker)
                 raise ApplyError('agent.rollback_failed') from exc
         self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(backup['version_snapshot']))

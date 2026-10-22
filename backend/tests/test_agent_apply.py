@@ -168,7 +168,7 @@ def test_terminal_markers_do_not_rollback(marker):
     assert not check_deadline(marker, lambda reason: pytest.fail(reason), lambda: 200)
 
 
-def test_failed_rollback_can_be_retried_by_timer(pipeline):
+def test_failed_rollback_is_terminal_for_timer(pipeline):
     engine, _, executor, now = pipeline
     engine.apply_version(snapshot())
     engine.apply_version(snapshot(2), True)
@@ -176,9 +176,36 @@ def test_failed_rollback_can_be_retried_by_timer(pipeline):
     with pytest.raises(ApplyError, match='rollback_failed'):
         engine.rollback('timeout')
     assert engine.status()['status'] == 'rollback_failed'
+    assert engine.status()['deadline'] is None
     executor.fail = False
-    assert check_deadline(engine.status(), engine.rollback, lambda: now[0])
-    assert engine.status()['status'] == 'rolled_back'
+    assert not check_deadline(engine.status(), engine.rollback, lambda: now[0])
+    assert engine.status()['status'] == 'rollback_failed'
+
+
+def test_new_apply_after_failed_rollback_keeps_marker_until_retry(pipeline):
+    from vs_router.agent.apply import JOURNAL_PATH
+    engine, fs, executor, now = pipeline
+    assert engine.apply_version(snapshot()).status == 'confirmed'
+    draft = dict(snapshot(2), configuration={'panel_port': 8443})
+    assert engine.apply_version(draft, True).status == 'pending'
+    executor.fail = True
+    with pytest.raises(ApplyError, match='agent.rollback_failed'):
+        engine.rollback('timeout')
+    failed = engine.status()
+    assert failed['status'] == 'rollback_failed'
+    assert failed['reason'] == 'timeout'
+    assert json.loads(fs.read(MARKER_PATH)) == json.loads(fs.read(JOURNAL_PATH)) == failed
+    with pytest.raises(ApplyError, match='agent.invalid_timeout'):
+        engine.apply_version(draft, True, 59)
+    assert engine.status() == failed  # Rejection must not erase the failure reason.
+    executor.fail = False
+    now[0] += 1
+    result = engine.apply_version(draft, True)
+    assert result.status == 'pending' and result.version_id == 2
+    current = engine.status()
+    assert current['status'] == 'pending' and current['version_id'] == 2
+    assert 'reason' not in current
+    assert json.loads(fs.read(MARKER_PATH)) == json.loads(fs.read(JOURNAL_PATH)) == current
 
 
 def test_unexpected_apply_error_keeps_its_reason(pipeline):

@@ -100,6 +100,7 @@ it("criterion_2_tunnel_fields_notes_and_draft_summary_are_preserved", async () =
   expect(within(editor).getByText(/Устройство создаётся автоматически/)).toBeVisible();
   expect(within(editor).getByText(/Сохранение создаёт только черновик/)).toBeVisible();
   expect(within(editor).getByRole("switch", { name: "Открыть порт на WAN" })).toBeChecked();
+  expect(within(editor).queryByRole("checkbox", { name: "Использовать туннель как маршрут по умолчанию" })).not.toBeInTheDocument();
   expect(within(editor).queryByLabelText("Имя пира")).not.toBeInTheDocument();
   await userEvent.click(within(editor).getByText("Показать дополнительные настройки"));
   for (const label of ["Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4",
@@ -520,6 +521,54 @@ it("criterion_12_a_new_awg_tunnel_takes_the_generated_profile_and_port", async (
   expect(tunnel.disable_cookies).toBe(true);
   expect(tunnel.header_protection_key).toEqual({ plaintext: "HPK=" });
   expect(tunnel.obfuscation).toEqual(profile);
+});
+
+it("client_without_default_route_saves_explicit_false", async () => {
+  const client: Tunnel = {
+    ...server, role: "client", peers: [], endpoint: "remote.example:51820",
+    server_public_key: "remote-public", allowed_ips: ["0.0.0.0/0", "::/0"],
+  };
+  const fetch = await mount(config([client]));
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  const editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
+  expect(within(editor).getByRole("checkbox", { name: "Использовать туннель как маршрут по умолчанию" })).not.toBeChecked();
+  await userEvent.click(within(editor).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(calls(fetch, "/api/draft")).toHaveLength(1));
+  expect(saved(fetch).tunnels[0]).toMatchObject({ default_route: false, allowed_ips: ["0.0.0.0/0", "::/0"] });
+});
+
+it("client_default_route_is_opt_in_saved_and_reloaded_without_changing_allowed_ips", async () => {
+  const client: Tunnel = {
+    ...server,
+    role: "client",
+    peers: [],
+    endpoint: "remote.example:51820",
+    server_public_key: "remote-public",
+    allowed_ips: ["0.0.0.0/0", "::/0"],
+    default_route: undefined,
+  };
+  const fetch = await mount(config([client]));
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  let editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
+  const toggle = within(editor).getByRole("checkbox", { name: "Использовать туннель как маршрут по умолчанию" });
+  expect(toggle).not.toBeChecked();
+  expect(within(editor).queryByText("Весь трафик хоста, включая доступ к панели и SSH, пойдёт через туннель.")).not.toBeInTheDocument();
+  await userEvent.click(toggle);
+  expect(within(editor).getByText("Весь трафик хоста, включая доступ к панели и SSH, пойдёт через туннель.")).toBeVisible();
+  await userEvent.click(within(editor).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(calls(fetch, "/api/draft")).toHaveLength(1));
+  expect(saved(fetch).tunnels[0]).toMatchObject({ default_route: true, allowed_ips: ["0.0.0.0/0", "::/0"] });
+
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  editor = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Клиент" });
+  expect(within(editor).getByRole("checkbox", { name: "Использовать туннель как маршрут по умолчанию" })).toBeChecked();
+  expect(within(editor).getByText("Весь трафик хоста, включая доступ к панели и SSH, пойдёт через туннель.")).toBeVisible();
+  await userEvent.click(within(editor).getByRole("checkbox", { name: "Использовать туннель как маршрут по умолчанию" }));
+  expect(within(editor).queryByText("Весь трафик хоста, включая доступ к панели и SSH, пойдёт через туннель.")).not.toBeInTheDocument();
+  await userEvent.click(within(editor).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(calls(fetch, "/api/draft")).toHaveLength(2));
+  const secondSave = JSON.parse(String(calls(fetch, "/api/draft")[1][1]?.body)) as Configuration;
+  expect(secondSave.tunnels[0]).toMatchObject({ default_route: false, allowed_ips: ["0.0.0.0/0", "::/0"] });
 });
 
 it("criterion_13_peer_tab_states_that_a_peer_goes_live_without_an_apply", async () => {
