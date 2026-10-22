@@ -176,6 +176,31 @@ def test_criterion_6_own_dns_device_rejects_domain_destinations(destinations):
     invalid(data, 'routing.domain_rule_own_resolvers')
 
 
+def test_rule_set_destination_requires_declared_source():
+    data = document()
+    data['routing_rules'] = [rule('blocked', ip_cidr=[],
+                                  rule_sets=['geosite-category-porn'])]
+    invalid(data, 'routing.ruleset_unavailable')
+
+
+def test_rule_set_destination_requires_engine_native_format():
+    data = document()
+    data['rule_sets'] = [{'name': 'list', 'format': 'text-domain',
+                          'url': 'https://example.org/list.txt'}]
+    data['routing_rules'] = [rule('blocked', ip_cidr=[], rule_sets=['list'])]
+    invalid(data, 'routing.ruleset_format')
+
+
+def test_rule_set_destination_valid_with_declared_srs_source():
+    data = document()
+    data['rule_sets'] = [{'name': 'geosite-category-porn', 'format': 'srs',
+                          'url': 'https://example.org/porn.srs'}]
+    data['routing_rules'] = [rule('adult', ip_cidr=[],
+                                  rule_sets=['geosite-category-porn'])]
+    parsed = parse_configuration(data)
+    assert parsed.routing_rules[0].rule_sets == ('geosite-category-porn',)
+
+
 def test_criterion_6_ip_only_panel_dns_and_server_rules_valid():
     data = document()
     data['tunnels'][0]['peers'][0]['dns_mode'] = 'own'
@@ -321,6 +346,14 @@ def render_document(data):
     }))
 
 
+def user_rules(output):
+    """User rules without system rows: ADR-0031 adds a leading product sniff
+    rule whenever a routing rule matches domains or rule sets, so positional
+    indexing must skip it explicitly."""
+    return [r for r in output['route']['rules']
+            if r.get('action') not in ('sniff', 'route-options')]
+
+
 def test_criterion_1_render_exits_order_and_tunnel_deduplication():
     data = minimal_render_document()
     data['proxies'] = {'enabled': False, 'outbounds': [{'tag': 'remote', 'type': 'direct'}]}
@@ -334,7 +367,7 @@ def test_criterion_1_render_exits_order_and_tunnel_deduplication():
              exit={'kind': 'tunnel', 'name': 'client_vpn'}),
     ]
     output = render_document(data)
-    assert [r['outbound'] for r in output['route']['rules'][:4]] == [
+    assert [r['outbound'] for r in user_rules(output)[:4]] == [
         'direct', 'remote', 'routing-tunnel:client_vpn', 'routing-tunnel:client_vpn']
     assert output['outbounds'].count({'type': 'direct', 'tag': 'routing-tunnel:client_vpn',
                                       'bind_interface': 'tun1'}) == 1
@@ -371,7 +404,7 @@ def test_criterion_3_render_destination_matchers_and_mixed_fields() -> None:
         rule('mixed', ip_cidr=['2001:db8::/32'], domain_suffix=['example.net'],
              domain_exact=['api.example.net']),
     ]
-    rules = render_document(data)['route']['rules']
+    rules = user_rules(render_document(data))
     assert rules == [
         {'ip_cidr': ['192.0.2.0/24'], 'action': 'route', 'outbound': 'direct'},
         {'domain_suffix': ['example.org'], 'action': 'route', 'outbound': 'direct'},
@@ -384,7 +417,11 @@ def test_criterion_3_render_destination_matchers_and_mixed_fields() -> None:
         },
         {'source_ip_cidr': ['10.66.66.2/32'], 'action': 'reject'},
     ]
-    assert not any(r.get('action') == 'sniff' for r in rules)
+    # Domain destinations now carry exactly one system sniff row before them
+    # (ADR-0031); the user rules above stay unchanged.
+    rendered = render_document(data)['route']['rules']
+    assert [r.get('action') for r in rendered].count('sniff') == 1
+    assert rendered[0] == {'action': 'sniff'}
 
 
 @pytest.mark.parametrize('enabled', [False, True])
@@ -438,7 +475,7 @@ def test_criterion_5_render_unmatched_devices_reject_before_legacy_egress(final)
     data['tproxy'] = {'bypass': [{'name': 'legacy_direct', 'source_ip_cidr': ['10.66.66.0/24']}],
                       'rules': [{'name': 'legacy', 'ip_cidr': ['203.0.113.0/24'],
                                  'action': 'direct'}]}
-    rules = render_document(data)['route']['rules']
+    rules = user_rules(render_document(data))
     assert rules[0]['outbound'] == 'direct'
     assert rules[1]['outbound'] == 'routing-tunnel:client_vpn'
     assert rules[2] == {'source_ip_cidr': ['10.66.66.2/32', '10.66.66.3/32',
@@ -497,7 +534,7 @@ def test_criterion_7_render_empty_rules_byte_equal_legacy_golden(name):
 
 def test_criterion_8_render_panel_valid_router_refuses_before_generator(monkeypatch):
     data = minimal_render_document()
-    assert render_document(data)['route']['rules'][0]['outbound'] == 'routing-tunnel:client_vpn'
+    assert user_rules(render_document(data))[0]['outbound'] == 'routing-tunnel:client_vpn'
     monkeypatch.setattr(apply_mod, 'read_profile', lambda: 'router')
     monkeypatch.setattr(apply_mod.shutil, 'which', lambda name: f'/usr/sbin/{name}')
     generator = Mock(side_effect=AssertionError('generator must not run'))

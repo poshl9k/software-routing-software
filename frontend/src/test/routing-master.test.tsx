@@ -197,6 +197,36 @@ it("criterion_R5_destination_requires_one_of_three_lists", async () => {
   expect(screen.getByRole("button", { name: "Далее" })).toBeEnabled();
 });
 
+it("criterion_R11_rule_set_service_writes_tags_and_declared_source", async () => {
+  // ADR-0031: choosing a rule-set service (18+ / RKN) puts its tag into the
+  // rule and its declaration into configuration.rule_sets on save.
+  const fetch = setup(baseConfiguration(), { catalog: { categories: [
+    { key: "block", title: "Блок", count: 1 },
+  ], services: [
+    { id: "porn", name: "Adult content (18+)", category: "block", icon_slug: "lucide-lock",
+      notice: null, covers: [], dns_domains: [],
+      rule_sets: [{ tag: "geosite-category-porn", url: "https://example.org/porn.srs", format: "srs" }],
+      declared: false, action: "tunnel" },
+  ] } });
+  const user = userEvent.setup();
+  await openMaster(user);
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: /Adult content \(18\+\)/ }));
+  // The tag itself satisfies the destination requirement: no typed domains.
+  expect(screen.getByRole("button", { name: "Далее" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Заблокировать" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const saved = savedDraft(fetch);
+  expect(saved.routing_rules[0].rule_sets).toEqual(["geosite-category-porn"]);
+  expect(saved.rule_sets).toEqual([expect.objectContaining({
+    name: "geosite-category-porn", format: "srs", url: "https://example.org/porn.srs",
+  })]);
+});
+
 it("criterion_R6_exit_writes_the_adr_exit_objects", async () => {
   const fetch = setup();
   const user = userEvent.setup();
@@ -240,7 +270,7 @@ it("criterion_R8_rules_table_shows_prose_cells_and_a_per_row_delete_label", asyn
   const configuration = baseConfiguration();
   configuration.routing_rules = [{
     name: "existing", subject: { kind: "server" }, domain_suffix: ["example.org"],
-    domain_exact: [], ip_cidr: [], exit: { kind: "direct" },
+    domain_exact: [], ip_cidr: [], rule_sets: [], exit: { kind: "direct" },
   }];
   setup(configuration);
   const user = userEvent.setup();
@@ -255,7 +285,7 @@ it("criterion_R9_edit_opens_a_window_with_three_groups_and_saves_in_place", asyn
   const configuration = baseConfiguration();
   configuration.routing_rules = [{
     name: "existing", subject: { kind: "server" }, domain_suffix: ["example.org"],
-    domain_exact: [], ip_cidr: [], exit: { kind: "direct" },
+    domain_exact: [], ip_cidr: [], rule_sets: [], exit: { kind: "direct" },
   }];
   const fetch = setup(configuration);
   const user = userEvent.setup();
@@ -278,9 +308,9 @@ it("criterion_R10_move_changes_the_order_in_the_saved_json", async () => {
   const configuration = baseConfiguration();
   configuration.routing_rules = [
     { name: "first", subject: { kind: "server" }, domain_suffix: ["first.test"], domain_exact: [],
-      ip_cidr: [], exit: { kind: "direct" } },
+      ip_cidr: [], rule_sets: [], exit: { kind: "direct" } },
     { name: "second", subject: { kind: "server" }, domain_suffix: ["second.test"], domain_exact: [],
-      ip_cidr: [], exit: { kind: "direct" } },
+      ip_cidr: [], rule_sets: [], exit: { kind: "direct" } },
   ];
   const fetch = setup(configuration);
   const user = userEvent.setup();

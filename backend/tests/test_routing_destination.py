@@ -49,7 +49,11 @@ def render(data):
 
 
 def first_rule(data):
-    return render(data)['route']['rules'][0]
+    # Skip the system sniff row: ADR-0031 adds a product sniff rule whenever a
+    # routing rule matches domains or rule sets, so the user rule is no longer
+    # guaranteed to be rules[0].
+    rules = render(data)['route']['rules']
+    return next(rule for rule in rules if rule.get('action') != 'sniff')
 
 
 def assert_outbound_route(rule):
@@ -62,6 +66,38 @@ def assert_reject(rule):
 
 
 # --- B3-1: one destination family only stays flat --------------------------
+
+def test_criterion_B3_1_rule_set_destination_family_flat():
+    data = document()
+    data['configuration']['rule_sets'] = [
+        {'name': 'geosite-category-porn', 'format': 'srs',
+         'url': 'https://example.org/porn.srs'}]
+    data['configuration']['routing_rules'] = [
+        {'name': 'adult', 'rule_sets': ['geosite-category-porn']},
+    ]
+    output = render(data)
+    rule = output['route']['rules'][1]  # rules[0] is the system sniff row
+    assert rule == {'rule_set': ['geosite-category-porn'], 'action': 'route',
+                    'outbound': 'direct'}
+    # The engine learns the set from the same document (ADR-0031).
+    assert output['route']['rule_set'] == [
+        {'type': 'remote', 'tag': 'geosite-category-porn', 'format': 'binary',
+         'url': 'https://example.org/porn.srs'}]
+
+
+def test_criterion_B3_2_rule_set_is_an_alternative_in_the_or():
+    data = document()
+    data['configuration']['rule_sets'] = [
+        {'name': 'geosite-rkn', 'format': 'srs', 'url': 'https://example.org/rkn.srs'}]
+    data['configuration']['routing_rules'] = [
+        {'name': 'mixed', 'ip_cidr': ['203.0.113.0/24'],
+         'rule_sets': ['geosite-rkn']},
+    ]
+    rule = render(data)['route']['rules'][1]
+    assert rule['type'] == 'logical' and rule['mode'] == 'or'
+    assert {'ip_cidr': ['203.0.113.0/24']} in rule['rules']
+    assert {'rule_set': ['geosite-rkn']} in rule['rules']
+
 
 def test_criterion_B3_1_single_destination_flat():
     data = document()

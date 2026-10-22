@@ -184,6 +184,9 @@ def _render_destination_disjunction(rule):
         matchers.append({"domain_suffix": list(rule.domain_suffix)})
     if rule.domain_exact:
         matchers.append({"domain": list(rule.domain_exact)})
+    if rule.rule_sets:
+        # ADR-0031: declared rule sets are a destination family of their own.
+        matchers.append({"rule_set": list(rule.rule_sets)})
     if not matchers:
         return None
     if len(matchers) == 1:
@@ -308,10 +311,16 @@ def generate_singbox(version: ConfigurationVersion,
         bypass_rules.append(match)
 
     rules = list(bypass_rules)
+    product_has_domain = any(
+        rule.domain_suffix or rule.domain_exact or rule.rule_sets
+        for rule in configuration.routing_rules)
     if configuration.tproxy.sniff:
         rules.insert(0, {"action": "sniff"})
     elif any(any((part.domain_suffix, part.domain_exact, part.domain_keyword, part.domain_regex))
-             for r in configuration.tproxy.rules for part in (r, *r.logical_rules)):
+             for r in configuration.tproxy.rules for part in (r, *r.logical_rules)) \
+            or product_has_domain:
+        # Domain and rule-set matching need sniffed domains (ADR-0020); product
+        # rules carry their own, so the system sniff covers them the same way.
         rules.append({"action": "sniff"})
     if configuration.tproxy.udp_timeout_seconds is not None:
         rules.insert(1 if configuration.tproxy.sniff else 0,
@@ -387,6 +396,29 @@ def generate_singbox(version: ConfigurationVersion,
         "outbounds": outbounds,
         "route": {"rules": rules, "final": final, "auto_detect_interface": True},
     }
+    # ADR-0031: the engine learns the sets from the same contract. Every tag
+    # referenced by a matcher (product rules, legacy rules and their logical
+    # parts, DNS rules) must have a remote declaration here, or the pinned
+    # engine rejects the config. Formats the engine cannot consume natively
+    # (text lists, raw geosite/geoip) are a render-time failure, not a
+    # silently dead matcher.
+    referenced_sets = {name for rule in configuration.routing_rules for name in rule.rule_sets}
+    referenced_sets |= {name for rule in configuration.tproxy.rules
+                        for part in (rule, *rule.logical_rules) for name in part.rule_sets}
+    referenced_sets |= {name for rule in configuration.tproxy.dns.rules for name in rule.rule_sets}
+    declared = {source.name: source for source in configuration.rule_sets}
+    rule_set_entries = []
+    for name in sorted(referenced_sets):
+        source = declared.get(name)
+        if source is None:
+            raise ValueError("routing.ruleset_unavailable")
+        engine_format = {"srs": "binary", "json": "source"}.get(source.format)
+        if engine_format is None:
+            raise ValueError(f"routing.ruleset_format: {source.format}")
+        rule_set_entries.append({"type": "remote", "tag": name,
+                                 "format": engine_format, "url": source.url})
+    if rule_set_entries:
+        result["route"]["rule_set"] = rule_set_entries
     if dns_policy.servers:
         dns_servers = []
         bootstrap_tag = None

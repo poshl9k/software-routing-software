@@ -250,11 +250,24 @@ def test_tproxy_outbound_on_a_non_route_action_is_rejected():
 
 
 def test_tproxy_rule_set_matcher():
-    source = {"name": "geo", "format": "text-domain", "url": "https://example.org/geo.txt"}
+    # srs is the only format the pinned engine consumes natively; the declared
+    # source must surface as a remote route.rule_set entry (ADR-0031).
+    source = {"name": "geo", "format": "srs", "url": "https://example.org/geo.srs"}
     generated = generate_singbox(version(tproxy={"rules": [{"name": "r", "rule_sets": ["geo"]}]},
                                         rule_sets=[source]))
+    assert generated["route"]["rule_set"] == [
+        {"type": "remote", "tag": "geo", "format": "binary", "url": "https://example.org/geo.srs"}]
     assert generated["route"]["rules"] == [
         {"rule_set": ["geo"], "action": "route", "outbound": "direct"}]
+
+
+def test_tproxy_text_format_source_is_refused_at_render():
+    # text-domain needs agent-side materialization that does not exist; a
+    # matcher referencing it must fail closed, not silently never match.
+    source = {"name": "geo", "format": "text-domain", "url": "https://example.org/geo.txt"}
+    with pytest.raises(ValueError, match="routing.ruleset_format"):
+        generate_singbox(version(tproxy={"rules": [{"name": "r", "rule_sets": ["geo"]}]},
+                                 rule_sets=[source]))
 
 
 def test_tproxy_route_ip_and_port_are_one_and_rule():
@@ -287,7 +300,7 @@ def test_tproxy_port_range_matcher():
 
 
 def test_tproxy_multiple_matchers_keep_declared_matcher_order():
-    source = {"name": "geo", "format": "text-domain", "url": "https://example.org/geo.txt"}
+    source = {"name": "geo", "format": "srs", "url": "https://example.org/geo.srs"}
     generated = generate_singbox(version(tproxy={"rules": [{
         "name": "r", "domain_suffix": ["example.org"], "ip_cidr": ["203.0.113.0/24"],
         "source_ip_cidr": ["192.0.2.0/24"], "rule_sets": ["geo"],
@@ -352,8 +365,8 @@ def test_reserved_block_tag_rejected():
 
 
 # Offline DNS policy preview; no host actions.
-def dns_preview(dns):
-    draft = version(tproxy={"dns": dns})
+def dns_preview(dns, rule_sets=None):
+    draft = version(tproxy={"dns": dns}, rule_sets=rule_sets or [])
     enabled_tproxy = draft.configuration.tproxy.model_copy(update={"enabled": True})
     offline = draft.model_copy(update={
         "configuration": draft.configuration.model_copy(update={"tproxy": enabled_tproxy})
@@ -430,7 +443,10 @@ def test_dns_logical_or_rule_and_rules_order():
              "rule_sets": ["list_a"], "server": "resolver"},
             {"name": "sets", "rule_sets": ["list_b"], "server": "resolver"},
         ],
-    })
+    }, rule_sets=[
+        {"name": "list_a", "format": "srs", "url": "https://example.org/a.srs"},
+        {"name": "list_b", "format": "srs", "url": "https://example.org/b.srs"},
+    ])
     assert rendered["dns"]["rules"] == [
         {"type": "logical", "mode": "or", "rules": [
             {"domain_suffix": ["example.org"]}, {"rule_set": ["list_a"]},

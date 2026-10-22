@@ -162,8 +162,8 @@ def test_criterion_5_collects_all_dns_rules_for_each_server():
 @pytest.mark.parametrize("explicit", [None, "remote"])
 def test_criterion_6_ruleset_only_dns_rule_retains_typed_detour(explicit):
     data = document()
-    data["rule_sets"] = [{"name": "sites", "format": "text-domain",
-                          "url": "https://example.org/sites.txt"}]
+    data["rule_sets"] = [{"name": "sites", "format": "srs",
+                          "url": "https://example.org/sites.srs"}]
     data["tproxy"]["dns"]["rules"] = [
         {"name": "ruleset", "rule_sets": ["sites"], "server": "resolver"}]
     data["tproxy"]["dns"]["servers"][0]["detour"] = explicit

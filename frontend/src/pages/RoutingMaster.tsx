@@ -36,7 +36,7 @@ import { useDraftEditor } from "../hooks/useDraftEditor";
 import { nameValid, addressValid, domainValid } from "../components/validators";
 import { api, ApiError } from "../api";
 import type {
-  Configuration, RoutingExit, RoutingSubject, RoutingRule,
+  CatalogService, Configuration, RoutingExit, RoutingSubject, RoutingRule,
   Interface, Subscriber, Tunnel,
 } from "../types";
 
@@ -261,7 +261,8 @@ export function exitComplete(exit: RoutingExit): boolean {
 
 export function ruleComplete(rule: RoutingRule): boolean {
   return nameValid(rule.name) &&
-    (rule.domain_suffix.length + rule.domain_exact.length + rule.ip_cidr.length > 0) &&
+    (rule.domain_suffix.length + rule.domain_exact.length + rule.ip_cidr.length +
+      rule.rule_sets.length > 0) &&
     domainListValid(rule.domain_suffix) && domainListValid(rule.domain_exact) &&
     cidrListValid(rule.ip_cidr) && exitComplete(rule.exit);
 }
@@ -273,6 +274,7 @@ function emptyRule(): RoutingRule {
     domain_suffix: [],
     domain_exact: [],
     ip_cidr: [],
+    rule_sets: [],
     exit: { kind: "direct" },
   };
 }
@@ -287,11 +289,14 @@ function emptyRule(): RoutingRule {
 export function suggestRuleName(rule: RoutingRule, taken: readonly string[]): string {
   const domain = rule.domain_suffix[0] ?? rule.domain_exact[0];
   const network = rule.ip_cidr[0];
+  // A rule-set-only destination names itself by its first tag (ADR-0031).
   let base = domain
     ? domain.replace(/^www\./, "").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")
     : network
       ? `net_${network.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`
-      : "rule";
+      : rule.rule_sets[0]
+        ? rule.rule_sets[0].replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+        : "rule";
   base = base.slice(0, 24) || "rule";
   // The backend accepts a name that starts with a letter only.
   if (!/^[a-zA-Z]/.test(base)) base = `rule_${base}`;
@@ -370,28 +375,37 @@ function DestinationFields({ rule, change }: {
   change: (update: Partial<RoutingRule>) => void;
 }) {
   const catalog = useQuery({ queryKey: queryKeys.presetCatalog(), queryFn: api.presetCatalog });
-  const services = (catalog.data?.services ?? []).filter((item) => item.dns_domains.length > 0 && item.covers.length === 0)
+  // Rule-set services (18+, RKN, реклама — ADR-0031) come with their own
+  // matcher tags instead of static domains; composites stay excluded here.
+  const services = (catalog.data?.services ?? [])
+    .filter((item) => item.covers.length === 0 && (item.dns_domains.length > 0 || item.rule_sets.length > 0))
     .sort((a, b) => {
       const featured = ["youtube", "rutube"];
       const rank = (id: string) => featured.includes(id) ? featured.indexOf(id) : featured.length;
       return rank(a.id) - rank(b.id);
     });
-  // A chosen service contributes its own domains; the operator adds nothing by
-  // hand, so the list of domains is NOT shown under the tiles. Several services
-  // can be chosen at once: their domains are alternatives (ADR-0029), so the
-  // union of their domains is the rule's destination.
-  const chosen = services.filter((item) => item.dns_domains.every((domain) => rule.domain_suffix.includes(domain)));
+  // A chosen service contributes its own destinations; the operator adds
+  // nothing by hand, so the lists are NOT shown under the tiles. Domain
+  // services contribute domains, rule-set services their tags; several
+  // services can be chosen at once and their destinations are alternatives
+  // (ADR-0029/0031).
+  const chosen = services.filter((item) =>
+    (item.dns_domains.length === 0 || item.dns_domains.every((domain) => rule.domain_suffix.includes(domain))) &&
+    (item.rule_sets.length === 0 || item.rule_sets.every((set) => rule.rule_sets.includes(set.tag))));
   const chosenIds = chosen.map((item) => item.id);
   const serviceDomains = new Set(chosen.flatMap((item) => item.dns_domains));
-  // Domains the operator typed by hand: everything in the list that no chosen
-  // service contributes.
+  // What the operator typed by hand: list entries no chosen service contributes.
   const manualDomains = rule.domain_suffix.filter((domain) => !serviceDomains.has(domain));
-  const empty = rule.domain_suffix.length + rule.domain_exact.length + rule.ip_cidr.length === 0;
+  const empty = rule.domain_suffix.length + rule.domain_exact.length +
+    rule.ip_cidr.length + rule.rule_sets.length === 0;
   const applyChosen = (ids: string[]) => {
-    const next = new Set(services.filter((item) => ids.includes(item.id)).flatMap((item) => item.dns_domains));
-    // Keep the hand-written domains, replace the service-contributed ones.
-    const keep = rule.domain_suffix.filter((domain) => !chosen.some((item) => item.dns_domains.includes(domain)));
-    change({ domain_suffix: [...new Set([...keep, ...next])] });
+    const nextDomains = new Set(services.filter((item) => ids.includes(item.id)).flatMap((item) => item.dns_domains));
+    const nextTags = services.filter((item) => ids.includes(item.id)).flatMap((item) => item.rule_sets.map((set) => set.tag));
+    // Keep the hand-written entries, replace the service-contributed ones.
+    const keepDomains = rule.domain_suffix.filter((domain) => !chosen.some((item) => item.dns_domains.includes(domain)));
+    const keepTags = rule.rule_sets.filter((tag) => !chosen.some((item) => item.rule_sets.some((set) => set.tag === tag)));
+    change({ domain_suffix: [...new Set([...keepDomains, ...nextDomains])],
+             rule_sets: [...new Set([...keepTags, ...nextTags])] });
   };
   return <FormGrid>
     {catalog.isPending ? <FormWide><LoadingSkeleton height={110} /></FormWide>
@@ -399,11 +413,13 @@ function DestinationFields({ rule, change }: {
         <ChoiceCards label="Готовые сервисы" layout="presets" multiple value={chosenIds}
           options={services.map((item) => ({ value: item.id, label: item.name,
             icon: item.icon_slug ? categoryIcons[item.category] ?? "network" : undefined,
-            description: `${item.dns_domains.length} ${plural(item.dns_domains.length, "домен", "домена", "доменов")}`,
+            description: item.rule_sets.length > 0
+              ? "готовый список правил"
+              : `${item.dns_domains.length} ${plural(item.dns_domains.length, "домен", "домена", "доменов")}`,
           }))}
           onChange={(_id, selected) => applyChosen(selected)} />
         {chosen.length > 0 && <Typography variant="body2" color="text.secondary" className="routing-subtitle">
-          Выбрано сервисов: {chosen.length}. Их домены — альтернативы назначения; свой список — ниже.
+          Выбрано сервисов: {chosen.length}. Их назначения — альтернативы; свой список — ниже.
         </Typography>}
       </FormWide>}
     <Field label="Свои домены (по одному в строке)" multiline value={manualDomains.join("\n")}
@@ -522,8 +538,27 @@ function finalExit(configuration: Configuration): string {
 const stepTitles = ["Шаг 1. Кому маршрутизируем", "Шаг 2. Что маршрутизировать", "Шаг 3. Куда направить", "Шаг 4. Проверка"];
 const stepSubtitles = ["Выберите, чей трафик попадёт под правило", "Домены, сервисы или IPv4-сети — достаточно одного совпадения", "Выберите путь для выбранного трафика", "Проверьте цепочку и порядок перед сохранением"];
 
+/**
+ * ADR-0031: a rule referencing a rule-set tag needs that tag DECLARED in
+ * `configuration.rule_sets`, or the validator refuses the draft. Selection in
+ * the wizard adds the catalog's own declaration additively — existing
+ * declarations (managed by «Источники списков») are never rewritten or dropped.
+ */
+function withDeclaredSources(rules: RoutingRule[], configuration: Configuration,
+                             catalog: CatalogService[]): Configuration {
+  const tags = new Set(rules.flatMap((rule) => rule.rule_sets));
+  const declared = new Map(configuration.rule_sets.map((source) => [source.name, source]));
+  for (const service of catalog)
+    for (const set of service.rule_sets)
+      if (tags.has(set.tag) && !declared.has(set.tag))
+        declared.set(set.tag, { name: set.tag, format: set.format, url: set.url,
+                                max_records: 200_000, max_bytes: 5_000_000 });
+  return { ...configuration, routing_rules: rules, rule_sets: [...declared.values()] };
+}
+
 export default function RoutingMasterPage() {
   const { configuration, error: apiError, user, versions, busy } = useConfiguration();
+  const catalog = useQuery({ queryKey: queryKeys.presetCatalog(), queryFn: api.presetCatalog });
   const apply = useApplyCommands();
   const navigate = useNavigate();
   const editor = useDraftEditor<RoutingRule[]>();
@@ -546,7 +581,8 @@ export default function RoutingMasterPage() {
   const change = (update: Partial<RoutingRule>) => setRule((current) => {
     const next = { ...current, ...update };
     const destinationChanged = update.domain_suffix !== undefined ||
-      update.domain_exact !== undefined || update.ip_cidr !== undefined;
+      update.domain_exact !== undefined || update.ip_cidr !== undefined ||
+      update.rule_sets !== undefined;
     if (destinationChanged && !nameEdited) {
       // The name follows the destination until the operator writes their own.
       const taken = rules.filter((item) => item.name !== current.name).map((item) => item.name);
@@ -558,7 +594,8 @@ export default function RoutingMasterPage() {
   const validSubject = subject.kind === "server" ||
     (subject.kind === "device" && peers.some((peer) => peer.subscriber === subject.subscriber && peer.peer === subject.peer)) ||
     (subject.kind === "interface" && interfaces.some((item) => item.name === subject.interface));
-  const validDestination = rule.domain_suffix.length + rule.domain_exact.length + rule.ip_cidr.length > 0 &&
+  const validDestination = rule.domain_suffix.length + rule.domain_exact.length +
+    rule.ip_cidr.length + rule.rule_sets.length > 0 &&
     domainListValid(rule.domain_suffix) && domainListValid(rule.domain_exact) && cidrListValid(rule.ip_cidr);
   const stepValid = [validSubject, validDestination, exitComplete(rule.exit), nameValid(rule.name)][step];
   const unique = !rules.some((item) => item.name === rule.name);
@@ -598,7 +635,9 @@ export default function RoutingMasterPage() {
     if (disabled || !wizardValid || saveLock.current) return;
     saveLock.current = true;
     setSaveIntent(intent);
-    void editor.save((items) => ({ ...configuration, routing_rules: [...items, rule] }));
+    const catalogServices = catalog.data?.services ?? [];
+    void editor.save((items) =>
+      withDeclaredSources([...items, rule], configuration, catalogServices));
   };
   const move = (index: number, direction: -1 | 1) => {
     if (readOnly || editor.saving) return;
@@ -610,7 +649,8 @@ export default function RoutingMasterPage() {
   };
   const save = () => {
     if (readOnly || !pageValid) return;
-    void editor.save((items) => ({ ...configuration, routing_rules: items }));
+    const catalogServices = catalog.data?.services ?? [];
+    void editor.save((items) => withDeclaredSources(items, configuration, catalogServices));
   };
   const final = finalExit(configuration);
   const fallback = "Трафик устройства абонента без совпадения блокируется; остальной трафик переходит к оставшимся правилам и конечному выходу.";

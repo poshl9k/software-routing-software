@@ -135,6 +135,18 @@ def validate_configuration(c):
     if any(name not in rule_set_names for rule in c.tproxy.rules
            for part in (rule, *rule.logical_rules) for name in part.rule_sets):
         fail("tproxy.ruleset_unavailable")
+    # Product routing rules reference the same declared sources (ADR-0031), and
+    # only formats the pinned engine accepts natively may be matched directly:
+    # text-domain/text-cidr/geosite/geoip need agent-side materialization that
+    # is not implemented, so a reference to one is refused instead of silently
+    # never matching.
+    engine_formats = {s.name: s.format for s in c.rule_sets}
+    for rule in c.routing_rules:
+        for name in rule.rule_sets:
+            if name not in rule_set_names:
+                fail('routing.ruleset_unavailable')
+            if engine_formats[name] not in ('srs', 'json'):
+                fail('routing.ruleset_format')
     zones = {i.zone for i in c.interfaces if i.zone}
     members = {m for i in c.interfaces for m in i.members}
     # A parent link that carries an assigned VLAN is a trunk: it must not also run

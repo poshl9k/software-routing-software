@@ -177,6 +177,8 @@ export interface RoutingRule {
   ip_cidr: string[];
   domain_suffix: string[];
   domain_exact: string[];
+  /** Declared rule-set tags (ADR-0031); an alternative destination family. */
+  rule_sets: string[];
   exit: RoutingExit;
 }
 export interface TProxyUpdateSchedule {

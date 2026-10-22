@@ -752,12 +752,17 @@ class RoutingRule(Model):
     ip_cidr: tuple[str, ...] = ()
     domain_suffix: tuple[str, ...] = ()
     domain_exact: tuple[str, ...] = ()
+    # Fourth destination family (ADR-0031): declared rule-set tags, an
+    # alternative to domains/networks. Referenced tags must be declared in
+    # Configuration.rule_sets (validators), so a missing declaration is a
+    # contract error, not a silently dead matcher.
+    rule_sets: tuple[EngineTag, ...] = ()
     exit: Exit = Field(default_factory=Exit)
 
     @model_validator(mode="after")
     def check_destination(self):
         from ipaddress import ip_network
-        if not (self.ip_cidr or self.domain_suffix or self.domain_exact):
+        if not (self.ip_cidr or self.domain_suffix or self.domain_exact or self.rule_sets):
             raise ValueError('routing.destination_required')
         for cidr in self.ip_cidr:
             try:
