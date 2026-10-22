@@ -301,6 +301,54 @@ def online_installer_dry_run(tmp_path, *, packaging=None, script=None):
     return result
 
 
+@pytest.mark.parametrize('present', [('awg',), ('awg-go',), ('awg', 'awg-go'), ()])
+def test_online_installer_builds_missing_awg_binaries_independently(tmp_path, present):
+    """Run the real dry-run entry point with an isolated command lookup path."""
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    stubs = {
+        'id': '#!/bin/sh\n[ "$1" = -u ] && { echo 0; exit 0; }\nexit 0\n',
+        'nft': '#!/bin/sh\nexit 1\n',  # No SSH lock table.
+        'ss': '#!/bin/sh\necho "LISTEN 0 1 0.0.0.0:22 0.0.0.0:*"\n',
+        'systemctl': '#!/bin/sh\nexit 0\n',  # SSH probe succeeds.
+        'unbound': '#!/bin/sh\nexit 0\n',
+        'caddy': '#!/bin/sh\nexit 0\n',
+        'getent': '#!/bin/sh\nexit 0\n',
+        'grep': '#!/bin/sh\nwhile IFS= read -r line; do\n'
+                '    case "$line" in *":22 "*) exit 0;; esac\n'
+                'done\nexit 1\n',
+        **{name: '#!/bin/sh\nexit 0\n' for name in present},
+    }
+    for name, content in stubs.items():
+        stub = bin_dir / name
+        stub.write_text(content)
+        stub.chmod(0o755)
+    # No inherited PATH: installed awg/awg-go (or other host tools) cannot
+    # alter the branch. Every privileged action is printed by run().
+    env = {**os.environ, 'PATH': str(bin_dir)}
+    env.pop('PACKAGING', None)
+    result = subprocess.run(
+        ['/bin/sh', str(PACKAGING / 'online-install.sh'), '--dry-run'],
+        cwd=tmp_path, env=env, text=True, capture_output=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'ONLINE_INSTALL_OK' in result.stdout
+    actions = result.stdout.splitlines()
+    go_actions = (
+        '+ git -C /root/vs-router-install clone --branch v3.1.20260812 --depth 1 https://github.com/amnezia-vpn/amneziawg-go',
+        '+ make -C /root/vs-router-install/amneziawg-go',
+        '+ install -m 0755 /root/vs-router-install/amneziawg-go/amneziawg-go /usr/local/bin/awg-go',
+    )
+    tools_actions = (
+        '+ git -C /root/vs-router-install clone --branch v3.1.20260812 --depth 1 https://github.com/amnezia-vpn/amneziawg-tools',
+        '+ make -C /root/vs-router-install/amneziawg-tools/src PREFIX=/usr BINDIR=/usr/local/bin install',
+    )
+    for action in go_actions:
+        assert (action in actions) == ('awg-go' not in present), action
+    for action in tools_actions:
+        assert (action in actions) == ('awg' not in present), action
+
+
 def test_online_installer_uses_pinned_helper_not_floating_ranges(tmp_path):
     script = (PACKAGING / 'online-install.sh').read_text()
     assert 'fastapi>=' not in script

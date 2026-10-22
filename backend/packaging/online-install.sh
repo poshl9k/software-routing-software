@@ -90,13 +90,15 @@ if ! command -v nft >/dev/null 2>&1 || ! command -v unbound >/dev/null 2>&1; the
 fi
 
 # --- 2. AmneziaWG (userspace runtime + tools) -------------------------------
-if ! command -v awg >/dev/null 2>&1; then
+if ! command -v awg-go >/dev/null 2>&1; then
     run git -C "$WORK" clone --branch v3.1.20260812 --depth 1 \
         https://github.com/amnezia-vpn/amneziawg-go
-    run git -C "$WORK" clone --branch v3.1.20260812 --depth 1 \
-        https://github.com/amnezia-vpn/amneziawg-tools
     run make -C "$WORK/amneziawg-go"
     run install -m 0755 "$WORK/amneziawg-go/amneziawg-go" /usr/local/bin/awg-go
+fi
+if ! command -v awg >/dev/null 2>&1; then
+    run git -C "$WORK" clone --branch v3.1.20260812 --depth 1 \
+        https://github.com/amnezia-vpn/amneziawg-tools
     run make -C "$WORK/amneziawg-tools/src" PREFIX=/usr BINDIR=/usr/local/bin install
 fi
 
