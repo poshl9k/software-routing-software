@@ -63,7 +63,7 @@ export const portalApi = {
     if (!response.ok) {
       const body = await response.json().catch(() => undefined) as PortalErrorBody | undefined;
       const code = body?.error?.code ?? body?.code ?? `http.${response.status}`;
-      throw new PortalApiError(response.status, code, response.status === 501 ? "Эта функция появится позже." : body?.error?.message ?? body?.message ?? "Не удалось экспортировать конфигурацию");
+      throw new PortalApiError(response.status, code, body?.error?.message ?? body?.message ?? "Не удалось экспортировать конфигурацию");
     }
     return response.blob();
   },

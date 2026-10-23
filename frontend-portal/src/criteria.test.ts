@@ -52,9 +52,9 @@ describe("criterion_3_russian_accessible_states", () => {
 });
 
 describe("criterion_4_build_and_test_configuration", () => {
-  it("accepts 501 export as a later feature response", async () => {
+  it("surfaces the backend export error verbatim (all three formats are real)", async () => {
     const { portalApi } = await import("./api");
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 501, headers: { "Content-Type": "application/json" } }));
-    await expect(portalApi.exportDevice("dev1", "qr")).rejects.toMatchObject({ status: 501, message: "Эта функция появится позже." });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: { code: "portal.export_unavailable" } }), { status: 503, headers: { "Content-Type": "application/json" } }));
+    await expect(portalApi.exportDevice("dev1", "qr")).rejects.toMatchObject({ status: 503, code: "portal.export_unavailable" });
   });
 });
