@@ -7,6 +7,7 @@ User=vs-router-portal
 EnvironmentFile=-/etc/vs-router/secrets.env
 Environment=VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db
 Environment=VS_PORTAL_INTERNAL_SECRET=/etc/vs-router/portal-internal.secret
+Environment=VS_PORTAL_STATIC_DIR=/var/lib/vs-router/portal/ui
 ExecStart=/usr/bin/python3 -m uvicorn vs_portal.app:app --uds /run/vs-router/portal/portal.sock --proxy-headers --forwarded-allow-ips="*"
 UMask=0007
 ProtectSystem=strict

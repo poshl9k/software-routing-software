@@ -1,4 +1,5 @@
 """Public portal app: isolated routes, database, auth and internal transport."""
+import os
 from threading import RLock
 
 from fastapi import FastAPI, Request
@@ -37,6 +38,20 @@ def create_app(engine=None, *, database_url=None, clock=None, internal_transport
     @app.get('/health')
     async def health() -> dict[str, str]:
         return {'status': 'ok'}
+
+    # The portal shell: any non-API path (e.g. /invite/<token>) serves the SPA.
+    static_dir = os.environ.get('VS_PORTAL_STATIC_DIR')
+    if static_dir:
+        from pathlib import Path
+        from fastapi.staticfiles import StaticFiles
+        from fastapi.responses import FileResponse
+        assets = Path(static_dir) / 'assets'
+        if assets.is_dir():
+            app.mount('/assets', StaticFiles(directory=assets), name='assets')
+
+            @app.get('/{spa_path:path}', include_in_schema=False)
+            async def spa(spa_path: str) -> FileResponse:
+                return FileResponse(Path(static_dir) / 'index.html')
 
     return app
 
