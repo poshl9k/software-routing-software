@@ -1066,6 +1066,11 @@ def test_installed_db_migrates_on_rerun(tmp_path):
     script = (PACKAGING / 'install.sh').read_text()
     block = script[script.index('DB=/var/lib/'):script.index('# AppArmor:')]
     block = block.replace('/var/lib/vs-router/vs-router.db', str(db))
+    # The block invokes the ambient `python3`; pin the interpreter that runs the
+    # suite, so the test does not depend on which python3 the developer's PATH
+    # happens to shadow (install.sh installs alembic for the system python).
+    import sys
+    block = block.replace('python3 -m alembic', f'"{sys.executable}" -m alembic')
     code = f'''set -eu
 packaging_dir="{PACKAGING}"
 systemctl() {{ echo "$*"; }}

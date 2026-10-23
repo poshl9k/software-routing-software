@@ -26,7 +26,7 @@ def anyio_backend():
 #: SHA-256 of the committed catalog = verbatim copy of awg-manager
 #: ``internal/presets/defaults.json`` at port time (no local edits). Pinned so the
 #: test is self-contained and does not depend on a transient reference checkout.
-CATALOG_SHA256 = '48a555798291933b001c3385ec5247aaa424da5afe4f9d22e31cfd897843d19b'
+CATALOG_SHA256 = 'e9a76a904f9ba389faa7807ad96b6199ea523d88b2c7247c11c5a8f2cd422633'
 
 
 def test_catalog_is_verbatim_and_typed():
@@ -34,7 +34,7 @@ def test_catalog_is_verbatim_and_typed():
     assert hashlib.sha256(copied.read_bytes()).hexdigest() == CATALOG_SHA256
     raw = json.loads(copied.read_text())
     entries = load_catalog()
-    assert len(raw) == len(entries) == 88
+    assert len(raw) == len(entries) == 90
     assert [e.id for e in entries] == [e['id'] for e in raw]
     assert all(e.license_verified is False and WARNING_LICENSE_UNVERIFIED in e.provenance for e in entries)
     anthropic = next(e for e in entries if e.id == 'anthropic')
@@ -100,9 +100,9 @@ async def test_catalog_api_auth_shape_counts_and_declared(api):
     assert [(c['key'], c['title'], c['count']) for c in data['categories']] == [
         ('social', 'Соцсети', 16), ('media', 'Медиа', 16),
         ('developer', 'Разработка', 15), ('cloud', 'Облако', 12),
-        ('gaming', 'Игры', 11), ('ai', 'AI', 6), ('block', 'Блок', 6),
+        ('gaming', 'Игры', 11), ('ai', 'AI', 6), ('block', 'Блок', 8),
     ]
-    assert len(data['services']) == 88
+    assert len(data['services']) == 90
     anthropic = next(e for e in data['services'] if e['id'] == 'anthropic')
     assert set(anthropic) == {'id', 'name', 'category', 'icon_slug', 'notice',
                               'covers', 'dns_domains', 'rule_sets', 'action', 'declared'}
