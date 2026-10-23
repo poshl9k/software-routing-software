@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from .api import auth, versions, aliases_io, leases, backup, diag, tunnels, keygen, host, release, update, rulesets, status, runtime, subscriptions_runtime
+from .api import auth, versions, aliases_io, leases, backup, diag, tunnels, keygen, host, release, update, rulesets, status, runtime, subscriptions_runtime, portal_admin
 from .api.errors import install_errors, issue
 
 
@@ -40,6 +40,8 @@ def create_app(engine=None, *, database_url=None, clock=None) -> FastAPI:
     app.include_router(versions.router, prefix="/api")
     for module in (aliases_io, leases, backup, diag, tunnels, keygen, host, release, update, rulesets, status, runtime, subscriptions_runtime):
         app.include_router(module.router, prefix="/api")
+    # The portal-admin router carries its own /api/portal-admin prefix (ADR-0032).
+    app.include_router(portal_admin.router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

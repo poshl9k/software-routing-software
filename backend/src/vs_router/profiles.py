@@ -73,6 +73,7 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_router.api.host': 'core',
     'vs_router.api.keygen': 'core',
     'vs_router.api.leases': 'router',
+    'vs_router.api.portal_admin': 'panel',
     'vs_router.api.release': 'core',
     'vs_router.api.rulesets': 'core',
     'vs_router.api.runtime': 'core',
@@ -96,6 +97,7 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_router.generators.tproxy_dns': 'core',
     'vs_router.generators.unbound': 'core',
     'vs_router.generators.wireguard': 'core',
+    'vs_router.internal_app': 'panel',
 }
 
 # Exact edges only: no source-wide skips or prefix/glob exceptions. Tests reject
@@ -103,6 +105,8 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
 KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
     ('vs_router.app', 'vs_router.api.leases'):
         'The shared application still registers the router DHCP lease API.',
+    ('vs_router.app', 'vs_router.api.portal_admin'):
+        'The shared application registers the admin API into the portal database (ADR-0032).',
     ('vs_router.generators', 'vs_router.generators.kea'):
         'The existing generator facade re-exports the router DHCP generator.',
     ('vs_router.generators', 'vs_router.generators.networkd'):
