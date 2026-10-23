@@ -53,7 +53,7 @@ export type PortalMe = {
   } | null;
   notices?: string[];
 };
-export type PortalDevice = { name: string; label: string; status: "active" | "inactive" | "removed"; last_handshake?: string | null; applied: boolean };
+export type PortalDevice = { name: string; label: string; status: "active" | "inactive" | "removed" | "pending"; last_handshake?: string | null; applied: boolean };
 export type DeviceOperation = { status: "applied" | "pending"; device?: PortalDevice };
 export type PortalDevicesResponse = { devices: PortalDevice[]; subscription?: PortalMe["subscription"]; tunnel?: unknown };
 export const portalApi = {
