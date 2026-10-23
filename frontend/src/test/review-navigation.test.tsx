@@ -41,24 +41,23 @@ it("opens review from the topbar without applying a draft", async () => {
 it("applies from the action strip only after dialog confirmation, without navigating", async () => {
   localStorage.setItem("vs-router.preferences", JSON.stringify({ safe: true, timeout: 180 }));
   const fetch = open("/");
-  const apply = await screen.findByRole("button", { name: "Применить v3" });
+  const apply = await screen.findByRole("button", { name: "Применить" });
   const strip = document.querySelector(".page-actions")!;
   const rail = document.querySelector(".sidebar .configuration-rail")!;
   await waitFor(() => expect(apply).toBeEnabled());
   expect(within(strip as HTMLElement).getByRole("link", { name: "Проверить изменения" })).toHaveAttribute("href", "/apply");
-  expect(within(rail as HTMLElement).getByText("Черновик v3 не применён")).toBeVisible();
-  expect(within(rail as HTMLElement).getByText("Стабильная v1")).toBeVisible();
+  expect(within(rail as HTMLElement).getByText("Есть изменения, ожидающие применения")).toBeVisible();
   expect(within(rail as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
   expect(within(rail as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
   await userEvent.click(apply);
-  let dialog = screen.getByRole("dialog", { name: "Применить черновик v3?" });
+  let dialog = screen.getByRole("dialog", { name: "Применить изменения?" });
   expect(within(dialog).getByText(/Через 180 с потребуется подтверждение/)).toBeVisible();
   expect(fetch.mock.calls.some(([url]) => url === "/api/apply")).toBe(false);
   expect(screen.queryByRole("heading", { name: "Применение изменений" })).not.toBeInTheDocument();
   await userEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
   expect(fetch.mock.calls.some(([url]) => url === "/api/apply")).toBe(false);
   await userEvent.click(apply);
-  dialog = screen.getByRole("dialog", { name: "Применить черновик v3?" });
+  dialog = screen.getByRole("dialog", { name: "Применить изменения?" });
   await userEvent.click(within(dialog).getByRole("button", { name: "Применить" }));
   await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/apply", expect.objectContaining({
     method: "POST", body: expect.stringContaining('"version_id":3'),
@@ -67,11 +66,12 @@ it("applies from the action strip only after dialog confirmation, without naviga
 });
 
 it("warns that the first apply has no rollback target", async () => {
+  localStorage.setItem("vs-router.preferences", JSON.stringify({ safe: true, timeout: 180 }));
   const fetch = open("/", [versions[0]]);
-  const apply = await screen.findByRole("button", { name: "Применить v3" });
+  const apply = await screen.findByRole("button", { name: "Применить" });
   await waitFor(() => expect(apply).toBeEnabled());
   await userEvent.click(apply);
-  expect(within(screen.getByRole("dialog", { name: "Применить черновик v3?" }))
+  expect(within(screen.getByRole("dialog", { name: "Применить изменения?" }))
     .getByText("Стабильной версии нет: это первое применение, откатывать будет некуда")).toBeVisible();
   expect(fetch.mock.calls.some(([url]) => url === "/api/apply")).toBe(false);
 });
@@ -84,7 +84,7 @@ it("applies the draft selected for review", async () => {
   await userEvent.selectOptions(draft, "2");
   expect(draft).toHaveValue("2");
   await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === "/api/diff/1/2")).toBe(true));
-  expect(screen.getByRole("heading", { name: /Изменения \(v1 → v2\)/ })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Изменения" })).toBeVisible();
   await userEvent.click(apply());
   await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/apply", expect.objectContaining({
     body: expect.stringContaining('"version_id":2'),

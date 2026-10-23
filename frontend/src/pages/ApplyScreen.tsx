@@ -70,6 +70,7 @@ const reasonTexts: Record<string, string> = {
   "profile.subscribers_not_supported":
     "абоненты есть только у панели (vs-panel) — на хосте-роутере их применить нельзя",
 };
+
 const reasonText = (code: string) => reasonTexts[code] ?? code;
 
 /**
@@ -169,9 +170,9 @@ export default function ApplyScreen() {
                 : "info"
           }
         >
-          {statusLabels[state.status]} · v{state.version_id}
+          {statusLabels[state.status]}
           {state.status === "rolled_back" && state.reason
-            ? ` · причина: ${reasonText(state.reason)}${state.reason_service ? ` (${state.reason_service})` : ""}`
+            ? ` · ${reasonText(state.reason)}${state.reason_service ? ` (${state.reason_service})` : ""}`
             : ""}
           {" · состояние агента"}
         </Alert>
@@ -210,7 +211,7 @@ export default function ApplyScreen() {
             value={shownDraft ? String(shownDraft.id) : ""}
             options={drafts.map((v) => ({
               value: String(v.id),
-              label: `v${v.id}${fmtDateTime(v.created_at) ? ` · ${fmtDateTime(v.created_at)}` : ""}`,
+              label: v.created_at ? fmtDateTime(v.created_at) : `v${v.id}`,
             }))}
             disabled={busy || !!active || user?.role !== "admin"}
             onChange={(value) => setSelected(Number(value))}
@@ -273,7 +274,7 @@ export default function ApplyScreen() {
         </p>
       </Card>
       <Card
-        title={`Изменения (${confirmed ? `v${confirmed.id}${fmtDateTime(confirmed.created_at) ? ` от ${fmtDateTime(confirmed.created_at)}` : ""}` : "нет стабильной версии"} → ${shownDraft ? `v${shownDraft.id}${fmtDateTime(shownDraft.created_at) ? ` от ${fmtDateTime(shownDraft.created_at)}` : ""}` : "нет черновика"})`}
+        title="Изменения"
       >
         <ErrorNotice error={diffQuery.error} />
         {diffQuery.data ? (

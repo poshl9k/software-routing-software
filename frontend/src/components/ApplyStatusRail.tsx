@@ -5,20 +5,20 @@ import { tokens } from "../theme";
 import { InlineStatus, type StatusTone } from "./InlineStatus";
 
 export type ApplyStatusRailProps = (
-  | { state: "draft"; draftVersion: string | number; stableVersion?: string | number }
+  | { state: "draft" }
   | { state: "pending"; seconds: number | null }
   | { state: "running" | "uncertain" }
-  | { state: "applied"; confirmedVersion: string | number; confirmedAt?: string }
+  | { state: "applied"; confirmedAt?: string }
   | { state: "error"; message?: string }
 ) & { action?: ReactNode };
 
 function phase(props: ApplyStatusRailProps): { tone: StatusTone; text: string; detail?: string } {
   switch (props.state) {
-    case "draft": return { tone: "amber", text: `Черновик v${props.draftVersion} не применён`, detail: props.stableVersion == null ? "Стабильная версия неизвестна" : `Стабильная v${props.stableVersion}` };
+    case "draft": return { tone: "amber", text: `Есть изменения, ожидающие применения` };
     case "pending": return { tone: "amber", text: "Ожидается подтверждение", detail: props.seconds == null ? "Время до подтверждения недоступно" : `Осталось ${Math.floor(Math.max(0, props.seconds) / 60).toString().padStart(2, "0")}:${Math.floor(Math.max(0, props.seconds) % 60).toString().padStart(2, "0")}` };
     case "running": return { tone: "blue", text: "Применение выполняется" };
     case "uncertain": return { tone: "unknown", text: "Состояние агента неизвестно" };
-    case "applied": return { tone: "green", text: `Подтверждена v${props.confirmedVersion}`, detail: props.confirmedAt ? `Подтверждена: ${props.confirmedAt}` : "Время подтверждения недоступно" };
+    case "applied": return { tone: "green", text: `Конфигурация применена`, detail: props.confirmedAt ? `Подтверждена: ${props.confirmedAt}` : undefined };
     case "error": return { tone: "red", text: "Ошибка применения", detail: props.message };
   }
 }

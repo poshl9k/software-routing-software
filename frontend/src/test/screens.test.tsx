@@ -248,7 +248,7 @@ describe("screens", () => {
       ),
     );
     open("/");
-    expect(await screen.findByText(/черновик v2 \(не применён\)/)).toBeVisible();
+    expect(await screen.findByText(/есть не применённые изменения/)).toBeVisible();
     expect(screen.getByText(/Состояние агента здесь не показано/)).toBeVisible();
   });
   it("restores pending apply from the agent marker after opening the page", async () => {
@@ -263,7 +263,7 @@ describe("screens", () => {
       } : path.startsWith("/api/diff") ? { changes: [], summary: [] } : {},
     ))));
     open("/apply");
-    expect(await screen.findByText(/Неподтверждённые изменения · v2/)).toBeVisible();
+    expect(await screen.findByText(/Неподтверждённые изменения/)).toBeVisible();
     expect(screen.getByRole("timer")).toHaveTextContent(/0[12]:[0-5][0-9]/);
     expect(screen.getByRole("button", { name: "Подтвердить изменения" })).toBeEnabled();
     expect(fetch.mock.calls.some(([path]) => path === "/api/apply/status")).toBe(true);
@@ -280,7 +280,7 @@ describe("screens", () => {
       } : path.startsWith("/api/diff") ? { changes: [], summary: [] } : [],
     ))));
     open("/apply");
-    expect(await screen.findByText(/Ошибка применения · v2/)).toBeVisible();
+    expect(await screen.findByText(/Ошибка применения · состояние агента/)).toBeVisible();
     expect(screen.getByText(/agent\.reload_failed/)).toBeVisible();
   });
   it("restores pending marker in the topbar on the overview", async () => {
@@ -475,7 +475,7 @@ describe("screens", () => {
         expect.objectContaining({ body: '{"version_id":2}' }),
       ),
     );
-    expect(await screen.findByText(/Подтверждено · v2/)).toBeVisible();
+    expect(await screen.findByText(/Подтверждено/)).toBeVisible();
   });
   it("first apply keeps the saved timer preference but sends safe_mode false", async () => {
     localStorage.setItem("vs-router.preferences", JSON.stringify({ safe: true, timeout: 180 }));

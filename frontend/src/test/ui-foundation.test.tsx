@@ -50,12 +50,11 @@ describe("shared P1 primitives", () => {
     expect(container.querySelector("h1")).toBeNull();
   });
   it("ApplyStatusRail renders draft, pending timer, running, uncertain, applied and error honestly", () => {
-    const { rerender } = rail({ state: "draft", draftVersion: 8, stableVersion: 7 });
-    expect(screen.getByText("Черновик v8 не применён")).toBeInTheDocument();
-    expect(screen.getByText("Стабильная v7")).toBeInTheDocument();
+    const { rerender } = rail({ state: "draft" });
+    expect(screen.getByText("Есть изменения, ожидающие применения")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Проверить изменения" })).toHaveAttribute("href", "/apply");
     const wrap = (props: Parameters<typeof ApplyStatusRail>[0]) => rerender(<MemoryRouter><ApplyStatusRail {...props} /></MemoryRouter>);
-    wrap({ state: "draft", draftVersion: 8, stableVersion: 7, action: null });
+    wrap({ state: "draft", action: null });
     expect(screen.queryByRole("link", { name: "Проверить изменения" })).not.toBeInTheDocument();
     wrap({ state: "pending", seconds: 65 });
     expect(screen.getByText("Осталось 01:05")).toBeInTheDocument();
@@ -69,10 +68,11 @@ describe("shared P1 primitives", () => {
     expect(screen.getByText("Применение выполняется")).toBeInTheDocument();
     wrap({ state: "uncertain" });
     expect(screen.getByText("Состояние агента неизвестно")).toBeInTheDocument();
-    wrap({ state: "applied", confirmedVersion: 7 });
-    expect(screen.getByText("Время подтверждения недоступно")).toBeInTheDocument();
-    wrap({ state: "applied", confirmedVersion: 7, confirmedAt: "2026-10-10T10:00:00Z" });
+    wrap({ state: "applied", confirmedAt: "2026-10-10T10:00:00Z" });
+    expect(screen.getByText("Конфигурация применена")).toBeInTheDocument();
     expect(screen.getByText(/Подтверждена: 2026/)).toBeInTheDocument();
+    wrap({ state: "applied" });
+    expect(screen.getByText("Конфигурация применена")).toBeInTheDocument();
     wrap({ state: "error", message: "Нет ответа" });
     expect(screen.getByText("Нет ответа")).toBeInTheDocument();
   });

@@ -91,12 +91,12 @@ function ApplyTopButton({ checking }: { checking: boolean }) {
   if (!draft) return null;
   return (
     <>
-      <Button variant="contained" disabled={busy || checking || !timeoutValid} onClick={() => setConfirmOpen(true)}>
-        Применить v{draft.id}
+      <Button variant="contained" disabled={busy || checking || !timeoutValid} onClick={() => { if (!preferences.safe) { void command("apply", draft.id); } else { setConfirmOpen(true); }}}>
+        Применить
       </Button>
       <ConfirmDialog
         open={confirmOpen}
-        title={`Применить черновик v${draft.id}?`}
+        title={`Применить изменения?`}
         body={!confirmed
           ? "Стабильной версии нет: это первое применение, откатывать будет некуда"
           : preferences.safe
@@ -183,8 +183,8 @@ function Layout() {
     : active ? { state: "running" }
     : applyError || state?.status === "failed" || state?.status === "rollback_failed" || state?.status === "rolled_back"
       ? { state: "error" }
-      : draft ? { state: "draft", draftVersion: draft.id, stableVersion: confirmed?.id }
-      : confirmed ? { state: "applied", confirmedVersion: confirmed.id }
+      : draft ? { state: "draft" }
+      : confirmed ? { state: "applied" }
       : { state: "uncertain" };
   const visibleNavigation = navigation.map((group) => ({
     ...group,
@@ -248,7 +248,6 @@ function Layout() {
           <Badge tone={product ? "blue" : "amber"}>{productLabel}</Badge>
           {!noConfiguration && version && (
             <Badge tone={version.status === "draft" ? "amber" : "green"}>
-              v{version.id} ·{" "}
               {version.status === "draft" ? "черновик" : "подтверждена"}
             </Badge>
           )}
