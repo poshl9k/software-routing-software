@@ -35,13 +35,16 @@ type TariffDraft = { id: number | null; name: string; device_limit: string; term
 
 const positive = (v: string) => Number.isInteger(Number(v)) && Number(v) >= 1;
 
-/** Полное имя портала: производное portal.<custom>, иначе резерв portal.<ip>.nip.io. */
+/** Полное имя портала. Первым — резерв portal.<ip>.nip.io: он работает без DNS
+ * (nip.io); производный portal.<custom> требует ручной DNS-записи, поэтому
+ * панели хватает резерва для работающей ссылки (ADR-0032, порядок как в
+ * management.portal_names). */
 function portalHost(record: { custom_hostname: string | null; address: string } | null | undefined) {
   if (!record) return null;
-  if (record.custom_hostname) return `portal.${record.custom_hostname}`;
   if (typeof record.address === "string" && record.address) {
     return `portal.${record.address.split("/")[0]}.nip.io`;
   }
+  if (record.custom_hostname) return `portal.${record.custom_hostname}`;
   return null;
 }
 
