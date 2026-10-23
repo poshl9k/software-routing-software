@@ -43,19 +43,26 @@ export async function portalRequest<T>(path: `/api/portal/${string}`, init: Requ
 
 const json = (method: string, data?: unknown): RequestInit => ({ method, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
 export type PortalMe = {
-  username: string;
-  subscription?: { tariff_name?: string; status: "active" | "expired"; expires_at?: string; days_remaining?: number; device_limit: number };
-  badges?: string[];
+  account?: { username: string; subscriber_name: string; email?: string | null; status: string };
+  username?: string;
+  subscription?: {
+    status: "active" | "expired" | string;
+    expires_at?: string;
+    tariff?: { name: string; device_limit: number; term_days: number } | null;
+    tariff_id?: number;
+  } | null;
+  notices?: string[];
 };
 export type PortalDevice = { name: string; label: string; status: "active" | "inactive" | "removed"; last_handshake?: string | null; applied: boolean };
 export type DeviceOperation = { status: "applied" | "pending"; device?: PortalDevice };
+export type PortalDevicesResponse = { devices: PortalDevice[]; subscription?: PortalMe["subscription"]; tunnel?: unknown };
 export const portalApi = {
   activateInvite: (data: { token: string; password: string; email?: string }) =>
       portalRequest<{ subscriber_name: string; username: string }>("/api/portal/invite/activate", json("POST", data)),
   login: (data: { username: string; password: string }) => portalRequest<void>("/api/portal/login", json("POST", data)),
   logout: () => portalRequest<void>("/api/portal/logout", json("POST", {})),
   me: () => portalRequest<PortalMe>("/api/portal/me"),
-  devices: () => portalRequest<PortalDevice[]>("/api/portal/devices"),
+  devices: () => portalRequest<PortalDevicesResponse>("/api/portal/devices"),
   addDevice: (label: string) => portalRequest<DeviceOperation>("/api/portal/devices", json("POST", { label })),
   removeDevice: (name: string) => portalRequest<DeviceOperation>(`/api/portal/devices/${encodeURIComponent(name)}`, { method: "DELETE", credentials: "include" }),
   setDeviceActive: (name: string, active: boolean) => portalRequest<DeviceOperation>(`/api/portal/devices/${encodeURIComponent(name)}/${active ? "activate" : "deactivate"}`, json("POST", {})),
