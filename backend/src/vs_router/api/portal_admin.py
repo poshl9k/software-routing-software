@@ -190,8 +190,17 @@ def create_invite(name: str, body: InviteBody, request: Request, response: Respo
     audit(db, "invite.create", name)
     db.commit()
     response.headers["Cache-Control"] = "no-store"
+    # The invitation must be a complete link: derive the portal's public name
+    # from the management record (portal.<custom>, else the <ip>.nip.io reserve).
+    invite_path = f"/invite/{row.token}"
+    try:
+        from ..management import portal_names, read_management
+        names = portal_names(read_management())
+        invite_url = f"https://{names[-1]}{invite_path}" if names else invite_path
+    except Exception:
+        invite_url = invite_path
     result = {"token": row.token, "subscriber_name": name, "expires_at": aware(row.expires_at),
-              "invite_path": f"/invite/{row.token}"}
+              "invite_path": invite_path, "invite_url": invite_url}
     if password is not None:
         result["password"] = password
     return result

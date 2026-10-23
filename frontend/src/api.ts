@@ -197,7 +197,7 @@ export const portalAdminApi = {
   deleteTariff: (tariff_id: number) =>
     request<void>(`/api/portal-admin/tariffs/${tariff_id}`, { method: "DELETE" }),
   createInvite: (name: string, body: { tariff_id: number; activate?: boolean }) =>
-    post<{ token: string; subscriber_name: string; expires_at: string; invite_path?: string; password?: string }>(
+    post<{ token: string; subscriber_name: string; expires_at: string; invite_path?: string; invite_url?: string; password?: string }>(
       `/api/portal-admin/subscribers/${encodeURIComponent(name)}/invite`, body,
     ),
   revokeInvite: (token: string) =>

@@ -50,7 +50,8 @@ export type PortalMe = {
 export type PortalDevice = { name: string; label: string; status: "active" | "inactive" | "removed"; last_handshake?: string | null; applied: boolean };
 export type DeviceOperation = { status: "applied" | "pending"; device?: PortalDevice };
 export const portalApi = {
-  activateInvite: (data: { token: string; password: string; email?: string }) => portalRequest<void>("/api/portal/invite/activate", json("POST", data)),
+  activateInvite: (data: { token: string; password: string; email?: string }) =>
+      portalRequest<{ subscriber_name: string; username: string }>("/api/portal/invite/activate", json("POST", data)),
   login: (data: { username: string; password: string }) => portalRequest<void>("/api/portal/login", json("POST", data)),
   logout: () => portalRequest<void>("/api/portal/logout", json("POST", {})),
   me: () => portalRequest<PortalMe>("/api/portal/me"),

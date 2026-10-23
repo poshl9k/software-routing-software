@@ -148,7 +148,7 @@ export default function Subscribers() {
     }),
     onSuccess: async (result) => {
       setInviteResult({
-        link: result.invite_path ?? `/invite/${result.token}`,
+        link: result.invite_url ?? result.invite_path ?? `/invite/${result.token}`,
         password: result.password, token: result.token,
       });
       await queryClient.invalidateQueries({ queryKey: queryKeys.portalSubscription(inviteFor!) });
