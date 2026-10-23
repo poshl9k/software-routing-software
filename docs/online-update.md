@@ -50,8 +50,15 @@ ADR-0010: манифест `release.json` + tar-артефакт зафикси�
 
 ## Настройка хоста
 
+Канал записывается автоматически: и `install-release.sh`, и `update.sh` после
+проверки выпуска сохраняют URL манифеста в host-owned
+`/etc/vs-router/update.json` (`{"manifest_url": "https://..."}`). Закреплённый
+GitHub-URL выпуска перезаписывается на стабильный
+`releases/latest/download/release.json`, чтобы канал не замер на установленном
+выпуске. Запись не блокирует установку: при неудаче скрипт пишет warning, и
+настройку можно сделать вручную:
+
 ```bash
-# /etc/vs-router/update.json  (host-owned; панель и агент читают только его)
 echo '{"manifest_url": "https://github.com/<owner>/<repo>/releases/latest/download/release.json"}' \
     > /etc/vs-router/update.json
 ```

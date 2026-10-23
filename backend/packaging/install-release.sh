@@ -168,6 +168,50 @@ print(value if isinstance(value, str) else '')
 PY
 }
 
+# ADR-0010: the update channel is host-owned configuration. Installing from a
+# release manifest also records that channel, so the panel can check and apply
+# later releases without hand-editing /etc/vs-router/update.json. Best effort:
+# a failed record must not abort an otherwise verified install.
+persist_update_channel() {  # manifest URL -> $VS_ROUTER_UPDATE_CONFIG
+    local url=$1
+    local config=${VS_ROUTER_UPDATE_CONFIG:-/etc/vs-router/update.json}
+    # A pinned per-release manifest URL would freeze the channel on the
+    # release that happened to be installed; the stable GitHub
+    # latest/download URL always serves the newest published release.json.
+    if [[ $url =~ ^https://[^/]+/[^/]+/[^/]+/releases/download/[^/]+/release\.json$ ]]; then
+        local base=${url%/release.json}
+        base=${base%/*}
+        url="${base%/download}/latest/download/release.json"
+    fi
+    if ! mkdir -p -- "$(dirname -- "$config")"; then
+        warn "could not create the update config directory for $config"
+        return 0
+    fi
+    if ! VS_ROUTER_CHANNEL_URL=$url python3 - "$config" <<'PY'
+import json, os, sys
+url, path = os.environ['VS_ROUTER_CHANNEL_URL'], sys.argv[1]
+data = {}
+try:
+    with open(path, encoding='utf-8') as handle:
+        loaded = json.load(handle)
+    if isinstance(loaded, dict):
+        data = loaded
+except (OSError, ValueError):
+    pass
+data['manifest_url'] = url
+temporary = path + '.tmp'
+with open(temporary, 'w', encoding='utf-8') as handle:
+    json.dump(data, handle, indent=2, sort_keys=True)
+    handle.write('\n')
+os.replace(temporary, path)
+PY
+    then
+        warn "could not record the update channel in $config; the panel will not see releases until it is set"
+        return 0
+    fi
+    log "Update channel recorded: $url"
+}
+
 # Reject links and special members rather than trusting tar's pathname filters.
 # make-release.sh creates a root-level git archive with an added REVISION file.
 archive_tree() {
@@ -292,6 +336,9 @@ PY
     fi
     source=$tree
     log "Verified release $commit"
+    if (( ! dry_run )); then
+        persist_update_channel "$manifest"
+    fi
 fi
 
 # Do not follow links into build or installer outputs, even for local sources.

@@ -634,3 +634,28 @@ def test_criterion_4_missing_build_tools_are_prepared_once(rig):
     assert result.returncode == 0, result.stderr
     assert not any(x.startswith('APT ') for x in events()[before:])
 
+
+def test_criterion_11_release_install_records_the_update_channel(rig):
+    """ADR-0010: a release install leaves the host's update channel configured,
+    so the panel can check and apply later releases without hand-editing
+    /etc/vs-router/update.json. A pinned GitHub release URL is rewritten to the
+    stable latest/download channel, never frozen on the installed release."""
+    source, tmp, _, run, events, _ = rig
+    release(rig)
+    config = tmp / 'missing-update.json'
+    url = f'https://github.com/owner/repo/releases/download/vs-router-{COMMIT}/release.json'
+    result = run('--manifest', url, '--release', COMMIT, '--hostname', 'reserve.example')
+    assert result.returncode == 0, result.stderr
+    assert json.loads(config.read_text())['manifest_url'] == \
+        'https://github.com/owner/repo/releases/latest/download/release.json'
+
+
+def test_criterion_11_dry_run_does_not_touch_the_update_channel(rig):
+    source, tmp, _, run, events, _ = rig
+    release(rig)
+    config = tmp / 'missing-update.json'
+    result = run('--manifest', 'https://example.invalid/release.json', '--release', COMMIT,
+                 '--hostname', 'reserve.example', '--dry-run')
+    assert result.returncode == 0, result.stderr
+    assert not config.exists()
+

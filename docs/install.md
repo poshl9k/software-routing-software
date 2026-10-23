@@ -342,7 +342,7 @@ build`) → вывод резервного имени `<ip>.nip.io` из лок
 | Флаг | Назначение |
 |---|---|
 | `--source DIR` | дерево-источник вместо собственного репозитория |
-| `--release SHA` / `--manifest URL` | закреплённый выпуск; URL манифеста также берётся из `VS_ROUTER_INSTALL_MANIFEST_URL` или `manifest_url` в `/etc/vs-router/update.json` |
+| `--release SHA` / `--manifest URL` | закреплённый выпуск; URL манифеста также берётся из `VS_ROUTER_INSTALL_MANIFEST_URL` или `manifest_url` в `/etc/vs-router/update.json`; после проверки выпуск записывает этот URL в `/etc/vs-router/update.json` (GitHub-URL — в форме `releases/latest/download/release.json`), так что панель сразу видит канал обновлений |
 | `--hostname H` / `--custom-hostname H` | резервное имя и свой домен (оба публикуются, ADR-0025) |
 | `--path-prefix P`, `--address A/P`, `--ssh-port N` | передаются установщику без изменений |
 | `--work DIR` / `--fresh` | рабочий каталог (по умолчанию `/root/vs-router-install`) и его очистка |
