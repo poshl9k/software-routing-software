@@ -21,4 +21,15 @@ body { margin: 0; min-width: 320px; background: var(--vs-bg); }
 .device-actions { display: flex; justify-content: end; flex-wrap: wrap; gap: 2px; }
 .footer { text-align: center; color: var(--vs-text-tertiary); border-top: 1px solid var(--vs-border); padding: 18px; font-size: 12px; }
 .loading { display: grid; place-items: center; min-height: 200px; }
-@media (max-width: 700px) { .content { margin: 28px auto; } .topbar { height: 58px; } .section-head { flex-direction: column; } .device { align-items: stretch; flex-direction: column; } .device-actions { justify-content: start; border-top: 1px solid var(--vs-border); padding-top: 8px; } .subscription-line { align-items: start; } }
+@media (max-width: 900px) { .content { width: min(720px, calc(100% - 32px)); } }
+@media (max-width: 700px) {
+  .content { width: calc(100% - 20px); margin: 20px auto; }
+  .topbar { height: 58px; padding: 0 16px; }
+  .section-head { flex-direction: column; align-items: stretch; }
+  .device { align-items: stretch; flex-direction: column; gap: 10px; padding: 12px; }
+  .device-actions { justify-content: stretch; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--vs-border); padding-top: 10px; }
+  .device-actions .MuiButton-root { flex: 1 1 45%; min-width: 0; padding-left: 8px; padding-right: 8px; }
+  .subscription-line { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .surface { padding: 16px; }
+  .limit-note { margin-top: 14px !important; padding-top: 10px; }
+}
