@@ -33,6 +33,11 @@ def create_app(engine=None, *, database_url=None, clock=None, internal_transport
 
     app.include_router(auth.router, prefix='/api/portal')
     app.include_router(devices.router, prefix='/api/portal')
+
+    @app.get('/health')
+    async def health() -> dict[str, str]:
+        return {'status': 'ok'}
+
     return app
 
 

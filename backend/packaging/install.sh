@@ -387,11 +387,16 @@ else
 fi
 systemctl is-active --quiet vs-router-agent.service
 systemctl is-active --quiet vs-router-web.service
-# Portal publication hooks (phase 5, ADR-0032)
+# Portal publication hooks (phase 5, ADR-0032). Traversal decides access:
+# /run/vs-router is root:vs-router-web 0770, so vs-router-portal must be a
+# member of vs-router-web to reach its own socket directory, and the /run
+# directories stay group vs-router-web so Caddy (a member) can traverse.
 id vs-router-portal >/dev/null 2>&1 || useradd --system --home-dir /var/lib/vs-router/portal --shell /usr/sbin/nologin vs-router-portal
 usermod -a -G vs-router-portal vs-router-web || true
-install -d -m 0770 -o vs-router-portal -g vs-router-portal /var/lib/vs-router/portal /run/vs-router/portal
-install -d -m 0770 -o vs-router-web -g vs-router-portal /run/vs-router/web
+usermod -a -G vs-router-web vs-router-portal || true
+install -d -m 0770 -o vs-router-portal -g vs-router-portal /var/lib/vs-router/portal
+install -d -m 0770 -o vs-router-portal -g vs-router-web /run/vs-router/portal
+install -d -m 0770 -o vs-router-web -g vs-router-web /run/vs-router/web
 install -m 0640 -o vs-router-web -g vs-router-portal /etc/vs-router/portal-internal.secret 2>/dev/null || install -m 0640 -o root -g root /dev/null /etc/vs-router/portal-internal.secret
 chown vs-router-web:vs-router-portal /etc/vs-router/portal-internal.secret 2>/dev/null || true
 chmod 0640 /etc/vs-router/portal-internal.secret 2>/dev/null || true

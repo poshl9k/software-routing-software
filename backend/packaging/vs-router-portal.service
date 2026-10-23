@@ -1,14 +1,18 @@
 [Unit]
-Description=vs-router portal (UDS)
+Description=vs-router subscriber portal (UDS)
 After=network.target
 
 [Service]
-Type=notify
 User=vs-router-portal
-ExecStart=/usr/bin/uvicorn vs_portal.app:app --uds /run/vs-router/portal/portal.sock
+EnvironmentFile=-/etc/vs-router/secrets.env
+Environment=VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db
+Environment=VS_PORTAL_INTERNAL_SECRET=/etc/vs-router/portal-internal.secret
+ExecStart=/usr/bin/python3 -m uvicorn vs_portal.app:app --uds /run/vs-router/portal/portal.sock --proxy-headers --forwarded-allow-ips="*"
 UMask=0007
 ProtectSystem=strict
 ReadWritePaths=/var/lib/vs-router/portal /run/vs-router/portal
-Environment="VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db"
-ExecStartPost=/bin/chmod 0660 /run/vs-router/portal/portal.sock
-ExecStartPost=/bin/chgrp vs-router-portal /run/vs-router/portal/portal.sock
+Restart=on-failure
+ExecStartPost=+/bin/sh -c 'i=0; while [ $i -lt 20 ] && [ ! -S /run/vs-router/portal/portal.sock ]; do sleep 0.5; i=$((i+1)); done; chmod 0660 /run/vs-router/portal/portal.sock && chgrp vs-router-web /run/vs-router/portal/portal.sock'
+
+[Install]
+WantedBy=multi-user.target

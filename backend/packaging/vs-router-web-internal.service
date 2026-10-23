@@ -3,10 +3,15 @@ Description=vs-router web internal (portal interface)
 After=network.target
 
 [Service]
-Type=notify
 User=vs-router-web
+Group=vs-router-web
+EnvironmentFile=-/etc/vs-router/secrets.env
+Environment=VS_PORTAL_INTERNAL_SECRET=/etc/vs-router/portal-internal.secret
+Environment=VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db
+Environment=VS_ROUTER_DATABASE_URL=sqlite:////var/lib/vs-router/vs-router.db
+WorkingDirectory=/var/lib/vs-router
 ExecStart=/usr/bin/python3 -m uvicorn vs_router.internal_app:app --uds /run/vs-router/web/internal.sock --proxy-headers --forwarded-allow-ips="*"
-ExecStartPost=/bin/sh -c 'chmod 0660 /run/vs-router/web/internal.sock; chgrp vs-router-portal /run/vs-router/web/internal.sock; chmod g+s /run/vs-router/web'
+ExecStartPost=/bin/sh -c 'i=0; while [ $i -lt 20 ] && [ ! -S /run/vs-router/web/internal.sock ]; do sleep 0.5; i=$((i+1)); done; chmod 0660 /run/vs-router/web/internal.sock; chgrp vs-router-portal /run/vs-router/web/internal.sock; chmod g+s /run/vs-router/web'
 Restart=on-failure
 UMask=0007
 ProtectSystem=strict
