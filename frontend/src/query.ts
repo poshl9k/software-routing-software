@@ -33,4 +33,6 @@ export const queryKeys = {
     ["tproxy", "preview", versionId] as const,
   presetCatalog: () => ["presets", "catalog"] as const,
   rulesets: () => ["rulesets"] as const,
+  portalTariffs: () => ["portal", "tariffs"] as const,
+  portalSubscription: (name: string) => ["portal", "subscription", name] as const,
 };

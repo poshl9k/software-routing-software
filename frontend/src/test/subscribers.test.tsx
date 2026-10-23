@@ -23,16 +23,37 @@ const configuration: Configuration = {
 
 function setup(path: string, config: Configuration = configuration, host: HostProfile = panel,
   role: "admin" | "operator" = "admin") {
-  const fetch = vi.fn((url: string, init?: RequestInit) => Promise.resolve(new Response(JSON.stringify(
-    url === "/api/versions" ? [{ id: 1, status: "draft", configuration: config }] :
-    url === "/api/auth/me" ? { id: 1, username: role, role } :
-    url === "/api/host/profile" ? host :
-    url === "/api/apply/status" ? null :
-    url === "/api/status/services" ? { generated_at: "2026-01-01", services: [] } :
-    url === "/api/tunnels/activity" ? {} :
-    url === "/api/draft" ? { id: 1, status: "draft", configuration: JSON.parse(String(init?.body)) } :
-    {},
-  ))));
+  const tariffs = [{ id: 7, name: "Базовый", device_limit: 3, term_days: 30, price_amount: null }];
+  const fetch = vi.fn((url: string, init?: RequestInit) => {
+    if (url === "/api/portal-admin/tariffs" && init?.method === "POST") {
+      return Promise.resolve(new Response(JSON.stringify({ id: 8, ...JSON.parse(String(init.body)) }), { status: 201 }));
+    }
+    if (url === "/api/portal-admin/subscribers/alice/invite") {
+      return Promise.resolve(new Response(JSON.stringify({
+        token: "tok123", subscriber_name: "alice", expires_at: "2026-10-30T00:00:00Z",
+        invite_path: "/invite/tok123", ...(JSON.parse(String(init?.body)).activate ? { password: "s3cret-password" } : {}),
+      }), { status: 201 }));
+    }
+    if (url === "/api/portal-admin/subscribers/alice/subscription") {
+      return Promise.resolve(new Response(JSON.stringify({
+        subscriber_name: "alice", tariff_id: 7, expires_at: "2099-01-01T00:00:00Z", status: "active",
+      })));
+    }
+    if (/^\/api\/portal-admin\/subscribers\/[^/]+\/subscription$/.test(url)) {
+      return Promise.resolve(new Response(JSON.stringify({ error: { code: "portal.subscription_not_found" } }), { status: 404 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify(
+      url === "/api/versions" ? [{ id: 1, status: "draft", configuration: config }] :
+      url === "/api/auth/me" ? { id: 1, username: role, role } :
+      url === "/api/host/profile" ? host :
+      url === "/api/apply/status" ? null :
+      url === "/api/status/services" ? { generated_at: "2026-01-01", services: [] } :
+      url === "/api/tunnels/activity" ? {} :
+      url === "/api/draft" ? { id: 1, status: "draft", configuration: JSON.parse(String(init?.body)) } :
+      url === "/api/portal-admin/tariffs" ? tariffs :
+      {},
+    )));
+  });
   vi.stubGlobal("fetch", fetch);
   render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
   return fetch;
@@ -46,7 +67,7 @@ function saved(fetch: ReturnType<typeof vi.fn>) {
 
 it("criterion_1_lists_subscribers_and_counts_devices_across_tunnels", async () => {
   setup("/subscribers");
-  const table = within(await screen.findByRole("table"));
+  const table = within((await screen.findAllByRole("table"))[0]!);
   const alice = table.getByRole("row", { name: /alice — Алиса/ });
   expect(within(alice).getByRole("cell", { name: "2" })).toBeVisible();
   expect(within(alice).getByText("wg_home / phone, wg_home / laptop")).toBeVisible();
@@ -145,4 +166,55 @@ it("operator_can_read_but_cannot_edit_subscribers", async () => {
   expect(await screen.findByRole("cell", { name: "alice — Алиса" })).toBeVisible();
   expect(screen.queryByRole("button", { name: "+ Абонент" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Удалить абонента alice" })).not.toBeInTheDocument();
+});
+
+it("criterion_6_creates_tariff_and_lists_it", async () => {
+  const fetch = setup("/subscribers");
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "+ Тариф" }));
+  const dialog = screen.getByRole("dialog", { name: "Тариф: новый" });
+  await user.type(within(dialog).getByLabelText(/^Название/), "Премиум");
+  await user.type(within(dialog).getByLabelText(/Лимит устройств/), "5");
+  await user.type(within(dialog).getByLabelText(/Срок подписки/), "90");
+  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([url, init]) =>
+    url === "/api/portal-admin/tariffs" && init?.method === "POST")).toBe(true));
+  const body = JSON.parse(String(fetch.mock.calls.find(([url, init]) =>
+    url === "/api/portal-admin/tariffs" && init?.method === "POST")![1]!.body));
+  expect(body).toEqual({ name: "Премиум", device_limit: 5, term_days: 90 });
+});
+
+it("criterion_7_invite_needs_tariff_and_ready_password_is_warned", async () => {
+  const fetch = setup("/subscribers");
+  const user = userEvent.setup();
+  const table = within((await screen.findAllByRole("table"))[0]!);
+  await user.click(await within(table.getByRole("row", { name: /alice — Алиса/ }))
+    .findByRole("button", { name: "Пригласить" }));
+  const dialog = screen.getByRole("dialog", { name: "Приглашение: alice" });
+  await user.click(within(dialog).getByRole("checkbox"));
+  expect(within(dialog).getByText(/перехватывается вместе со ссылкой/i)).toBeVisible();
+  await user.click(within(dialog).getByRole("button", { name: "Выслать приглашение" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) =>
+    url === "/api/portal-admin/subscribers/alice/invite")).toBe(true));
+  const body = JSON.parse(String(fetch.mock.calls.find(([url]) =>
+    url === "/api/portal-admin/subscribers/alice/invite")![1]!.body));
+  expect(body).toEqual({ tariff_id: 7, activate: true });
+  expect(await within(dialog).findByLabelText(/Ссылка-приглашение/)).toHaveValue("/invite/tok123");
+  expect(await within(dialog).findByLabelText("Пароль")).toHaveValue("s3cret-password");
+  expect(within(dialog).getByRole("button", { name: "Отозвать" })).toBeEnabled();
+});
+
+it("criterion_8_subscription_dialog_shows_badge_and_renews", async () => {
+  const fetch = setup("/subscribers");
+  const user = userEvent.setup();
+  const table = within((await screen.findAllByRole("table"))[0]!);
+  await waitFor(() => expect(within(table.getByRole("row", { name: /alice — Алиса/ }))
+    .getByText("Активна")).toBeVisible());
+  await user.click(within(table.getByRole("row", { name: /alice — Алиса/ }))
+    .getByRole("button", { name: "Подписка" }));
+  const dialog = await screen.findByRole("dialog", { name: "Подписка: alice" });
+  await user.click(within(dialog).getByRole("button", { name: "Продлить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([url, init]) =>
+    url === "/api/portal-admin/subscribers/alice/subscription" && init?.method === "PATCH"
+      && JSON.parse(String(init.body)).renew === true)).toBe(true));
 });

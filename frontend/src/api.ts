@@ -17,6 +17,7 @@ import type {
   UpdateStatus, UpdateStart, ServiceStatusResponse,
   ProxySubscription, SubscriptionPreview, SubscriptionRefresh, SubscriptionMember,
   RuntimeEngine, RuntimeConnections, RuntimeLogEntry, RuntimeProxies, RuntimeProxyDelay,
+  Tariff, Subscription,
 } from "./types";
 export class ApiError extends Error {
   constructor(
@@ -71,6 +72,8 @@ export async function request<T>(
 }
 const post = <T>(path: `/api/${string}`, body: unknown) =>
   request<T>(path, { method: "POST", body: JSON.stringify(body) });
+const put = <T>(path: `/api/${string}`, body: unknown) =>
+  request<T>(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const api = {
   hostInterfaces: () => request<HostInterface[]>("/api/host/interfaces"),
   hostManagement: () => request<HostManagement | null>("/api/host/management"),
@@ -183,6 +186,30 @@ export const api = {
     post<unknown>(`/api/runtime/proxies/${encodeURIComponent(group)}/select`, { name }),
   runtimeProxyDelay: (tag: string, url: string, timeout_ms = 3000) =>
     request<RuntimeProxyDelay>(`/api/runtime/proxies/${encodeURIComponent(tag)}/delay?url=${encodeURIComponent(url)}&timeout_ms=${timeout_ms}`),
+};
+
+export const portalAdminApi = {
+  listTariffs: () => request<Tariff[]>("/api/portal-admin/tariffs"),
+  createTariff: (body: { name: string; device_limit: number; term_days: number; price_amount?: number | null }) =>
+    post<Tariff>("/api/portal-admin/tariffs", body),
+  updateTariff: (tariff_id: number, body: { name: string; device_limit: number; term_days: number; price_amount?: number | null }) =>
+    put<Tariff>(`/api/portal-admin/tariffs/${tariff_id}`, body),
+  deleteTariff: (tariff_id: number) =>
+    request<void>(`/api/portal-admin/tariffs/${tariff_id}`, { method: "DELETE" }),
+  createInvite: (name: string, body: { tariff_id: number; activate?: boolean }) =>
+    post<{ token: string; subscriber_name: string; expires_at: string; invite_path?: string; password?: string }>(
+      `/api/portal-admin/subscribers/${encodeURIComponent(name)}/invite`, body,
+    ),
+  revokeInvite: (token: string) =>
+    request<void>(`/api/portal-admin/invites/${encodeURIComponent(token)}`, { method: "DELETE" }),
+  readSubscription: (name: string) =>
+    request<Subscription>(`/api/portal-admin/subscribers/${encodeURIComponent(name)}/subscription`),
+  updateSubscription: (name: string, body: { tariff_id?: number; renew?: boolean }) =>
+    request<Subscription>(`/api/portal-admin/subscribers/${encodeURIComponent(name)}/subscription`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 };
 
 async function responseError(response: Response): Promise<ApiError> {

@@ -284,6 +284,30 @@ export interface ProxyOutbound {
   admin_listen: string | null;
 }
 // Subscription runtime (agent proposals; no implicit draft write).
+export interface Tariff {
+  id: number;
+  name: string;
+  device_limit: number;
+  term_days: number;
+  price_amount?: number | null;
+  created_at?: string;
+}
+
+export interface Subscription {
+  subscriber_name: string;
+  tariff_id: number | null;
+  expires_at: string;
+  status: "active" | "expired" | "renewed";
+  updated_at?: string;
+}
+
+export interface Invite {
+  token: string;
+  subscriber_name: string;
+  expires_at: string;
+  used_at?: string | null;
+}
+
 export interface SubscriptionMember {
   tag: string;
   label: string;
