@@ -1,0 +1,24 @@
+:root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--vs-bg); color: var(--vs-text); }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: var(--vs-bg); }
+.page { min-height: 100vh; display: flex; flex-direction: column; }
+.topbar { height: 66px; padding: 0 clamp(20px, 5vw, 72px); border-bottom: 1px solid var(--vs-border); display: flex; align-items: center; justify-content: space-between; }
+.brand { color: var(--vs-text); text-decoration: none; font-weight: 750; letter-spacing: .09em; }
+.brand span { color: var(--vs-accent); font-size: 11px; }
+.content { width: min(900px, calc(100% - 40px)); margin: 52px auto; flex: 1; }
+.surface { padding: clamp(18px, 3vw, 28px); border: 1px solid var(--vs-border); border-radius: 12px !important; background: var(--vs-panel) !important; }
+.form { display: grid; gap: 20px; }
+.underlink { text-align: center; margin-top: 18px !important; color: var(--vs-text-tertiary); }
+.subscription { margin-bottom: 18px; }
+.subscription-line, .section-head, .device-main { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.subscription-line { margin-top: 12px; }
+.limit-note { border-top: 1px solid var(--vs-border); margin-top: 18px !important; padding-top: 14px; }
+.devices { margin-top: 18px; }
+.section-head { align-items: start; }
+.device { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 16px; border: 1px solid var(--vs-border); border-radius: 9px; background: rgba(255,255,255,.015); }
+.device-main { justify-content: start; }
+.device-avatar { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; background: rgba(113,112,255,.14); color: var(--vs-accent-hover); font-weight: 700; }
+.device-actions { display: flex; justify-content: end; flex-wrap: wrap; gap: 2px; }
+.footer { text-align: center; color: var(--vs-text-tertiary); border-top: 1px solid var(--vs-border); padding: 18px; font-size: 12px; }
+.loading { display: grid; place-items: center; min-height: 200px; }
+@media (max-width: 700px) { .content { margin: 28px auto; } .topbar { height: 58px; } .section-head { flex-direction: column; } .device { align-items: stretch; flex-direction: column; } .device-actions { justify-content: start; border-top: 1px solid var(--vs-border); padding-top: 8px; } .subscription-line { align-items: start; } }
