@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useQueries } from "@tanstack/react-query";
 import { Button, Checkbox, Dialog, DialogContent, DialogTitle, FormControlLabel } from "@mui/material";
-import { portalAdminApi } from "../api";
+import { api, portalAdminApi } from "../api";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -34,6 +34,16 @@ function subscriptionBadge(sub: { status: string; expires_at: string } | null) {
 type TariffDraft = { id: number | null; name: string; device_limit: string; term_days: string; price_amount: string };
 
 const positive = (v: string) => Number.isInteger(Number(v)) && Number(v) >= 1;
+
+/** Полное имя портала: производное portal.<custom>, иначе резерв portal.<ip>.nip.io. */
+function portalHost(record: { custom_hostname: string | null; address: string } | null | undefined) {
+  if (!record) return null;
+  if (record.custom_hostname) return `portal.${record.custom_hostname}`;
+  if (typeof record.address === "string" && record.address) {
+    return `portal.${record.address.split("/")[0]}.nip.io`;
+  }
+  return null;
+}
 
 export default function Subscribers() {
   const { configuration, version, user, error, saveDraft, setNotice } = useConfiguration();
@@ -80,6 +90,7 @@ export default function Subscribers() {
   };
 
   // ----- Тарифы (БД портала; серверное состояние — TanStack Query) -----
+  const hostRecord = useQuery({ queryKey: queryKeys.hostManagement(), queryFn: api.hostManagement, enabled: admin });
   const tariffs = useQuery({
     queryKey: queryKeys.portalTariffs(),
     queryFn: portalAdminApi.listTariffs,
@@ -148,7 +159,9 @@ export default function Subscribers() {
     }),
     onSuccess: async (result) => {
       setInviteResult({
-        link: result.invite_url ?? result.invite_path ?? `/invite/${result.token}`,
+        link: portalHost(hostRecord.data)
+          ? `https://${portalHost(hostRecord.data)}${result.invite_path ?? `/invite/${result.token}`}`
+          : result.invite_path ?? `/invite/${result.token}`,
         password: result.password, token: result.token,
       });
       await queryClient.invalidateQueries({ queryKey: queryKeys.portalSubscription(inviteFor!) });
