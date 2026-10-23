@@ -68,6 +68,41 @@ if [ "$DRY_RUN" != 1 ]; then
     : > /etc/vs-router/online-install
 fi
 
+# --- 0. Swap for small VPSes -------------------------------------------------
+# The Go builds (awg-go, Caddy) are the memory peak of the install. On a host
+# whose total memory (RAM + existing swap) is below 4 GiB, top up the swap file
+# so the build cannot be OOM-killed. Idempotent: an existing large-enough swap
+# (any swap device or file, not only ours) is left untouched.
+mem_total_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+swap_total_kb=$(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+TARGET_TOTAL_KB=$((4 * 1024 * 1024))
+available_total_kb=$((mem_total_kb + swap_total_kb))
+if [ "$available_total_kb" -lt "$TARGET_TOTAL_KB" ]; then
+    need_mb=$(( (TARGET_TOTAL_KB - available_total_kb + 1023) / 1024 ))
+    SWAPFILE=/swapfile
+    if [ ! -f "$SWAPFILE" ] || [ "$(stat -c %s "$SWAPFILE" 2>/dev/null || echo 0)" \
+        != "$((need_mb * 1024 * 1024))" ]; then
+        run swapoff "$SWAPFILE" 2>/dev/null || true
+        run rm -f "$SWAPFILE"
+        if run fallocate -l "${need_mb}M" "$SWAPFILE"; then :; else
+            run dd if=/dev/zero of="$SWAPFILE" bs=1M count="$need_mb" status=none
+        fi
+        run chmod 0600 "$SWAPFILE"
+        run mkswap "$SWAPFILE"
+        run swapon "$SWAPFILE"
+        if ! grep -qs "^\s*${SWAPFILE}\s" /etc/fstab; then
+            run sh -c "printf '%s\\n' '$SWAPFILE none swap sw,noatime 0 0' >> /etc/fstab"
+        fi
+        echo "SWAP: low-memory host ($(awk -v t=$mem_total_kb -v s=$swap_total_kb \
+'BEGIN{printf "%d MiB RAM, %d MiB swap", t/1024, s/1024}')); added ${need_mb} MiB $SWAPFILE"
+    else
+        echo "SWAP: $SWAPFILE already sized (${need_mb} MiB); keeping it"
+    fi
+else
+    echo "SWAP: sufficient memory ($(awk -v t=$mem_total_kb -v s=$swap_total_kb \
+'BEGIN{printf "%d MiB RAM, %d MiB swap", t/1024, s/1024}')); no swap needed"
+fi
+
 # --- 1. Packages ------------------------------------------------------------
 # Go builds need scratch space outside the RAM-backed /tmp on small VPSes.
 run install -d -m 0700 "$WORK/tmp"
