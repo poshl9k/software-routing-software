@@ -6,7 +6,7 @@ from .unbound import generate_unbound
 from .dnscrypt import generate_dnscrypt, doh_server_names, DOH_LISTEN_ADDR, DOH_LISTEN_PORT
 
 from .wireguard import generate_wg_conf, generate_wg_bundle, serialize_wireguard
-from .caddy import generate_caddy_json, generate_caddy_bundle, serialize_caddy
+from .caddy import generate_caddy_json, generate_caddy_bundle, serialize_caddy, bind
 
 __all__ = ["generate_kea", "generate_nftables", "generate_unbound", "generate_networkd", "generate_pppoe",
            "serialize_networkd", "generate_wg_conf", "generate_wg_bundle", "serialize_wireguard",

@@ -1,0 +1,14 @@
+[Unit]
+Description=vs-router portal (UDS)
+After=network.target
+
+[Service]
+Type=notify
+User=vs-router-portal
+ExecStart=/usr/bin/uvicorn vs_portal.app:app --uds /run/vs-router/portal/portal.sock
+UMask=0007
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vs-router/portal /run/vs-router/portal
+Environment="VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db"
+ExecStartPost=/bin/chmod 0660 /run/vs-router/portal/portal.sock
+ExecStartPost=/bin/chgrp vs-router-portal /run/vs-router/portal/portal.sock

@@ -56,6 +56,20 @@ class Management(Model):
         return str(IPv4Interface(self.address).ip)
 
 
+def portal_names(state):
+    """Public portal subscription names, reserve-first, no duplicates (ADR-0032).
+
+    The portal's own domain is derived from the panel's custom hostname by the
+    ``portal.`` prefix — one field serves both publications, and the panel keeps
+    its name even if the portal name is lost. ``()`` never happens: the reserve
+    always exists for an installed host.
+    """
+    reserve = f"portal.{state.ip}.nip.io"
+    custom = getattr(state, 'custom_hostname', None)
+    derived = f"portal.{custom}" if custom else None
+    return tuple(dict.fromkeys(name for name in (reserve, derived) if name))
+
+
 def publication_names(state):
     """Public panel names, in order, without duplicates (reserve first).
 

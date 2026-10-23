@@ -1,0 +1,16 @@
+[Unit]
+Description=vs-router web internal (portal interface)
+After=network.target
+
+[Service]
+Type=notify
+User=vs-router-web
+ExecStart=/usr/bin/python3 -m uvicorn vs_router.internal_app:app --uds /run/vs-router/web/internal.sock --proxy-headers --forwarded-allow-ips="*"
+ExecStartPost=/bin/sh -c 'chmod 0660 /run/vs-router/web/internal.sock; chgrp vs-router-portal /run/vs-router/web/internal.sock; chmod g+s /run/vs-router/web'
+Restart=on-failure
+UMask=0007
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vs-router /run/vs-router/web
+
+[Install]
+WantedBy=multi-user.target

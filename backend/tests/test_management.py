@@ -587,20 +587,27 @@ def test_caddy_publishes_panel_with_acme_hostname_and_secret_path():
     assert 'load_files' not in tls
     assert config['apps']['tls']['automation']['policies'][0]['issuers'][0]['module'] == 'acme'
     assert config['apps']['http']['servers']['management_acme']['listen'] == ['92.51.36.131:80']
-    # The panel and API live under the prefix; the root 404s; /health stays open.
-    assert server['routes'][0]['match'] == [{'path': ['/health']}]
-    assert server['routes'][1]['match'] == [{'path': ['/uOE3flWG7hvM/*']}]
-    assert server['routes'][1]['handle'][0] == {'handler': 'rewrite',
+    # The portal answers first on its own names (ADR-0032); the panel follows,
+    # host-bound, under the secret prefix; the root 404s; /health stays open.
+    assert server['routes'][0]['match'] == [{'host': ['portal.92.51.36.131.nip.io']}]
+    assert server['routes'][0]['handle'][0]['upstreams'] == [{'dial': 'unix//run/vs-router/portal/portal.sock'}]
+    assert server['routes'][1]['match'] == [{'host': ['92.51.36.131.nip.io'], 'path': ['/health']}]
+    assert server['routes'][2]['match'] == [{'host': ['92.51.36.131.nip.io'], 'path': ['/uOE3flWG7hvM/*']}]
+    assert server['routes'][2]['handle'][0] == {'handler': 'rewrite',
                                                 'strip_path_prefix': '/uOE3flWG7hvM'}
-    assert server['routes'][2]['handle'][0]['status_code'] == 404
+    assert server['routes'][3]['handle'][0]['status_code'] == 404
 
 
 def test_caddy_panel_without_hostname_keeps_the_local_ca():
     config = generate_caddy_json(ConfigurationVersion(), VPS)
     server = config['apps']['http']['servers']['management']
     assert server['listen'] == ['92.51.36.131:443']
-    assert server['routes'] == [{'handle': [{'handler': 'reverse_proxy', 'upstreams': [
-        {'dial': 'unix//run/vs-router/web/web.sock'}]}]}]
+    assert server['routes'] == [
+        {'match': [{'host': ['portal.92.51.36.131.nip.io']}],
+         'handle': [{'handler': 'reverse_proxy',
+                     'upstreams': [{'dial': 'unix//run/vs-router/portal/portal.sock'}]}]},
+        {'handle': [{'handler': 'reverse_proxy', 'upstreams': [
+            {'dial': 'unix//run/vs-router/web/web.sock'}]}]}]
     assert server['tls_connection_policies'][0]['certificate_selection'] == {'any_tag': ['management']}
     assert config['apps']['tls']['certificates']['load_files'][0]['tags'] == ['management']
     assert 'automate' not in config['apps']['tls']['certificates']
@@ -767,7 +774,8 @@ def test_single_uplink_provision_publishes_both_acme_subjects(tmp_path):
         hostname='92.51.36.131.nip.io', custom_hostname='panel.example.com')
     caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
     assert caddy == generate_caddy_json(ConfigurationVersion(), state)
-    names = ['92.51.36.131.nip.io', 'panel.example.com']
+    names = ['92.51.36.131.nip.io', 'panel.example.com',
+             'portal.92.51.36.131.nip.io', 'portal.panel.example.com']
     assert caddy['apps']['tls']['certificates']['automate'] == names
     policy = caddy['apps']['tls']['automation']['policies'][0]
     assert policy['subjects'] == names
@@ -1071,7 +1079,7 @@ def test_publish_panel_domain_serves_the_custom_name_beside_the_reserve(tmp_path
     assert record['custom_hostname'] == CUSTOM
     caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
     automate = caddy['apps']['tls']['certificates']['automate']
-    assert set(automate) == {'92.51.36.131.nip.io', CUSTOM}
+    assert set(automate) == {'92.51.36.131.nip.io', CUSTOM, 'portal.92.51.36.131.nip.io', 'portal.' + CUSTOM}
     assert set(caddy['apps']['tls']['automation']['policies'][0]['subjects']) == set(automate)
     assert caddy['apps']['http']['servers']['management_acme']['listen'] == ['92.51.36.131:80']
     assert 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 counter accept comment "management_acme"' in (applied / 'nftables.conf').read_text()
@@ -1089,7 +1097,8 @@ def test_publish_panel_domain_serves_the_custom_name_beside_the_reserve(tmp_path
     record = json.loads((state_dir / 'management.json').read_text())
     assert record['hostname'] == '92.51.36.131.nip.io' and record['custom_hostname'] is None
     caddy = json.loads((tmp_path / 'etc/caddy/caddy.json').read_text())
-    assert caddy['apps']['tls']['certificates']['automate'] == ['92.51.36.131.nip.io']
+    assert caddy['apps']['tls']['certificates']['automate'] == [
+        '92.51.36.131.nip.io', 'portal.92.51.36.131.nip.io']
     assert 'management_acme' in caddy['apps']['http']['servers']
     assert 'management_acme' in (applied / 'nftables.conf').read_text()
 

@@ -24,14 +24,19 @@ def generate_caddy_json(version, management=None) -> dict:
     sites = sorted(version.configuration.sites, key=lambda s: s.name)
     apps, servers, l4, policies, automate, certificates = {}, {}, {}, [], [], []
     if management is not None:
-        from ..management import TLS_DIR, publication_names, validate_site_bindings
+        from ..management import TLS_DIR, portal_names, publication_names, validate_site_bindings
         validate_site_bindings(version, management)
         # Every published name answers the panel; the reserve and the operator's
         # own domain coexist, so a failure of one never hides the panel (ADR-0024).
         names = list(publication_names(management))
+        # The portal answers on its own names only (ADR-0032): a dedicated route
+        # ahead of the panel's keeps the admin surface unreachable there.
+        portal = list(portal_names(management))
         sni = management.custom_hostname or (names[0] if names else management.ip)
         panel = [{'handler': 'reverse_proxy',
                   'upstreams': [{'dial': 'unix//run/vs-router/web/web.sock'}]}]
+        portal_proxy = [{'handler': 'reverse_proxy',
+                         'upstreams': [{'dial': 'unix//run/vs-router/portal/portal.sock'}]}]
         if management.path_prefix:
             # The panel and its API live only under the secret prefix; the bare
             # host root answers 404. `/health` stays outside it so the agent's
@@ -43,6 +48,18 @@ def generate_caddy_json(version, management=None) -> dict:
                       {'handle': [{'handler': 'static_response', 'status_code': 404}]}]
         else:
             routes = [{'handle': panel}]
+        if portal:
+            # Host-matched portal route first; with public panel names the
+            # panel's own routes stop being a catch-all so its API never
+            # answers on a portal name (a no-name panel keeps its catch-all).
+            routes = [{'match': [{'host': portal}], 'handle': portal_proxy}, *routes]
+            if names:
+                for entry in routes[1:]:
+                    if 'match' in entry:
+                        for matcher in entry['match']:
+                            matcher['host'] = names
+                    else:
+                        entry['match'] = [{'host': names}]
         section = {'listen': [bind(management.ip, 443)], 'routes': routes,
                    'automatic_https': {'disable': True}}
         if names:
@@ -55,8 +72,8 @@ def generate_caddy_json(version, management=None) -> dict:
                 'listen': [bind(management.ip, 80)],
                 'routes': [{'handle': [{'handler': 'static_response', 'status_code': 308,
                                         'headers': {'Location': ['https://{http.request.host}{http.request.uri}']}}]}]}
-            automate.extend(names)
-            policies.append({'subjects': names, 'issuers': [
+            automate.extend([*names, *portal])
+            policies.append({'subjects': [*names, *portal], 'issuers': [
                 {'module': 'acme', 'challenges': {'tls-alpn': {'disabled': True}}}]})
         else:
             section['tls_connection_policies'] = [{'default_sni': sni,

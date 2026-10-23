@@ -387,3 +387,14 @@ else
 fi
 systemctl is-active --quiet vs-router-agent.service
 systemctl is-active --quiet vs-router-web.service
+# Portal publication hooks (phase 5, ADR-0032)
+id vs-router-portal >/dev/null 2>&1 || useradd --system --home-dir /var/lib/vs-router/portal --shell /usr/sbin/nologin vs-router-portal
+usermod -a -G vs-router-portal vs-router-web || true
+install -d -m 0770 -o vs-router-portal -g vs-router-portal /var/lib/vs-router/portal /run/vs-router/portal
+install -d -m 0770 -o vs-router-web -g vs-router-portal /run/vs-router/web
+install -m 0640 -o vs-router-web -g vs-router-portal /etc/vs-router/portal-internal.secret 2>/dev/null || install -m 0640 -o root -g root /dev/null /etc/vs-router/portal-internal.secret
+chown vs-router-web:vs-router-portal /etc/vs-router/portal-internal.secret 2>/dev/null || true
+chmod 0640 /etc/vs-router/portal-internal.secret 2>/dev/null || true
+systemctl daemon-reload
+[ -f /etc/systemd/system/vs-router-portal.service ] && systemctl enable vs-router-portal.service
+[ -f /etc/systemd/system/vs-router-web-internal.service ] && systemctl enable vs-router-web-internal.service
