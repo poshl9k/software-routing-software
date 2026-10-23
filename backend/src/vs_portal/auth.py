@@ -83,6 +83,16 @@ def public_account(account):
             'email': account.email, 'status': account.status}
 
 
+@router.get('/invite/{token}')
+def invite_info(token: str, request: Request, db: Session = Depends(get_db)):
+    """A preview the activation page shows before burning the one-time token."""
+    invite = db.get(Invite, token)
+    state = request.app.state.auth
+    if invite is None or invite.used_at is not None or invite.expires_at <= state.now():
+        raise APIError(400, 'portal.invite_invalid')
+    return {'subscriber_name': invite.subscriber_name, 'expires_at': invite.expires_at}
+
+
 @router.post('/invite/activate')
 def activate(body: Activation, request: Request, db: Session = Depends(get_db)):
     state = request.app.state.auth

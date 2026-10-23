@@ -57,6 +57,7 @@ export type PortalDevice = { name: string; label: string; status: "active" | "in
 export type DeviceOperation = { status: "applied" | "pending"; device?: PortalDevice };
 export type PortalDevicesResponse = { devices: PortalDevice[]; subscription?: PortalMe["subscription"]; tunnel?: unknown };
 export const portalApi = {
+  inviteInfo: (token: string) => portalRequest<{ subscriber_name: string; expires_at: string }>(`/api/portal/invite/${encodeURIComponent(token)}`),
   activateInvite: (data: { token: string; password: string; email?: string }) =>
       portalRequest<{ subscriber_name: string; username: string }>("/api/portal/invite/activate", json("POST", data)),
   login: (data: { username: string; password: string }) => portalRequest<void>("/api/portal/login", json("POST", data)),
