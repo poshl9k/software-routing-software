@@ -105,6 +105,7 @@ class Device(Base):
     preshared_key: Mapped[EncryptedSecret | None] = mapped_column(SecretJSON())
     allowed_ips: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(8), nullable=False, default='inactive')
+    tunnel_name: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 

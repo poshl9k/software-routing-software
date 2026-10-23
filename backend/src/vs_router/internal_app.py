@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from ipaddress import ip_network
 from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Body, Depends, FastAPI, Header, Request
 from pydantic import Field
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -21,7 +21,7 @@ from .api.errors import APIError
 from .api.keygen import generate_peer_key, generate_peer_keypair
 from .db import ConfigurationRow
 from .generators.amnezia import tunnel_dns
-from .generators.wireguard import client_endpoint, materialize_addresses, peer_address, server_public_key
+from .generators.wireguard import client_endpoint, materialize_addresses, peer_address, server_public_key, tunnel_addresses
 from .schema import Configuration, EncryptedSecret, Model, Peer
 from .secrets import decrypt_secret, encrypt_secret
 
@@ -31,6 +31,7 @@ class DeviceOperation(Model):
     device_id: int | None = Field(default=None, ge=1)
     label: str | None = Field(default=None, min_length=1, max_length=128)
     keys: dict | None = None
+    tunnel: str | None = None
 
 
 def read_internal_secret():
@@ -104,6 +105,7 @@ def _peer(device):
 
 def _device_result(device):
     return {'id': device.id, 'name': device.name, 'label': device.label,
+            'tunnel': device.tunnel_name,
             'private_key': _stored(device.private_key), 'public_key': device.public_key,
             'preshared_key': _stored(device.preshared_key),
             'allowed_ips': list(device.allowed_ips or ())}
@@ -114,12 +116,17 @@ def _active(subscription):
             and subscription.expires_at > datetime.now(timezone.utc))
 
 
-def _tunnel(configuration, name):
-    # Existing subscriber peers determine the server; otherwise use the sole server.
+def _tunnel(configuration, name, preferred=None):
+    # An explicitly bound tunnel wins (the device records its creation tunnel);
+    # otherwise existing subscriber peers determine the server, then the sole server.
     servers = [t for t in configuration.tunnels if t.role == 'server']
-    bound = [t for t in servers if any(p.subscriber == name for p in t.peers)]
     if not servers:
         raise APIError(409, 'portal.tunnel_unavailable')
+    if preferred is not None:
+        named = [t for t in servers if t.name == preferred]
+        if named:
+            return named[0]
+    bound = [t for t in servers if any(p.subscriber == name for p in t.peers)]
     if len(bound) > 1 or (not bound and len(servers) != 1):
         raise APIError(409, 'portal.tunnel_ambiguous')
     return (bound or servers)[0]
@@ -240,7 +247,15 @@ def _mutate(name, action, db, portal, body=None):
             raise APIError(409, 'apply.busy')
         config = row.configuration
         reservations = list(portal.scalars(select(Device).where(Device.status != 'removed')))
-        tunnel = _tunnel(config, name)
+        # The device's recorded creation tunnel (or an explicit hint) resolves
+        # ambiguity; the peer-binding heuristics stay as the fallback.
+        preferred = body.get('tunnel') if isinstance(body, dict) else None
+        if action == 'device' and body is not None and body.tunnel:
+            preferred = body.tunnel
+        if action == 'renew' or (action == 'expire' and preferred is None):
+            preferred = next((d.tunnel_name for d in devices
+                              if d.status != 'removed' and d.tunnel_name), None)
+        tunnel = _tunnel(config, name, preferred)
         peers = list(tunnel.peers)
         device = None
         if action == 'device':
@@ -260,6 +275,7 @@ def _mutate(name, action, db, portal, body=None):
                 if device.status == 'removed':
                     raise APIError(409, 'device.removed')
                 device.name = f'portal_{device.id}'
+                device.tunnel_name = tunnel.name
                 if not device.private_key:
                     pair = generate_peer_keypair()
                     device.private_key = _encrypt(pair['private_key'])
@@ -285,6 +301,7 @@ def _mutate(name, action, db, portal, body=None):
                 if device.status == 'removed' and op != 'delete':
                     raise APIError(404, 'device.not_found')
                 if op == 'activate':
+                    device.tunnel_name = device.tunnel_name or tunnel.name
                     peer = _allocate(config, tunnel, device, reservations)
                     peers = [p for p in peers if not (p.name == device.name and p.subscriber == name)]
                     peers.append(peer)
@@ -371,7 +388,9 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
                            'random_trailers': tunnel.random_trailers,
                            'disable_cookies': tunnel.disable_cookies,
                            'allowed_ips': list(tunnel.allowed_ips or ('0.0.0.0/0',)),
-                           'listen_port': tunnel.listen_port}}
+                           'listen_port': tunnel.listen_port,
+                           'keepalive': tunnel.keepalive,
+                           'subnet': str(tunnel_addresses(tunnel, config)[0])}}
 
     @app.post('/internal/portal/subscribers/{name}/device-op', dependencies=[Depends(_auth)])
     def device_op(name: str, body: DeviceOperation, db: Session = Depends(_db),
@@ -383,8 +402,9 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
         return _mutate(name, 'expire', db, portal)
 
     @app.post('/internal/portal/subscribers/{name}/renew', dependencies=[Depends(_auth)])
-    def renew(name: str, db: Session = Depends(_db), portal: Session = Depends(_portal_db)):
-        return _mutate(name, 'renew', db, portal)
+    def renew(name: str, body: dict | None = Body(default=None),
+              db: Session = Depends(_db), portal: Session = Depends(_portal_db)):
+        return _mutate(name, 'renew', db, portal, body)
 
     return app
 

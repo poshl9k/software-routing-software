@@ -74,12 +74,15 @@ def _client_addresses(tunnel, peer, configuration) -> list[str]:
 
 
 def amnezia_uri(tunnel, peer, configuration, *, dns1: str | None = None, dns2: str | None = None, endpoint=None,
-                description=None, mtu: int = DEFAULT_MTU) -> str:
+                description=None, mtu: int = DEFAULT_MTU, subnet: str | None = None,
+                server_public: str | None = None) -> str:
     """A ``vpn://`` document for one server peer, importable into the Amnezia app.
 
     ``dns1``/``dns2`` resolve the config's DNS placeholders. A peer without its own
     private key cannot be exported — the app needs it, and inventing one would
-    be a silent mismatch.
+    be a silent mismatch. ``subnet`` lets a caller outside the panel's schema
+    (the portal's device export) supply the container subnet the configuration
+    object would otherwise be needed for.
     """
     if tunnel.protocol != 'awg' or tunnel.role != 'server':
         raise ValueError('amnezia.role_unsupported')
@@ -94,11 +97,16 @@ def amnezia_uri(tunnel, peer, configuration, *, dns1: str | None = None, dns2: s
     if not addresses:
         raise ValueError('amnezia.address_required')
     # The container subnet is the tunnel's own network (the app pairs a /32
-    # client_ip with the tunnel subnet), never the peer's /32.
-    subnet = ip_network(tunnel_addresses(tunnel, configuration)[0], strict=False)
+    # client_ip with the tunnel subnet), never the peer's /32. An explicit
+    # ``subnet`` (portal export) replaces the configuration-derived one.
+    if subnet is None:
+        subnet = str(tunnel_addresses(tunnel, configuration)[0])
+    subnet_net = ip_network(subnet, strict=False)
     client_private = reveal(peer.private_key)
     client_public = peer.public_key
-    public = server_public_key(tunnel)
+    # The server public key is derived from the private key by the panel; a
+    # caller outside the schema (the portal) passes the applied value instead.
+    public = server_public if server_public is not None else server_public_key(tunnel)
     allowed = tuple(tunnel.allowed_ips) or DEFAULT_ALLOWED_IPS
     parameters = awg_parameters(tunnel)
     psk = reveal(peer.preshared_key) if peer.preshared_key else None
@@ -143,8 +151,8 @@ def amnezia_uri(tunnel, peer, configuration, *, dns1: str | None = None, dns2: s
         'last_config': json.dumps(last_config, ensure_ascii=False),
         'port': str(tunnel.listen_port),
         'protocol_version': PROTOCOL_VERSION,
-        'subnet_address': str(subnet.network_address),
-        'subnet_cidr': str(subnet.prefixlen),
+        'subnet_address': str(subnet_net.network_address),
+        'subnet_cidr': str(subnet_net.prefixlen),
         'transport_proto': TRANSPORT_PROTO,
     }
     document = {

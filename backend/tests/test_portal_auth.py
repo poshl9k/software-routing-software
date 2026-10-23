@@ -32,9 +32,12 @@ async def portal(monkeypatch):
     panel_calls = []
     busy = [False]
     state = {'subscription': {'status': 'active'}, 'devices': [],
-             'tunnel': {'name': 'vpn', 'protocol': 'wg', 'public_key': 'SERVER',
+             'tunnel': {'name': 'vpn', 'protocol': 'awg', 'public_key': 'SERVER',
                         'endpoint': 'vpn.example:51820', 'dns_servers': ['10.0.0.1'],
-                        'allowed_ips': ['0.0.0.0/0']}}
+                        'allowed_ips': ['0.0.0.0/0'], 'listen_port': 51820,
+                        'subnet': '10.66.1.0/24', 'keepalive': 25,
+                        'obfuscation': {'Jc': '8', 'Jmin': '25', 'Jmax': '87',
+                                        'S1': '97', 'S2': '60', 'H1': '462728319', 'H2': '1'}}}
 
     def panel(request):
         assert request.headers['X-VS-Portal-Secret'] == 'test-internal-secret'

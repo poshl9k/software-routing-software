@@ -39,7 +39,21 @@ async def test_criterion_2_create_encrypt_export_and_no_other_accounts(portal):
     assert conf.headers['Cache-Control'] == 'no-store'
     for kind in ('qr', 'amnezia'):
         response = await client.get(f'/api/portal/devices/{device.name}/export?format={kind}')
-        assert response.status_code == 501 and response.json()['error']['code'] == 'portal.export_pending'
+        assert response.status_code == 200, response.text
+    # QR encodes the same config (PNG bytes); amnezia is the panel's vpn:// container.
+    assert (await client.get(f'/api/portal/devices/{device.name}/export?format=qr')).headers['content-type'] == 'image/png'
+    amnezia = await client.get(f'/api/portal/devices/{device.name}/export?format=amnezia')
+    assert amnezia.text.startswith('vpn://')
+    import base64, json, struct, zlib
+    blob = base64.urlsafe_b64decode(amnezia.text[6:] + '==')
+    document = json.loads(zlib.decompress(blob[4:]))
+    container = document['containers'][0]['awg']
+    assert document['containers'][0]['container'] == 'amnezia-awg2'
+    last_config = json.loads(container['last_config'])
+    assert last_config['client_priv_key'] == 'client-private'
+    assert last_config['hostName'] == 'vpn.example' and container['port'] == '51820'
+    # An unknown format is refused; export degrades honestly without tunnel data.
+    assert (await client.get(f'/api/portal/devices/{device.name}/export?format=txt')).status_code == 422
     state['tunnel']['endpoint'] = None
     assert (await client.get(f'/api/portal/devices/{device.name}/export')).status_code == 503
     assert any(b'"device_id":' in body for _, path, body in calls if path.endswith('device-op'))

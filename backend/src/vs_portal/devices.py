@@ -77,11 +77,14 @@ def _material(device, fields):
     for field in ('private_key', 'preshared_key'):
         if field in fields and fields[field] is not None:
             setattr(device, field, _secret(fields[field]))
+    if fields.get('tunnel'):
+        device.tunnel_name = fields['tunnel']
 
 
 def _payload(op, device):
     payload = {'op': op.op, 'device_id': device.id if device else None,
-               'label': op.label if op.op == 'create' else None}
+               'label': op.label if op.op == 'create' else None,
+               'tunnel': device.tunnel_name if device else None}
     if device and device.private_key is not None:
         key = get_secret_key()
         try:
@@ -258,20 +261,12 @@ def _line(value):
     return value
 
 
-@router.get('/devices/{name}/export')
-def export_device(name: str, request: Request, format: str = Query('conf'),
-                  account: Account = Depends(current_account), db: Session = Depends(get_db)):
-    device = device_owned(db, name, account.subscriber_name)
-    if format in ('qr', 'amnezia'):
-        raise APIError(501, 'portal.export_pending')
-    if format != 'conf':
-        raise APIError(422, 'portal.export_format')
-    state = request.app.state.internal.state(account.subscriber_name)
-    tunnel = state.get('tunnel')
+def _conf_text(device, tunnel, key):
+    """The wg-quick client config for one device, from stored key material."""
     if not isinstance(tunnel, dict) or not device.private_key or not device.allowed_ips:
         raise APIError(503, 'portal.export_unavailable')
     try:
-        private = decrypt_secret(device.private_key, get_secret_key())
+        private = decrypt_secret(device.private_key, key)
     except (InvalidToken, ValueError):
         raise APIError(503, 'portal.export_unavailable') from None
     endpoint = tunnel.get('endpoint')
@@ -290,7 +285,7 @@ def export_device(name: str, request: Request, format: str = Query('conf'),
         if not obfuscation or (any(key in obfuscation for key in ('S3', 'S4', 'I1'))
                                and not tunnel.get('header_protection_key')):
             raise APIError(503, 'portal.export_unavailable')
-        lines += [f'{key} = {_line(str(obfuscation[key]))}' for key in AWG_ORDER if key in obfuscation]
+        lines += [f'{k} = {_line(str(obfuscation[k]))}' for k in AWG_ORDER if k in obfuscation]
         if tunnel.get('header_protection_key'):
             lines.append(f'HeaderProtectionKey = {_line(tunnel["header_protection_key"])}')
         if tunnel.get('random_trailers'):
@@ -305,10 +300,82 @@ def export_device(name: str, request: Request, format: str = Query('conf'),
               'PersistentKeepalive = 25']
     if device.preshared_key:
         try:
-            lines.append(f'PresharedKey = {_line(decrypt_secret(device.preshared_key, get_secret_key()))}')
+            lines.append(f'PresharedKey = {_line(decrypt_secret(device.preshared_key, key))}')
         except (InvalidToken, ValueError):
             raise APIError(503, 'portal.export_unavailable') from None
-    return Response('\n'.join(lines) + '\n', media_type='text/plain; charset=utf-8',
+    return '\n'.join(lines) + '\n'
+
+
+def _amnezia_uri(device, tunnel, key, account_name):
+    """The Amnezia ``vpn://`` container, reusing the panel's own generator.
+
+    The generator's schema objects are replaced by a shim carrying the same
+    fields from the internal state and the stored (decrypted) key material;
+    ``dns1``/``dns2``/``subnet`` remove the last configuration dependencies.
+    """
+    from types import SimpleNamespace
+    from vs_router.generators.amnezia import amnezia_uri
+    from vs_router.secrets import encrypt_secret
+    if tunnel.get('protocol') != 'awg':
+        raise APIError(400, 'amnezia.role_unsupported')
+    for field in ('listen_port', 'public_key', 'endpoint', 'subnet'):
+        if not tunnel.get(field):
+            raise APIError(503, 'portal.export_unavailable')
+    try:
+        private = encrypt_secret(decrypt_secret(device.private_key, key), key) \
+            if device.private_key else None
+        psk = encrypt_secret(decrypt_secret(device.preshared_key, key), key) \
+            if device.preshared_key else None
+    except (InvalidToken, ValueError):
+        raise APIError(503, 'portal.export_unavailable') from None
+    hpk = tunnel.get('header_protection_key')
+    dns_pair = tunnel.get('dns_servers') or ()
+    shim = SimpleNamespace(
+        protocol='awg', role='server', name=tunnel.get('name') or device.name,
+        listen_port=tunnel['listen_port'], obfuscation=tunnel.get('obfuscation') or {},
+        header_protection_key=encrypt_secret(hpk, key) if hpk else None,
+        random_trailers=bool(tunnel.get('random_trailers')),
+        disable_cookies=bool(tunnel.get('disable_cookies')),
+        allowed_ips=tuple(tunnel.get('allowed_ips') or ()),
+        keepalive=tunnel.get('keepalive') or 25,
+        # Non-empty: tunnel_dns eagerly derives a primary otherwise.
+        dns_servers=tuple(dns_pair), endpoint=None)
+    peer = SimpleNamespace(name=device.name, allowed_ips=tuple(device.allowed_ips or ()),
+                           public_key=device.public_key, private_key=private,
+                           preshared_key=psk)
+    dns_pair = tunnel.get('dns_servers') or ()
+    try:
+        return amnezia_uri(shim, peer, None, dns1=dns_pair[0] if dns_pair else None,
+                           dns2=dns_pair[1] if len(dns_pair) > 1 else None,
+                           endpoint=tunnel.get('endpoint'), description=device.label,
+                           subnet=tunnel['subnet'], server_public=tunnel.get('public_key'))
+    except ValueError as exc:
+        raise APIError(503, 'portal.export_unavailable') from exc
+
+
+@router.get('/devices/{name}/export')
+def export_device(name: str, request: Request, format: str = Query('conf'),
+                  account: Account = Depends(current_account), db: Session = Depends(get_db)):
+    device = device_owned(db, name, account.subscriber_name)
+    if format not in ('conf', 'qr', 'amnezia'):
+        raise APIError(422, 'portal.export_format')
+    state = request.app.state.internal.state(account.subscriber_name)
+    tunnel = state.get('tunnel')
+    key = get_secret_key()
+    if format == 'qr':
+        import io
+        import qrcode
+        image = qrcode.make(_conf_text(device, tunnel, key))
+        out = io.BytesIO()
+        image.save(out, format='PNG')
+        return Response(out.getvalue(), media_type='image/png',
+                        headers={'Cache-Control': 'no-store'})
+    if format == 'amnezia':
+        uri = _amnezia_uri(device, tunnel, key, account.subscriber_name)
+        return Response(uri, media_type='text/plain; charset=utf-8',
+                        headers={'Content-Disposition': f'attachment; filename="{name}-amnezia.txt"',
+                                 'Cache-Control': 'no-store'})
+    return Response(_conf_text(device, tunnel, key), media_type='text/plain; charset=utf-8',
                     headers={'Content-Disposition': f'attachment; filename="{name}.conf"',
                              'Cache-Control': 'no-store'})
 
