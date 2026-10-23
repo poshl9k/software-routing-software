@@ -35,4 +35,5 @@ export const queryKeys = {
   rulesets: () => ["rulesets"] as const,
   portalTariffs: () => ["portal", "tariffs"] as const,
   portalSubscription: (name: string) => ["portal", "subscription", name] as const,
+  portalSettings: () => ["portal", "settings"] as const,
 };

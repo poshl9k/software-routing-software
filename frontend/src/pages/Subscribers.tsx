@@ -191,8 +191,24 @@ export default function Subscribers() {
     },
   });
 
+  // ----- Контакт поддержки (настройка портала) -----
+  const support = useQuery({ queryKey: queryKeys.portalSettings(), queryFn: portalAdminApi.readSettings, enabled: admin });
+  const [supportUrl, setSupportUrl] = useState<string | null>(null);
+  const supportEditing = supportUrl !== null;
+  const saveSupport = useMutation({
+    mutationFn: () => portalAdminApi.updateSettings({ support_url: supportUrl ?? "" }),
+    onSuccess: async (data) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.portalSettings() });
+      setNotice("Контакт поддержки сохранён");
+      setSupportUrl(null);
+      return data;
+    },
+  });
+  const supportValue = supportEditing ? supportUrl : (support.data?.support_url ?? null);
+
   const pageError = error ?? removeSubscriber.error ?? tariffs.error ?? saveTariff.error
-    ?? removeTariff.error ?? sendInvite.error ?? revokeInvite.error ?? patchSubscription.error;
+    ?? removeTariff.error ?? sendInvite.error ?? revokeInvite.error ?? patchSubscription.error
+    ?? support.error ?? saveSupport.error;
   return <>
     <PageHeader>Абоненты</PageHeader>
     <ErrorNotice error={pageError} />
@@ -233,6 +249,16 @@ export default function Subscribers() {
             <DeleteButton label={`Удалить тариф ${row.name}`} onClick={() => setDeleteTariffId(row.id)} />
           </> : "",
         ])} /></div>
+    </Card>
+    <Card title="Поддержка" action={admin ? <Button disabled={support.isLoading}
+      onClick={() => setSupportUrl(support.data?.support_url ?? "")}>Изменить</Button> : undefined}>
+      {admin && supportEditing ? <FormGrid>
+        <Field label="Ссылка на TG-бот поддержки" required value={supportUrl ?? ""}
+          hint="Формат https://t.me/<бот>; показывается абонентам в кабинете" onChange={(v) => setSupportUrl(v)} />
+        <EditorFooter saving={saveSupport.isPending} valid={!support.isLoading}
+          cancel={() => setSupportUrl(null)} save={() => saveSupport.mutate()} />
+      </FormGrid> : supportValue ? <InfoNote>Контакт поддержки: <a href={supportValue} target="_blank" rel="noreferrer">{supportValue}</a></InfoNote>
+        : <EmptyState>Контакт поддержки не задан.</EmptyState>}
     </Card>
 
     {/* Редактор абонента — черновик конфигурации */}

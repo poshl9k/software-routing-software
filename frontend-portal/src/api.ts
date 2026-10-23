@@ -52,6 +52,7 @@ export type PortalMe = {
     tariff_id?: number;
   } | null;
   notices?: string[];
+  support_url?: string | null;
 };
 export type PortalDevice = { name: string; label: string; status: "active" | "inactive" | "removed" | "pending"; last_handshake?: string | null; applied: boolean };
 export type DeviceOperation = { status: "applied" | "pending"; device?: PortalDevice };

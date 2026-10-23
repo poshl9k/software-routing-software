@@ -206,6 +206,13 @@ export const portalAdminApi = {
     request<void>(`/api/portal-admin/invites/${encodeURIComponent(token)}`, { method: "DELETE" }),
   readSubscription: (name: string) =>
     request<Subscription>(`/api/portal-admin/subscribers/${encodeURIComponent(name)}/subscription`),
+  readSettings: () => request<{ support_url: string | null }>("/api/portal-admin/settings"),
+  updateSettings: (body: { support_url?: string }) =>
+    request<{ support_url: string | null }>("/api/portal-admin/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   updateSubscription: (name: string, body: { tariff_id?: number; renew?: boolean }) =>
     request<Subscription>(`/api/portal-admin/subscribers/${encodeURIComponent(name)}/subscription`, {
       method: "PATCH",

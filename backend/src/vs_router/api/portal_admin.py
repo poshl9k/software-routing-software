@@ -332,3 +332,35 @@ def update_subscription(name: str, body: SubscriptionPatch, response: Response,
             response.status_code = 202
     response.headers["Cache-Control"] = "no-store"
     return subscription_view(row)
+
+
+@router.get("/settings")
+def read_settings(db: Session = Depends(get_portal_db)):
+    values = {row.key: row.value for row in db.scalars(select(Setting))}
+    return {"support_url": values.get("support_url")}
+
+
+@router.put("/settings")
+def update_settings(body: dict, response: Response, db: Session = Depends(get_portal_db)):
+    if not set(body) <= {"support_url"} or not all(isinstance(v, str) and len(v) <= 256 for v in body.values()):
+        raise APIError(422, "request.invalid")
+    if "support_url" in body:
+        value = body["support_url"].strip()
+        if value and not value.startswith(("https://t.me/", "https://telegram.me/")):
+            raise APIError(422, "portal.support_url_invalid")
+        begin_write(db)
+        if value:
+            row = db.get(Setting, "support_url")
+            if row is None:
+                row = Setting(key="support_url", value=value)
+                db.add(row)
+            else:
+                row.value = value
+        else:
+            row = db.get(Setting, "support_url")
+            if row is not None:
+                db.delete(row)
+        audit(db, "settings.support_url", value or "removed")
+        db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return read_settings(db)

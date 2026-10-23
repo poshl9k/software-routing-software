@@ -12,7 +12,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from vs_router.api.errors import APIError
-from .models import Account, Audit, Device, Invite, Subscription, Tariff, as_utc
+from .models import Account, Audit, Device, Invite, Setting, Subscription, Tariff, as_utc
 
 COOKIE = 'vs_portal_session'
 TTL = 8 * 60 * 60
@@ -178,7 +178,9 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
 def me(request: Request, account: Account = Depends(current_account), db: Session = Depends(get_db)):
     subscription = db.get(Subscription, account.subscriber_name)
     if subscription is None:
-        return {'account': public_account(account), 'subscription': None, 'notices': []}
+        support = db.get(Setting, 'support_url')
+        return {'account': public_account(account), 'subscription': None, 'notices': [],
+                'support_url': support.value if support else None}
     tariff = db.get(Tariff, subscription.tariff_id)
     remaining = (subscription.expires_at - request.app.state.auth.now()).total_seconds()
     expired = subscription.status != 'active' or remaining <= 0
@@ -192,9 +194,10 @@ def me(request: Request, account: Account = Depends(current_account), db: Sessio
         if count >= tariff.device_limit:
             notices.append({'code': 'portal.device_limit',
                             'message': f'На этом тарифе разрешено {tariff.device_limit} устройств'})
+    support = db.get(Setting, 'support_url')
     return {'account': public_account(account),
             'subscription': {'status': 'expired' if expired else 'active',
                              'expires_at': subscription.expires_at.isoformat(),
                              'tariff': {'name': tariff.name, 'device_limit': tariff.device_limit,
                                         'term_days': tariff.term_days} if tariff else None},
-            'notices': notices}
+            'notices': notices, 'support_url': support.value if support else None}

@@ -244,9 +244,10 @@ async def test_criterion_9_portal_migrated_separate_from_panel(portal_admin_api)
     assert "portal_accounts" not in panel_tables
     assert "configuration_versions" not in portal_tables
     assert portal_tables == {"alembic_version", "portal_accounts", "portal_invites", "portal_tariffs",
-                             "portal_subscriptions", "portal_devices", "portal_device_ops", "portal_audit"}
+                             "portal_subscriptions", "portal_devices", "portal_device_ops",
+                             "portal_audit", "portal_settings"}
     with portal.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == "0002"
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == "0003"
 
 
 async def test_criterion_8_panel_second_engine_lazy_and_sqlite_wal(tmp_path, monkeypatch):

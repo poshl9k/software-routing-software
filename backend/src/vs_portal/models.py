@@ -133,6 +133,13 @@ class Audit(Base):
     at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
+class Setting(Base):
+    """Admin-editable portal settings (key/value); e.g. the support Telegram link."""
+    __tablename__ = 'portal_settings'
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(256), nullable=False)
+
+
 def make_engine(database_url=None):
     url = database_url or os.environ.get('VS_PORTAL_DATABASE_URL', 'sqlite:///vs-portal.db')
     sqlite = url.startswith('sqlite:')
