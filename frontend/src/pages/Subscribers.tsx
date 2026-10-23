@@ -49,7 +49,7 @@ function portalHost(record: { custom_hostname: string | null; address: string } 
 }
 
 export default function Subscribers() {
-  const { configuration, version, user, error, saveDraft, setNotice } = useConfiguration();
+  const { configuration, version, user, error, refresh, setNotice } = useConfiguration();
   const queryClient = useQueryClient();
   const admin = user?.role === "admin";
 
@@ -57,8 +57,6 @@ export default function Subscribers() {
   const editor = useDraftEditor<Subscriber>();
   const [originalName, setOriginalName] = useState<string | null>(null);
   const [deleteName, setDeleteName] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<unknown>(null);
-  const [deleting, setDeleting] = useState(false);
   const subscribers = configuration.subscribers ?? [];
   const devices = (name: string) => configuration.tunnels.flatMap((tunnel) =>
     tunnel.peers.filter((peer) => peer.subscriber === name)
@@ -75,22 +73,15 @@ export default function Subscribers() {
         subscribers.map((item) => item.name === originalName ? value : item),
     }));
   };
-  const remove = async () => {
-    if (!deleteName || !admin || deleting || devices(deleteName).length) return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      const saved = await saveDraft({ ...configuration,
-        subscribers: subscribers.filter((item) => item.name !== deleteName),
-      });
-      setNotice(`Черновик v${saved.id} сохранён`);
+  const removeSubscriber = useMutation({
+    mutationFn: (name: string) => portalAdminApi.deleteSubscriber(name),
+    onSuccess: async (_result, name) => {
+      // Серверный каскад уже убрал абонента, его пиров и правила из черновика.
+      await refresh();
+      setNotice(`Абонент ${name} удалён вместе с устройствами`);
       setDeleteName(null);
-    } catch (failure) {
-      setDeleteError(failure);
-    } finally {
-      setDeleting(false);
-    }
-  };
+    },
+  });
 
   // ----- Тарифы (БД портала; серверное состояние — TanStack Query) -----
   const hostRecord = useQuery({ queryKey: queryKeys.hostManagement(), queryFn: api.hostManagement, enabled: admin });
@@ -200,12 +191,12 @@ export default function Subscribers() {
     },
   });
 
-  const pageError = error ?? deleteError ?? tariffs.error ?? saveTariff.error
+  const pageError = error ?? removeSubscriber.error ?? tariffs.error ?? saveTariff.error
     ?? removeTariff.error ?? sendInvite.error ?? revokeInvite.error ?? patchSubscription.error;
   return <>
     <PageHeader>Абоненты</PageHeader>
     <ErrorNotice error={pageError} />
-    <Card title="Абоненты" action={admin ? <Button disabled={!version || deleting}
+    <Card title="Абоненты" action={admin ? <Button disabled={!version || removeSubscriber.isPending}
       onClick={() => { setOriginalName(null); editor.begin({ name: "", label: null }); }}>+ Абонент</Button> : undefined}>
       <div className="table-wide"><DataTable heads={["Абонент", "Устройств", "Подписка", "Устройства", "Действия"]}
         empty={<EmptyState>Абонентов нет. Добавьте абонента, затем привяжите к нему пир.</EmptyState>}
@@ -218,10 +209,10 @@ export default function Subscribers() {
             <Badge tone={badge.tone}>{badge.text}</Badge>,
             refs.join(", ") || "Нет устройств",
             admin ? <>
-              <Button disabled={deleting} onClick={() => { setOriginalName(row.name); editor.begin(row); }}>Редактировать</Button>
+              <Button disabled={removeSubscriber.isPending} onClick={() => { setOriginalName(row.name); editor.begin(row); }}>Редактировать</Button>
               <Button disabled={tariffs.isLoading || tariffList.length === 0} onClick={() => openInvite(row.name)}>Пригласить</Button>
               <Button onClick={() => openSubscription(row.name)}>Подписка</Button>
-              <DeleteButton label={`Удалить абонента ${row.name}`} onClick={() => { setDeleteError(null); setDeleteName(row.name); }} />
+              <DeleteButton label={`Удалить абонента ${row.name}`} onClick={() => setDeleteName(row.name)} />
             </> : "—",
           ];
         })} /></div>
@@ -348,15 +339,13 @@ export default function Subscribers() {
       </DialogContent>
     </Dialog>
 
-    <ConfirmDialog open={deleteName !== null} title="Удалить абонента?"
-      body={deleteName && devices(deleteName).length
-        ? `Удаление заблокировано: абонент ${deleteName} привязан к устройствам ${devices(deleteName).join(", ")}. Сначала отвяжите пиры.`
-        : `Абонент ${deleteName ?? ""} будет удалён из черновика.`}
-      confirmLabel={deleteName && devices(deleteName).length ? "Понятно" : "Удалить из черновика"}
-      cancelLabel="Отмена" danger
+    <ConfirmDialog open={deleteName !== null} title="Удалить абонента?" danger
+      body={deleteName
+        ? `Абонент ${deleteName} будет удалён вместе с его устройствами и правилами маршрутизации. Служебные пиры (без абонента) не затрагиваются. Действие необратимо.`
+        : ""}
+      confirmLabel="Удалить" cancelLabel="Отмена"
       onCancel={() => setDeleteName(null)} onConfirm={() => {
-        if (deleteName && devices(deleteName).length) setDeleteName(null);
-        else void remove();
+        if (deleteName) removeSubscriber.mutate(deleteName);
       }} />
     <ConfirmDialog open={deleteTariffId !== null} title="Удалить тариф?"
       body="Тариф с назначенными подписками удалить нельзя."

@@ -5,17 +5,21 @@ import secrets
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import Field
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from vs_portal.models import Audit, Device, DeviceOp, Invite, Subscription, Tariff, make_engine
+from vs_portal.models import Account, Audit, Device, DeviceOp, Invite, Setting, Subscription, Tariff, make_engine
 from vs_portal.internal import InternalClient
 
 from ..db import ConfigurationRow
-from ..schema import Model
+from ..generators.wireguard import materialize_addresses
+from ..schema import Configuration, Model
 from .auth import admin, get_db
+from .configuration import check_roles
 from .errors import APIError
+from .tunnel_peers import live_peers
+from .versions import profile_default
 
 router = APIRouter(prefix="/api/portal-admin", dependencies=[Depends(admin)])
 _engine_lock = RLock()
@@ -208,6 +212,63 @@ def revoke_invite(token: str, db: Session = Depends(get_portal_db)):
     audit(db, "invite.revoke", row.subscriber_name)
     db.delete(row)
     db.commit()
+    return Response(status_code=204)
+
+
+def cascade_subscriber(configuration, name):
+    """Drop a subscriber and every configuration artifact it owns.
+
+    The subscriber record, its device peers in every tunnel and its device
+    routing rules leave the document together; otherwise the stored draft
+    fails peer.subscriber_reference / routing.subscriber_reference at the
+    next save or apply. Service/transport peers (peer.subscriber is None,
+    CONTEXT.md) belong to no subscriber and are never touched.
+    """
+    data = configuration.model_dump(mode='json')
+    data['subscribers'] = [subscriber for subscriber in data['subscribers']
+                           if subscriber['name'] != name]
+    data['tunnels'] = [{**tunnel, 'peers': [peer for peer in tunnel['peers']
+                                            if peer.get('subscriber') != name]}
+                       for tunnel in data['tunnels']]
+    data['routing_rules'] = [rule for rule in data['routing_rules']
+                             if not (rule['subject'].get('kind') == 'device'
+                                     and rule['subject'].get('subscriber') == name)]
+    return Configuration.model_validate(data)
+
+
+@router.delete("/subscribers/{name}", status_code=204)
+def delete_subscriber(name: str, panel_db: Session = Depends(get_db),
+                      db: Session = Depends(get_portal_db)):
+    """Delete a subscriber together with everything it owns.
+
+    Portal side: account, subscription, invites, devices and their operation
+    queue go in one transaction — a leftover Subscription row would keep the
+    portal worker issuing device operations for a subscriber the configuration
+    no longer knows. Config side: the cascade lands in the current draft
+    (created when none), mirroring the panel editor's save semantics, and
+    removed device peers drop from a running tunnel immediately (live_peers).
+    """
+    row = require_subscriber(panel_db, name)
+    begin_write(db)
+    # DeviceOp references Device by id (PRAGMA foreign_keys=ON), so the
+    # operation queue must go first; the rest are plain subscriber-owned rows.
+    for model in (DeviceOp, Device, Invite, Subscription, Account):
+        db.execute(delete(model).where(model.subscriber_name == name))
+    audit(db, "subscriber.delete", name)
+    db.commit()
+    draft = panel_db.scalar(select(ConfigurationRow).where(ConfigurationRow.status == 'draft'))
+    old = draft.configuration if draft is not None else row.configuration
+    configuration = materialize_addresses(cascade_subscriber(old, name))
+    check_roles(configuration, old)
+    if draft is None:
+        next_id = (panel_db.scalar(select(func.max(ConfigurationRow.id))) or 0) + 1
+        draft = ConfigurationRow(id=next_id, status='draft', configuration=configuration,
+                                 profile=row.profile or profile_default())
+        panel_db.add(draft)
+    else:
+        draft.configuration = configuration
+    panel_db.commit()
+    live_peers(configuration, old)
     return Response(status_code=204)
 
 

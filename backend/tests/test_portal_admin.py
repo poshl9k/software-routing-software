@@ -1,6 +1,7 @@
 """Admin portal contract: two isolated in-memory DBs; no sockets or root."""
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from alembic import command
@@ -84,6 +85,7 @@ async def test_criterion_8_admin_required_and_operator_forbidden(portal_admin_ap
         ("PATCH", "/api/portal-admin/subscribers/alice/subscription", {"renew": True}),
         ("POST", "/api/portal-admin/subscribers/alice/invite", {"tariff_id": 1}),
         ("DELETE", "/api/portal-admin/invites/token", None),
+        ("DELETE", "/api/portal-admin/subscribers/alice", None),
     ]:
         response = await client.request(method, url, json=body)
         assert response.status_code == 403, response.text
@@ -270,6 +272,73 @@ async def test_criterion_8_panel_second_engine_lazy_and_sqlite_wal(tmp_path, mon
         assert connection.exec_driver_sql("PRAGMA journal_mode").scalar() == "wal"
     app.state.portal_engine.dispose()
     panel.dispose()
+
+
+async def test_criterion_8_deleting_a_subscriber_cascades_config_and_portal(portal_admin_api, monkeypatch):
+    from vs_router.api import portal_admin
+    client, panel, portal, _ = portal_admin_api
+    await login(client)
+    now = datetime.now(timezone.utc)
+    with Session(panel) as db:
+        db.add(ConfigurationRow(id=2, status="confirmed", profile="panel", configuration=Configuration.model_validate({
+            "subscribers": [{"name": "alice"}, {"name": "bob"}],
+            "interfaces": [{"name": "wg0"}],
+            "tunnels": [{"name": "vpn", "interface": "wg0", "role": "server", "protocol": "wg",
+                         "listen_port": 51820,
+                         "private_key": {"encrypted": True, "ciphertext": "gAAAAplaceholder"},
+                         "peers": [
+                             {"name": "phone", "public_key": "A" * 44, "subscriber": "alice"},
+                             {"name": "laptop", "public_key": "B" * 44, "subscriber": "alice"},
+                             {"name": "tablet", "public_key": "C" * 44, "subscriber": "bob"},
+                             {"name": "transport", "public_key": "D" * 44},
+                         ]}],
+            "routing_rules": [
+                {"name": "alice_rule", "subject": {"kind": "device", "subscriber": "alice", "peer": "phone"},
+                 "ip_cidr": ["10.0.0.0/8"], "exit": {"kind": "block"}},
+                {"name": "bob_rule", "subject": {"kind": "device", "subscriber": "bob", "peer": "tablet"},
+                 "ip_cidr": ["10.0.0.0/8"], "exit": {"kind": "block"}},
+            ],
+        })))
+        db.commit()
+    with Session(portal) as db:
+        db.add(Tariff(id=1, name="base", device_limit=3, term_days=30, created_at=now))
+        db.commit()
+    with Session(portal) as db:
+        db.add_all([
+            Account(subscriber_name="alice", password_hash="x", status="active"),
+            Invite(token="tok1", subscriber_name="alice", expires_at=now + timedelta(days=1), created_at=now),
+            Subscription(subscriber_name="alice", tariff_id=1, expires_at=now + timedelta(days=30),
+                         status="active", updated_at=now),
+            Device(subscriber_name="alice", name="phone", label="П", status="active",
+                   allowed_ips=["10.0.0.2/32"], created_at=now),
+            Device(subscriber_name="alice", name="laptop", label="Л", status="active",
+                   allowed_ips=["10.0.0.3/32"], created_at=now),
+            DeviceOp(subscriber_name="alice", op="create", device_id=1, status="applied", created_at=now),
+        ])
+        db.commit()
+    monkeypatch.setattr(portal_admin, "live_peers", Mock())
+    response = await client.delete("/api/portal-admin/subscribers/alice")
+    assert response.status_code == 204, response.text
+    # Portal rows of the deleted subscriber are gone; nothing leaks into audit detail.
+    with Session(portal) as db:
+        for model in (Account, Invite, Subscription, Device, DeviceOp):
+            assert db.scalar(select(model).where(model.subscriber_name == "alice")) is None, model.__name__
+        assert {row.action for row in db.scalars(select(Audit))} >= {"subscriber.delete"}
+    # The cascade lands in a NEW draft built from the confirmed row.
+    with Session(panel) as db:
+        draft = db.scalar(select(ConfigurationRow).where(ConfigurationRow.status == "draft"))
+        assert draft is not None and draft.id == 3 and draft.profile == "panel"
+        assert [s.name for s in draft.configuration.subscribers] == ["bob"]
+        assert [(p.name, p.subscriber) for p in draft.configuration.tunnels[0].peers] == \
+            [("tablet", "bob"), ("transport", None)]
+        assert [r.name for r in draft.configuration.routing_rules] == ["bob_rule"]
+    # The confirmed row itself is untouched (history is immutable).
+    with Session(panel) as db:
+        confirmed = db.get(ConfigurationRow, 2)
+        assert [s.name for s in confirmed.configuration.subscribers] == ["alice", "bob"]
+        assert len(confirmed.configuration.tunnels[0].peers) == 4
+    # A second delete is a 404: the subscriber no longer exists anywhere.
+    assert (await client.delete("/api/portal-admin/subscribers/alice")).status_code == 404
 
 
 def test_criterion_6_7_real_portal_internal_roundtrip_and_retry(rig):

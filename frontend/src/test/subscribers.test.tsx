@@ -24,7 +24,25 @@ const configuration: Configuration = {
 function setup(path: string, config: Configuration = configuration, host: HostProfile = panel,
   role: "admin" | "operator" = "admin") {
   const tariffs = [{ id: 7, name: "Базовый", device_limit: 3, term_days: 30, price_amount: null }];
+  // Stateful mirror of the backend DELETE contract: subscriber, its device
+  // peers and its device routing rules leave the document; service peers
+  // (subscriber === null) are untouched.
+  let current = config;
+  const cascadeDelete = (cfg: Configuration, name: string): Configuration => ({
+    ...cfg,
+    subscribers: (cfg.subscribers ?? []).filter((s) => s.name !== name),
+    tunnels: (cfg.tunnels ?? []).map((t) => ({
+      ...t,
+      peers: (t.peers ?? []).filter((p) => p.subscriber !== name),
+    })),
+    routing_rules: (cfg.routing_rules ?? []).filter(
+      (r) => !(r.subject.kind === "device" && r.subject.subscriber === name)),
+  });
   const fetch = vi.fn((url: string, init?: RequestInit) => {
+    if (init?.method === "DELETE" && /^\/api\/portal-admin\/subscribers\/[^/]+$/.test(url)) {
+      current = cascadeDelete(current, decodeURIComponent(url.split("/").pop()!));
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
     if (url === "/api/portal-admin/tariffs" && init?.method === "POST") {
       return Promise.resolve(new Response(JSON.stringify({ id: 8, ...JSON.parse(String(init.body)) }), { status: 201 }));
     }
@@ -43,7 +61,7 @@ function setup(path: string, config: Configuration = configuration, host: HostPr
       return Promise.resolve(new Response(JSON.stringify({ error: { code: "portal.subscription_not_found" } }), { status: 404 }));
     }
     return Promise.resolve(new Response(JSON.stringify(
-      url === "/api/versions" ? [{ id: 1, status: "draft", configuration: config }] :
+      url === "/api/versions" ? [{ id: 1, status: "draft", configuration: current }] :
       url === "/api/auth/me" ? { id: 1, username: role, role } :
       url === "/api/host/profile" ? host :
       url === "/api/apply/status" ? null :
@@ -96,16 +114,20 @@ it("criterion_2_creates_subscriber_in_exact_saved_array_and_refuses_duplicate", 
   ]);
 });
 
-it("criterion_3_blocks_referenced_subscriber_deletion_and_names_every_device", async () => {
+it("criterion_3_deleting_a_subscriber_cascades_to_its_peers_and_keeps_service_peers", async () => {
   const fetch = setup("/subscribers");
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Удалить абонента alice" }));
   const dialog = screen.getByRole("dialog", { name: "Удалить абонента?" });
-  expect(within(dialog).getByText(/wg_home \/ phone, wg_home \/ laptop/)).toBeVisible();
-  await user.click(within(dialog).getByRole("button", { name: "Понятно" }));
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Удалить абонента?" })).not.toBeInTheDocument());
-  expect(fetch.mock.calls.filter(([url]) => url === "/api/draft")).toHaveLength(0);
-  expect(screen.getByRole("button", { name: "Удалить абонента alice" })).toBeVisible();
+  expect(within(dialog).getByText(/вместе с его устройствами/)).toBeVisible();
+  await user.click(within(dialog).getByRole("button", { name: "Удалить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([url, init]) =>
+    url === "/api/portal-admin/subscribers/alice" && init?.method === "DELETE")).toBe(true));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Удалить абонента alice" })).not.toBeInTheDocument());
+  const table = within((await screen.findAllByRole("table"))[0]!);
+  const bob = table.getByRole("row", { name: /bob/ });
+  expect(within(bob).getByText("wg_work / tablet")).toBeVisible();
+  expect(table.queryByText("wg_home / phone")).not.toBeInTheDocument();
 });
 
 it("criterion_4_peer_editor_saves_subscriber_and_null_for_service_peer", async () => {
@@ -150,15 +172,16 @@ it.each([
   await waitFor(() => expect(screen.queryByRole("heading", { name: "Абоненты", level: 1 }) !== null).toBe(available));
 });
 
-it("unreferenced subscriber is removed from the saved draft", async () => {
+it("deleting an unreferenced subscriber calls the admin endpoint and refreshes", async () => {
   const config = { ...configuration, subscribers: [...configuration.subscribers!, { name: "carol", label: null }] };
   const fetch = setup("/subscribers", config);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "Удалить абонента carol" }));
   const dialog = screen.getByRole("dialog", { name: "Удалить абонента?" });
-  await user.click(within(dialog).getByRole("button", { name: "Удалить из черновика" }));
-  await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === "/api/draft")).toBe(true));
-  expect(saved(fetch).subscribers).toEqual(configuration.subscribers);
+  await user.click(within(dialog).getByRole("button", { name: "Удалить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([url, init]) =>
+    url === "/api/portal-admin/subscribers/carol" && init?.method === "DELETE")).toBe(true));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Удалить абонента carol" })).not.toBeInTheDocument());
 });
 
 it("operator_can_read_but_cannot_edit_subscribers", async () => {
