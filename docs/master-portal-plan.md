@@ -56,7 +56,7 @@
 
 | Этап | Состояние |
 | --- | --- |
-| 1 | частично: скелет `vs_master` (модели Node/Account(tg id)/Tariff/Subscription/Device.node_id+node_subscriber/DeviceOp, engine, тесты — ff41897); bearer-аутентификация bridge + `token-rotate` (идемпотентный) + `/internal/master/state` (телеметрия) на ноде — в работе; профиль `master` в MODULE_PROFILES + `alembic-master` — в работе; воркер DeviceOp, миграция БД нод, портал/админка, caddy, онбординг — не начаты |
+| 1 | частично: скелет `vs_master` (модели, engine, тесты — ff41897); bearer+token-rotate+телеметрия на ноде и клиент мастера (3184460); профиль `master` в гварде + `alembic-master` (60b66bd); воркер DeviceOp мастера (545be71); скрипт миграции БД ноды → мастер (edaa4f0). Осталось: админ-API и публичный портал мастера, `frontend-master/`, caddy/поддомен, онбординг нод rg2…rgN, остановка локальных порталов, проверка миграции на реальных данных |
 | 2 | не начата |
 | 3 | не начата |
 | 4 | не начата |
