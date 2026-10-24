@@ -1,2 +1,5 @@
 *.iso
 release/
+node_modules/
+dist/
+*.tsbuildinfo
