@@ -325,7 +325,24 @@ def scratch_builder(tmp_path, *, template=None):
     (packaging / 'get.sh').write_text(TEMPLATE.read_text() if template is None else template)
     (packaging / 'install-release.sh').write_text(WRAPPER)
     (repo / 'backend/pyproject.toml').write_text('[project]\nversion = "1.2.3"\n')
-    env = {**os.environ, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull}
+    # The default build path needs a node+npm+uv toolchain; fakes produce the
+    # artifacts make-release.sh verifies before tarring the archive.
+    (repo / 'frontend').mkdir()
+    (repo / 'frontend/package.json').write_text('{"name": "fixture"}\n')
+    tools = tmp_path / 'builder-bin'
+    tools.mkdir()
+    wheel_name = 'vs_router_backend-1.2.3-py3-none-any.whl'
+
+    def tool(name, body):
+        script = tools / name
+        script.write_text('#!/bin/sh\n' + body)
+        script.chmod(0o755)
+
+    tool('node', 'echo v22.12.0\n')
+    tool('npm', 'case "$1" in run) mkdir -p dist; printf UI > dist/index.html;; esac\nexit 0\n')
+    tool('uv', 'mkdir -p dist; printf WHEEL > "dist/%s"; exit 0\n' % wheel_name)
+    env = {**os.environ, 'PATH': f'{tools}:{os.environ["PATH"]}',
+           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull}
     def git(*args):
         return subprocess.run(['git', '-C', str(repo), *args], env=env,
                               capture_output=True, text=True, check=True).stdout.strip()
@@ -363,6 +380,50 @@ def test_criterion_9_builder_generates_pinned_posix_entry(tmp_path):
         assert bashism not in text
     with tarfile.open(archive, 'r:gz') as tar:
         assert './backend/pyproject.toml' in tar.getnames()
+
+
+def test_criterion_9_default_build_ships_prebuilt_artifacts(tmp_path):
+    """Without --skip-build the archive carries the built frontend and wheel.
+
+    An online install consumes the prebuilt bundle instead of building on the
+    host (the npm build was the OOM wall on thin VPSes); the artifact pins
+    commit+REVISION+sha as before, now over the final bundle.
+    """
+    _, _, out, commit, _, build = scratch_builder(tmp_path)
+    result = build()
+    assert result.returncode == 0, result.stdout + result.stderr
+    archive = out / f'vs-router-{commit}.tar.gz'
+    with tarfile.open(archive, 'r:gz') as tar:
+        names = tar.getnames()
+    assert './frontend/dist/index.html' in names
+    assert './backend/dist/vs_router_backend-1.2.3-py3-none-any.whl' in names
+    assert 'Prebuilt bundle' in result.stderr
+
+
+def test_criterion_9_skip_build_publishes_a_source_only_artifact(tmp_path):
+    """--skip-build keeps the legacy shape: the tree + REVISION, no dist."""
+    _, _, out, commit, _, build = scratch_builder(tmp_path)
+    result = build('--skip-build')
+    assert result.returncode == 0, result.stdout + result.stderr
+    with tarfile.open(out / f'vs-router-{commit}.tar.gz', 'r:gz') as tar:
+        names = tar.getnames()
+    assert './frontend/dist' not in names
+    assert not [n for n in names if n.startswith('./backend/dist')]
+
+
+def test_criterion_9_default_build_fails_closed_without_the_toolchain(tmp_path):
+    """A missing node/npm aborts the release instead of publishing a bad bundle."""
+    _, _, out, _, _, build = scratch_builder(tmp_path)
+    bin_dir = tmp_path / 'release-bin'
+    bin_dir.mkdir()
+    for name in ('git', 'sed', 'mkdir', 'mktemp', 'rm', 'sh', 'bash', 'dirname', 'pwd', 'tar', 'head'):
+        actual = shutil.which(name)
+        assert actual, name
+        (bin_dir / name).symlink_to(actual)
+    result = build(extra_env={'PATH': str(bin_dir)})
+    assert result.returncode != 0
+    assert 'node and npm are required' in result.stderr
+    assert not list(out.glob('*.tar.gz'))
 
 
 def test_criterion_9_real_builder_archive_extracts_dot_backend_member(rig):
@@ -420,7 +481,8 @@ def test_criterion_9_builder_rejects_empty_pins(tmp_path, empty):
         fake = fakebin / 'sha256sum'
         fake.write_text('#!/bin/sh\nexit 0\n')
         fake.chmod(0o755)
-        overrides['PATH'] = f'{fakebin}:{os.environ["PATH"]}'
+        # Keep the builder toolchain (node/npm/uv fakes) reachable in the PATH.
+        overrides['PATH'] = f'{fakebin}:{tmp_path / "builder-bin"}:{os.environ["PATH"]}'
     result = build(extra_env=overrides)
     assert result.returncode != 0, result.stdout + result.stderr
     assert ('VS_ROUTER_BASE_URL is empty' if empty == 'base' else 'sha256sum failed') in result.stderr
@@ -437,7 +499,9 @@ def test_criterion_9_uploads_third_asset_in_both_branches(tmp_path, existing):
     gh.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n'
                   'case "$1 $2" in "release view") [ "$EXISTING" = 1 ] ;; esac\n')
     gh.chmod(0o755)
-    result = build('--upload', extra_env={'PATH': f'{fakebin}:{os.environ["PATH"]}',
+    # Keep the builder toolchain (node/npm/uv fakes) reachable in the PATH too.
+    tools = tmp_path / 'builder-bin'
+    result = build('--upload', extra_env={'PATH': f'{fakebin}:{tools}:{os.environ["PATH"]}',
                                           'GH_CALLS': str(log), 'EXISTING': '1' if existing else '0'})
     assert result.returncode == 0, result.stdout + result.stderr
     calls = log.read_text().splitlines()

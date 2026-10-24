@@ -2,13 +2,17 @@
 # Build a pinned, verifiable vs-router release artifact for the ONLINE update
 # channel (ADR-0010). Produces, in $OUT:
 #   vs-router-<commit>.tar.gz   the pinned commit's tree, plus a REVISION file
-#                               at the archive root, and
+#                               at the archive root, and — by default — the
+#                               PREBUILT frontend bundle (frontend/dist) and
+#                               backend wheel (backend/dist/*.whl), so an
+#                               online install never builds on the host.
 #   release.json                {commit, semver, source_url, source_sha256,
 #                                min_os}
 #   get.sh                      public entry with the same baked release pins
 # The artifact format matches what the ISO vendors (ADR-0008): a `git archive`
 # of one commit; the added REVISION lets a guest cross-check the archive
-# against the manifest commit without any git history.
+# against the manifest commit without any git history. source_sha256 covers the
+# FINAL archive, so the prebuilt binaries are pinned exactly like the source.
 #
 # Usage:
 #   VS_ROUTER_RELEASE_BASE_URL=<url> make-release.sh [<40-hex-commit>] [--upload]
@@ -19,6 +23,10 @@
 #                      --upload (then derived from `gh repo view`).
 #     --upload         create/update the GitHub Release and upload the assets
 #                      with `gh` (requires gh auth and a pushed commit)
+#     --skip-build     publish a SOURCE-ONLY artifact (legacy); the default
+#                      builds frontend/dist and the backend wheel and fails
+#                      closed when either is missing. Needs node+npm (and uv
+#                      or pip) on the workstation running this script.
 #     --help
 #
 # Never a branch or `latest` git ref (ADR-0005).
@@ -31,10 +39,11 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 OUT=${VS_ROUTER_RELEASE_OUT:-$REPO_ROOT/release}
 BASE_URL=${VS_ROUTER_RELEASE_BASE_URL:-}
 UPLOAD=0
+SKIP_BUILD=0
 COMMIT=
 
 usage() {
-    sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while (($#)); do
@@ -42,6 +51,7 @@ while (($#)); do
         --out)      OUT=${2:?--out needs a directory}; shift ;;
         --base-url) BASE_URL=${2:?--base-url needs a URL}; shift ;;
         --upload)   UPLOAD=1 ;;
+        --skip-build) SKIP_BUILD=1 ;;
         --help|-h)  usage; exit 0 ;;
         --*)        usage >&2; echo "unknown option: $1" >&2; exit 1 ;;
         *)          COMMIT=$1 ;;
@@ -84,6 +94,43 @@ trap 'rm -rf "$stage"' EXIT
 # The tree of exactly this commit, plus the pinned REVISION at the root.
 git -C "$REPO_ROOT" archive --format=tar "$COMMIT" | tar -x -C "$stage"
 printf '%s\n' "$COMMIT" > "$stage/REVISION"
+
+log()  { printf '[make-release] %s\n' "$*" >&2; }
+fail() { printf '[make-release] ERROR: %s\n' "$*" >&2; exit 1; }
+
+# Prebuilt bundle: build the compiled frontend and the backend wheel INTO the
+# staged tree, so the published archive carries binaries and an online install
+# never builds on the host (the npm build was the OOM wall on thin VPSes).
+# git archive copies only tracked files, so no stale untracked dist is
+# inherited; both outputs are built fresh and verified before tarring.
+if (( ! SKIP_BUILD )); then
+    command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 \
+        || fail 'node and npm are required to build the frontend (or pass --skip-build)'
+    if ! command -v uv >/dev/null 2>&1; then
+        command -v python3 >/dev/null 2>&1 \
+            && python3 -m pip --version >/dev/null 2>&1 \
+            && python3 -c 'import setuptools, wheel' >/dev/null 2>&1 \
+            || fail 'uv or python3+pip+setuptools+wheel is required to build the backend wheel (or pass --skip-build)'
+    fi
+    rm -rf "$stage/frontend/dist" "$stage/backend/dist"
+    log 'Building frontend bundle (npm ci && npm run build)'
+    (cd "$stage/frontend" && npm ci && npm run build)
+    log 'Building backend wheel'
+    if command -v uv >/dev/null 2>&1; then
+        (cd "$stage/backend" && uv build --wheel --out-dir dist)
+    else
+        python3 -m pip wheel --no-deps --no-build-isolation -w "$stage/backend/dist" "$stage/backend"
+    fi
+    shopt -s nullglob
+    wheels=("$stage/backend/dist"/*.whl)
+    shopt -u nullglob
+    (( ${#wheels[@]} == 1 )) \
+        || fail "expected exactly one backend wheel in backend/dist (found ${#wheels[@]})"
+    [[ -f $stage/frontend/dist/index.html && ! -L $stage/frontend/dist/index.html ]] \
+        || fail 'frontend bundle missing after the build: frontend/dist/index.html'
+    log "Prebuilt bundle: ${wheels[0]#$stage/} + frontend/dist"
+fi
+
 tar -czf "$OUT/$name" -C "$stage" .
 
 sha256=$(sha256sum "$OUT/$name" | awk '{print $1}')

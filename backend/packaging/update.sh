@@ -13,7 +13,8 @@
 #   1. resolve a pinned release from a manifest and download its artifact
 #   2. verify source_sha256 and REVISION == manifest commit, extract to
 #      /opt/vs-router.new and keep the previous tree at /opt/vs-router.prev
-#   3. rebuild the frontend static bundle (frontend/dist) and the backend wheel
+#   3. skip the host build when the release ships prebuilt artifacts
+#      (frontend/dist + the backend wheel, built by make-release.sh)
 #   4. reinstall the Python package (system python, matching bootstrap.sh)
 #   5. apply database migrations (alembic upgrade head) against the live DB
 #   6. deploy the UI bundle + systemd units via install.sh
@@ -349,11 +350,23 @@ main() {
 
     cd "$REPO_ROOT"
 
+    # The release archive normally ships the prebuilt frontend bundle and the
+    # backend wheel (make-release.sh builds them into the staged tree), so an
+    # update never builds on the host — the npm build was the OOM wall on
+    # memory-thin VPSes. --skip-build (or a manual scp of artifacts) still
+    # bypasses the build; a tree without both artifacts builds as before.
     if (( ! SKIP_BUILD )); then
-        log 'Building frontend bundle'
-        ( cd "$REPO_ROOT/frontend" && npm ci && npm run build )
-        log 'Building backend wheel'
-        ( cd "$REPO_ROOT/backend" && rm -rf dist && python3 -m pip wheel --no-build-isolation --no-deps -w dist . )
+        shopt -s nullglob
+        prebuilt_wheels=("$REPO_ROOT/backend/dist"/*.whl)
+        shopt -u nullglob
+        if (( ${#prebuilt_wheels[@]} == 1 )) && [[ -f $REPO_ROOT/frontend/dist/index.html ]]; then
+            log "Release ships prebuilt artifacts (${prebuilt_wheels[0]#$REPO_ROOT/} + frontend/dist); skipping the host build"
+        else
+            log 'Building frontend bundle'
+            ( cd "$REPO_ROOT/frontend" && npm ci && npm run build )
+            log 'Building backend wheel'
+            ( cd "$REPO_ROOT/backend" && rm -rf dist && python3 -m pip wheel --no-build-isolation --no-deps -w dist . )
+        fi
     fi
 
     log 'Installing backend package'

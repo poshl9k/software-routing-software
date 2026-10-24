@@ -14,7 +14,11 @@ ADR-0010: манифест `release.json` + tar-артефакт зафикси�
 - [x] **`backend/packaging/make-release.sh`** — собрать `vs-router-<commit>.tar.gz`
       (дерево коммита + `REVISION` внутри) и `release.json`
       (`commit/semver/source_url/source_sha256/min_os`); опционально
-      `--upload` через `gh release create`.
+      `--upload` через `gh release create`. По умолчанию в архив включаются
+      ПРЕБИЛД-артефакты: собранный `frontend/dist` и backend-wheel
+      (`backend/dist/*.whl`) — онлайн-установка не собирает ничего на хосте,
+      а `source_sha256` покрывает финальный архив вместе с бинарниками.
+      `--skip-build` публикует источник-без-сборки (наследие).
 - [x] **`update.sh` без `git fetch`:** `--release <40hex>` / `--manifest <url>`
       → скачать манифест → проверить `sha256` и `REVISION` → распаковать в
       `/opt/vs-router.new` (прежнее дерево сохраняется в `/opt/vs-router.prev`)
@@ -72,13 +76,23 @@ echo '{"manifest_url": "https://github.com/<owner>/<repo>/releases/latest/downlo
 ## Как выпустить
 
 ```bash
-# локально: собрать артефакт и манифест в ./release
+# локально: собрать артефакт и манифест в ./release. По умолчанию в архив
+# входят пребилд frontend/dist и backend-wheel — на хосте ничего не собирается.
+# Нужен node+npm и uv (или python3+pip+setuptools+wheel) на рабочей станции.
 VS_ROUTER_RELEASE_BASE_URL="https://github.com/<owner>/<repo>/releases/download/vs-router-<commit>" \
     backend/packaging/make-release.sh <40-hex-commit>
 
 # загрузить в GitHub Release (ассеты получают неизменяемые URL)
 backend/packaging/make-release.sh <40-hex-commit> --upload
+
+# источник-без-сборки (наследие): архив без пребилд-артефактов — хост соберёт сам
+backend/packaging/make-release.sh <40-hex-commit> --skip-build
 ```
+
+Потребители выпуска (`update.sh`, `install-release.sh`) видят пребилд-набор
+(`backend/dist/*.whl` + `frontend/dist/index.html`) и пропускают сборку на хосте
+без флагов; при неполном наборе или источнике-без-сборки хост собирает как
+раньше.
 
 ## Как обновиться на сервере
 

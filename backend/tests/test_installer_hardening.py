@@ -1191,7 +1191,7 @@ def test_make_release_builds_a_verified_manifest(tmp_path):
     revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
                               capture_output=True, text=True, check=True).stdout.strip()
     result = subprocess.run(
-        ['bash', str(PACKAGING / 'make-release.sh'), revision],
+        ['bash', str(PACKAGING / 'make-release.sh'), revision, '--skip-build'],
         env={**os.environ, 'VS_ROUTER_RELEASE_OUT': str(out),
              'VS_ROUTER_RELEASE_BASE_URL': 'https://example.invalid/download/vs-router-x'},
         capture_output=True, text=True)
@@ -1219,6 +1219,17 @@ def test_make_release_never_uses_a_branch_or_latest_ref():
     assert not re.search(r'^\s*git\s+(fetch|pull|checkout)\b', maker, re.M)
     assert '^[0-9a-f]{40}$' in maker
     assert 'git archive' in maker
+
+
+def test_release_consumers_reuse_the_prebuilt_bundle():
+    """update.sh and install-release.sh skip the host build when the release
+    archive ships the prebuilt wheel + frontend/dist (make-release.sh default)."""
+    updater = (PACKAGING / 'update.sh').read_text()
+    wrapper = (PACKAGING / 'install-release.sh').read_text()
+    for text, name in ((updater, 'update.sh'), (wrapper, 'install-release.sh')):
+        assert 'Release ships prebuilt artifacts' in text, name
+        assert 'backend/dist' in text, name
+        assert 'frontend/dist/index.html' in text, name
 
 
 def test_libcronet_manifest_and_install_placement():

@@ -406,6 +406,21 @@ if [[ -z $hostname ]]; then
 fi
 
 
+# The release archive normally ships prebuilt artifacts (make-release.sh builds
+# them into the tree): exactly one backend wheel and frontend/dist/index.html.
+# When both are present the host build — and the nodejs/npm toolchain it needs —
+# is skipped without any flag; an explicit --skip-build still works, and an
+# incomplete prebuilt set falls back to the normal build.
+if (( ! skip_build )); then
+    shopt -s nullglob
+    prebuilt_wheels=("$source/backend/dist"/*.whl)
+    shopt -u nullglob
+    if (( ${#prebuilt_wheels[@]} == 1 )) && [[ -f $source/frontend/dist/index.html ]]; then
+        skip_build=1
+        log "Release ships prebuilt artifacts (${prebuilt_wheels[0]#$source/} + frontend/dist); skipping the host build"
+    fi
+fi
+
 # The online installer prepares runtime dependencies, but runs after the build.
 # Only bootstrap the minimal build toolchain here, after source verification.
 if (( ! skip_build )); then

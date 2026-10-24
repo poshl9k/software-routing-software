@@ -306,6 +306,19 @@ def test_criterion_4_build_fail_closed(rig, failure):
         assert 'NPM run build' not in events()
 
 
+def test_criterion_4_prebuilt_release_skips_the_host_build(rig):
+    """A release shipping wheel+UI installs with no build and no node/npm/uv."""
+    source, _, _, run, events, bin_dir = rig
+    built(source)
+    # The toolchain is deliberately absent: the prebuilt path must not need it.
+    for tool in ('node', 'npm', 'uv'):
+        (bin_dir / tool).unlink()
+    result = run('--source', source, '--hostname', 'reserve.example')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any(x.startswith(('APT ', 'NPM ', 'UV ', 'PIP ')) for x in events())
+    assert 'prebuilt artifacts' in result.stderr
+
+
 def test_criterion_4_pip_fallback_and_skip_build(rig):
     source, _, _, run, events, bin_dir = rig
     (bin_dir / 'uv').unlink()
