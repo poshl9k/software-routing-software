@@ -1,7 +1,8 @@
-import { Alert, Box, Button, CircularProgress, GlobalStyles, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, CircularProgress, GlobalStyles, Stack, TextField, Typography } from "@mui/material";
 import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { MasterApiError, masterApi } from "./api";
+import { NodesPage, SubscribersPage, TariffsPage } from "./pages";
 import { globalStyles, theme } from "../theme";
 import { ThemeProvider } from "@mui/material/styles";
 
@@ -41,21 +42,30 @@ function AuthForm({ setup = false }: { setup?: boolean }) {
 
 function Dashboard() {
   const navigate = useNavigate();
-  const [error, setError] = useState<unknown>(null);
   const [ready, setReady] = useState<boolean | null>(null);
+  const [tab, setTab] = useState<"nodes" | "subscribers" | "tariffs">("nodes");
   useEffect(() => {
     masterApi.nodes().then(() => { setReady(true); }).catch((reason) => {
       if (reason instanceof MasterApiError && reason.status === 401) navigate("/login", { replace: true });
-      else if (reason instanceof MasterApiError && reason.status === 404) setReady(false);
-      else setError(reason);
+      else navigate("/login", { replace: true });
     });
   }, [navigate]);
+  async function logout() {
+    try { await masterApi.logout(); navigate("/login", { replace: true }); } catch { navigate("/login", { replace: true }); }
+  }
   if (ready === false) return <Navigate to="/setup" replace />;
   return <Box className="page"><Box component="main" className="content">
-    <Typography component="h1" variant="h1" sx={{ mb: 3, fontSize: { xs: "2rem", sm: "3rem", md: "3.6rem" } }}>Мастер-портал</Typography>
-    <ErrorNotice error={error} />
+    <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+      <Typography component="h1" variant="h1" sx={{ fontSize: { xs: "2rem", sm: "3rem", md: "3.6rem" } }}>Мастер-портал</Typography>
+      <Button onClick={() => void logout()} aria-label="Выйти из аккаунта">Выйти</Button>
+    </Stack>
+    <Box role="tablist" aria-label="Разделы" sx={{ mb: 3 }}>
+      <Button role="tab" aria-selected={tab === "nodes"} variant={tab === "nodes" ? "contained" : "text"} onClick={() => setTab("nodes")}>Ноды</Button>
+      <Button role="tab" aria-selected={tab === "subscribers"} variant={tab === "subscribers" ? "contained" : "text"} onClick={() => setTab("subscribers")}>Абоненты</Button>
+      <Button role="tab" aria-selected={tab === "tariffs"} variant={tab === "tariffs" ? "contained" : "text"} onClick={() => setTab("tariffs")}>Тарифы</Button>
+    </Box>
     {ready === null && <Box className="loading"><CircularProgress /></Box>}
-    {ready === true && <Alert severity="info">Экраны нод, абонентов и тарифов будут добавлены следующим слайсом; API уже отвечает.</Alert>}
+    {ready === true && (tab === "nodes" ? <NodesPage /> : tab === "subscribers" ? <SubscribersPage /> : <TariffsPage />)}
   </Box></Box>;
 }
 

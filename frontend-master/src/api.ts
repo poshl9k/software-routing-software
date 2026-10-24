@@ -64,7 +64,7 @@ export const masterApi = {
     masterRequest<{ node: MasterNode }>(`/api/master-admin/nodes/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   removeNode: (id: number) => masterRequest<void>(`/api/master-admin/nodes/${id}`, { method: "DELETE" }),
   rotateNodeToken: (id: number) =>
-    masterRequest<{ rotated: boolean; token?: string }>(`/api/master-admin/nodes/${id}/rotate-token`, { method: "POST" }),
+    masterRequest<{ rotated: boolean }>(`/api/master-admin/nodes/${id}/rotate-token`, { method: "POST" }),
   tariffs: () => masterRequest<{ tariffs: MasterTariff[] }>("/api/master-admin/tariffs"),
   saveTariff: (body: Partial<MasterTariff> & { name?: string }) =>
     masterRequest<{ tariff: MasterTariff }>(`/api/master-admin/tariffs${body.id ? `/${body.id}` : ""}`,
