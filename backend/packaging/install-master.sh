@@ -18,10 +18,9 @@ apt-get update -qq
 apt-get install -y -qq python3-pip ca-certificates >/dev/null
 
 # Runtime deps pinned in requirements-runtime.txt (hash-verified), then the wheel --no-deps.
-# Debian ships some deps (typing_extensions...) as apt packages without RECORD;
-# reinstall it first so pip owns it, then the hash-pinned set can replace it.
-pip install --break-system-packages --ignore-installed typing_extensions
-pip install --break-system-packages -r "$SCRIPT_DIR/requirements-runtime.txt"
+# Debian ships several deps (typing_extensions, idna, ...) as apt packages without
+# RECORD; --ignore-installed overwrites them instead of refusing to uninstall.
+pip install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-runtime.txt"
 pip install --break-system-packages --no-deps --force-reinstall \
     "$SCRIPT_DIR"/vs_router_backend-*-py3-none-any.whl
 
