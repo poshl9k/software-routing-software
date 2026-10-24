@@ -30,6 +30,7 @@ ModuleProfile = Literal['core', 'router', 'panel', 'master']
 MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_master': 'master',
     'vs_master.bridge': 'master',
+    'vs_master.migrate_node': 'master',
     'vs_master.models': 'master',
     'vs_master.worker': 'master',
     'vs_portal.models': 'panel',
@@ -122,6 +123,10 @@ KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
         'Master reuses portal UTC and Secret column-type helpers.',
     ('vs_master.models', 'vs_router.schema'):
         'Master reuses the shared EncryptedSecret schema type.',
+    ('vs_master.migrate_node', 'vs_portal.models'):
+        'Migration reads the node portal schema it copies into the master.',
+    ('vs_master.migrate_node', 'vs_router.secrets'):
+        'Migration re-encrypts device key material across installation keys.',
     ('vs_master.worker', 'vs_portal.security'):
         'Master worker reads the shared installation secret key without owning portal state.',
     ('vs_master.worker', 'vs_router.secrets'):
