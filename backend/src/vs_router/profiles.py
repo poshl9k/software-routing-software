@@ -31,7 +31,9 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_master': 'master',
     'vs_master.bridge': 'master',
     'vs_master.models': 'master',
+    'vs_master.worker': 'master',
     'vs_portal.models': 'panel',
+    'vs_portal.security': 'panel',
     'vs_router': 'core',
     'vs_router.app': 'core',
     'vs_router.db': 'core',
@@ -120,6 +122,10 @@ KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
         'Master reuses portal UTC and Secret column-type helpers.',
     ('vs_master.models', 'vs_router.schema'):
         'Master reuses the shared EncryptedSecret schema type.',
+    ('vs_master.worker', 'vs_portal.security'):
+        'Master worker reads the shared installation secret key without owning portal state.',
+    ('vs_master.worker', 'vs_router.secrets'):
+        'Master worker encrypts persisted device material and decrypts bridge credentials.',
     ('vs_router.app', 'vs_router.api.leases'):
         'The shared application still registers the router DHCP lease API.',
     ('vs_router.app', 'vs_router.api.portal_admin'):
