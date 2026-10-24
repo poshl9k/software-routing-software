@@ -1,13 +1,17 @@
-"""Explicit module ownership for the two-product split (ADR-0018/0026).
+"""Explicit module ownership for three product profiles (ADR-0018/0026/0035).
 
-Every Python module, including package initializers, must have an exact entry
-in MODULE_PROFILES. Unknown modules are errors, never implicitly core. Package
-initializers use their import name (``vs_router.agent``, not ``.__init__``).
-Core must not import router/panel code; router and panel must not import each
-other. Only the exact, reason-bearing edges below grandfather existing coupling.
-The AST guard also follows imported symbols through re-exports, so a core facade
-cannot conceal a profile-specific dependency. This is policy data, not runtime
-profile selection; host capabilities and the installer marker remain unchanged.
+Every Python module in the guarded ``vs_router`` and ``vs_master`` inventories,
+including package initializers, must have an exact entry in MODULE_PROFILES.
+``vs_portal.models`` is classified as a panel target without making the entire
+``vs_portal`` tree part of that inventory. Unknown guarded modules are errors,
+never implicitly core. Package initializers use their import name
+(``vs_router.agent``, not ``.__init__``). Core must not import router/panel/master
+code; router, panel, and master must not import each other. In particular,
+``vs_router`` cannot import ``vs_master``. Only the exact, reason-bearing edges
+below grandfather existing coupling. The AST guard also follows imported symbols
+through re-exports, so a core facade cannot conceal a profile-specific dependency.
+This is policy data, not runtime profile selection; host capabilities and the
+installer marker remain unchanged.
 
 Mixed modules keep their current public entrypoints. Management/schema/service
 orchestration remain core; the console with single-uplink/domain provisioning is
@@ -21,9 +25,13 @@ outbound functionality, not the future panel-only subscriber model.
 """
 from typing import Literal
 
-ModuleProfile = Literal['core', 'router', 'panel']
+ModuleProfile = Literal['core', 'router', 'panel', 'master']
 
 MODULE_PROFILES: dict[str, ModuleProfile] = {
+    'vs_master': 'master',
+    'vs_master.bridge': 'master',
+    'vs_master.models': 'master',
+    'vs_portal.models': 'panel',
     'vs_router': 'core',
     'vs_router.app': 'core',
     'vs_router.db': 'core',
@@ -106,6 +114,12 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
 # Exact edges only: no source-wide skips or prefix/glob exceptions. Tests reject
 # empty reasons and stale entries, and prove removing each exception fails.
 KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
+    ('vs_master.bridge', 'vs_router.api.errors'):
+        'Master bridge translates shared API error contracts.',
+    ('vs_master.models', 'vs_portal.models'):
+        'Master reuses portal UTC and Secret column-type helpers.',
+    ('vs_master.models', 'vs_router.schema'):
+        'Master reuses the shared EncryptedSecret schema type.',
     ('vs_router.app', 'vs_router.api.leases'):
         'The shared application still registers the router DHCP lease API.',
     ('vs_router.app', 'vs_router.api.portal_admin'):

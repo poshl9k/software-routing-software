@@ -12,7 +12,9 @@ from vs_router.profiles import KNOWN_CROSS_PROFILE_EDGES, MODULE_PROFILES, modul
 
 
 SOURCE = Path(__file__).parents[1] / 'src'
-VALID_PROFILES = {'core', 'router', 'panel'}
+INVENTORY_PACKAGES = ('vs_router', 'vs_master')
+POLICY_PACKAGES = ('vs_router', 'vs_master', 'vs_portal')
+VALID_PROFILES = {'core', 'router', 'panel', 'master'}
 
 
 def module_name(path, root):
@@ -23,11 +25,20 @@ def module_name(path, root):
 
 
 def inspect_boundary(root, profiles, exceptions):
-    """Check exact inventory and direct AST edges; return observed module edges."""
-    sources = {module_name(path, root): path for path in (root / 'vs_router').rglob('*.py')}
-    assert sources.keys() == profiles.keys(), (
-        f'unclassified modules: {sorted(sources.keys() - profiles.keys())}; '
-        f'stale profiles: {sorted(profiles.keys() - sources.keys())}')
+    """Check shared inventory and direct AST graph; return observed module edges."""
+    inventory_roots = [root / package for package in INVENTORY_PACKAGES
+                       if (root / package).is_dir()]
+    sources = {module_name(path, root): path
+               for inventory_root in inventory_roots
+               for path in inventory_root.rglob('*.py')}
+    inventory_profiles = {
+        name: profile for name, profile in profiles.items()
+        if any(name == package or name.startswith(package + '.')
+               for package in INVENTORY_PACKAGES)
+    }
+    assert sources.keys() == inventory_profiles.keys(), (
+        f'unclassified modules: {sorted(sources.keys() - inventory_profiles.keys())}; '
+        f'stale profiles: {sorted(inventory_profiles.keys() - sources.keys())}')
     assert set(profiles.values()) <= VALID_PROFILES, 'invalid module profile'
     trees = {name: ast.parse(path.read_text(), filename=str(path)) for name, path in sources.items()}
     exports = {}
@@ -120,33 +131,40 @@ def inspect_boundary(root, profiles, exceptions):
     edges = set()
     for source in sources:
         for base, symbol in imports(source):
-            if not (base == 'vs_router' or base.startswith('vs_router.')):
+            from_master = source == 'vs_master' or source.startswith('vs_master.')
+            policy_packages = POLICY_PACKAGES if from_master else INVENTORY_PACKAGES
+            if not any(base == package or base.startswith(package + '.')
+                       for package in policy_packages):
                 continue
-            if base not in sources:
-                raise AssertionError(f'{source}: unclassified vs_router import {base}')
-            targets = {base}
+            targets = {base} if base in profiles else set()
             if symbol is not None:
-                if symbol == '*':
-                    for exported in exported_names(base):
-                        candidate = f'{base}.{exported}'
-                        if candidate in sources:
-                            targets.add(candidate)
-                        targets |= resolve_symbol(base, exported)
-                else:
-                    candidate = f'{base}.{symbol}'
-                    if candidate in sources:
-                        targets.add(candidate)
-                    else:
+                candidate = f'{base}.{symbol}'
+                if candidate in profiles:
+                    targets.add(candidate)
+                if base in sources:
+                    if symbol == '*':
+                        for exported in exported_names(base):
+                            candidate = f'{base}.{exported}'
+                            if candidate in profiles:
+                                targets.add(candidate)
+                            targets |= resolve_symbol(base, exported)
+                    elif candidate not in profiles:
                         targets |= resolve_symbol(base, symbol)
+            if (not targets and
+                    any(base == package or base.startswith(package + '.')
+                        for package in policy_packages)):
+                raise AssertionError(f'{source}: unclassified import {base}')
             edges.update((source, target) for target in targets if source != target)
 
     for (source, target), reason in exceptions.items():
-        assert source in sources and target in sources, f'stale exception module: {source} -> {target}'
+        assert source in sources and target in profiles, f'stale exception module: {source} -> {target}'
         assert isinstance(reason, str) and reason.strip(), f'blank exception reason: {source} -> {target}'
         assert profiles[source] != profiles[target], f'same-profile exception: {source} -> {target}'
         assert (source, target) in edges, f'stale exception edge: {source} -> {target}'
     for source, target in sorted(edges):
-        if profiles[source] != profiles[target] and profiles[target] != 'core':
+        cross_profile = profiles[source] != profiles[target]
+        requires_exception = profiles[target] != 'core' or profiles[source] == 'master'
+        if cross_profile and requires_exception:
             assert (source, target) in exceptions, f'cross-profile import: {source} -> {target}'
     return edges
 
@@ -166,9 +184,16 @@ def fixture_tree(tmp_path, files, profiles, exceptions=None):
 
 
 def test_criterion_1_exact_inventory_and_missing_registration(tmp_path):
-    root = SOURCE / 'vs_router'
-    files = {module_name(path, SOURCE) for path in root.rglob('*.py')}
-    assert files == MODULE_PROFILES.keys()
+    files = {module_name(path, SOURCE)
+             for package in INVENTORY_PACKAGES
+             for path in (SOURCE / package).rglob('*.py')}
+    inventory_profiles = {name for name in MODULE_PROFILES
+                          if any(name == package or name.startswith(package + '.')
+                                 for package in INVENTORY_PACKAGES)}
+    assert files == inventory_profiles
+    assert MODULE_PROFILES['vs_master'] == 'master'
+    assert MODULE_PROFILES['vs_master.models'] == 'master'
+    assert MODULE_PROFILES['vs_portal.models'] == 'panel'
     assert set(MODULE_PROFILES.values()) <= VALID_PROFILES
     for name in files:
         assert module_profile(name) == MODULE_PROFILES[name]
@@ -181,6 +206,42 @@ def test_criterion_1_exact_inventory_and_missing_registration(tmp_path):
 
 def test_criterion_2_real_boundary():
     inspect_boundary(SOURCE, MODULE_PROFILES, KNOWN_CROSS_PROFILE_EDGES)
+
+
+def test_criterion_2_master_edges_and_router_import_forbidden(tmp_path):
+    files = {
+        'vs_master': None,
+        'vs_master.models': ('from vs_portal.models import UTCDateTime\n'
+                             'from vs_router.schema import EncryptedSecret\n'),
+        'vs_router': None,
+        'vs_router.schema': 'EncryptedSecret = str\n',
+    }
+    profiles = {
+        'vs_master': 'master',
+        'vs_master.models': 'master',
+        'vs_portal.models': 'panel',
+        'vs_router': 'core',
+        'vs_router.schema': 'core',
+    }
+    exceptions = {
+        ('vs_master.models', 'vs_portal.models'): 'portal helpers',
+        ('vs_master.models', 'vs_router.schema'): 'shared secret type',
+    }
+    edges = fixture_tree(tmp_path / 'allowed', files, profiles, exceptions)
+    assert ('vs_master.models', 'vs_portal.models') in edges
+    assert ('vs_master.models', 'vs_router.schema') in edges
+
+    forbidden_files = {**files, 'vs_router.consumer': 'import vs_master.models\n'}
+    forbidden_profiles = {**profiles, 'vs_router.consumer': 'core'}
+    with pytest.raises(AssertionError,
+                       match=r'cross-profile import: vs_router\.consumer -> vs_master\.models'):
+        fixture_tree(tmp_path / 'forbidden', forbidden_files, forbidden_profiles, exceptions)
+
+    unclassified_files = {**files, 'vs_master.consumer': 'import vs_portal.missing\n'}
+    unclassified_profiles = {**profiles, 'vs_master.consumer': 'master'}
+    with pytest.raises(AssertionError, match='unclassified import vs_portal.missing'):
+        fixture_tree(tmp_path / 'unclassified', unclassified_files,
+                     unclassified_profiles, exceptions)
 
 
 @pytest.mark.parametrize('form', [
@@ -292,7 +353,7 @@ def test_criterion_4_fixture_rejects_coupling_without_false_positives(tmp_path):
     assert ('vs_router.router', 'vs_router.core') in edges
     assert ('vs_router.ok', 'vs_router.router') in edges
     assert all(target != 'requests' for _, target in edges)
-    with pytest.raises(AssertionError, match='unclassified vs_router import'):
+    with pytest.raises(AssertionError, match='unclassified import vs_router'):
         fixture_tree(tmp_path, {**files, 'vs_router.consumer': 'import vs_router.missing'}, mapping)
 
     chain = {'vs_router': None, 'vs_router.router': 'from .panel import value',
