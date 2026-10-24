@@ -27,6 +27,9 @@
   statements: apply is no longer a 501 stub, the agent exists, static UI serving
   exists, and production demo fallback has been removed. Test counts and old
   “MVP ready” claims are not current verification.
+- Master-portal plan: `docs/master-portal-plan.md` + ADR-0035 decide the `vs_master`
+  master/node architecture (single subscriber DB on the master, node-only bridge access).
+  Phase: not started — read the plan's status table before any portal work.
 - Operational references: `docs/install.md`, `installer/README.md`,
   `docs/admin.md`, `docs/tunnel-proxy-apply.md`. `docs/lab-01` through `lab-04`
   reports record specific past VM checks, not blanket current guarantees.
