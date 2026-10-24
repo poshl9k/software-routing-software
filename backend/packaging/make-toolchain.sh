@@ -105,11 +105,17 @@ fi
 if [[ -f $bundle_tar ]]; then
     if (( FORCE )); then
         log "Rebuilding (forced): toolchain $TOOLCHAIN_ID"
-    else
+    elif (( ! UPLOAD )); then
         log "Bundle for toolchain $TOOLCHAIN_ID already exists: $bundle_tar"
         log 'Pins unchanged; pass --force to rebuild'
         exit 0
+    else
+        # An existing bundle is a valid upload source: verify it before publishing.
+        log "Bundle for toolchain $TOOLCHAIN_ID already exists: $bundle_tar; uploading it"
     fi
+fi
+if (( UPLOAD )) && [[ -f $bundle_tar && $FORCE == 0 ]]; then
+    verify_bundle
 fi
 
 command -v go >/dev/null 2>&1 || fail 'go is required (https://go.dev/dl/)'
