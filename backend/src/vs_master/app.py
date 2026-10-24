@@ -1,4 +1,5 @@
 """Master portal administrator application."""
+import os
 from threading import RLock
 
 from fastapi import FastAPI, Request
@@ -42,6 +43,20 @@ def create_master_app(engine=None, database_url=None, clock=None):
     @app.get('/health')
     async def health():
         return {'status': 'ok'}
+
+    # The admin SPA: any non-API path (e.g. deep /nodes link) serves the shell.
+    static_dir = os.environ.get('VS_MASTER_STATIC_DIR')
+    if static_dir:
+        from pathlib import Path
+        from fastapi.staticfiles import StaticFiles
+        from fastapi.responses import FileResponse
+        assets = Path(static_dir) / 'assets'
+        if assets.is_dir():
+            app.mount('/assets', StaticFiles(directory=assets), name='assets')
+
+            @app.get('/{spa_path:path}', include_in_schema=False)
+            async def spa(spa_path: str) -> FileResponse:
+                return FileResponse(Path(static_dir) / 'index.html')
 
     return app
 
