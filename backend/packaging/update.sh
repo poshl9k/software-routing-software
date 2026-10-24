@@ -287,6 +287,48 @@ stage_release() {
         fail 'release artifact contains unsafe paths'
     fi
 
+    # A release may also ship the pinned compiled toolchain (release.json's
+    # toolchain section): the bundle and every binary are verified against the
+    # manifest here, before the live tree is touched, and the whole stage aborts
+    # on any mismatch. Without the section the host builds as before.
+    tc_json=$(python3 - "$tmp/release.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as handle:
+        tc = json.load(handle).get('toolchain')
+except (OSError, ValueError):
+    tc = None
+if tc:
+    print(tc['bundle_url'])
+    print(tc['bundle_sha256'])
+    for name, digest in sorted(tc['binaries'].items()):
+        print(name, digest)
+PY
+    ) || fail 'release.json toolchain section is invalid'
+    if [[ -n $tc_json ]]; then
+        tc_url=$(head -n1 <<<"$tc_json")
+        tc_sha=$(sed -n '2p' <<<"$tc_json")
+        tc_pairs=$(tail -n +3 <<<"$tc_json")
+        fetch "$tc_url" "$tmp/toolchain.tar.gz" \
+            || fail 'toolchain bundle download failed'
+        printf '%s  %s\n' "$tc_sha" "$tmp/toolchain.tar.gz" | sha256sum -c - >/dev/null \
+            || fail 'toolchain bundle SHA-256 does not match the manifest'
+        if tar -tzf "$tmp/toolchain.tar.gz" | grep -Evq '^(\./)?[^/]+$'; then
+            fail 'toolchain bundle contains unexpected paths'
+        fi
+        tc_stage=$tmp/toolchain
+        mkdir -p "$tc_stage"
+        tar -xzf "$tmp/toolchain.tar.gz" -C "$tc_stage" --no-same-owner
+        while read -r bin_name bin_digest; do
+            [[ -f $tc_stage/$bin_name ]] || fail "toolchain bundle lacks $bin_name"
+            printf '%s  %s\n' "$bin_digest" "$tc_stage/$bin_name" | sha256sum -c - >/dev/null \
+                || fail "toolchain binary $bin_name does not match the manifest"
+        done <<<"$tc_pairs"
+        install -m 0755 "$tc_stage"/caddy "$tc_stage"/awg-go "$tc_stage"/awg \
+            "$tc_stage"/awg-quick "$tc_stage"/wg-go /usr/local/bin/
+        log "Installed the release's prebuilt toolchain binaries (bundle $tc_sha)"
+    fi
+
     stage=$REPO_ROOT.new
     rm -rf "$stage"
     mkdir -p "$stage"

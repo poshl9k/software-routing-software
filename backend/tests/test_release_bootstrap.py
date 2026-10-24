@@ -322,6 +322,10 @@ def scratch_builder(tmp_path, *, template=None):
     packaging = repo / 'backend/packaging'
     packaging.mkdir(parents=True)
     shutil.copy2(MAKER, packaging / 'make-release.sh')
+    # make-release computes the toolchain id through make-toolchain.sh, which
+    # sources the pinned versions from bootstrap.sh — both live in packaging/.
+    shutil.copy2(PACKAGING / 'bootstrap.sh', packaging / 'bootstrap.sh')
+    shutil.copy2(PACKAGING / 'make-toolchain.sh', packaging / 'make-toolchain.sh')
     (packaging / 'get.sh').write_text(TEMPLATE.read_text() if template is None else template)
     (packaging / 'install-release.sh').write_text(WRAPPER)
     (repo / 'backend/pyproject.toml').write_text('[project]\nversion = "1.2.3"\n')

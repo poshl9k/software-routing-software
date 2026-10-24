@@ -7,12 +7,17 @@
 #                               backend wheel (backend/dist/*.whl), so an
 #                               online install never builds on the host.
 #   release.json                {commit, semver, source_url, source_sha256,
-#                                min_os}
+#                                min_os, toolchain?}
 #   get.sh                      public entry with the same baked release pins
 # The artifact format matches what the ISO vendors (ADR-0008): a `git archive`
 # of one commit; the added REVISION lets a guest cross-check the archive
 # against the manifest commit without any git history. source_sha256 covers the
 # FINAL archive, so the prebuilt binaries are pinned exactly like the source.
+# A default build also references the PREBUILT compiled-toolchain bundle for
+# this release's pins (make-toolchain.sh): the toolchain section in release.json
+# tells the host installers to download and verify the pinned Caddy/AWG binaries
+# instead of building them. Without a bundle for these pins the section is
+# omitted and the host builds as before.
 #
 # Usage:
 #   VS_ROUTER_RELEASE_BASE_URL=<url> make-release.sh [<40-hex-commit>] [--upload]
@@ -131,13 +136,38 @@ if (( ! SKIP_BUILD )); then
     log "Prebuilt bundle: ${wheels[0]#$stage/} + frontend/dist"
 fi
 
+# Toolchain section (default build only): a release whose pins have a built
+# compiled-toolchain bundle (release/toolchain/toolchain-<id>.json, published by
+# make-toolchain.sh under its own immutable tag) references it from release.json
+# — host installers then download and verify the pinned Go binaries instead of
+# building them. The bundle id is the hash of the pins, so releases sharing the
+# pins share the binaries; no bundle for these pins -> no section -> host builds.
+tc_manifest=
+tc_url=
+if (( ! SKIP_BUILD )); then
+    tc_id=$(bash "$SCRIPT_DIR/make-toolchain.sh" --print-id) \
+        || fail 'cannot compute the toolchain id (make-toolchain.sh failed)'
+    tc_manifest="$REPO_ROOT/release/toolchain/toolchain-$tc_id.json"
+    if [[ ! -f $tc_manifest ]]; then
+        log "WARNING: no toolchain bundle for pins $tc_id in release/toolchain; the host will build the Go binaries"
+        tc_manifest=
+    fi
+    if [[ -n $tc_manifest && $BASE_URL == https://github.com/* ]]; then
+        tc_url="${BASE_URL%%/releases/download*}/releases/download/toolchain-$tc_id/toolchain-amd64-$tc_id.tar.gz"
+    elif [[ -n $tc_manifest ]]; then
+        log 'WARNING: BASE_URL is not a github releases URL; skipping the toolchain section'
+        tc_manifest=
+    fi
+fi
+
 tar -czf "$OUT/$name" -C "$stage" .
 
 sha256=$(sha256sum "$OUT/$name" | awk '{print $1}')
 [[ $sha256 =~ ^[0-9a-f]{64}$ ]] || { echo 'sha256sum failed' >&2; exit 1; }
 
 RELEASE_OUT="$OUT/release.json" RELEASE_COMMIT="$COMMIT" RELEASE_SEMVER="$semver" \
-RELEASE_URL="$source_url" RELEASE_SHA="$sha256" python3 - <<'PY'
+RELEASE_URL="$source_url" RELEASE_SHA="$sha256" \
+RELEASE_TOOLCHAIN="$tc_manifest" RELEASE_TOOLCHAIN_URL="$tc_url" python3 - <<'PY'
 import json, os
 manifest = {
     'commit': os.environ['RELEASE_COMMIT'],
@@ -146,6 +176,18 @@ manifest = {
     'source_sha256': os.environ['RELEASE_SHA'],
     'min_os': 'debian-13',
 }
+if os.environ.get('RELEASE_TOOLCHAIN'):
+    with open(os.environ['RELEASE_TOOLCHAIN'], encoding='utf-8') as handle:
+        bundle = json.load(handle)
+    manifest['toolchain'] = {
+        'id': bundle['toolchain_id'],
+        'arch': bundle['arch'],
+        'bundle_name': bundle['bundle_name'],
+        'bundle_url': os.environ['RELEASE_TOOLCHAIN_URL'],
+        'bundle_sha256': bundle['bundle_sha256'],
+        'binaries': bundle['binaries'],
+        'pins': bundle['pins'],
+    }
 with open(os.environ['RELEASE_OUT'], 'w', encoding='utf-8') as handle:
     json.dump(manifest, handle, indent=2, sort_keys=True)
     handle.write('\n')

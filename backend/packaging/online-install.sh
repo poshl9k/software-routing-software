@@ -13,6 +13,7 @@ ADDRESS=''
 SSH_PORT=22
 WHEEL=''
 UI=''
+TOOLCHAIN=''
 DRY_RUN=0
 
 usage() {
@@ -27,6 +28,10 @@ Usage: online-install.sh [options]
   --ssh-port N      SSH port to keep open (default 22)
   --wheel FILE      prebuilt vs_router backend wheel
   --ui DIR          prebuilt frontend dist/ directory
+  --toolchain FILE  prebuilt compiled toolchain bundle (caddy, awg-go, awg,
+                    awg-quick, wg-go); replaces the host Go builds entirely.
+                    The release updater verifies it against the manifest
+                    before passing it here; direct callers must verify it.
   --dry-run         print actions without changing the system
 EOF
 }
@@ -40,6 +45,7 @@ while [ $# -gt 0 ]; do
         --ssh-port) SSH_PORT=${2:?}; shift 2 ;;
         --wheel) WHEEL=${2:?}; shift 2 ;;
         --ui) UI=${2:?}; shift 2 ;;
+        --toolchain) TOOLCHAIN=${2:?}; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -116,15 +122,38 @@ install_packages() {
     # that has nothing to serve.
     run apt-get install -y \
         dbus python3 python3-pip python3-venv python3-setuptools python3-wheel \
-        git build-essential golang-go nodejs npm curl socat nftables apparmor \
-        wireguard-tools unbound ppp traceroute \
+        curl socat nftables apparmor wireguard-tools unbound ppp traceroute \
         fail2ban python3-systemd openssh-server
+    # The Go toolchain (git/build-essential/golang/npm) exists only to compile
+    # the binaries; a prebuilt toolchain bundle (verified by the release
+    # updater) removes the packages and the builds entirely — they are the
+    # memory peak of a small VPS install.
+    if [ -z "$TOOLCHAIN" ]; then
+        run apt-get install -y git build-essential golang-go nodejs npm
+    fi
 }
 if ! command -v nft >/dev/null 2>&1 || ! command -v unbound >/dev/null 2>&1; then
     install_packages
 fi
 
-# --- 2. AmneziaWG (userspace runtime + tools) -------------------------------
+# --- 2. Compiled binaries: prebuilt toolchain bundle or Go builds ------------
+# A release can ship the pinned binaries in a verified toolchain bundle
+# (make-toolchain.sh, passed as --toolchain FILE): they are extracted once and
+# every Go build below is skipped. Without the bundle the builds run as before
+# — they are the memory peak of a ≈1 GB VPS install.
+if [ -n "$TOOLCHAIN" ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "+ tar -xzf $TOOLCHAIN -C /usr/local/bin"
+    else
+        # Fail closed on anything but a flat set of top-level files.
+        if ! tar -tzf "$TOOLCHAIN" | grep -Eq '^(\./)?[^/]+$'; then
+            echo "ERROR: toolchain bundle has unexpected paths: $TOOLCHAIN" >&2
+            exit 1
+        fi
+        tar -xzf "$TOOLCHAIN" -C /usr/local/bin --no-same-owner
+        echo "TOOLCHAIN: installed prebuilt binaries from $TOOLCHAIN"
+    fi
+else
 if ! command -v awg-go >/dev/null 2>&1; then
     run git -C "$WORK" clone --branch v3.1.20260812 --depth 1 \
         https://github.com/amnezia-vpn/amneziawg-go
@@ -150,6 +179,7 @@ if ! command -v caddy >/dev/null 2>&1; then
         xcaddy build v2.11.4 --with github.com/mholt/caddy-l4@v0.1.2 \
         --with github.com/caddy-dns/cloudflare@v0.2.4 --output /usr/local/bin/caddy"
 fi
+fi # end: Go builds (skipped when a toolchain bundle is supplied)
 
 # --- 4. Panel (wheel + built UI) --------------------------------------------
 if [ -n "$WHEEL" ]; then

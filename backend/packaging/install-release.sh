@@ -341,7 +341,57 @@ PY
     fi
 fi
 
-# Do not follow links into build or installer outputs, even for local sources.
+# --- Prebuilt compiled toolchain (release path only) -------------------------
+# A release's manifest may pin a toolchain bundle (release.json's toolchain
+# section): the pinned Caddy/AmneziaWG binaries, downloaded once and verified
+# against the manifest, replacing the host Go builds. Every digest is checked
+# before anything is installed; the release path aborts on any mismatch.
+tc_bundle_args=()
+if [[ -n ${tmp:-} ]]; then
+    tc_json=$(python3 - "$tmp/release.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as handle:
+        tc = json.load(handle).get('toolchain')
+except (OSError, ValueError):
+    tc = None
+if tc:
+    print(tc['bundle_url'])
+    print(tc['bundle_sha256'])
+    for name, digest in sorted(tc['binaries'].items()):
+        print(name, digest)
+PY
+    ) || fail 'release.json toolchain section is invalid'
+    if [[ -n $tc_json ]]; then
+        tc_url=$(head -n1 <<<"$tc_json")
+        tc_sha=$(sed -n '2p' <<<"$tc_json")
+        tc_pairs=$(tail -n +3 <<<"$tc_json")
+        tc_bundle="$work/toolchain-$tc_sha.tar.gz"
+        if [[ -e $tc_bundle ]]; then
+            log 'Reusing the cached toolchain bundle'
+        else
+            log 'Fetching the release toolchain bundle'
+            fetch "$tc_url" "$tc_bundle"
+        fi
+        printf '%s  %s\n' "$tc_sha" "$tc_bundle" | sha256sum -c - >/dev/null \
+            || fail 'toolchain bundle SHA-256 does not match the manifest'
+        if tar -tzf "$tc_bundle" | grep -Evq '^(\./)?[^/]+$'; then
+            fail 'toolchain bundle contains unexpected paths'
+        fi
+        tc_stage=$tmp/toolchain
+        mkdir -p "$tc_stage"
+        tar -xzf "$tc_bundle" -C "$tc_stage" --no-same-owner
+        while read -r bin_name bin_digest; do
+            [[ -f $tc_stage/$bin_name ]] || fail "toolchain bundle lacks $bin_name"
+            printf '%s  %s\n' "$bin_digest" "$tc_stage/$bin_name" | sha256sum -c - >/dev/null \
+                || fail "toolchain binary $bin_name does not match the manifest"
+        done <<<"$tc_pairs"
+        log "Verified toolchain bundle ($tc_sha); installing its binaries"
+        tc_bundle_args=(--toolchain "$tc_bundle")
+    fi
+fi
+
+# Do not follow links into build or installer outputs.
 python3 - "$source" <<'PY' || fail 'source contains unsafe paths'
 import os, pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -496,6 +546,7 @@ if [[ ! -f $ui/index.html || -L $ui/index.html ]]; then
 fi
 
 args=(--wheel "$wheel" --ui "$ui" --hostname "$hostname")
+(( ${#tc_bundle_args[@]} == 0 )) || args+=("${tc_bundle_args[@]}")
 [[ -z $custom_hostname ]] || args+=(--custom-hostname "$custom_hostname")
 [[ -z $path_prefix ]] || args+=(--path-prefix "$path_prefix")
 [[ -z $address ]] || args+=(--address "$address")
