@@ -11,7 +11,7 @@ from .api.errors import install_errors, issue
 
 
 def create_app(engine=None, *, database_url=None, clock=None) -> FastAPI:
-    app = FastAPI(title="vs-router", version="0.1.0")
+    app = FastAPI(title="vs-router", version="0.2.0")
     if engine is None:
         url = database_url or os.environ.get("VS_ROUTER_DATABASE_URL", "sqlite:///vs-router.db")
         options = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite:") else {}
