@@ -41,10 +41,10 @@ const positive = (v: string) => Number.isInteger(Number(v)) && Number(v) >= 1;
  * management.portal_names). */
 function portalHost(record: { custom_hostname: string | null; address: string } | null | undefined) {
   if (!record) return null;
+  if (record.custom_hostname) return `portal.${record.custom_hostname}`;
   if (typeof record.address === "string" && record.address) {
     return `portal.${record.address.split("/")[0]}.nip.io`;
   }
-  if (record.custom_hostname) return `portal.${record.custom_hostname}`;
   return null;
 }
 
