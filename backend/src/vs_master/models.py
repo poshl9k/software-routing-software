@@ -102,6 +102,9 @@ class Device(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey('master_accounts.id'), nullable=False)
     node_id: Mapped[int] = mapped_column(ForeignKey('master_nodes.id'), nullable=False)
+    # The subscriber NAME in the node's router configuration: the node bridge
+    # addresses device operations by name, so the master carries the mapping.
+    node_subscriber: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str | None] = mapped_column(String(64))
     label: Mapped[str] = mapped_column(String(128), nullable=False)
     public_key: Mapped[str | None] = mapped_column(String(128))

@@ -60,7 +60,8 @@ def test_device_carries_node_and_op_targets_node(engine, node):
         account = Account(display_name='Иван', telegram_chat_id='100', password_hash='x')
         db.add(account)
         db.flush()
-        device = Device(account_id=account.id, node_id=node.id, label='Телефон',
+        device = Device(account_id=account.id, node_id=node.id,
+                        node_subscriber='subscriber-100', label='Телефон',
                         private_key=EncryptedSecret(ciphertext='gAAAA-priv'))
         db.add(device)
         db.flush()

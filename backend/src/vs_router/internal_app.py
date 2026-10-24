@@ -1,4 +1,5 @@
 """Secret-authenticated, narrowly scoped portal bridge to the panel apply cycle."""
+import json
 import os
 import secrets
 from datetime import datetime, timezone
@@ -34,6 +35,11 @@ class DeviceOperation(Model):
     tunnel: str | None = None
 
 
+class TokenRotate(Model):
+    """Master-generated replacement bearer token (ADR-0035 D2)."""
+    new_token: str = Field(min_length=16, max_length=128)
+
+
 def read_internal_secret():
     from vs_portal.internal import read_internal_secret as read_secret
     try:
@@ -42,10 +48,55 @@ def read_internal_secret():
         return ''
 
 
-def _auth(x_vs_portal_secret: str | None = Header(default=None)):
+def _auth(request: Request, x_vs_portal_secret: str | None = Header(default=None)):
     expected = read_internal_secret()
-    if not expected or not x_vs_portal_secret or not secrets.compare_digest(expected, x_vs_portal_secret):
+    supplied = x_vs_portal_secret or ''
+    if not supplied:
+        auth = request.headers.get('Authorization', '')
+        if auth.startswith('Bearer '):
+            supplied = auth[len('Bearer '):].strip()
+    if not expected or not supplied:
         raise APIError(403, 'auth.forbidden')
+    if secrets.compare_digest(expected, supplied):
+        return
+    # The master authenticates with its long-lived bearer token (ADR-0035 D2);
+    # the previous generation stays valid only until the master confirms rotation.
+    with Session(request.app.state.portal_engine) as portal:
+        current, previous = _read_master_tokens(portal)
+    for candidate in (current, previous):
+        if candidate and secrets.compare_digest(candidate, supplied):
+            return
+    raise APIError(403, 'auth.forbidden')
+
+
+MASTER_TOKEN_KEY = 'master_bridge_token'
+
+
+def _read_master_tokens(portal):
+    from vs_portal.models import Setting
+    row = portal.get(Setting, MASTER_TOKEN_KEY)
+    if row is None:
+        return '', ''
+    try:
+        data = json.loads(row.value)
+    except ValueError:
+        return '', ''
+    current = _stored(data.get('current')) or ''
+    previous = (_stored(data.get('previous')) or '') if data.get('previous') else ''
+    return current, previous
+
+
+def _write_master_tokens(portal, current, previous):
+    from vs_portal.models import Setting
+    value = json.dumps({'current': _encrypt(current).model_dump(mode='json'),
+                        'previous': _encrypt(previous).model_dump(mode='json') if previous else None})
+    row = portal.get(Setting, MASTER_TOKEN_KEY)
+    if row is None:
+        row = Setting(key=MASTER_TOKEN_KEY, value=value)
+        portal.add(row)
+    else:
+        row.value = value
+    portal.commit()
 
 
 def _db(request: Request):
@@ -405,6 +456,39 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
     def renew(name: str, body: dict | None = Body(default=None),
               db: Session = Depends(_db), portal: Session = Depends(_portal_db)):
         return _mutate(name, 'renew', db, portal, body)
+
+    @app.post('/internal/master/token-rotate')
+    def token_rotate(request: Request, body: TokenRotate, portal: Session = Depends(_portal_db)):
+        # Authenticated by the CURRENT token (the token is its own channel).
+        # Idempotent: a retry that arrives with the OLD token after a lost
+        # response is answered 200 {'rotated': False} when the proposed token is
+        # already current, 403 when the old token has been revoked.
+        auth = request.headers.get('Authorization', '')
+        supplied = auth[len('Bearer '):].strip() if auth.startswith('Bearer ') else ''
+        current, previous = _read_master_tokens(portal)
+        matched_current = bool(current) and secrets.compare_digest(current, supplied)
+        matched_previous = (not matched_current) and bool(previous) and secrets.compare_digest(previous, supplied)
+        if not (matched_current or matched_previous):
+            raise APIError(403, 'auth.forbidden')
+        same_as_current = bool(current) and secrets.compare_digest(current, body.new_token)
+        if matched_previous and not same_as_current:
+            raise APIError(403, 'auth.forbidden')
+        if same_as_current:
+            return {'rotated': False}
+        _write_master_tokens(portal, body.new_token, current)
+        return {'rotated': True}
+
+    @app.get('/internal/master/state', dependencies=[Depends(_auth)])
+    def master_state(portal: Session = Depends(_portal_db)):
+        # Master telemetry (ADR-0035 D7): subscriber device counts plus the
+        # live tunnel activity when the agent can read it.
+        Device, _, _ = _models()
+        active = portal.scalar(select(func.count(Device.id)).where(Device.status == 'active')) or 0
+        try:
+            live = versions.agent_call('tunnel_activity', {})
+        except APIError:
+            live = {}
+        return {'active_devices': active, 'tunnels': live if isinstance(live, dict) else {}}
 
     return app
 
