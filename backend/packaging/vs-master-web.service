@@ -1,0 +1,18 @@
+[Unit]
+Description=vs-master master portal
+After=network.target
+
+[Service]
+User=vs-master-web
+EnvironmentFile=-/etc/vs-router/secrets.env
+Environment=VS_MASTER_DATABASE_URL=sqlite:////var/lib/vs-router/master/vs-master.db
+Environment=VS_MASTER_STATIC_DIR=/var/lib/vs-router/master/ui
+# Loopback only: Caddy on the same host terminates TLS and proxies to 127.0.0.1:8440.
+ExecStart=/usr/bin/python3 -m uvicorn vs_master.app:app --host 127.0.0.1 --port 8440 --proxy-headers --forwarded-allow-ips="127.0.0.1"
+UMask=0007
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vs-router/master
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
