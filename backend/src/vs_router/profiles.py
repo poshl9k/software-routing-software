@@ -29,10 +29,14 @@ ModuleProfile = Literal['core', 'router', 'panel', 'master']
 
 MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_master': 'master',
+    'vs_master.admin_api': 'master',
+    'vs_master.app': 'master',
+    'vs_master.auth': 'master',
     'vs_master.bridge': 'master',
     'vs_master.migrate_node': 'master',
     'vs_master.models': 'master',
     'vs_master.worker': 'master',
+    'vs_portal.errors': 'panel',
     'vs_portal.models': 'panel',
     'vs_portal.security': 'panel',
     'vs_router': 'core',
@@ -117,6 +121,18 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
 # Exact edges only: no source-wide skips or prefix/glob exceptions. Tests reject
 # empty reasons and stale entries, and prove removing each exception fails.
 KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
+    ('vs_master.admin_api', 'vs_portal.security'):
+        'Master admin API reads the shared installation secret key for encrypted node credentials.',
+    ('vs_master.admin_api', 'vs_router.api.errors'):
+        'Master admin API uses the shared public error contract.',
+    ('vs_master.admin_api', 'vs_router.schema'):
+        'Master admin API reuses the strict shared Pydantic model base.',
+    ('vs_master.admin_api', 'vs_router.secrets'):
+        'Master admin API encrypts and decrypts persisted node credentials.',
+    ('vs_master.app', 'vs_portal.errors'):
+        'Master app reuses the portal nested-error response handlers.',
+    ('vs_master.auth', 'vs_router.api.errors'):
+        'Master authentication uses the shared public error contract.',
     ('vs_master.bridge', 'vs_router.api.errors'):
         'Master bridge translates shared API error contracts.',
     ('vs_master.models', 'vs_portal.models'):
