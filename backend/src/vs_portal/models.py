@@ -56,6 +56,7 @@ class Account(Base):
     subscriber_name: Mapped[str] = mapped_column(String(64), primary_key=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str | None] = mapped_column(String(320))
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(8), nullable=False, default='active')
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 

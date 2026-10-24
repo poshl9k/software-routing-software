@@ -11,7 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
-from vs_portal.models import (Account, Audit, Device, DeviceOp, Invite,
+from vs_portal.models import (Account, Audit, Device, DeviceOp, Invite, Setting,
                               Subscription, Tariff, make_engine)
 from vs_router.api.errors import APIError
 from vs_router.app import create_app
@@ -237,6 +237,86 @@ async def test_criterion_8_renew_busy_persists_retry_and_keeps_material(portal_a
         assert db.scalar(select(Device)).private_key == TEST_SECRET
 
 
+async def test_criterion_3_settings_get_and_valid_bot_token_roundtrip(portal_admin_api):
+    client, _, engine, _ = portal_admin_api
+    await login(client)
+    response = await client.get("/api/portal-admin/settings")
+    assert response.status_code == 200
+    assert response.json() == {"support_url": None, "bot_token": None}
+
+    token = "123456789:AbC_def-GHI"
+    response = await client.put("/api/portal-admin/settings", json={"bot_token": token})
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {"support_url": None, "bot_token": token}
+    assert (await client.get("/api/portal-admin/settings")).json() == {
+        "support_url": None, "bot_token": token}
+    with Session(engine) as db:
+        setting = db.get(Setting, "bot_token")
+        assert setting is not None and setting.value == token
+        records = list(db.scalars(select(Audit).where(Audit.action == "settings.bot_token")))
+        assert [(row.action, row.detail) for row in records] == [("settings.bot_token", "updated")]
+        assert all(token not in (row.detail or "") for row in db.scalars(select(Audit)))
+
+
+@pytest.mark.parametrize("token", [
+    "123456789", "prefix123:abc", "123:", ":abc", "123:abc!", "123:abc:def",
+    "123:abc suffix", " 123:abc", "123:abc\n",
+])
+async def test_criterion_3_invalid_bot_token_rejected_without_write_or_audit(
+        portal_admin_api, token):
+    client, _, engine, _ = portal_admin_api
+    await login(client)
+    with Session(engine) as db:
+        initial = db.get(Setting, "bot_token")
+        initial_value = initial.value if initial is not None else None
+    response = await client.put("/api/portal-admin/settings", json={"bot_token": token})
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "portal.bot_token_invalid"
+    with Session(engine) as db:
+        setting = db.get(Setting, "bot_token")
+        assert (setting.value if setting is not None else None) == initial_value
+        assert db.scalar(select(Audit).where(Audit.action == "settings.bot_token")) is None
+
+
+async def test_criterion_3_empty_bot_token_removes_setting_without_secret_in_audit(portal_admin_api):
+    client, _, engine, _ = portal_admin_api
+    await login(client)
+    token = "987654321:secret_value-with-safe_chars"
+    assert (await client.put("/api/portal-admin/settings", json={"bot_token": token})).status_code == 200
+
+    response = await client.put("/api/portal-admin/settings", json={"bot_token": ""})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"support_url": None, "bot_token": None}
+    with Session(engine) as db:
+        assert db.get(Setting, "bot_token") is None
+        records = list(db.scalars(select(Audit).where(Audit.action == "settings.bot_token")))
+        assert [row.detail for row in records] == ["updated", "removed"]
+        assert all(token not in (row.detail or "") for row in db.scalars(select(Audit)))
+
+
+async def test_criterion_3_support_url_roundtrip_and_delete_still_persist(portal_admin_api):
+    client, _, engine, _ = portal_admin_api
+    await login(client)
+    url = "https://t.me/router_support"
+    response = await client.put("/api/portal-admin/settings", json={"support_url": url})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"support_url": url, "bot_token": None}
+    assert (await client.get("/api/portal-admin/settings")).json() == {
+        "support_url": url, "bot_token": None}
+    with Session(engine) as db:
+        setting = db.get(Setting, "support_url")
+        assert setting is not None and setting.value == url
+
+    response = await client.put("/api/portal-admin/settings", json={"support_url": ""})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"support_url": None, "bot_token": None}
+    with Session(engine) as db:
+        assert db.get(Setting, "support_url") is None
+        records = list(db.scalars(select(Audit).where(Audit.action == "settings.support_url")))
+        assert [row.detail for row in records] == [url, "removed"]
+
+
 async def test_criterion_9_portal_migrated_separate_from_panel(portal_admin_api):
     _, panel, portal, _ = portal_admin_api
     panel_tables = set(inspect(panel).get_table_names())
@@ -247,7 +327,7 @@ async def test_criterion_9_portal_migrated_separate_from_panel(portal_admin_api)
                              "portal_subscriptions", "portal_devices", "portal_device_ops",
                              "portal_audit", "portal_settings"}
     with portal.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == "0003"
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == "0005"
 
 
 async def test_criterion_8_panel_second_engine_lazy_and_sqlite_wal(tmp_path, monkeypatch):

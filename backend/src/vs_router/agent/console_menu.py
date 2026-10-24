@@ -24,6 +24,7 @@ from ..api.configuration import parse_configuration, validate
 from ..api.errors import APIError
 from ..db import ConfigurationRow, UserRow
 from ..management import Management, STATE_DIR, read_management, verify_identity, wired_ports
+from ..profile import read_profile
 from ..schema import Configuration
 from .management_console import Console
 from .rpc import AgentRPCError
@@ -121,7 +122,7 @@ def render_status(ports, selection, version, services, management=None, fingerpr
 class Menu:
     def __init__(self, *, input_fn=input, print_fn=print, password_fn=getpass.getpass,
                  runner=None, sysnet=Path('/sys/class/net'), console=None, database=None,
-                 apply_fn=None):
+                 apply_fn=None, profile_fn=read_profile, setup_fn=None):
         self.input = input_fn
         self.print = print_fn
         self.password = password_fn
@@ -134,6 +135,8 @@ class Menu:
         self.database = database or create_engine(os.environ.get(
             'VS_ROUTER_DATABASE_URL', 'sqlite:////var/lib/vs-router/vs-router.db'))
         self.apply_fn = apply_fn or self.apply_rpc
+        self.profile_fn = profile_fn
+        self.setup_fn = setup_fn
         self.selection = Selection()
 
     @staticmethod
@@ -315,17 +318,30 @@ class Menu:
         result = self.runner(['ping', '-c', '3', '-W', '2', host])
         self.print('Ping: success' if result.returncode == 0 else 'Ping: no reply')
 
+    def setup_portal(self):
+        if self.setup_fn is not None:
+            return self.setup_fn()
+        from .setup_wizard import main as setup_main
+        return setup_main()
+
     def loop(self):
-        local_guard()
+        profile = self.profile_fn()
+        if profile != 'panel':
+            local_guard()
         actions = {'1': self.assign, '2': self.set_address, '3': self.set_password,
                    '4': self.status, '5': self.save_apply, '8': self.ping,
                    '6': lambda: self.runner(['systemctl', 'reboot']),
                    '7': lambda: self.runner(['systemctl', 'poweroff']),
                    '9': lambda: self.runner(['/bin/sh'])}
+        if profile == 'panel':
+            actions['10'] = self.setup_portal
         while True:
-            self.print('0) Logout | 1) Assign interfaces (WAN/LAN) | 2) Set interface IP address\n'
-                       '3) Reset administrator password | 4) Show status | 5) Save and apply\n'
-                       '6) Reboot | 7) Power off | 8) Ping | 9) Shell')
+            menu = ('0) Logout | 1) Assign interfaces (WAN/LAN) | 2) Set interface IP address\n'
+                    '3) Reset administrator password | 4) Show status | 5) Save and apply\n'
+                    '6) Reboot | 7) Power off | 8) Ping | 9) Shell')
+            if profile == 'panel':
+                menu += ' | 10) Setup portal'
+            self.print(menu)
             try:
                 choice = self.input('> ').strip()
                 if choice == '0':
@@ -346,7 +362,6 @@ class Menu:
 
 def main():
     try:
-        local_guard()
         return Menu().loop()
     except ValueError:
         print('console.local_root_required', file=sys.stderr)

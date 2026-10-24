@@ -401,5 +401,23 @@ install -m 0640 -o vs-router-web -g vs-router-portal /etc/vs-router/portal-inter
 chown vs-router-web:vs-router-portal /etc/vs-router/portal-internal.secret 2>/dev/null || true
 chmod 0640 /etc/vs-router/portal-internal.secret 2>/dev/null || true
 systemctl daemon-reload
-[ -f /etc/systemd/system/vs-router-portal.service ] && systemctl enable vs-router-portal.service
-[ -f /etc/systemd/system/vs-router-web-internal.service ] && systemctl enable vs-router-web-internal.service
+if [ "$PROFILE" = panel ]; then
+    mkdir -p /var/lib/vs-router/portal
+    (
+        cd /opt/vs-router/backend
+        VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db \
+            python3 -m alembic -c alembic-portal/alembic.ini upgrade head
+    )
+    chown vs-router-portal:vs-router-portal /var/lib/vs-router/portal/vs-portal.db
+    systemctl enable vs-router-portal.service vs-router-web-internal.service
+    systemctl start vs-router-portal.service vs-router-web-internal.service
+fi
+# Telegram worker is panel-only; share the portal DB group (including WAL files).
+if [ "$PROFILE" = panel ]; then
+    id vs-router-telegram >/dev/null 2>&1 || useradd --system --gid vs-router-portal \
+        --home-dir /var/lib/vs-router/portal --shell /usr/sbin/nologin vs-router-telegram
+    usermod -a -G vs-router-portal vs-router-telegram
+    chmod 0660 /var/lib/vs-router/portal/vs-portal.db
+    systemctl enable vs-router-telegram.service
+    systemctl restart vs-router-telegram.service
+fi

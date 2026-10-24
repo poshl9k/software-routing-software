@@ -1,6 +1,7 @@
 """Administrator access to portal accounts, independent of configuration storage."""
 from datetime import datetime, timedelta, timezone
 from threading import RLock
+import re
 import secrets
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -335,32 +336,52 @@ def update_subscription(name: str, body: SubscriptionPatch, response: Response,
 
 
 @router.get("/settings")
-def read_settings(db: Session = Depends(get_portal_db)):
+def read_settings(response: Response, db: Session = Depends(get_portal_db)):
     values = {row.key: row.value for row in db.scalars(select(Setting))}
-    return {"support_url": values.get("support_url")}
+    response.headers["Cache-Control"] = "no-store"
+    return {"support_url": values.get("support_url"), "bot_token": values.get("bot_token") or None}
 
 
 @router.put("/settings")
 def update_settings(body: dict, response: Response, db: Session = Depends(get_portal_db)):
-    if not set(body) <= {"support_url"} or not all(isinstance(v, str) and len(v) <= 256 for v in body.values()):
+    if not set(body) <= {"support_url", "bot_token"} or not all(isinstance(v, str) for v in body.values()):
         raise APIError(422, "request.invalid")
+    value = None
     if "support_url" in body:
         value = body["support_url"].strip()
+        if len(body["support_url"]) > 256:
+            raise APIError(422, "request.invalid")
         if value and not value.startswith(("https://t.me/", "https://telegram.me/")):
             raise APIError(422, "portal.support_url_invalid")
+    if "bot_token" in body and body["bot_token"] and (
+        len(body["bot_token"]) > 256 or not re.fullmatch(
+            r"\d+:[a-zA-Z0-9_-]+", body["bot_token"]
+        )
+    ):
+        raise APIError(422, "portal.bot_token_invalid")
+    if "support_url" in body or "bot_token" in body:
         begin_write(db)
-        if value:
+        if "support_url" in body:
             row = db.get(Setting, "support_url")
-            if row is None:
-                row = Setting(key="support_url", value=value)
-                db.add(row)
-            else:
-                row.value = value
-        else:
-            row = db.get(Setting, "support_url")
-            if row is not None:
+            if value:
+                if row is None:
+                    db.add(Setting(key="support_url", value=value))
+                else:
+                    row.value = value
+            elif row is not None:
                 db.delete(row)
-        audit(db, "settings.support_url", value or "removed")
+            audit(db, "settings.support_url", value or "removed")
+        if "bot_token" in body:
+            token = body["bot_token"]
+            row = db.get(Setting, "bot_token")
+            if token:
+                if row is None:
+                    db.add(Setting(key="bot_token", value=token))
+                else:
+                    row.value = token
+            elif row is not None:
+                db.delete(row)
+            audit(db, "settings.bot_token", "updated" if token else "removed")
         db.commit()
     response.headers["Cache-Control"] = "no-store"
-    return read_settings(db)
+    return read_settings(response, db)

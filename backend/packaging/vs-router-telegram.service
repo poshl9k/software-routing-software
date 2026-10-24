@@ -1,0 +1,18 @@
+[Unit]
+Description=vs-router portal Telegram bot
+Wants=network-online.target
+After=network-online.target vs-router-portal.service
+
+[Service]
+User=vs-router-telegram
+Group=vs-router-portal
+Environment=VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db
+ExecStart=/usr/bin/python3 -m vs_router.telegram_bot
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vs-router/portal
+NoNewPrivileges=true
+PrivateTmp=true
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

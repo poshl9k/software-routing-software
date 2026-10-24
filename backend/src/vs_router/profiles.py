@@ -32,6 +32,8 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_router.profiles': 'core',
     'vs_router.schema': 'core',
     'vs_router.secrets': 'core',
+    'vs_router.telegram_bot': 'panel',
+    'vs_router.telegram_bot.__main__': 'panel',
     'vs_router.validators': 'core',
     'vs_router.agent': 'core',
     'vs_router.agent.apply': 'core',
@@ -39,6 +41,7 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_router.agent.bootstrap_dns': 'core',
     'vs_router.agent.clash': 'core',
     'vs_router.agent.console_menu': 'router',
+    'vs_router.agent.setup_wizard': 'panel',
     'vs_router.agent.daemon': 'core',
     'vs_router.agent.ddns_update': 'core',
     'vs_router.agent.dnscrypt_service': 'core',
@@ -143,6 +146,8 @@ KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
         'The mixed service adapter still decodes router PPPoE bundles for reload.',
     ('vs_router.agent.console_menu', 'vs_router.agent.management_console'):
         'The router menu still uses the mixed provisioning console for LAN setup.',
+    ('vs_router.agent.console_menu', 'vs_router.agent.setup_wizard'):
+        'The shared console entry point exposes portal setup only on panel-profile hosts.',
     ('vs_router.agent.management_console', 'vs_router.generators.networkd'):
         'The panel provisioning console still contains legacy router LAN provisioning.',
 }
