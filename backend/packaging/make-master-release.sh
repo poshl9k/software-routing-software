@@ -82,7 +82,7 @@ echo "\$VSM_SHA  \$FETCH/bundle.tar.gz" | sha256sum -c - || fail 'bundle checksu
 rm -rf "\$FETCH/vs-master-\$VSM_COMMIT"
 tar xzf "\$FETCH/bundle.tar.gz" -C "\$FETCH"
 log "installing"
-sh "\$FETCH/vs-master-\$VSM_COMMIT/install-master.sh"
+bash "\$FETCH/vs-master-\$VSM_COMMIT/install-master.sh"
 log "done; probe: curl http://127.0.0.1:8440/health"
 ENTRY
 chmod +x "$OUT/get-master.sh"
