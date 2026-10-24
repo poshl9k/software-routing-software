@@ -51,6 +51,10 @@ class BridgeClient:
         """Telemetry: {'active_devices': int, 'tunnels': {...}} (D7)."""
         return self._request('GET', '/internal/master/state')
 
+    def state(self, subscriber: str):
+        """Subscriber devices, subscription echo, and tunnel export state."""
+        return self._request('GET', f'/internal/portal/subscribers/{subscriber}/state')
+
     def device_op(self, subscriber: str, payload: dict):
         return self._request('POST', f'/internal/portal/subscribers/{subscriber}/device-op', payload)
 

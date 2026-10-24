@@ -1,10 +1,12 @@
 """Master portal administrator application."""
+from threading import RLock
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from vs_portal.errors import install_errors, nested
 
-from . import admin_api, auth
+from . import accounts, admin_api, auth, exports, portal_api
 from .models import make_engine
 
 
@@ -12,6 +14,9 @@ def create_master_app(engine=None, database_url=None, clock=None):
     app = FastAPI(title='vs-master', docs_url=None)
     app.state.engine = engine if engine is not None else make_engine(database_url)
     app.state.auth = auth.AuthState(clock=clock)
+    app.state.portal_auth = accounts.AuthState(clock=clock)
+    app.state.device_lock = RLock()
+    app.state.node_client_factory = None
     install_errors(app)
 
     @app.middleware('http')
@@ -29,7 +34,10 @@ def create_master_app(engine=None, database_url=None, clock=None):
         return response
 
     app.include_router(auth.router, prefix='/api/admin')
+    app.include_router(accounts.router, prefix='/api/portal')
     app.include_router(admin_api.router)
+    app.include_router(portal_api.router)
+    app.include_router(exports.router)
 
     @app.get('/health')
     async def health():

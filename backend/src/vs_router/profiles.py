@@ -29,12 +29,15 @@ ModuleProfile = Literal['core', 'router', 'panel', 'master']
 
 MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_master': 'master',
+    'vs_master.accounts': 'master',
     'vs_master.admin_api': 'master',
     'vs_master.app': 'master',
     'vs_master.auth': 'master',
     'vs_master.bridge': 'master',
+    'vs_master.exports': 'master',
     'vs_master.migrate_node': 'master',
     'vs_master.models': 'master',
+    'vs_master.portal_api': 'master',
     'vs_master.worker': 'master',
     'vs_portal.errors': 'panel',
     'vs_portal.models': 'panel',
@@ -121,6 +124,8 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
 # Exact edges only: no source-wide skips or prefix/glob exceptions. Tests reject
 # empty reasons and stale entries, and prove removing each exception fails.
 KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
+    ('vs_master.accounts', 'vs_router.api.errors'):
+        'Master subscriber authentication uses the shared public error contract.',
     ('vs_master.admin_api', 'vs_portal.security'):
         'Master admin API reads the shared installation secret key for encrypted node credentials.',
     ('vs_master.admin_api', 'vs_router.api.errors'):
@@ -135,10 +140,26 @@ KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
         'Master authentication uses the shared public error contract.',
     ('vs_master.bridge', 'vs_router.api.errors'):
         'Master bridge translates shared API error contracts.',
+    ('vs_master.exports', 'vs_portal.security'):
+        'Master exports decrypt subscriber material with the shared installation key.',
+    ('vs_master.exports', 'vs_router.api.errors'):
+        'Master exports use the shared public error contract.',
+    ('vs_master.exports', 'vs_router.generators.amnezia'):
+        'Master exports reuse the deterministic Amnezia container generator.',
+    ('vs_master.exports', 'vs_router.generators.wireguard'):
+        'Master exports preserve the shared AmneziaWG parameter order.',
+    ('vs_master.exports', 'vs_router.secrets'):
+        'Master exports decrypt stored subscriber material for authenticated downloads.',
     ('vs_master.models', 'vs_portal.models'):
         'Master reuses portal UTC and Secret column-type helpers.',
     ('vs_master.models', 'vs_router.schema'):
         'Master reuses the shared EncryptedSecret schema type.',
+    ('vs_master.portal_api', 'vs_portal.security'):
+        'Master portal decrypts node credentials with the shared installation key.',
+    ('vs_master.portal_api', 'vs_router.api.errors'):
+        'Master portal uses the shared public error contract.',
+    ('vs_master.portal_api', 'vs_router.secrets'):
+        'Master portal decrypts persisted node bridge credentials.',
     ('vs_master.migrate_node', 'vs_portal.models'):
         'Migration reads the node portal schema it copies into the master.',
     ('vs_master.migrate_node', 'vs_router.secrets'):
