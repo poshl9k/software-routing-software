@@ -410,38 +410,70 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
         return response
 
     @app.get('/internal/portal/subscribers/{name}/state', dependencies=[Depends(_auth)])
-    def state(name: str, db: Session = Depends(_db), portal: Session = Depends(_portal_db)):
+    def state(name: str, tunnel: str | None = None, db: Session = Depends(_db),
+              portal: Session = Depends(_portal_db)):
+        # A subscriber with no devices yet must still activate and list devices:
+        # the first device is created by the subscriber in the portal, so tunnel
+        # resolution is deferred until a device (with its tunnel_name) exists.
+        # The explicit `tunnel` query (device export) forces one resolution.
         row, subscription, devices = _context(name, db, portal)
         config = row.configuration
-        tunnel = _tunnel(config, name)
-        actual = {p.name: p for p in tunnel.peers if p.subscriber == name}
+        live_devices = [d for d in devices if d.status != 'removed']
+        servers = {t.name: t for t in config.tunnels if t.role == 'server'}
+
+        def resolve(preferred):
+            if preferred is not None and preferred in servers:
+                return servers[preferred]
+            return _tunnel(config, name, preferred)
+
+        if tunnel is not None:
+            resolved = resolve(tunnel)
+            selected = {resolved.name: resolved}
+        elif live_devices:
+            selected = {}
+            for device in live_devices:
+                resolved = resolve(device.tunnel_name)
+                selected.setdefault(resolved.name, resolved)
+        else:
+            selected = {}
+        peers_by_name = {p.name: p for t in selected.values() for p in t.peers if p.subscriber == name}
         try:
             live = versions.agent_call('tunnel_activity', {})
         except APIError:
             live = {}
-        handshakes = {p.get('public_key'): p.get('latest_handshake')
-                      for p in (live.get(tunnel.interface, []) if isinstance(live, dict) else [])
-                      if isinstance(p, dict)}
-        endpoint, _ = client_endpoint(tunnel, config)
+        handshakes = {}
+        for t in selected.values():
+            activity = live.get(t.interface, []) if isinstance(live, dict) else []
+            if isinstance(activity, list):
+                handshakes.update({p.get('public_key'): p.get('latest_handshake')
+                                   for p in activity if isinstance(p, dict)})
+        if len(selected) == 1:
+            tunnel_row = next(iter(selected.values()))
+            endpoint, _ = client_endpoint(tunnel_row, config)
+            tunnel_view = {'name': tunnel_row.name, 'protocol': tunnel_row.protocol,
+                           'obfuscation': tunnel_row.obfuscation, 'dns_mode': 'panel', 'exit': 'direct',
+                           'public_key': server_public_key(tunnel_row), 'endpoint': endpoint,
+                           'dns': list(tunnel_dns(tunnel_row, config)),
+                           'dns_servers': list(tunnel_dns(tunnel_row, config)),
+                           'header_protection_key': (_stored(tunnel_row.header_protection_key)
+                                                     if tunnel_row.header_protection_key else None),
+                           'random_trailers': tunnel_row.random_trailers,
+                           'disable_cookies': tunnel_row.disable_cookies,
+                           'allowed_ips': list(tunnel_row.allowed_ips or ('0.0.0.0/0',)),
+                           'listen_port': tunnel_row.listen_port,
+                           'keepalive': tunnel_row.keepalive,
+                           'subnet': str(tunnel_addresses(tunnel_row, config)[0])}
+        else:
+            tunnel_view = None
         return {'subscription': ({'status': subscription.status, 'expires_at': subscription.expires_at,
                                   'tariff_id': subscription.tariff_id} if subscription else None),
                 'devices': [{'id': d.id, 'name': d.name, 'label': d.label, 'status': d.status,
-                             'allowed_ips': d.allowed_ips or [], 'applied': d.name in actual,
-                             'last_handshake': handshakes.get(actual[d.name].public_key) if d.name in actual else None}
-                            for d in devices if d.status != 'removed'],
-                'tunnel': {'name': tunnel.name, 'protocol': tunnel.protocol,
-                           'obfuscation': tunnel.obfuscation, 'dns_mode': 'panel', 'exit': 'direct',
-                           'public_key': server_public_key(tunnel), 'endpoint': endpoint,
-                           'dns': list(tunnel_dns(tunnel, config)),
-                           'dns_servers': list(tunnel_dns(tunnel, config)),
-                           'header_protection_key': (_stored(tunnel.header_protection_key)
-                                                     if tunnel.header_protection_key else None),
-                           'random_trailers': tunnel.random_trailers,
-                           'disable_cookies': tunnel.disable_cookies,
-                           'allowed_ips': list(tunnel.allowed_ips or ('0.0.0.0/0',)),
-                           'listen_port': tunnel.listen_port,
-                           'keepalive': tunnel.keepalive,
-                           'subnet': str(tunnel_addresses(tunnel, config)[0])}}
+                             'allowed_ips': d.allowed_ips or [],
+                             'applied': d.name in peers_by_name,
+                             'last_handshake': (handshakes.get(peers_by_name[d.name].public_key)
+                                                if d.name in peers_by_name else None)}
+                            for d in live_devices],
+                'tunnel': tunnel_view}
 
     @app.post('/internal/portal/subscribers/{name}/device-op', dependencies=[Depends(_auth)])
     def device_op(name: str, body: DeviceOperation, db: Session = Depends(_db),

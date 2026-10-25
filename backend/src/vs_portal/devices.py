@@ -359,7 +359,9 @@ def export_device(name: str, request: Request, format: str = Query('conf'),
     device = device_owned(db, name, account.subscriber_name)
     if format not in ('conf', 'qr', 'amnezia'):
         raise APIError(422, 'portal.export_format')
-    state = request.app.state.internal.state(account.subscriber_name)
+    # The device's recorded creation tunnel resolves ambiguity; a legacy record
+    # without one falls back to the server-side heuristics.
+    state = request.app.state.internal.state(account.subscriber_name, tunnel=device.tunnel_name)
     tunnel = state.get('tunnel')
     key = get_secret_key()
     if format == 'qr':

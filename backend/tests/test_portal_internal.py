@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 from vs_portal.models import Device, Subscription, Tariff
 from vs_router.api import versions
 from vs_router.db import Base, ConfigurationRow
+from vs_router.schema import Configuration
 from vs_router.internal_app import create_internal_app
 from vs_router.secrets import encrypt_secret
 
@@ -247,6 +248,41 @@ def test_criterion_7_failed_apply_keeps_retry_material_and_cleans_only_own_draft
     retried = post(rig, {'op': 'create', 'device_id': id})
     assert retried.status_code == 200, retried.text
     assert retried.json()['device']['public_key'] == first_key
+
+
+def test_criterion_7_state_without_devices_needs_no_tunnel(rig):
+    """A subscriber with zero devices activates and lists state on a
+    multi-server-tunnel box: tunnel resolution is deferred to device creation,
+    where the subscriber picks (or the sole server is used)."""
+    client, panel, portal, *_ = rig
+    with Session(panel) as db:
+        modified = last(rig).model_dump(mode='json')
+        modified['interfaces'].append({'name': 'wg1', 'zone': 'lan', 'addresses': ['10.77.77.1/24']})
+        modified['tunnels'].append({'name': 'vpn2', 'interface': 'wg1', 'role': 'server',
+                                    'protocol': 'wg', 'private_key': modified['tunnels'][0]['private_key'],
+                                    'listen_port': 20501, 'endpoint': 'vpn2.example.org',
+                                    'allowed_ips': ['10.77.77.0/24']})
+        row = db.scalar(select(ConfigurationRow).where(ConfigurationRow.status == 'confirmed'))
+        assert row is not None
+        row.configuration = Configuration.model_validate(modified)
+        db.commit()
+    response = client.get(PATH + '/state', headers=HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['tunnel'] is None
+    assert body['devices'] == []
+    assert body['subscription']['status'] == 'active'
+    # A device bound to the second tunnel resolves to its own tunnel.
+    with Session(portal) as db:
+        device = Device(subscriber_name='alice', label='phone', status='active',
+                        name='portal_1', public_key='PUB', allowed_ips=['10.77.77.5/32'],
+                        tunnel_name='vpn2')
+        db.add(device)
+        db.commit()
+    state = client.get(PATH + '/state', headers=HEADERS).json()
+    assert state['tunnel']['name'] == 'vpn2'
+    assert state['devices'][0]['applied'] is False
+    assert state['devices'][0]['last_handshake'] is None
 
 
 def test_criterion_7_state_ignores_admin_draft(rig):

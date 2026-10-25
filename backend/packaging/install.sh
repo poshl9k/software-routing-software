@@ -394,12 +394,26 @@ systemctl is-active --quiet vs-router-web.service
 id vs-router-portal >/dev/null 2>&1 || useradd --system --home-dir /var/lib/vs-router/portal --shell /usr/sbin/nologin vs-router-portal
 usermod -a -G vs-router-portal vs-router-web || true
 usermod -a -G vs-router-web vs-router-portal || true
+# Portal joint secret: generate once, never overwrite on updates. An empty
+# file makes read_internal_secret() fail with portal.internal_unavailable and
+# blocks every activation, device op and renewal. The install below only fixes
+# ownership/mode; generation happens here so a fresh or updated box always has
+# a non-empty shared secret (portal and internal units read the same path).
+install -d -m 0700 /etc/vs-router
+if [ ! -s /etc/vs-router/portal-internal.secret ]; then
+    portal_secret=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+    [ -n "$portal_secret" ] || { echo 'ERROR: portal-internal secret generator returned nothing' >&2; exit 1; }
+    secret_tmp=$(mktemp /etc/vs-router/.portal-internal.XXXXXXXXXX)
+    trap 'rm -f "$secret_tmp"' EXIT
+    printf '%s\n' "$portal_secret" > "$secret_tmp"
+    install -m 0640 -o vs-router-web -g vs-router-portal "$secret_tmp" /etc/vs-router/portal-internal.secret
+    echo 'Portal-internal secret: created'
+else
+    echo 'Portal-internal secret: kept existing'
+fi
 install -d -m 0770 -o vs-router-portal -g vs-router-portal /var/lib/vs-router/portal
 install -d -m 0770 -o vs-router-portal -g vs-router-web /run/vs-router/portal
 install -d -m 0770 -o vs-router-web -g vs-router-web /run/vs-router/web
-install -m 0640 -o vs-router-web -g vs-router-portal /etc/vs-router/portal-internal.secret 2>/dev/null || install -m 0640 -o root -g root /dev/null /etc/vs-router/portal-internal.secret
-chown vs-router-web:vs-router-portal /etc/vs-router/portal-internal.secret 2>/dev/null || true
-chmod 0640 /etc/vs-router/portal-internal.secret 2>/dev/null || true
 systemctl daemon-reload
 if [ "$PROFILE" = panel ]; then
     mkdir -p /var/lib/vs-router/portal

@@ -1,7 +1,7 @@
 """Narrow authenticated UDS transport to the panel's internal application."""
 import os
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 
@@ -43,7 +43,6 @@ class InternalClient:
         self.transport = transport
 
     def _request(self, method, name, suffix, payload=None):
-        from urllib.parse import quote
         path = f'/internal/portal/subscribers/{quote(name, safe="")}/{suffix}'
         try:
             with httpx.Client(transport=self.transport, base_url='http://portal-internal.sock', timeout=15) as client:
@@ -63,8 +62,9 @@ class InternalClient:
             raise APIError(503, 'portal.internal_unavailable')
         return body
 
-    def state(self, name):
-        return self._request('GET', name, 'state')
+    def state(self, name, tunnel=None):
+        suffix = 'state' if tunnel is None else f'state?tunnel={quote(tunnel, safe="")}'
+        return self._request('GET', name, suffix)
 
     def device_op(self, name, payload):
         return self._request('POST', name, 'device-op', payload)
