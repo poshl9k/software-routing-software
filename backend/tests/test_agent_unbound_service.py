@@ -61,6 +61,25 @@ def argv_of(executor):
     return [call for call, _ in executor.calls]
 
 
+def test_start_reowns_staged_configs_to_resolver_uids():
+    """The agent (root) chowns each staged config before checkconf/starts.
+
+    systemd 257 with NoNewPrivileges=true does not honour the unit's
+    ExecStartPre '+' chown, so the agent-owned re-own must come first.
+    """
+    executor = UnboundExecutor()
+    unbound_service.UnboundService(executor, FakeFS()).start()
+    argv = argv_of(executor)
+    for role in unbound_service.ROLES:
+        chown = [unbound_service.CHOWN_BINARY, str(unbound_service.uid_for(role)),
+                 str(unbound_service.config_path(role))]
+        assert chown in argv
+        # The chown precedes both the checkconf and the unit start for its role.
+        assert argv.index(chown) < argv.index(list(unbound_service.checkconf_argv(role)))
+        assert argv.index(chown) < next(i for i, a in enumerate(argv)
+                                        if a == ['systemctl', 'restart', unbound_service.unit_name(role)])
+
+
 def _recording_validators(order):
     def validator(name, path):
         order.append(name)
@@ -149,7 +168,8 @@ def test_start_uses_only_fixed_argv():
     unbound_service.UnboundService(executor, fs).start()
     for argv, _ in executor.calls:
         assert isinstance(argv, list)  # never a shell string
-        assert argv[0] in ("systemctl", unbound_service.UNBOUND_CHECKCONF_BINARY)
+        assert argv[0] in ("systemctl", unbound_service.UNBOUND_CHECKCONF_BINARY,
+                           unbound_service.CHOWN_BINARY)
 
 
 # --------------------------------------------------------------------------

@@ -24,6 +24,16 @@ case "$PROFILE" in
     *) echo "ERROR: VS_ROUTER_PROFILE must be router or panel, got '$PROFILE'" >&2; exit 1 ;;
 esac
 command -v pppd >/dev/null 2>&1 || { echo 'ERROR: Debian ppp package is required' >&2; exit 1; }
+# /etc/vs-router stays group-traversable (root:vs-router-web 0770): the panel
+# and portal processes reach portal-internal.secret through that group. Before
+# the group exists (fresh install) the directory stays 0700 root-only.
+prepare_etc_dir() {
+    install -d -m 0700 /etc/vs-router
+    if getent group vs-router-web >/dev/null 2>&1; then
+        chgrp vs-router-web /etc/vs-router
+        chmod 0770 /etc/vs-router
+    fi
+}
 # Both ISO and online installs enter here, as do updates. A non-empty key file
 # must survive byte-for-byte: replacing it would orphan all encrypted secrets.
 (
@@ -31,7 +41,7 @@ command -v pppd >/dev/null 2>&1 || { echo 'ERROR: Debian ppp package is required
     # subshell restores the caller's trace setting and discards the variable.
     set +x
     if [ ! -s /etc/vs-router/secrets.env ]; then
-        install -d -m 0770 -o root -g vs-router-web /etc/vs-router
+        prepare_etc_dir
         secret_key=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')
         [ -n "$secret_key" ] || { echo 'ERROR: secret-encryption key generator returned no key' >&2; exit 1; }
         # Generate successfully before creating anything; publish atomically so
@@ -399,7 +409,7 @@ usermod -a -G vs-router-web vs-router-portal || true
 # blocks every activation, device op and renewal. The install below only fixes
 # ownership/mode; generation happens here so a fresh or updated box always has
 # a non-empty shared secret (portal and internal units read the same path).
-install -d -m 0770 -o root -g vs-router-web /etc/vs-router
+prepare_etc_dir
 if [ ! -s /etc/vs-router/portal-internal.secret ]; then
     portal_secret=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
     [ -n "$portal_secret" ] || { echo 'ERROR: portal-internal secret generator returned nothing' >&2; exit 1; }

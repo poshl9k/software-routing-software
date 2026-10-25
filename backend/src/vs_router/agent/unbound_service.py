@@ -28,9 +28,11 @@ Safety
   the resolver processes cannot drift apart.
 * Config access (lab-37 defect 4): the agent stages each split config ``0600``
   owned by root, so a dedicated non-root resolver UID cannot read it
-  (``Permission denied`` -> ``217/USER``). Each unit's privileged ``ExecStartPre``
-  re-owns its own fixed config to the resolver UID before ``ExecStart``; the
-  running resolver still sees ``/etc`` read-only (``ProtectSystem=strict``).
+  (``Permission denied`` -> ``217/USER``). :meth:`UnboundService.start` — the
+  agent itself runs as root — re-owns each staged config to its resolver UID
+  before any unit starts; the units' privileged ``ExecStartPre`` re-own stays
+  as a redundant layer (systemd 257 with ``NoNewPrivileges=true`` does not
+  honour its '+' marker, so the agent-owned chown is the operative one).
 * Listener collision (lab-37 defect 4): the two resolvers *replace* the stock
   product resolver while the contour is up — selected owns the ingress listeners
   and ordinary the rest — so the product unit must not keep binding ``:53`` on
@@ -150,10 +152,13 @@ def unit_content(role: str) -> str:
         "Type=simple\n"
         f"User={spec['uid']}\n"
         # The agent stages the split config 0600 owned by root; a dedicated
-        # non-root resolver UID cannot read it. ``+`` runs this line with full
-        # privileges, so it can re-own its own fixed config to the resolver UID
-        # before ExecStart. Path and UID come from the role registry only; no
-        # caller data reaches the command and no secret is placed here.
+        # non-root resolver UID cannot read it. The agent itself re-owns the
+        # staged config to the resolver UID in :meth:`UnboundService.start`
+        # (it runs as root); the privileged ``ExecStartPre`` below is kept as a
+        # redundant layer, though systemd 257 with ``NoNewPrivileges=true``
+        # does not honour its '+' marker. Path and UID come from the role
+        # registry only; no caller data reaches the command and no secret is
+        # placed here.
         f"ExecStartPre=+{CHOWN_BINARY} {spec['uid']} {spec['config']}\n"
         f"ExecStart={UNBOUND_BINARY} -d -c {spec['config']}\n"
         "Restart=on-failure\n"
@@ -205,6 +210,15 @@ class UnboundService:
         return all(self.is_active(role) for role in ROLES)
 
     def start(self) -> None:
+        # The agent runs as root: re-own each staged config to its resolver UID
+        # before anything starts. The unit's privileged ExecStartPre '+' chown is
+        # not a substitute: on systemd 257 with NoNewPrivileges=true it does not
+        # take effect, the staged 0600 root config stays root-owned and the
+        # resolver dies reading it (observed on rg4: apply.failed).
+        for role in ROLES:
+            if self.executor.run(
+                    [CHOWN_BINARY, str(uid_for(role)), str(config_path(role))], 15).returncode:
+                raise ApplyError("agent.reload_failed")
         # Check every config before enabling anything: an invalid resolver config
         # must block interception, not leave one unit up and one down.
         for role in ROLES:
