@@ -212,19 +212,30 @@ def test_criterion_R5_tunnel_interface_uses_subscriber_peers():
     assert cidrs == ('10.66.66.2/32',)
 
 
-def test_criterion_R5_tunnel_interface_no_subscriber_peer_no_address():
+def test_criterion_R5_tunnel_interface_no_subscriber_peer_matches_nothing():
     data = document()
     for peer in data['tunnels'][0]['peers']:
         peer.pop('subscriber', None)
     config = Configuration.model_validate(data)
-    with pytest.raises(ValueError, match='routing.subject_interface_no_address'):
-        routing_subject_interface_cidrs(config, 'wg0')
+    # A tunnel subject with no subscriber peers is a valid transient state
+    # (the subscriber's last device is gone): the rule matches nothing and the
+    # generator drops it instead of emitting a catch-all empty condition.
+    assert routing_subject_interface_cidrs(config, 'wg0') == ()
+    output = render(data)
+    rule_names = [rule.get('ip_cidr') for rule in output['route']['rules']]
+    assert ['192.0.2.0/24'] not in rule_names
+    # The unconditional final reject for device traffic stays absent: no
+    # devices exist, and legacy defaults remain in charge.
+    assert not any(rule.get('action') == 'reject' and 'source_ip_cidr' in rule
+                   for rule in output['route']['rules'])
 
 
 def test_criterion_R5_subject_interface_no_address_on_configuration():
     data = document()
+    data['interfaces'] = [i for i in data['interfaces'] if i['name'] != 'lan']
+    data['interfaces'].append({'name': 'lan', 'zone': 'lan', 'addresses': ['fd00:aa::1/64']})
     data['routing_rules'] = [{'name': 's', 'ip_cidr': ['192.0.2.0/24'],
-                              'subject': {'kind': 'interface', 'interface': 'tun1'}}]
+                              'subject': {'kind': 'interface', 'interface': 'lan'}}]
     invalid(data, 'routing.subject_interface_no_address')
 
 

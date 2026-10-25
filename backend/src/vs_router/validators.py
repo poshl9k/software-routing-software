@@ -379,7 +379,12 @@ def routing_subject_interface_cidrs(c, name):
     A tunnel interface is also declared in interfaces, but its local address is
     not its devices' source range. Physical/configured interfaces use IPv4
     network CIDRs; tunnel interfaces use subscriber peers' IPv4 AllowedIPs.
-    Empty sources fail closed rather than becoming an unrestricted rule.
+    A tunnel interface with no subscriber peers resolves to no sources: that is
+    a normal transient state (the subscriber's last device is gone), the rule
+    matches nothing and generation drops it — an empty source list must never
+    reach sing-box, where an absent condition matches ALL traffic.
+    A physical interface without addresses still fails closed: the rule cannot
+    be honoured and the operator must fix the interface or the rule.
     """
     tunnels = [tunnel for tunnel in c.tunnels if tunnel.interface == name]
     if tunnels:
@@ -391,7 +396,7 @@ def routing_subject_interface_cidrs(c, name):
             fail('routing.subject_interface_reference')
         networks = [ip_interface(address).network for address in interface.addresses]
     sources = tuple(dict.fromkeys(str(network) for network in networks if network.version == 4))
-    if not sources:
+    if not sources and not tunnels:
         fail('routing.subject_interface_no_address')
     return sources
 

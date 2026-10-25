@@ -242,8 +242,14 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
                 raise ValueError("routing.device_address_required")
             subject_match["source_ip_cidr"] = list(peer.allowed_ips)
         elif rule.subject.kind == "interface":
-            subject_match["source_ip_cidr"] = list(routing_subject_interface_cidrs(
-                configuration, rule.subject.interface))
+            sources = routing_subject_interface_cidrs(configuration, rule.subject.interface)
+            if not sources:
+                # Tunnel subject with no subscriber peers (last device gone):
+                # the rule matches nothing. Skip it — an empty source_ip_cidr
+                # would be read by sing-box as "no condition" and catch ALL
+                # traffic, so the rule must not be rendered at all.
+                continue
+            subject_match["source_ip_cidr"] = list(sources)
         destination = _render_destination_disjunction(rule)
         # Domain matching needs DNS visibility (ADR-0020). Do not pretend that
         # sniffing implements the subscriber resolver, or enable it implicitly.
