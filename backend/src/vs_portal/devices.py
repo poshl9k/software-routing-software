@@ -265,6 +265,13 @@ def _conf_text(device, tunnel, key):
     """The wg-quick client config for one device, from stored key material."""
     if not isinstance(tunnel, dict) or not device.private_key or not device.allowed_ips:
         raise APIError(503, 'portal.export_unavailable')
+    if not tunnel.get('endpoint'):
+        # A DHCP WAN without a lease and no explicit tunnel endpoint: the server
+        # does not know its own public address, so the client config would be
+        # broken. Name the missing piece instead of a bare export_unavailable.
+        raise APIError(503, 'portal.export_unavailable',
+                       [{'message': 'Сервер не знает свой публичный адрес: задайте '
+                                    'endpoint туннеля в панели администратора.'}])
     try:
         private = decrypt_secret(device.private_key, key)
     except (InvalidToken, ValueError):

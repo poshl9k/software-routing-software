@@ -34,6 +34,8 @@ export async function portalRequest<T>(path: `/api/portal/${string}`, init: Requ
     const friendly: Record<string, string> = {
       "portal.device_limit": "Лимит устройств по вашему тарифу достигнут.",
       "portal.subscription_expired": "Подписка истекла. Обратитесь к администратору для продления.",
+      "portal.export_unavailable": "Конфигурацию нельзя собрать: у сервера нет публичного адреса. Попросите администратора задать endpoint туннеля.",
+      "portal.internal_unavailable": "Сервис панели временно недоступен. Попробуйте ещё раз чуть позже.",
     };
     throw new PortalApiError(response.status, code, friendly[code] ?? payload?.error?.message ?? payload?.message ?? "Ошибка запроса");
   }
