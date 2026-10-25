@@ -31,7 +31,7 @@ command -v pppd >/dev/null 2>&1 || { echo 'ERROR: Debian ppp package is required
     # subshell restores the caller's trace setting and discards the variable.
     set +x
     if [ ! -s /etc/vs-router/secrets.env ]; then
-        install -d -m 0700 /etc/vs-router
+        install -d -m 0770 -o root -g vs-router-web /etc/vs-router
         secret_key=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')
         [ -n "$secret_key" ] || { echo 'ERROR: secret-encryption key generator returned no key' >&2; exit 1; }
         # Generate successfully before creating anything; publish atomically so
@@ -399,7 +399,7 @@ usermod -a -G vs-router-web vs-router-portal || true
 # blocks every activation, device op and renewal. The install below only fixes
 # ownership/mode; generation happens here so a fresh or updated box always has
 # a non-empty shared secret (portal and internal units read the same path).
-install -d -m 0700 /etc/vs-router
+install -d -m 0770 -o root -g vs-router-web /etc/vs-router
 if [ ! -s /etc/vs-router/portal-internal.secret ]; then
     portal_secret=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
     [ -n "$portal_secret" ] || { echo 'ERROR: portal-internal secret generator returned nothing' >&2; exit 1; }
