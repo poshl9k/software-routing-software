@@ -24,14 +24,16 @@ case "$PROFILE" in
     *) echo "ERROR: VS_ROUTER_PROFILE must be router or panel, got '$PROFILE'" >&2; exit 1 ;;
 esac
 command -v pppd >/dev/null 2>&1 || { echo 'ERROR: Debian ppp package is required' >&2; exit 1; }
-# /etc/vs-router stays group-traversable (root:vs-router-web 0770): the panel
-# and portal processes reach portal-internal.secret through that group. Before
-# the group exists (fresh install) the directory stays 0700 root-only.
+# /etc/vs-router stays traversable (root:vs-router-web 0711): the panel and
+# portal processes reach portal-internal.secret through that group, and the
+# reserved TProxy resolver UIDs (no supplementary group) traverse via other-x
+# to read their own staged configs. Before the group exists (fresh install)
+# the directory stays 0700 root-only until the group is created.
 prepare_etc_dir() {
     install -d -m 0700 /etc/vs-router
     if getent group vs-router-web >/dev/null 2>&1; then
         chgrp vs-router-web /etc/vs-router
-        chmod 0770 /etc/vs-router
+        chmod 0711 /etc/vs-router
     fi
 }
 # Both ISO and online installs enter here, as do updates. A non-empty key file
