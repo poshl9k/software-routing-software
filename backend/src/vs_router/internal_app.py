@@ -3,7 +3,7 @@ import json
 import os
 import secrets
 from datetime import datetime, timezone
-from ipaddress import ip_network
+from ipaddress import ip_interface, ip_network
 from typing import Literal
 
 from fastapi import Body, Depends, FastAPI, Header, Request
@@ -450,6 +450,24 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
         if len(selected) == 1:
             tunnel_row = next(iter(selected.values()))
             endpoint, _ = client_endpoint(tunnel_row, config)
+            if endpoint is None:
+                # The config cannot derive an endpoint (DHCP WAN without a
+                # lease, no explicit tunnel endpoint). Fall back to the live
+                # WAN address the agent reads from the host, so device export
+                # works on NAT/DHCP hosts without pinning an endpoint by hand.
+                try:
+                    live_addresses = versions.agent_call('list_addresses', {})
+                except APIError:
+                    live_addresses = {}
+                if isinstance(live_addresses, dict):
+                    wan_address = next((ip_interface(address).ip
+                                        for interface in config.interfaces
+                                        if interface.zone == 'wan'
+                                        for address in live_addresses.get(interface.name, [])),
+                                       None)
+                    if wan_address is not None:
+                        endpoint, _ = client_endpoint(tunnel_row, config,
+                                                      metadata_endpoint=str(wan_address))
             tunnel_view = {'name': tunnel_row.name, 'protocol': tunnel_row.protocol,
                            'obfuscation': tunnel_row.obfuscation, 'dns_mode': 'panel', 'exit': 'direct',
                            'public_key': server_public_key(tunnel_row), 'endpoint': endpoint,

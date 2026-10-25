@@ -285,6 +285,43 @@ def test_criterion_7_state_without_devices_needs_no_tunnel(rig):
     assert state['devices'][0]['last_handshake'] is None
 
 
+def test_criterion_7_state_endpoint_falls_back_to_live_wan_address(rig, monkeypatch):
+    """A DHCP WAN without a lease in the config still yields an export endpoint:
+    the agent's live WAN address fills in the server endpoint."""
+    client, panel, portal, *_ = rig
+    from vs_router.api import versions
+    with Session(panel) as db:
+        row = db.scalar(select(ConfigurationRow).where(ConfigurationRow.status == 'confirmed'))
+        assert row is not None
+        modified = last(rig).model_dump(mode='json')
+        for interface in modified['interfaces']:
+            if interface['zone'] == 'wan':
+                interface['addressing'] = 'dhcp'
+                interface['addresses'] = []
+        for tunnel in modified['tunnels']:
+            tunnel['endpoint'] = None
+        row.configuration = Configuration.model_validate(modified)
+        db.commit()
+    # A device bound to the tunnel makes the state resolve it (with no devices
+    # the tunnel view is legitimately None).
+    with Session(portal) as db:
+        db.add(Device(subscriber_name='alice', label='phone', status='active',
+                      name='portal_1', public_key='PUB', allowed_ips=['10.66.66.2/32'],
+                      tunnel_name='vpn'))
+        db.commit()
+    original_agent_call = versions.agent_call
+
+    def agent_call(method, body):
+        if method == 'list_addresses':
+            return {'wan0': ['198.51.100.7/24']}
+        return original_agent_call(method, body)
+
+    monkeypatch.setattr(versions, 'agent_call', agent_call)
+    state = client.get(PATH + '/state', headers=HEADERS)
+    assert state.status_code == 200, state.text
+    assert state.json()['tunnel']['endpoint'] == '198.51.100.7:20500'
+
+
 def test_criterion_7_state_ignores_admin_draft(rig):
     with Session(rig[1]) as db:
         modified = last(rig).model_dump(mode='json')
