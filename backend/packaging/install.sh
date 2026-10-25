@@ -422,7 +422,13 @@ if [ "$PROFILE" = panel ]; then
         VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db \
             python3 -m alembic -c alembic-portal/alembic.ini upgrade head
     )
-    chown vs-router-portal:vs-router-portal /var/lib/vs-router/portal/vs-portal.db
+    chown -R vs-router-portal:vs-router-portal /var/lib/vs-router/portal
+    # WAL mode needs group-write on -wal AND -shm, not just the database: a
+    # shm/wal recreated by a root-side tool with umask 022 lands 0644 and every
+    # panel-side write then fails with 'attempt to write a readonly database'.
+    chmod 0660 /var/lib/vs-router/portal/vs-portal.db \
+        /var/lib/vs-router/portal/vs-portal.db-wal \
+        /var/lib/vs-router/portal/vs-portal.db-shm 2>/dev/null || true
     systemctl enable vs-router-portal.service vs-router-web-internal.service
     systemctl start vs-router-portal.service vs-router-web-internal.service
 fi
