@@ -56,14 +56,16 @@ def awg_profile(rng=None) -> dict:
     """
     rng = rng or secrets.SystemRandom()
     jmin = rng.randint(8, 64)
+    # Amnezia recommendation for AWG 3.1: S1-S4 must be equal and >= 12.
+    s_value = rng.randint(12, 150)
     profile = {
         "Jc": rng.randint(4, 12),
         "Jmin": jmin,
         "Jmax": jmin + rng.randint(16, 64),
-        "S1": rng.randint(12, 150),
-        "S2": rng.randint(12, 150),
-        "S3": rng.randint(12, 150),
-        "S4": rng.randint(12, 150),
+        "S1": s_value,
+        "S2": s_value,
+        "S3": s_value,
+        "S4": s_value,
         "I1": f"<b 0x{rng.randbytes(6).hex()}><r {rng.randint(2, 6)}>",
         "I2": f"<rd {rng.randint(4, 10)}><b 0x{rng.randbytes(4).hex()}>",
         "I3": f"<r {rng.randint(3, 9)}><t>",
