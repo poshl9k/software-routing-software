@@ -1,6 +1,10 @@
 [Unit]
 Description=Caddy web server (vs-router, with L4 and DNS plugins)
 After=network.target
+# Keep ordering to network.target only (install.sh rewrites unit copies that
+# name network-online); wait for a real uplink address in ExecStartPre instead,
+# or a bind to the not-yet-assigned LAN IP fails the unit.
+ExecStartPre=/bin/sh -c 'i=0; until ip -4 route show default >/dev/null 2>&1 || [ $i -ge 30 ]; do sleep 2; i=$((i+1)); done; ip -4 route show default >/dev/null'
 
 [Service]
 User=caddy

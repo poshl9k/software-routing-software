@@ -2,6 +2,11 @@
 Description=vs-router WireGuard userspace tunnel %i
 After=vs-router-bootrestore.service network.target
 Requires=vs-router-bootrestore.service
+# Wait for the uplink to have an address before tunnel_start resolves an
+# endpoint or the reloader brings the device up.
+ExecStartPre=/bin/sh -c 'i=0; until ip -4 route show default >/dev/null 2>&1 || [ $i -ge 30 ]; do sleep 2; i=$((i+1)); done; ip -4 route show default >/dev/null'
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
