@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Annotated, cast
 from fastapi import APIRouter, Body, Depends, Path, Response
@@ -18,6 +19,7 @@ from .errors import APIError
 from .tunnel_peers import live_peers
 
 router = APIRouter(dependencies=[Depends(current_user)])
+logger = logging.getLogger(__name__)
 PositiveID = Annotated[int, Path(ge=1)]
 
 _DIFF_TITLES = {
@@ -204,6 +206,11 @@ def apply(body: ApplyParams, db: Session = Depends(get_db)):
     build_request("apply_version", body)
     row = version(db, body.version_id)
     if row.status != "draft":
+        # Log the rejected id: a 409 here is invisible in the journal otherwise
+        # (the SPA shows one generic error card), and the stale-id class of
+        # failures (apply race after confirm) needs the concrete id to debug.
+        logger.warning("apply rejected: version %s status=%s",
+                       body.version_id, row.status)
         raise APIError(409, "version.not_draft")
     result = validate(row.configuration.model_dump(mode="json"))
     if not result["valid"]:
