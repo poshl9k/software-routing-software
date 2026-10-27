@@ -439,7 +439,11 @@ main() {
 
     log 'Restarting runtime services'
     systemctl daemon-reload
-    if ! systemctl restart vs-router-agent vs-router-web; then
+    # vs-router-web-internal holds the schema in memory: without a restart it
+    # keeps validating the confirmed configuration with the previous release's
+    # model and rejects any newly added field with extra_forbidden (500
+    # internal.error on every portal call until it is restarted by hand).
+    if ! systemctl restart vs-router-agent vs-router-web vs-router-web-internal; then
         warn 'the runtime services did not restart'
         rollback_update || true
         fail 'the update could not restart the services; the previous release was restored'

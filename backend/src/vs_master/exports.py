@@ -51,7 +51,17 @@ def _conf_text(device, tunnel, key):
     if tunnel.get('mtu'):
         lines.append(f'MTU = {_line(str(tunnel["mtu"]))}')
     if tunnel.get('protocol') == 'awg':
-        obfuscation = tunnel.get('obfuscation') or {}
+        obfuscation = dict(tunnel.get('obfuscation') or {})
+        # Mirror the generator's RandomTrailers repair: exports must carry the
+        # parameters the node actually runs (equalized S1-S4, no CPA), not the
+        # raw stored ones — otherwise re-imported clients cannot handshake.
+        if (tunnel.get('random_trailers')
+                and all(name in obfuscation for name in ('S1', 'S2', 'S3', 'S4'))
+                and all(isinstance(obfuscation[name], int) for name in ('S1', 'S2', 'S3', 'S4'))):
+            equal = max(min(obfuscation[k] for k in ('S1', 'S2', 'S3', 'S4')), 12)
+            for name in ('S1', 'S2', 'S3', 'S4'):
+                obfuscation[name] = equal
+            obfuscation.pop('ContentPaddingAddition', None)
         if not obfuscation or (any(name in obfuscation for name in ('S3', 'S4', 'I1'))
                                and not tunnel.get('header_protection_key')):
             raise APIError(503, 'portal.export_unavailable')

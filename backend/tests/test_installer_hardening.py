@@ -1147,7 +1147,9 @@ def test_updater_downloads_a_verified_pinned_release():
     assert "|| warn 'alembic upgrade failed" not in updater
     # The restart is fatal too, and now takes the previous release back with it
     # (ADR-0021): the failure branch must end in `fail`, and must roll back.
-    restart = updater.split('if ! systemctl restart vs-router-agent vs-router-web; then')[1]
+    # vs-router-web-internal is included: it holds the schema in memory, and a
+    # restart skipped there keeps validating new fields with the old model.
+    restart = updater.split('if ! systemctl restart vs-router-agent vs-router-web vs-router-web-internal; then')[1]
     restart = restart.split('\n    fi')[0]
     assert 'rollback_update' in restart
     assert 'fail ' in restart

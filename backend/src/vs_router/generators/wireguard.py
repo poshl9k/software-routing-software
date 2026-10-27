@@ -61,6 +61,11 @@ AWG_ORDER = ('Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'S3', 'S4',
 HPK_S_FLOOR = 12  # amneziawg-go: header protection forces S1-S4 >= 12
 
 
+def tunnel_mtu(tunnel):
+    """The tunnel device MTU for exports; shims without the field emit nothing."""
+    return getattr(tunnel, 'mtu', None)
+
+
 def effective_obfuscation(tunnel) -> dict:
     """The obfuscation dict as it must be emitted for the device.
 

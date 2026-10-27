@@ -22,7 +22,8 @@ from .api.errors import APIError
 from .api.keygen import generate_peer_key, generate_peer_keypair
 from .db import ConfigurationRow
 from .generators.amnezia import tunnel_dns
-from .generators.wireguard import client_endpoint, materialize_addresses, peer_address, server_public_key, tunnel_addresses
+from .generators.wireguard import (client_endpoint, effective_obfuscation, materialize_addresses,
+                                   peer_address, server_public_key, tunnel_addresses, tunnel_mtu)
 from .schema import Configuration, EncryptedSecret, Model, Peer
 from .secrets import decrypt_secret, encrypt_secret
 
@@ -469,7 +470,7 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
                         endpoint, _ = client_endpoint(tunnel_row, config,
                                                       metadata_endpoint=str(wan_address))
             tunnel_view = {'name': tunnel_row.name, 'protocol': tunnel_row.protocol,
-                           'obfuscation': tunnel_row.obfuscation, 'dns_mode': 'panel', 'exit': 'direct',
+                           'obfuscation': effective_obfuscation(tunnel_row), 'dns_mode': 'panel', 'exit': 'direct',
                            'public_key': server_public_key(tunnel_row), 'endpoint': endpoint,
                            'dns': list(tunnel_dns(tunnel_row, config)),
                            'dns_servers': list(tunnel_dns(tunnel_row, config)),
@@ -478,7 +479,7 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
                            'random_trailers': tunnel_row.random_trailers,
                            'disable_cookies': tunnel_row.disable_cookies,
                            'allowed_ips': list(tunnel_row.allowed_ips or ('0.0.0.0/0',)),
-                           'mtu': tunnel_row.mtu,
+                           'mtu': tunnel_mtu(tunnel_row),
                            'listen_port': tunnel_row.listen_port,
                            'keepalive': tunnel_row.keepalive,
                            'subnet': str(tunnel_addresses(tunnel_row, config)[0])}
