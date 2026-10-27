@@ -139,6 +139,8 @@ export interface Tunnel {
   disable_cookies: boolean;
   /** Server only: open udp/<listen_port> on the WAN zone (generated firewall rule). */
   open_port: boolean;
+  /** Tunnel device MTU; empty keeps the host default. Recommended 1200 for AWG 3+. */
+  mtu?: number | null;
 }
 export interface CaddySite {
   name: string;

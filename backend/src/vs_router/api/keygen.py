@@ -56,8 +56,12 @@ def awg_profile(rng=None) -> dict:
     """
     rng = rng or secrets.SystemRandom()
     jmin = rng.randint(8, 64)
-    # Amnezia recommendation for AWG 3.1: S1-S4 must be equal and >= 12.
-    s_value = rng.randint(12, 150)
+    # Amnezia recommendation for AWG 3.1: with RandomTrailers on, S1-S4 must be
+    # equal and >= 12 (header-protection floor). They are also capped at 32:
+    # S4 pads every data packet, and a larger value fragments a full-size
+    # packet at any MTU below ~1500, which collapses throughput (measured on
+    # lab hosts: ~0.4 Mbit/s at the default 1420 with S4 > 20).
+    s_value = rng.randint(12, 32)
     profile = {
         "Jc": rng.randint(4, 12),
         "Jmin": jmin,
@@ -71,7 +75,11 @@ def awg_profile(rng=None) -> dict:
         "I3": f"<r {rng.randint(3, 9)}><t>",
         "I4": f"<b 0x{rng.randbytes(8).hex()}>",
         "I5": f"<rc {rng.randint(4, 12)}><rd {rng.randint(2, 6)}>",
-        "ContentPaddingAddition": _span(rng, 10, 60, (40, 120)),
+        # ContentPaddingAddition is deliberately absent: together with
+        # RandomTrailers it is the worst combination — it defeats trailer
+        # obfuscation on the send path while keeping the receiver's loose
+        # matching, and its randomised per-packet length defeats UDP GRO
+        # batching (~22% of download, measured upstream).
         "RekeyAfterTime": _span(rng, 90, 150, (10, 40)),
         "RekeyTimeout": _span(rng, 2, 5, (2, 5)),
         "RejectAfterTime": _span(rng, 130, 200, (20, 60)),
@@ -97,6 +105,9 @@ def generate_tunnel_keys(body: TunnelKeyRequest):
         result["random_trailers"] = True
         result["disable_cookies"] = True
         result["listen_port"] = suggest_port()
+        # AWG 3+ obfuscation consumes tunnel-MTU headroom before the outer UDP
+        # packet is built; 1200 leaves room for paddings at any common WAN MTU.
+        result["mtu"] = 1200
     return result
 
 

@@ -48,6 +48,8 @@ def _conf_text(device, tunnel, key):
     lines = ['[Interface]', f'PrivateKey = {_line(private)}',
              'Address = ' + ', '.join(_line(v) for v in device.allowed_ips),
              'DNS = ' + ', '.join(_line(v) for v in dns)]
+    if tunnel.get('mtu'):
+        lines.append(f'MTU = {_line(str(tunnel["mtu"]))}')
     if tunnel.get('protocol') == 'awg':
         obfuscation = tunnel.get('obfuscation') or {}
         if not obfuscation or (any(name in obfuscation for name in ('S3', 'S4', 'I1'))
@@ -99,6 +101,7 @@ def _amnezia_uri(device, tunnel, key, account_name):
         disable_cookies=bool(tunnel.get('disable_cookies')),
         allowed_ips=tuple(tunnel.get('allowed_ips') or ()),
         keepalive=tunnel.get('keepalive') or 25,
+        mtu=tunnel.get('mtu'),
         dns_servers=tuple(dns_pair), endpoint=None)
     peer = SimpleNamespace(name=device.name, allowed_ips=tuple(device.allowed_ips or ()),
                            public_key=device.public_key, private_key=private,

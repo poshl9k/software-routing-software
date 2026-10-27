@@ -25,19 +25,19 @@ function failure(text: string, field: string) {
 }
 
 describe("parseWireGuardConf", () => {
-  it("maps a WG client without inventing Address/DNS/MTU/ListenPort fields or peer rows", () => {
+  it("maps a WG client without inventing Address/DNS/ListenPort fields or peer rows", () => {
     const result = parseWireGuardConf(`# example\r\n; comment\r\n${basic.replaceAll("\n", "\r\n")}`);
     expect(result).toEqual({ tunnel: {
       role: "client", protocol: "wg", private_key: { plaintext: privateKey },
       server_public_key: publicKey, endpoint: "vpn.example.com:51820",
-      allowed_ips: ["0.0.0.0/0", "::/0"], keepalive: 25,
+      allowed_ips: ["0.0.0.0/0", "::/0"], keepalive: 25, mtu: 1420,
       preshared_key: null, header_protection_key: null,
       random_trailers: false, disable_cookies: false,
       peers: [], listen_port: null, obfuscation: {},
     } });
     expect(Object.keys(result.tunnel ?? {}).sort()).toEqual([
       "allowed_ips", "disable_cookies", "endpoint", "header_protection_key", "keepalive",
-      "listen_port", "obfuscation", "peers", "preshared_key", "private_key", "protocol",
+      "listen_port", "mtu", "obfuscation", "peers", "preshared_key", "private_key", "protocol",
       "random_trailers", "role", "server_public_key",
     ]);
   });

@@ -210,8 +210,12 @@ def test_tunnel_route_delete_rejects_other_failures(config, rc, stderr):
 
 
 def test_awg3_client_config_roundtrip(config):
-    """An imported AmneziaWG 3 client config is emitted verbatim: S3/S4, I1-I5,
-    min-max ranges, header protection, toggles and the preshared secret."""
+    """An imported AmneziaWG 3 client config is emitted with the full AWG 3+
+    profile: S3/S4, I1-I5, min-max ranges, header protection, toggles and the
+    preshared secret. With RandomTrailers on, the stored unequal S1-S4 are
+    equalized (min; receiver misclassification repair) and the
+    ContentPaddingAddition is dropped — both ends carrying the same stored
+    values stay in contract after the repair."""
     import os
     key = os.environ['VS_ROUTER_SECRET_KEY'].encode()
     data = json.loads(json.dumps(config))
@@ -232,13 +236,14 @@ def test_awg3_client_config_roundtrip(config):
         random_trailers=True, disable_cookies=True)
     files = generate_wg_bundle(ConfigurationVersion.model_validate(data), {})
     text = files['vpn.conf']
-    for expected in ('Jc = 5', 'S3 = 43', 'S4 = 12', 'H4 = 4',
+    for expected in ('Jc = 5', 'S1 = 12', 'S3 = 12', 'S4 = 12', 'H4 = 4',
                      'I1 = <r 2><b 0x858000010001000000000669636c6f7564>',
-                     'ContentPaddingAddition = 10-100', 'RekeyAfterTime = 100-120',
+                     'RekeyAfterTime = 100-120',
                      'MaxHandshakeAttempts = 15-20', 'HeaderProtectionKey = HEADERPROT',
                      'RandomTrailers = on', 'DisableCookies = on',
                      'PresharedKey = PRESHARED', 'PersistentKeepalive = 25-35'):
         assert expected in text, expected
+    assert 'ContentPaddingAddition' not in text
     # The interface parameters land before the peer section.
     assert text.index('HeaderProtectionKey') < text.index('[Peer]')
     assert text.index('[Peer]') < text.index('PresharedKey')

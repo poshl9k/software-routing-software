@@ -83,6 +83,7 @@ function keygenPatch(
       disable_cookies: keys.disable_cookies ?? false,
     } : {}),
     ...(keys.listen_port ? { listen_port: keys.listen_port } : {}),
+    ...(keys.mtu ? { mtu: keys.mtu } : {}),
   };
 }
 const certificateModeLabels: Record<CaddySite["certificate_mode"], string> = {
@@ -705,7 +706,7 @@ function Collection<T extends Row>({
               </FormWide>
             </FormGrid>
             {preview && parsedImport?.error && <ErrorNotice error={new Error(parsedImport.error)} />}
-            {preview && parsedImport?.row && <InfoNote>Распознано: клиент · {(parsedImport.row as Tunnel).protocol === "awg" ? "AmneziaWG" : "WireGuard"}; endpoint {(parsedImport.row as Tunnel).endpoint}; AllowedIPs {(parsedImport.row as Tunnel).allowed_ips.join(", ")}; Address {parsedImport.address ?? "отсутствует — будет назначен автоматически"}; PSK {(parsedImport.row as Tunnel).preshared_key ? "распознан" : "отсутствует"}. Приватный ключ скрыт. Сохранение создаёт только черновик.</InfoNote>}
+            {preview && parsedImport?.row && <InfoNote>Распознано: клиент · {(parsedImport.row as Tunnel).protocol === "awg" ? "AmneziaWG" : "WireGuard"}; endpoint {(parsedImport.row as Tunnel).endpoint}; AllowedIPs {(parsedImport.row as Tunnel).allowed_ips.join(", ")}; Address {parsedImport.address ?? "отсутствует — будет назначен автоматически"}; MTU {(parsedImport.row as Tunnel).mtu ?? "умолчание хоста"}; PSK {(parsedImport.row as Tunnel).preshared_key ? "распознан" : "отсутствует"}. Приватный ключ скрыт. Сохранение создаёт только черновик.</InfoNote>}
             <ErrorNotice error={importError ? new Error(importError) : null} />
           </DialogContent>
           <DialogActions>
@@ -986,6 +987,7 @@ export function Tunnels() {
     disable_cookies: false,
     open_port: true,
     default_route: false,
+    mtu: null,
   });
   const createTunnel = async (rows: Tunnel[], role: Tunnel["role"], protocol: Tunnel["protocol"]): Promise<Tunnel> => {
     const row = { ...emptyTunnel(rows), role, protocol, listen_port: role === "server" ? 51820 : null, open_port: false };
@@ -1053,6 +1055,7 @@ export function Tunnels() {
           ipsValid(t.allowed_ips) &&
           (t.dns_servers ?? []).length <= 2 && (t.dns_servers ?? []).every((v) => ipValid(v.trim())) &&
           numericValue(t.keepalive) &&
+          (t.mtu == null || (Number.isInteger(t.mtu) && t.mtu >= 576 && t.mtu <= 65535)) &&
           (t.role === "server"
             ? portValid(t.listen_port ?? 0) &&
               t.peers.every(
@@ -1133,6 +1136,14 @@ export function Tunnels() {
                   value={t.open_port}
                   onChange={(open_port) => patch({ open_port })}
                 />
+                <Field
+                  label="MTU туннеля"
+                  type="number"
+                  value={t.mtu ?? ""}
+                  valid={t.mtu == null || (Number.isInteger(t.mtu) && t.mtu >= 576 && t.mtu <= 65535)}
+                  hint="Пусто — умолчание хоста. Для AmneziaWG рекомендуется 1200: паддинги съедают запас MTU и полные пакеты фрагментируются"
+                  onChange={(v) => patch({ mtu: v.trim() === "" ? null : Number(v) })}
+                />
             </>}
             {t.role === "client" && <>
                 <Field label="Endpoint" value={t.endpoint ?? ""} valid={!!t.endpoint?.trim()} onChange={(endpoint) => patch({ endpoint })} />
@@ -1140,6 +1151,14 @@ export function Tunnels() {
                 <Field label="Keepalive, с" value={String(t.keepalive)} valid={numericValue(t.keepalive)}
                   hint="Секунды или диапазон AWG 3+, например 25-35"
                   onChange={(v) => patch({ keepalive: /^[0-9]+$/.test(v) ? Number(v) : v })} />
+                <Field
+                  label="MTU туннеля"
+                  type="number"
+                  value={t.mtu ?? ""}
+                  valid={t.mtu == null || (Number.isInteger(t.mtu) && t.mtu >= 576 && t.mtu <= 65535)}
+                  hint="Пусто — умолчание хоста. Для AmneziaWG рекомендуется 1200: паддинги съедают запас MTU и полные пакеты фрагментируются"
+                  onChange={(v) => patch({ mtu: v.trim() === "" ? null : Number(v) })}
+                />
                 <FormWide><FormControlLabel label="Использовать туннель как маршрут по умолчанию"
                   control={<Checkbox checked={t.default_route === true}
                     onChange={(_, default_route) => patch({ default_route })} />} /></FormWide>

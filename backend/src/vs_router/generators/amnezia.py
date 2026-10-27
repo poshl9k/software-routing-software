@@ -22,8 +22,8 @@ import zlib
 from ipaddress import ip_interface, ip_network
 
 from .wireguard import (AWG_ORDER, DEFAULT_PRIMARY_DNS, DEFAULT_SECONDARY_DNS, client_endpoint,
-                        line, obfuscation, peer_address, reveal, server_public_key, tunnel_addresses,
-                        tunnel_dns)
+                        effective_obfuscation, line, obfuscation, peer_address, reveal,
+                        server_public_key, tunnel_addresses, tunnel_dns)
 
 # The app's own AWG export carries an MTU. The panel does not model one yet, so
 # the observed default is emitted until a per-tunnel MTU field exists.
@@ -57,7 +57,8 @@ def decode_document(uri: str) -> dict:
 
 def awg_parameters(tunnel) -> dict[str, str]:
     """The obfuscation block the app carries: parameters as strings, I1-I5 always present."""
-    params = {key: str(tunnel.obfuscation[key]) for key in AWG_ORDER if key in tunnel.obfuscation}
+    effective = effective_obfuscation(tunnel)
+    params = {key: str(effective[key]) for key in AWG_ORDER if key in effective}
     for key in ('I1', 'I2', 'I3', 'I4', 'I5'):
         params.setdefault(key, '')
     if tunnel.header_protection_key is not None:
@@ -74,7 +75,7 @@ def _client_addresses(tunnel, peer, configuration) -> list[str]:
 
 
 def amnezia_uri(tunnel, peer, configuration, *, dns1: str | None = None, dns2: str | None = None, endpoint=None,
-                description=None, mtu: int = DEFAULT_MTU, subnet: str | None = None,
+                description=None, mtu: int | None = None, subnet: str | None = None,
                 server_public: str | None = None) -> str:
     """A ``vpn://`` document for one server peer, importable into the Amnezia app.
 
@@ -90,6 +91,11 @@ def amnezia_uri(tunnel, peer, configuration, *, dns1: str | None = None, dns2: s
         raise ValueError('amnezia.listen_port_required')
     if peer.private_key is None:
         raise ValueError('amnezia.peer_private_key_required')
+    # The tunnel's own MTU field wins; a caller-provided value (legacy callers
+    # passing the observed default) is the fallback. getattr: shim tunnel
+    # objects outside the panel schema may not model the field.
+    tunnel_mtu = getattr(tunnel, 'mtu', None)
+    resolved_mtu = tunnel_mtu if tunnel_mtu is not None else (mtu if mtu is not None else DEFAULT_MTU)
     resolved, missing = client_endpoint(tunnel, configuration, endpoint)
     if missing or resolved is None:
         raise ValueError('amnezia.endpoint_unresolved')
@@ -116,6 +122,7 @@ def amnezia_uri(tunnel, peer, configuration, *, dns1: str | None = None, dns2: s
         '[Interface]',
         f'Address = {line(addresses[0])}',
         f'DNS = {DNS_PLACEHOLDER}',
+        f'MTU = {resolved_mtu}',
         f'PrivateKey = {line(client_private)}',
         *obfuscation(tunnel),
         '', '[Peer]',
@@ -140,7 +147,7 @@ def amnezia_uri(tunnel, peer, configuration, *, dns1: str | None = None, dns2: s
         'client_pub_key': client_public,
         'config': conf_text,
         'hostName': host,
-        'mtu': str(mtu),
+        'mtu': str(resolved_mtu),
         'persistent_keep_alive': str(tunnel.keepalive),
         'port': tunnel.listen_port,
         'psk_key': psk,

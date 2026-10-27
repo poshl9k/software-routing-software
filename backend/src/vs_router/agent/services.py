@@ -613,6 +613,10 @@ class WireGuardReloader:
         checked(self.executor, [protocol, 'setconf', iface, str(self.config_dir / entry['file'])])
         for address in entry['addresses']:
             checked(self.executor, ['ip', 'addr', 'replace', address, 'dev', iface])
+        if entry.get('mtu'):
+            # AWG paddings consume tunnel-MTU headroom; a full-size default MTU
+            # fragments the outer packet at common WAN MTUs (see the generator).
+            checked(self.executor, ['ip', 'link', 'set', 'dev', iface, 'mtu', str(entry['mtu'])])
         checked(self.executor, ['ip', 'link', 'set', 'dev', iface, 'up'])
         for route in entry['routes']:
             checked(self.executor, self.route('replace', route, iface))

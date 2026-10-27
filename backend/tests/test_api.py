@@ -95,17 +95,24 @@ async def test_keygen_endpoints(api):
     obf = awg['obfuscation']
     # The whole AWG 3+ set, not just the classic core: leaving header protection
     # and the AWG 3 additions out is what the Amnezia app rates "базовая".
+    # ContentPaddingAddition stays out: with RandomTrailers it is the worst
+    # combination (defeats trailer obfuscation on send, keeps loose matching on
+    # receive, defeats UDP GRO) and its S1-S4 are equal and <= 32 — S4 pads
+    # every data packet, and larger values fragment a full-size packet at
+    # common WAN MTUs (lab-measured collapse to ~0.4 Mbit/s at MTU 1420).
     assert set(obf) == {'Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'S3', 'S4',
                         'H1', 'H2', 'H3', 'H4', 'I1', 'I2', 'I3', 'I4', 'I5',
-                        'ContentPaddingAddition', 'RekeyAfterTime', 'RekeyTimeout',
+                        'RekeyAfterTime', 'RekeyTimeout',
                         'RejectAfterTime', 'KeepaliveTimeout', 'MaxHandshakeAttempts'}
     assert 4 <= obf['Jc'] <= 12 and 8 <= obf['Jmin'] < obf['Jmax'] <= 128
-    # Header protection requires S1-S4 >= 12 (amneziawg-go).
-    assert all(12 <= obf[f'S{i}'] <= 150 for i in range(1, 5))
+    # Header protection requires S1-S4 >= 12 (amneziawg-go); equal S is the
+    # RandomTrailers contract, <= 32 keeps the padded packet inside any MTU.
+    assert all(12 <= obf[f'S{i}'] <= 32 for i in range(1, 5))
+    assert len({obf[f'S{i}'] for i in range(1, 5)}) == 1
     assert len({obf[f'H{i}'] for i in range(1, 5)}) == 4
     assert all(5 <= obf[f'H{i}'] <= 2_147_483_647 for i in range(1, 5))
     assert all(obf[f'I{i}'].startswith('<') for i in range(1, 6))
-    for key in ('ContentPaddingAddition', 'RekeyAfterTime', 'RekeyTimeout',
+    for key in ('RekeyAfterTime', 'RekeyTimeout',
                 'RejectAfterTime', 'KeepaliveTimeout', 'MaxHandshakeAttempts'):
         low, high = (int(part) for part in obf[key].split('-'))
         assert 0 < low < high
@@ -114,6 +121,7 @@ async def test_keygen_endpoints(api):
     # A server on the AWG default port is its own fingerprint.
     assert awg['listen_port'] not in (51820, 51821)
     assert 20000 <= awg['listen_port'] <= 60000
+    assert awg['mtu'] == 1200
     # Nothing in a generated profile is a constant between tunnels.
     second = (await client.post('/api/keygen/tunnel', json={'protocol': 'awg'})).json()
     assert second['obfuscation'] != obf

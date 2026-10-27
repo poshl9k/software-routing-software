@@ -113,6 +113,10 @@ export function parseWireGuardConf(text: string): ImportedTunnel | ImportFailure
   }
   const keepalive = numberOrRange(peer.persistentkeepalive ?? "0");
   if (keepalive === null) return { error: "Некорректный PersistentKeepalive" };
+  const mtu = iface.mtu === undefined ? null : Number(iface.mtu);
+  if (iface.mtu !== undefined && (!/^[0-9]+$/.test(iface.mtu) || mtu! < 576 || mtu! > 65535)) {
+    return { error: "Некорректный MTU" };
+  }
 
   const obfuscation: Record<string, number | string> = {};
   for (const [key, name] of Object.entries(awgNumeric)) {
@@ -152,6 +156,7 @@ export function parseWireGuardConf(text: string): ImportedTunnel | ImportFailure
       endpoint: peer.endpoint,
       allowed_ips: ips,
       keepalive,
+      mtu,
       preshared_key: peer.presharedkey ? { plaintext: peer.presharedkey } : null,
       header_protection_key: headerProtectionKey ? { plaintext: headerProtectionKey } : null,
       random_trailers: randomTrailers,

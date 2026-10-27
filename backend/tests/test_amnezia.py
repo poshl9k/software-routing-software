@@ -80,8 +80,12 @@ def test_uri_matches_the_app_container_shape(config):
     assert container['container'] == CONTAINER
     awg = container['awg']
     # Interface parameters travel as strings, I1-I5 always present, plus the
-    # app's own container metadata.
-    assert awg['Jc'] == '5' and awg['S4'] == '12'
+    # app's own container metadata. With RandomTrailers on, the stored unequal
+    # S1-S4 are equalized (receiver misclassification repair) and
+    # ContentPaddingAddition is dropped (worst-of-both combination).
+    assert awg['Jc'] == '5'
+    assert awg['S1'] == awg['S2'] == awg['S3'] == awg['S4'] == '12'  # min of stored, HPK floor 12
+    assert 'ContentPaddingAddition' not in awg
     assert awg['RekeyAfterTime'] == '100-120' and awg['RandomTrailers'] == 'on'
     assert awg['HeaderProtectionKey'] == 'HEADERPROTECTIONKEY='
     assert all(awg[key] == '' for key in ('I1', 'I2', 'I3', 'I4', 'I5'))
@@ -212,3 +216,48 @@ def test_peer_without_its_own_private_key_is_rejected(config):
 def test_encode_decode_roundtrip_preserves_unicode():
     document = {'description': 'Сервер 1', 'containers': []}
     assert decode_document(encode_document(document)) == document
+
+
+# --- Tunnel MTU + obfuscation repair (lab rg4 case: unequal S1-S4 with ---
+# --- RandomTrailers collapsed upload to ~0.4 Mbit/s; paddings fragmented ---
+# --- full-size packets at the 1428 path MTU) -------------------------------
+
+def test_tunnel_mtu_reaches_every_export_shape(config):
+    data = json.loads(config.model_dump_json())
+    data['configuration']['tunnels'][0]['mtu'] = 1200
+    version = ConfigurationVersion.model_validate(data)
+    tunnel = version.configuration.tunnels[0]
+    document = decode_document(amnezia_uri(tunnel, tunnel.peers[0], version.configuration))
+    assert json.loads(document['containers'][0]['awg']['last_config'])['mtu'] == '1200'
+    inner = json.loads(document['containers'][0]['awg']['last_config'])['config']
+    assert 'MTU = 1200\n' in inner
+    bundle = generate_wg_bundle(version, {})
+    assert 'MTU = 1200\n' in bundle['vpn.peer-phone.conf']
+    assert json.loads(bundle['manifest.json'])['wg0']['mtu'] == 1200
+
+
+def test_mtu_out_of_range_is_rejected(config):
+    data = json.loads(config.model_dump_json())
+    data['configuration']['tunnels'][0]['mtu'] = 100
+    with pytest.raises(ValueError, match='tunnel.mtu'):
+        ConfigurationVersion.model_validate(data)
+
+
+def test_no_trailers_keeps_stored_obfuscation(config):
+    """Equalization and the CPA drop fire only for RandomTrailers tunnels."""
+    data = json.loads(config.model_dump_json())
+    tunnel = data['configuration']['tunnels'][0]
+    tunnel['random_trailers'] = False
+    version = ConfigurationVersion.model_validate(data)
+    conf = generate_wg_bundle(version, {})['vpn.peer-phone.conf']
+    assert 'S1 = 28' in conf and 'S4 = 12' in conf
+    assert 'ContentPaddingAddition = 10-100' in conf
+
+
+def test_equalization_floors_at_the_hpk_minimum_and_is_deterministic(config):
+    data = json.loads(config.model_dump_json())
+    tunnel = data['configuration']['tunnels'][0]
+    tunnel['obfuscation'].update({'S1': 5, 'S2': 9, 'S3': 3, 'S4': 7})
+    version = ConfigurationVersion.model_validate(data)
+    conf = generate_wg_bundle(version, {})['vpn.peer-phone.conf']
+    assert 'S1 = 12' in conf and 'S4 = 12' in conf

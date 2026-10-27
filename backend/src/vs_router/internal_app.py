@@ -478,6 +478,7 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
                            'random_trailers': tunnel_row.random_trailers,
                            'disable_cookies': tunnel_row.disable_cookies,
                            'allowed_ips': list(tunnel_row.allowed_ips or ('0.0.0.0/0',)),
+                           'mtu': tunnel_row.mtu,
                            'listen_port': tunnel_row.listen_port,
                            'keepalive': tunnel_row.keepalive,
                            'subnet': str(tunnel_addresses(tunnel_row, config)[0])}

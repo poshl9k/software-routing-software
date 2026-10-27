@@ -90,7 +90,7 @@ export const api = {
   keygenTunnel: (protocol: "wg" | "awg") => post<{
     private_key: string; public_key: string; obfuscation?: Record<string, number | string>;
     header_protection_key?: string; random_trailers?: boolean; disable_cookies?: boolean;
-    listen_port?: number;
+    listen_port?: number; mtu?: number;
   }>("/api/keygen/tunnel", { protocol }),
   keygenPeer: () => post<{ preshared_key: string }>("/api/keygen/peer", {}),
   keygenPeerKeypair: () => post<{ private_key: string; public_key: string }>("/api/keygen/peer-keypair", {}),

@@ -261,6 +261,21 @@ class Tunnel(Model):
     # Server only: open udp/<listen_port> on the WAN zone so remote clients can
     # reach the server. The panel shows the generated rule on the Firewall page.
     open_port: bool = True
+    # Tunnel device MTU. AmneziaWG obfuscation (paddings, trailers, header
+    # protection) consumes tunnel MTU headroom before the outer UDP packet is
+    # built; a full-size 1420 MTU plus AWG 3+ additions fragments at a 1500 WAN
+    # (and worse at a 1428 path), which collapses throughput. None keeps the
+    # previous behaviour (the host default).
+    mtu: int | None = None
+
+    @field_validator("mtu")
+    @classmethod
+    def check_mtu(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, bool) or not isinstance(value, int) or not 576 <= value <= 65535:
+            raise ValueError("tunnel.mtu")
+        return value
 
     @field_validator("dns_servers")
     @classmethod
