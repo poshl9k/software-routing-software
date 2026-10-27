@@ -99,6 +99,30 @@ def check_roles(configuration, previous):
         raise APIError(422, "tunnel.role_immutable")
 
 
+def tunnels_share_subnet(configuration):
+    """True when two tunnel devices claim the same network.
+
+    Cross-tunnel address overlap is the silent-blackhole class (a peer's
+    AllowedIPs answering for another tunnel's address); with randomised
+    creation-time subnets it should never happen, so it stays a warning an
+    operator can act on rather than a hard error that would reject legacy
+    configurations known to run (asymmetric egress paths can survive it).
+    """
+    networks = {}
+    for tunnel in configuration.tunnels:
+        interface = next((i for i in configuration.interfaces if i.name == tunnel.interface), None)
+        if interface is None or not interface.addresses:
+            continue
+        try:
+            network = ip_network(interface.addresses[0], strict=False)
+        except ValueError:
+            continue
+        networks.setdefault(str(network), tunnel.name)
+        if networks[str(network)] != tunnel.name:
+            return True
+    return False
+
+
 def validate(value, previous=None):
     errors = []
     with _validation_lock, warnings.catch_warnings(record=True) as caught:
@@ -112,6 +136,8 @@ def validate(value, previous=None):
         else:
             if aliases_overlap(configuration):
                 warnings.warn("alias.overlap", UserWarning)
+            if tunnels_share_subnet(configuration):
+                warnings.warn("tunnel.subnet_overlap", UserWarning)
             version = ConfigurationVersion(configuration=configuration)
             for name, generator in (("nftables", generate_nftables),
                                     ("unbound", generate_unbound), ("kea", generate_kea),
@@ -122,7 +148,8 @@ def validate(value, previous=None):
                     errors.append(issue("generator.failed", [{"generator": name}]))
         # Only known validator warning codes are safe to return verbatim.
         warning_codes = sorted({str(w.message) for w in caught
-                                if str(w.message) in {"alias.large", "alias.overlap"}})
+                                if str(w.message) in {"alias.large", "alias.overlap",
+                                                      "tunnel.subnet_overlap"}})
     return {"valid": not errors, "errors": errors,
             "warnings": [issue(code) for code in warning_codes]}
 

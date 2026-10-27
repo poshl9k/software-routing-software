@@ -94,6 +94,7 @@ def awg_profile(rng=None) -> dict:
 
 @router.post("/keygen/tunnel")
 def generate_tunnel_keys(body: TunnelKeyRequest):
+    rng = secrets.SystemRandom()
     private = X25519PrivateKey.generate()
     result: dict = {
         "private_key": _b64(private.private_bytes_raw()),
@@ -108,6 +109,12 @@ def generate_tunnel_keys(body: TunnelKeyRequest):
         # AWG 3+ obfuscation consumes tunnel-MTU headroom before the outer UDP
         # packet is built; 1200 leaves room for paddings at any common WAN MTU.
         result["mtu"] = 1200
+    # A creation-time random subnet instead of the name-derived pool slot: two
+    # independently managed panels must not correlate on the same 10.66.x.0/24
+    # (cross-host tunnel overlap is a silent blackhole). The picked subnet is
+    # stored as the tunnel device's explicit address on save, and explicit
+    # values always win afterwards.
+    result["subnet"] = f"10.66.{rng.randint(0, 255)}.0/24"
     return result
 
 

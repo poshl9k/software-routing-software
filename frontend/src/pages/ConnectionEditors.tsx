@@ -342,6 +342,7 @@ function Collection<T extends Row>({
   tunnelStatus,
   filter,
   showQr,
+  addressOverrides,
 }: {
   kind: "tunnels" | "sites" | "ddns";
   title: string;
@@ -362,6 +363,9 @@ function Collection<T extends Row>({
   configPatch?: (rows: T[], importedAddresses: Record<string, string>) => Partial<Configuration>;
   importRow?: (text: string, rows: T[]) => { row?: T; error?: string; address?: string };
   tunnelStatus?: ServiceStatusResponse;
+  /** Creation-time interface addresses (e.g. the randomised keygen subnet) —
+   * they win over the name-derived pool slot until an operator edits them. */
+  addressOverrides?: Record<string, string>;
 }) {
   const { configuration: c, version, noConfiguration } = useConfiguration();
   const editor = useDraftEditor<EditableRow<T>[]>();
@@ -384,6 +388,7 @@ function Collection<T extends Row>({
   const currentEditing = useRef<EditableRow<T>[] | null>(null);
   const collection = c[kind] as T[];
   const list = filter ? filter(collection) : collection;
+  const imported = { ...addressOverrides, ...importAddresses };
   const editing = editor.value;
   currentEditing.current = editing;
   const isEdit = editor.isEdit;
@@ -408,7 +413,7 @@ function Collection<T extends Row>({
         sites: c.sites,
         ddns: c.ddns,
         [kind]: rows,
-        ...(configPatch ? configPatch(rows, importAddresses) : {}),
+        ...(configPatch ? configPatch(rows, imported) : {}),
       };
     });
   const add = async (role: Tunnel["role"] = "server", chosenProtocol: Tunnel["protocol"] = "wg") => {
@@ -503,7 +508,7 @@ function Collection<T extends Row>({
               const updated = latest.map((v) => v.id === id ? { ...v, row: { ...v.row, ...patch } } : v);
               currentEditing.current = updated;
               editor.setValue(updated);
-            }, created, noConfiguration, editor.setError, importAddresses, setFormBusy)}
+            }, created, noConfiguration, editor.setError, imported, setFormBusy)}
           </div>
         ) : (
           <div key={id}>
@@ -513,14 +518,14 @@ function Collection<T extends Row>({
               const updated = latest.map((v) => v.id === id ? { ...v, row: { ...v.row, ...patch } } : v);
               currentEditing.current = updated;
               editor.setValue(updated);
-            }, created, noConfiguration, editor.setError, importAddresses, setFormBusy)}
+            }, created, noConfiguration, editor.setError, imported, setFormBusy)}
           </div>
         )
       ))}
       {kind === "tunnels" && (() => {
         const tunnel = editing.find((item) => item.id === selected)?.row as Tunnel | undefined;
         if (!tunnel) return <InfoNote>Сохранение удалит выбранный туннель только из черновика. Изменения вступят в силу после применения.</InfoNote>;
-        const address = importAddresses[tunnel.interface] ?? c.interfaces.find((i) => i.name === tunnel.interface)?.addresses[0] ?? tunnelAddress(tunnel, editing.map((v) => v.row as Tunnel));
+        const address = imported[tunnel.interface] ?? c.interfaces.find((i) => i.name === tunnel.interface)?.addresses[0] ?? tunnelAddress(tunnel, editing.map((v) => v.row as Tunnel));
         return <InfoNote>При сохранении: {tunnel.name || "новый туннель"} · {tunnel.role === "server" ? "сервер" : "клиент"} · {tunnel.protocol === "awg" ? "AmneziaWG" : "WireGuard"}; интерфейс {tunnel.interface} ({c.interfaces.some((i) => i.name === tunnel.interface) ? "существующий" : "будет создан"}, зона LAN), адрес {address}; WAN UDP-порт {tunnel.role === "server" && tunnel.open_port ? `${tunnel.listen_port} будет открыт после применения` : "не открывается"}. Сохранение создаёт только черновик.</InfoNote>;
       })()}
       {!allValid && <p role="status">Проверьте обязательные поля, формат значений и уникальность имён.</p>}
@@ -989,12 +994,23 @@ export function Tunnels() {
     default_route: false,
     mtu: null,
   });
+  const [pendingAddresses, setPendingAddresses] = useState<Record<string, string>>({});
   const createTunnel = async (rows: Tunnel[], role: Tunnel["role"], protocol: Tunnel["protocol"]): Promise<Tunnel> => {
     const row = { ...emptyTunnel(rows), role, protocol, listen_port: role === "server" ? 51820 : null, open_port: false };
     if (row.private_key && "plaintext" in row.private_key && row.private_key.plaintext) return row;
     const keys = await api.keygenTunnel(row.protocol);
     if (!keys.private_key?.trim()) throw new Error("Сервер не вернул приватный ключ туннеля");
-    return { ...row, ...keygenPatch(keys, row.protocol) };
+    const result = { ...row, ...keygenPatch(keys, row.protocol) };
+    if (keys.subnet) {
+      // The keygen subnet is randomised so two independently managed panels
+      // never correlate on the same 10.66.x.0/24 (cross-host tunnel overlap
+      // is a silent blackhole). It lands as the device's explicit address and
+      // wins over the name-derived pool slot from then on.
+      const host = role === "server" ? 1 : 2;
+      const address = `${keys.subnet.split("/")[0].replace(/\.0$/, "")}.${host}/24`;
+      setPendingAddresses((old) => ({ ...old, [result.interface]: address }));
+    }
+    return result;
   };
   return (
     <>
@@ -1010,6 +1026,7 @@ export function Tunnels() {
       <Collection<Tunnel>
         kind="tunnels"
         showQr={showQr}
+        addressOverrides={pendingAddresses}
         filter={(rows) => rows.filter((t) => t.role === (roleTab === "clients" ? "client" : "server"))}
         tunnelStatus={telemetry.isSuccess ? telemetry.data : undefined}
         title="Туннели"

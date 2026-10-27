@@ -83,13 +83,14 @@ async def test_rate_limit(api):
 
 
 async def test_keygen_endpoints(api):
-    import base64
     client = api[0]
     assert (await client.post('/api/keygen/tunnel', json={'protocol': 'wg'})).status_code == 401
     await sign_in(client)
     wg = (await client.post('/api/keygen/tunnel', json={'protocol': 'wg'})).json()
-    assert set(wg) == {'private_key', 'public_key'}
-    for value in wg.values():
+    assert set(wg) == {'private_key', 'public_key', 'subnet'}
+    import re
+    assert re.fullmatch(r'10\.66\.\d+\.0/24', wg['subnet'])
+    for value in (wg[k] for k in ('private_key', 'public_key')):
         assert len(value) == 44 and len(base64.b64decode(value, validate=True)) == 32
     awg = (await client.post('/api/keygen/tunnel', json={'protocol': 'awg'})).json()
     obf = awg['obfuscation']
@@ -628,6 +629,33 @@ async def test_host_management_endpoint(api, monkeypatch):
     response = await client.get('/api/host/management')
     assert response.status_code == 503
     assert response.json()['code'] == 'host.interfaces_unavailable'
+
+
+async def test_overlapping_tunnel_subnets_warn(api, monkeypatch):
+    """Two tunnel devices claiming one network is the silent-blackhole class;
+    validation warns (legacy configs may legitimately run split-egress)."""
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', Fernet.generate_key().decode())
+    client, _, _ = api
+    await sign_in(client)
+    key = {'plaintext': base64.b64encode(b'k' * 32).decode()}
+    peer = {'public_key': 'P' * 44}
+    body = {
+        'schema_version': 1,
+        'interfaces': [{'name': 'tun0', 'zone': 'lan', 'addresses': ['10.66.66.1/24']},
+                       {'name': 'tun1', 'zone': 'lan', 'addresses': ['10.66.66.1/24']}],
+        'tunnels': [
+            {'name': 'a', 'interface': 'tun0', 'role': 'server', 'protocol': 'wg',
+             'private_key': key, 'listen_port': 51820,
+             'peers': [{**peer, 'name': 'p1', 'allowed_ips': ['10.66.66.2/32']}]},
+            {'name': 'b', 'interface': 'tun1', 'role': 'server', 'protocol': 'wg',
+             'private_key': key, 'listen_port': 51821,
+             'peers': [{**peer, 'name': 'p2', 'allowed_ips': ['10.66.66.3/32']}]},
+        ],
+    }
+    assert (await client.post('/api/draft', json=body)).status_code == 201
+    result = (await client.post('/api/draft/validate')).json()
+    assert result['valid']
+    assert {'code': 'tunnel.subnet_overlap', 'message': 'tunnel.subnet_overlap', 'details': []} in result['warnings']
 
 
 async def test_tunnel_activity_and_peer_conf_export(api, monkeypatch):
