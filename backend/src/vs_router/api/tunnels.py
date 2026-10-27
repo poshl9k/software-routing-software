@@ -1,5 +1,6 @@
 """QR and file export of tunnel peer configs, plus peer activity telemetry."""
 from io import BytesIO
+import time
 from ipaddress import ip_address, ip_interface
 
 import qrcode
@@ -111,6 +112,61 @@ def activity(db: Session = Depends(get_db)) -> dict[str, dict[str, int | None]]:
                       if isinstance(peer, dict)}
         result[tunnel.name] = {peer.name: handshakes.get(peer.public_key)
                                for peer in tunnel.peers}
+    return result
+
+
+@router.get('/tunnels/availability')
+def availability(response: Response, db: Session = Depends(get_db)) -> dict[str, dict[str, str | int | None]]:
+    """Client-server peer handshake signal, not an end-to-end URL-test probe."""
+    response.headers['Cache-Control'] = 'no-store'
+    row = db.scalars(select(ConfigurationRow).order_by(ConfigurationRow.id.desc())).first()
+    if row is None:
+        return {}
+    try:
+        configured = [t for t in row.snapshot().configuration.tunnels if t.role == 'client']
+    except (ValueError, KeyError):
+        return {}
+    unknown = {'state': 'unknown', 'last_handshake': None}
+    result = {t.name: unknown.copy() for t in configured}
+    if not configured:
+        return result
+
+    # Draft-only tunnels have never been installed. A confirmed snapshot must
+    # describe this same client and server peer before telemetry is trusted.
+    confirmed = db.scalars(select(ConfigurationRow).where(
+        ConfigurationRow.status == 'confirmed').order_by(ConfigurationRow.id.desc())).first()
+    if confirmed is None:
+        return result
+    try:
+        applied = {t.name: t for t in confirmed.snapshot().configuration.tunnels
+                   if t.role == 'client'}
+    except (ValueError, KeyError):
+        return result
+    try:
+        live = agent_call('tunnel_activity', {})
+    except Exception:
+        return result
+    if not isinstance(live, dict):
+        return result
+    now = int(time.time())
+    for tunnel in configured:
+        previous = applied.get(tunnel.name)
+        if (previous is None or previous.interface != tunnel.interface
+                or previous.server_public_key != tunnel.server_public_key):
+            continue
+        peers = live.get(tunnel.interface)
+        if not isinstance(peers, list):
+            continue
+        matching = [peer for peer in peers if isinstance(peer, dict)
+                    and peer.get('public_key') == tunnel.server_public_key]
+        if len(matching) != 1:
+            continue
+        stamp = matching[0].get('latest_handshake')
+        if type(stamp) is not int or stamp < 0 or stamp > now:
+            continue
+        state = ('never_handshaked' if stamp == 0 else
+                 'recent_handshake' if now - stamp <= 180 else 'stale_handshake')
+        result[tunnel.name] = {'state': state, 'last_handshake': stamp}
     return result
 
 

@@ -29,6 +29,8 @@ export const queryKeys = {
   hostAddresses: () => ["host", "addresses"] as const,
   serviceStatus: () => ["status", "services"] as const,
   tunnelActivity: () => ["tunnels", "activity"] as const,
+  tunnelAvailability: () => ["tunnels", "availability"] as const,
+  compositeRuntime: () => ["routing", "composite-runtime"] as const,
   tproxyPreview: (versionId: number | null) =>
     ["tproxy", "preview", versionId] as const,
   presetCatalog: () => ["presets", "catalog"] as const,

@@ -142,6 +142,11 @@ export interface Tunnel {
   /** Tunnel device MTU; empty keeps the host default. Recommended 1200 for AWG 3+. */
   mtu?: number | null;
 }
+/** Read-only handshake telemetry; not an end-to-end availability probe. */
+export interface TunnelAvailability {
+  state: "recent_handshake" | "stale_handshake" | "never_handshaked" | "unknown";
+  last_handshake: number | null;
+}
 export interface CaddySite {
   name: string;
   hostname: string;
@@ -359,6 +364,8 @@ export interface ProxyGroup {
   tag: string;
   type: "selector" | "urltest";
   outbounds: string[];
+  /** URL-test composite members; mutually exclusive with legacy outbounds. */
+  exits?: RoutingExit[];
   url: string | null;
   interval_minutes: number | null;
   tolerance_ms?: number | null;

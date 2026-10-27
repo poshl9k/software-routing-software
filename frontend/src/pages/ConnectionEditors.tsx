@@ -4,6 +4,7 @@ import { Button, Checkbox, FormControlLabel, Dialog, DialogTitle, DialogContent,
 import { useConfiguration } from "../state";
 import type {
   Tunnel,
+  TunnelAvailability,
   Peer,
   Subscriber,
   CaddySite,
@@ -18,7 +19,7 @@ import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
 import { DeleteButton } from "../components/DeleteButton";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { EditorFieldset, EditorFooter, EditorShell } from "../components/EditorShell";
+import { EditorFooter, EditorShell } from "../components/EditorShell";
 import { ValueTabs } from "../components/Tabs";
 import { ExpertDisclosure } from "../components/ExpertDisclosure";
 import { PageSection } from "../components/PageSection";
@@ -340,6 +341,7 @@ function Collection<T extends Row>({
   configPatch,
   importRow,
   tunnelStatus,
+  tunnelAvailability,
   filter,
   showQr,
   addressOverrides,
@@ -363,6 +365,7 @@ function Collection<T extends Row>({
   configPatch?: (rows: T[], importedAddresses: Record<string, string>) => Partial<Configuration>;
   importRow?: (text: string, rows: T[]) => { row?: T; error?: string; address?: string };
   tunnelStatus?: ServiceStatusResponse;
+  tunnelAvailability?: Record<string, TunnelAvailability>;
   /** Creation-time interface addresses (e.g. the randomised keygen subnet) —
    * they win over the name-derived pool slot until an operator edits them. */
   addressOverrides?: Record<string, string>;
@@ -586,9 +589,12 @@ function Collection<T extends Row>({
                     : <><dt>Endpoint</dt><dd>{tunnel.endpoint ?? "не задан"}</dd></>}
                 </dl>
                 {version?.status === "draft" && <Badge tone="blue">Черновик</Badge>}
+                {tunnel.role === "client" && <div>
+                  <ClientHandshake status={tunnelAvailability?.[tunnel.name]} />
+                </div>}
                 {service ? <InlineStatus
                   tone={service.state === "running" ? "green" : service.state === "stopped" ? "amber" : "unknown"}
-                  text={service.state === "running" ? "Работает" : service.state === "stopped" ? "Остановлена" : "Состояние неизвестно"}
+                  text={`${tunnel.role === "client" ? "Служба: " : ""}${service.state === "running" ? "Работает" : service.state === "stopped" ? "Остановлена" : "Состояние неизвестно"}`}
                   asOf={tunnelStatus?.generated_at}
                 /> : <InlineStatus tone="unknown" text="Статус недоступен" />}
               </Card>;
@@ -932,9 +938,34 @@ function TunnelPeers({ tunnel, subscribers, patch, created, disabled, setError, 
   );
 }
 
+function ClientHandshake({ status }: { status?: TunnelAvailability }) {
+  const timestamp = status?.last_handshake;
+  const dated = typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp > 0 &&
+    !Number.isNaN(new Date(timestamp * 1000).getTime());
+  if (dated && (status?.state === "recent_handshake" || status?.state === "stale_handshake")) {
+    return <InlineStatus tone={status.state === "recent_handshake" ? "green" : "amber"}
+      text={`${status.state === "recent_handshake" ? "Недавний handshake" : "Устаревший handshake"}: ${new Date(timestamp * 1000).toLocaleString("ru-RU")}`} />;
+  }
+  if (status?.state === "never_handshaked" && (timestamp === 0 || timestamp === null))
+    return <InlineStatus tone="amber" text="Handshake ещё не было" />;
+  return <InlineStatus tone="unknown" text="Handshake: состояние неизвестно" />;
+}
+
 export function Tunnels() {
   const { configuration: c } = useConfiguration();
   const [roleTab, setRoleTab] = useState<"clients" | "servers">("clients");
+  const availability = useQuery({
+    queryKey: queryKeys.tunnelAvailability(),
+    queryFn: async ({ signal }) => {
+      const result = await api.tunnelAvailability(signal);
+      if (!result || typeof result !== "object" || Array.isArray(result))
+        throw new Error("Некорректные данные handshake туннелей");
+      return result;
+    },
+    enabled: roleTab === "clients" && c.tunnels.some((t) => t.role === "client"),
+    refetchInterval: 30_000,
+    retry: false,
+  });
   const telemetry = useQuery({
     queryKey: queryKeys.serviceStatus(),
     queryFn: async ({ signal }) => {
@@ -1023,12 +1054,17 @@ export function Tunnels() {
           { value: "servers", label: "Серверы" },
         ]}
       />
+      {roleTab === "clients" && <>
+        <InfoNote>Handshake показывает обмен ключами с VPN-сервером, а не сквозную доступность интернета. Недавний — не старше 180 секунд. Это не URL-test и не указание выбранного участника группы.</InfoNote>
+        <ErrorNotice error={availability.error} />
+      </>}
       <Collection<Tunnel>
         kind="tunnels"
         showQr={showQr}
         addressOverrides={pendingAddresses}
         filter={(rows) => rows.filter((t) => t.role === (roleTab === "clients" ? "client" : "server"))}
         tunnelStatus={telemetry.isSuccess ? telemetry.data : undefined}
+        tunnelAvailability={availability.isSuccess ? availability.data : undefined}
         title="Туннели"
         addLabel="+ Добавить туннель"
         configPatch={(rows, importedAddresses) => {
@@ -1101,7 +1137,7 @@ export function Tunnels() {
           <Badge>{t.role === "server" ? "сервер" : "клиент"}</Badge>,
           t.protocol,
         ]}
-        form={(t, patch, created, disabled, setError, importedAddresses, setBusy) => (
+        form={(t, patch, created, disabled, setError, importedAddresses) => (
           <>
           <PageSection title="Идентификация">
           <FormGrid>

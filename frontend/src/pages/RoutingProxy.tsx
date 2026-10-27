@@ -6,6 +6,7 @@ import { api } from "../api";
 import { queryKeys } from "../query";
 import type {
   ProxyGroup,
+  RoutingExit,
   ProxyOutbound,
   ProxySettings,
   ProxySubscription,
@@ -33,6 +34,7 @@ import { hostValid, nameValid, portValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { parseShareLinks } from "../shareLinks";
 import { SecretField } from "./ConnectionEditors";
+import { exitLabel } from "./RoutingMaster";
 
 const OUTBOUND_TYPES: ProxyOutbound["type"][] = [
   "direct",
@@ -99,14 +101,49 @@ const subscriptionValid = (s: ProxySubscription) =>
   (s.headers ?? []).every((header) => !header.trim() || headerValid(header.trim())) &&
   regexValid(s.filter_include) && regexValid(s.filter_exclude);
 
-const groupValid = (g: ProxyGroup, allTags: string[]) =>
-  nameValid(g.tag) &&
-  g.tag !== RESERVED_TAG &&
-  g.outbounds.length > 0 &&
-  !g.outbounds.includes(g.tag) &&
-  g.outbounds.every((t) => t !== g.tag && allTags.includes(t)) &&
-  optionalRange(g.interval_minutes, 1, 1440) &&
-  optionalRange(g.tolerance_ms, 0, 5000);
+const compositeMode = (g: ProxyGroup) => g.exits !== undefined && (g.exits.length > 0 || g.outbounds.length === 0);
+const groupDescription = (g: ProxyGroup) =>
+  g.exits?.length ? g.exits.map(exitLabel).join(", ") : g.outbounds.join(", ");
+
+const groupValid = (g: ProxyGroup, allTags: string[], memberChoices: RoutingExit[]) => {
+  const exits = g.exits ?? [];
+  const membersValid = exits.length > 0
+    ? g.type === "urltest" && g.outbounds.length === 0 &&
+      new Set(exits.map(exitLabel)).size === exits.length &&
+      exits.every((exit) => memberChoices.some((choice) => exitLabel(choice) === exitLabel(exit)))
+    : g.outbounds.length > 0 && g.outbounds.every((t) => t !== g.tag && allTags.includes(t));
+  return nameValid(g.tag) && g.tag !== RESERVED_TAG && membersValid &&
+    optionalRange(g.interval_minutes, 1, 1440) && optionalRange(g.tolerance_ms, 0, 5000);
+};
+
+function CompositeMembers({ exits, choices, update }: {
+  exits: RoutingExit[];
+  choices: RoutingExit[];
+  update: (exits: RoutingExit[]) => void;
+}) {
+  const move = (index: number, delta: number) => {
+    const reordered = [...exits];
+    [reordered[index], reordered[index + delta]] = [reordered[index + delta], reordered[index]];
+    update(reordered);
+  };
+  return <>
+    <Select label="Добавить участника" value="" placeholder={{ label: "Выберите выход", disabled: true }}
+      options={choices.map((exit, index) => ({ value: String(index), label: exitLabel(exit),
+        disabled: exits.some((item) => exitLabel(item) === exitLabel(exit)) }))}
+      onChange={(value) => update([...exits, choices[Number(value)]])} />
+    <DataTable heads={["Порядок", "Участник", "Действия"]}
+      empty={<EmptyState title="Нет участников">Выберите хотя бы один выход. WAN автоматически не добавляется.</EmptyState>}
+      rows={exits.map((exit, index) => [index + 1,
+        <>{exitLabel(exit)}{!choices.some((choice) => exitLabel(choice) === exitLabel(exit)) &&
+          <InlineStatus tone="red" text="Выход недоступен для выбора; удалите или замените участника" />}</>,
+        <FormActions>
+          <Button aria-label={`Вверх: ${exitLabel(exit)}`} disabled={index === 0} onClick={() => move(index, -1)}>Вверх</Button>
+          <Button aria-label={`Вниз: ${exitLabel(exit)}`} disabled={index === exits.length - 1} onClick={() => move(index, 1)}>Вниз</Button>
+          <DeleteButton label={`Удалить участника: ${exitLabel(exit)}`} onClick={() => update(exits.filter((_, i) => i !== index))} />
+        </FormActions>,
+      ])} />
+  </>;
+}
 
 function localCleared(type: ProxyOutbound["type"]): Partial<ProxyOutbound> {
   const cleared: Partial<ProxyOutbound> = {
@@ -308,6 +345,13 @@ function SubscriptionCard({ subscription, editable, canFetch = true, onChange, o
 
 function ProxiesView({ settings, readonly }: { settings: ProxySettings; readonly: boolean }) {
   const [tab, setTab] = useState<"outbounds" | "subscriptions">("outbounds");
+  const runtime = useQuery({
+    queryKey: queryKeys.compositeRuntime(),
+    queryFn: api.runtimeProxies,
+    enabled: tab === "outbounds" && settings.groups.some((group) => group.exits?.length),
+    refetchInterval: 30_000,
+    retry: false,
+  });
   return (
     <>
       <ValueTabs value={tab} change={setTab} tabs={[
@@ -347,7 +391,7 @@ function ProxiesView({ settings, readonly }: { settings: ProxySettings; readonly
           rows={settings.groups.map((g) => [
             g.tag,
             <Badge>{g.type}</Badge>,
-            g.outbounds.join(", "),
+            groupDescription(g),
             g.url ? "https://•••" : "—",
           ])}
           empty={
@@ -357,6 +401,27 @@ function ProxiesView({ settings, readonly }: { settings: ProxySettings; readonly
             </EmptyState>
           }
         />
+        {settings.groups.some((g) => g.exits?.length) && <>
+          <InfoNote>Состояние ниже — от работающего sing-box, не от черновика. Проверка URL-test показывает доступность выхода до проверочного URL; handshake туннеля и выбранный канал сами по себе её не доказывают.</InfoNote>
+          <ErrorNotice error={runtime.error} />
+          {settings.groups.filter((g) => g.exits?.length).map((g) => {
+            const active = runtime.isSuccess ? runtime.data?.proxies?.[g.tag] : undefined;
+            return <PageSection key={g.tag} title={`Группа ${g.tag}`}>
+              <InlineStatus tone={active?.now ? "blue" : "unknown"}
+                text={active?.now ? `Сейчас выбран выход: ${active.now}` : "Активный выход неизвестен"} />
+              {(active?.all ?? []).map((tag) => {
+                const sample = runtime.data?.proxies?.[tag]?.history?.at(-1);
+                const sampledAt = sample?.time ? Date.parse(sample.time) : NaN;
+                const fresh = Number.isFinite(sampledAt) && sampledAt <= Date.now() &&
+                  Date.now() - sampledAt <= (g.interval_minutes ?? 10) * 120_000 + 60_000;
+                const measured = fresh && typeof sample?.delay === "number" && Number.isFinite(sample.delay) && sample.delay >= 0;
+                const healthy = measured && (sample?.delay ?? 0) > 0;
+                return <InlineStatus key={tag} tone={!measured ? "unknown" : healthy ? "green" : "red"}
+                  text={`${tag}: ${!measured ? "нет свежей проверки" : healthy ? `URL доступен (${sample.delay} мс)` : "URL недоступен"}`} />;
+              })}
+            </PageSection>;
+          })}
+        </>}
       </Card>}
     </>
   );
@@ -430,7 +495,8 @@ export function ProxiesEditor() {
       .map((r) => `правило ${r.name}`),
     ...(configuration.tproxy.final === "route" && tags.includes(configuration.tproxy.final_outbound ?? "")
       ? ["конечное действие"] : []),
-    ...current.groups.filter((g) => !tags.includes(g.tag) && g.outbounds.some((t) => tags.includes(t)))
+    ...current.groups.filter((g) => !tags.includes(g.tag) && (g.outbounds.some((t) => tags.includes(t)) ||
+      g.exits?.some((exit) => exit.kind === "outbound" && tags.includes(exit.tag))))
       .map((g) => `группа ${g.tag}`),
   ];
   const requestDelete = (indices: number[], kind: "outbound" | "group") => {
@@ -472,12 +538,18 @@ export function ProxiesEditor() {
   const namesUnique =
     new Set(current.subscriptions.map((s) => s.name)).size ===
     current.subscriptions.length;
+  const memberChoices: RoutingExit[] = [
+    ...configuration.tunnels.filter((t) => t.role === "client").map((t): RoutingExit => ({ kind: "tunnel", name: t.name })),
+    ...configuration.interfaces.filter((iface) => !configuration.tunnels.some((t) => t.interface === iface.name))
+      .map((iface): RoutingExit => ({ kind: "interface", interface: iface.name })),
+    ...current.outbounds.map((o): RoutingExit => ({ kind: "outbound", tag: o.tag })),
+  ];
   const valid =
     tagsUnique &&
     namesUnique &&
     current.outbounds.every(outboundValid) &&
     current.subscriptions.every(subscriptionValid) &&
-    current.groups.every((g) => groupValid(g, allTags));
+    current.groups.every((g) => groupValid(g, allTags, memberChoices));
 
   const begin = () => {
     setEditedHeaders([]);
@@ -924,7 +996,7 @@ export function ProxiesEditor() {
             {current.groups.map((g, index) =>
               <Card key={index} title={g.tag || "Новая группа"}
                 action={<Button onClick={() => setActiveEditor({ kind: "group", index })}>Изменить</Button>}>
-                <Typography>{g.type} · {g.outbounds.join(", ") || "Нет выходов"}</Typography>
+                <Typography>{g.type} · {groupDescription(g) || "Нет выходов"}</Typography>
               </Card>)}
             {current.groups.map((g, index) => {
               if (activeEditor?.kind !== "group" || activeEditor.index !== index) return null;
@@ -935,6 +1007,10 @@ export function ProxiesEditor() {
                   ),
                 });
               const refs = groupRefs(g.tag);
+              const composite = compositeMode(g);
+              const exits = g.exits ?? [];
+              const hasWan = exits.some((exit) => exit.kind === "interface" &&
+                configuration.interfaces.some((iface) => iface.name === exit.interface && iface.zone === "wan"));
               return (
                 <Dialog key={index} open onClose={editor.saving ? undefined : closeEditor} fullWidth maxWidth="md" aria-labelledby="group-editor-title">
                   <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -952,13 +1028,28 @@ export function ProxiesEditor() {
                     />
                   </FormGrid></PageSection>
                   <PageSection title="Состав"><FormGrid>
-                    <SelectField
+                    <Select
                       label="Тип группы"
                       value={g.type}
-                      options={GROUP_TYPES}
-                      onChange={(type) => update({ type })}
+                      options={GROUP_TYPES.map((type) => ({ value: type, label: type, disabled: type === "selector" && composite }))}
+                      onChange={(type) => update({ type: type as ProxyGroup["type"] })}
                     />
-                    <FormWide>
+                    {g.type === "urltest" && <Select label="Состав группы" value={composite ? "exits" : "outbounds"}
+                      helperText="Смена формата сохраняет ссылки. Вложенные группы доступны только в прежнем формате."
+                      options={[
+                        { value: "outbounds", label: "По тегам (прежний формат)", disabled: exits.some((exit) => exit.kind !== "outbound") },
+                        { value: "exits", label: "Туннели, интерфейсы и прокси", disabled: g.outbounds.some((tag) => !current.outbounds.some((o) => o.tag === tag)) },
+                      ]}
+                      onChange={(mode) => update(mode === "exits"
+                        ? { exits: g.outbounds.map((tag) => ({ kind: "outbound", tag })), outbounds: [] }
+                        : { exits: undefined, outbounds: exits.flatMap((exit) => exit.kind === "outbound" ? [exit.tag] : []) })} />}
+                    {composite ? <FormWide>
+                      <CompositeMembers exits={exits} choices={memberChoices} update={(members) => update({ exits: members, outbounds: [] })} />
+                      <InfoNote>WAN не добавляется автоматически. Прямой выход через WAN возможен только при явном включении интерфейса WAN в состав.</InfoNote>
+                      {hasWan && <InfoNote severity="warning">Включён WAN: группа сможет направлять трафик напрямую через этот интерфейс, мимо VPN.</InfoNote>}
+                      {exits.some((exit) => exit.kind === "outbound" && current.outbounds.some((o) => o.tag === exit.tag && o.type === "direct")) &&
+                        <InfoNote severity="warning">Включён прямой прокси-выход: трафик сможет идти обычным маршрутом хоста, мимо VPN.</InfoNote>}
+                    </FormWide> : <FormWide>
                       <Typography variant="h2">Выходы группы</Typography>
                       {refs.length ? (
                         refs.map((t) => (
@@ -987,9 +1078,10 @@ export function ProxiesEditor() {
                       )}
                       {g.outbounds.filter((tag) => !allTags.includes(tag)).map((tag) =>
                         <InfoNote key={tag}>ссылка сломана: {tag}</InfoNote>)}
-                    </FormWide>
+                    </FormWide>}
                     {g.type === "urltest" && (
                       <>
+                        <FormWide><InfoNote>URL-test проверяет каждый выход и выбирает по задержке с учётом допуска, а не по фиксированному приоритету списка. Порядок участников сохраняется; существующие соединения могут не переключиться.</InfoNote></FormWide>
                         <Field
                           label="URL проверки"
                           value={g.url ?? ""}

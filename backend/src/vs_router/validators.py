@@ -364,12 +364,16 @@ def routing_referenced_tags(c):
             continue
         visited.add(tag)
         referenced.add(tag)
-        for member in groups[tag].outbounds:
+        group = groups[tag]
+        for member in group.outbounds:
             if member not in groups and member not in outbounds:
                 fail('routing.exit_group_member_missing')
             referenced.add(member)
             if member in groups:
                 pending.append(member)
+        for member in group.exits:
+            if member.kind == 'outbound':
+                referenced.add(member.tag)
     return referenced
 
 
@@ -438,6 +442,20 @@ def derive_dns_detours(c):
     return derived
 
 
+def validate_routing_exit(target, tunnels, interfaces, outbound_tags):
+    """Validate a bound/proxy exit independently of where it is referenced."""
+    if target.kind == 'outbound' and target.tag not in outbound_tags:
+        fail('routing.outbound_reference')
+    if target.kind == 'tunnel':
+        tunnel = tunnels.get(target.name)
+        if tunnel is None:
+            fail('routing.tunnel_reference')
+        elif tunnel.role != 'client':
+            fail('routing.tunnel_client_required')
+    if target.kind == 'interface' and target.interface not in interfaces:
+        fail('routing.exit_interface_reference')
+
+
 def validate_routing(c):
     """Resolve routing data only; capture and egress generation are separate."""
     if len({rule.name for rule in c.routing_rules}) != len(c.routing_rules):
@@ -454,27 +472,25 @@ def validate_routing(c):
         for peer in tunnel.peers:
             if peer.subscriber is not None:
                 devices.setdefault((peer.subscriber, peer.name), []).append(peer)
-    for rule in c.routing_rules:
-        if rule.exit.kind == 'outbound' and rule.exit.tag not in outbound_tags:
-            fail('routing.outbound_reference')
-        if rule.exit.kind == 'tunnel':
-            tunnel = tunnels.get(rule.exit.name)
-            if tunnel is None:
-                fail('routing.tunnel_reference')
-            elif tunnel.role != 'client':
+    exits = [rule.exit for rule in c.routing_rules]
+    for group in c.proxies.groups:
+        for member in group.exits:
+            if (member.kind == 'interface' and
+                    any(t.role == 'server' and t.interface == member.interface
+                        for t in c.tunnels)):
                 fail('routing.tunnel_client_required')
-        if rule.exit.kind == 'interface' and rule.exit.interface not in interfaces:
-            fail('routing.exit_interface_reference')
-        if rule.exit.kind in ('interface', 'tunnel'):
-            tag = routing_exit_tag(rule.exit)
-            # Track original exit source to detect colliding sanitized names
-            # (two different interfaces may sanitize to the same tag).
-            source = (rule.exit.interface
-                      if rule.exit.kind == 'interface' else rule.exit.name)
+            exits.append(member)
+    for target in exits:
+        validate_routing_exit(target, tunnels, interfaces, outbound_tags)
+        if target.kind in ('interface', 'tunnel'):
+            tag = routing_exit_tag(target)
+            # Distinct interfaces can sanitize to the same generated tag.
+            source = (target.kind, target.interface if target.kind == 'interface' else target.name)
             if tag in outbound_tags | group_tags or (
                     tag in generated_tags and generated_tags[tag] != source):
                 fail('proxy.tag_collision')
             generated_tags[tag] = source
+    for rule in c.routing_rules:
         if rule.subject.kind == 'interface':
             routing_subject_interface_cidrs(c, rule.subject.interface)
         if rule.subject.kind == 'device':
@@ -543,6 +559,7 @@ def validate_proxies(c):
                 if not listen.is_loopback:
                     fail("proxy.admin_inbound_open")
     group_refs = {g.tag: tuple(g.outbounds) for g in proxies.groups}
+    composite_tags = {g.tag for g in proxies.groups if g.exits}
     # This validator runs before validate_routing: give product-referenced
     # incomplete groups their own error, leaving unrelated legacy errors intact.
     routing_referenced_tags(c)
@@ -555,7 +572,7 @@ def validate_proxies(c):
                 visit(ref, stack | {tag})
 
     for tag, refs in group_refs.items():
-        if not refs:
+        if not refs and tag not in composite_tags:
             fail("proxy.group_empty")
         if tag in refs:
             fail("proxy.group_recursive")

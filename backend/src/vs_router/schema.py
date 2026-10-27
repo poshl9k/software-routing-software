@@ -669,9 +669,33 @@ class ProxyGroup(Model):
     tag: Name
     type: Literal["selector", "urltest"]
     outbounds: tuple[Name, ...] = ()
+    exits: tuple["Exit", ...] = ()
     url: str | None = None
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     tolerance_ms: int | None = Field(default=None, ge=0, le=5000)
+
+    @model_validator(mode="after")
+    def check_members(self):
+        if self.exits and self.outbounds:
+            raise ValueError("proxy.group_mixed_members")
+        if self.exits and self.type != "urltest":
+            raise ValueError("proxy.group_exits_urltest_required")
+        if any(member.kind not in ("tunnel", "interface", "outbound") for member in self.exits):
+            raise ValueError("proxy.group_exit_kind")
+        targets = [(member.kind, member.name or member.interface or member.tag) for member in self.exits]
+        if len(set(targets)) != len(targets):
+            raise ValueError("proxy.group_duplicate_member")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.exits:
+            # ADR-0029: only the target field for each kind is present on wire.
+            data["exits"] = [member.model_dump(exclude_none=True) for member in self.exits]
+        else:
+            data.pop("exits", None)  # Keep existing snapshots byte-compatible.
+        return data
 
 
 class ProxySettings(Model):

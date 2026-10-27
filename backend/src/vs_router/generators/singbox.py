@@ -123,7 +123,9 @@ def _render_outbound(outbound: ProxyOutbound,
 
 
 def _render_group(group):
-    rendered = {"type": group.type, "tag": group.tag, "outbounds": list(group.outbounds)}
+    members = ([routing_exit_tag(member) for member in group.exits] if group.exits
+               else list(group.outbounds))
+    rendered = {"type": group.type, "tag": group.tag, "outbounds": members}
     if group.type == "urltest":
         if group.url:
             rendered["url"] = group.url
@@ -314,6 +316,8 @@ def generate_singbox(version: ConfigurationVersion,
     """
     configuration = version.configuration
     # Recheck even for model_copy/model_construct callers that bypass validation.
+    if any(group.exits for group in configuration.proxies.groups):
+        validate_routing(configuration)
     dns_detours = derive_dns_detours(configuration)
     proxies = configuration.proxies
 
@@ -385,6 +389,25 @@ def generate_singbox(version: ConfigurationVersion,
                      if proxies.enabled or o.tag in referenced)
     outbounds.extend(_render_group(g) for g in sorted(proxies.groups, key=lambda g: g.tag)
                      if proxies.enabled or g.tag in referenced)
+    bound_tags = {outbound['tag'] for outbound in bound_outbounds}
+    tunnels = {tunnel.name: tunnel for tunnel in configuration.tunnels}
+    for group in proxies.groups:
+        if not (proxies.enabled or group.tag in referenced):
+            continue
+        for member in group.exits:
+            if member.kind not in ('tunnel', 'interface'):
+                continue
+            tag = routing_exit_tag(member)
+            if tag in bound_tags:
+                continue
+            if member.kind == 'tunnel':
+                assert member.name is not None
+                interface = tunnels[member.name].interface
+            else:
+                interface = member.interface
+            bound_outbounds.append({'type': 'direct', 'tag': tag,
+                                    'bind_interface': interface})
+            bound_tags.add(tag)
     outbounds.extend(bound_outbounds)
     # TProxy final action overrides the default outbound selection
     tproxy = configuration.tproxy

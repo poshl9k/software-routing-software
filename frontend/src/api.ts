@@ -17,7 +17,7 @@ import type {
   UpdateStatus, UpdateStart, ServiceStatusResponse,
   ProxySubscription, SubscriptionPreview, SubscriptionRefresh, SubscriptionMember,
   RuntimeEngine, RuntimeConnections, RuntimeLogEntry, RuntimeProxies, RuntimeProxyDelay,
-  Tariff, Subscription,
+  Tariff, Subscription, TunnelAvailability,
 } from "./types";
 export class ApiError extends Error {
   constructor(
@@ -143,6 +143,7 @@ export const api = {
     if (!response.ok) throw await responseError(response);
     return response.blob();
   },
+  tunnelAvailability: (signal?: AbortSignal) => request<Record<string, TunnelAvailability>>("/api/tunnels/availability", { signal }),
   tunnelActivity: (signal?: AbortSignal) => request<Record<string, Record<string, number | null>>>("/api/tunnels/activity", { signal }),
   backupExport: (include_secrets: boolean, password?: string) => post<{ schema_version: number; versions: unknown[]; users: unknown[] }>("/api/backup/export", { include_secrets, ...(password ? { password } : {}) }),
   backupRestore: (body: { schema_version: number; versions: unknown[]; password?: string; allow_partial: boolean }) => post<{ restored: number; skipped: number }>("/api/backup/restore", body),
