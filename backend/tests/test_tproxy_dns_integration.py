@@ -117,7 +117,7 @@ def test_disabled_is_inert_in_plan_scaffold_and_apply():
 def test_phase_order_is_guards_before_readiness_before_interception():
     assert tproxy_apply.PHASE_ORDER == (
         ("guards", (GUARDS,)),
-        ("readiness", (SELECTED, ORDINARY, "singbox")),
+        ("readiness", (SELECTED, ORDINARY, "subscriber_peers", "singbox")),
         ("interception", ("tproxy_interception",)))
     # Readiness resolver configs are named and the phase list is one contract.
     assert list(tproxy_apply.cleanup_files()) == [

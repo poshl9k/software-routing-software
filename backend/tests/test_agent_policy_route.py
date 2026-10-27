@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from test_agent_apply import FakeExecutor
 from vs_router.agent import policy_route
 from vs_router.agent.apply import ApplyError
 from vs_router.generators import marks
@@ -55,27 +54,162 @@ def test_non_integer_registry_entry_fails_closed(monkeypatch):
         policy_route.commands("add")
 
 
-def test_loader_is_idempotent_and_removable():
-    executor = FakeExecutor()
-    loader = policy_route.PolicyRouteLoader(executor)
-    loader.apply()
-    loader.apply()  # a repeated apply converges instead of duplicating the rule
-    add = [list(argv) for argv in policy_route.commands("add")]
-    delete = [list(argv) for argv in policy_route.commands("del")]
-    assert [argv for argv, _ in executor.calls] == delete + add + delete + add
+class PolicyStateExecutor:
+    """Fake ``ip`` state: probes render kernel-like text, mutations update it."""
+
+    def __init__(self, *, rules=(), routes=(), fail=()):
+        self.rules = list(rules)
+        self.routes = list(routes)
+        self.fail = {tuple(argv) for argv in fail}
+        self.calls = []
+
+    def run(self, argv, timeout):
+        self.calls.append((argv, timeout))
+        key = tuple(argv)
+        if key in self.fail:
+            return SimpleNamespace(returncode=1, stdout="")
+        if argv == ["ip", "-4", "rule", "show"]:
+            return SimpleNamespace(returncode=0, stdout="\n".join(self.rules) + "\n")
+        if argv == ["ip", "-4", "route", "show", "table", "100"]:
+            return SimpleNamespace(returncode=0, stdout="\n".join(self.routes) + "\n")
+        if argv[:3] == ["ip", "rule", "add"]:
+            self.rules.append("100: from all fwmark 0x100 lookup 100")
+        elif argv[:3] == ["ip", "route", "add"]:
+            self.routes.append("local default dev lo scope host")
+        elif argv[:3] == ["ip", "rule", "del"]:
+            self.rules = [line for line in self.rules if line !=
+                          "100: from all fwmark 0x100 lookup 100"]
+        elif argv[:3] == ["ip", "route", "del"]:
+            self.routes = [line for line in self.routes if line !=
+                           "local default dev lo scope host"]
+        return SimpleNamespace(returncode=0, stdout="")
+
+
+def _mutations(executor):
+    return [argv for argv, _ in executor.calls if "add" in argv or "del" in argv]
+
+
+def test_loader_exact_state_is_noop_including_rendered_mask_and_alias(monkeypatch):
+    route = marks.POLICY_ROUTES[0]
+    monkeypatch.setattr(policy_route, "_route_table_aliases",
+                        lambda table_id: {str(table_id), "vs_tproxy"})
+    executor = PolicyStateExecutor(
+        rules=(f"{route.rule_priority}: from all fwmark {route.fwmark:#x}/0xffffffff "
+               "lookup vs_tproxy",),
+        routes=("local default dev lo scope host",),
+    )
+
+    policy_route.PolicyRouteLoader(executor).apply()
+
+    assert _mutations(executor) == []
+    assert executor.rules and executor.routes
+
+
+def test_loader_installs_route_before_rule_when_both_are_missing():
+    add_rule, add_route = [list(argv) for argv in policy_route.commands("add")]
+    executor = PolicyStateExecutor()
+
+    policy_route.PolicyRouteLoader(executor).apply()
+
+    assert _mutations(executor) == [add_route, add_rule]
+
+
+def test_real_subprocess_bytes_and_missing_fib_are_first_apply_not_error():
+    class ByteExecutor(PolicyStateExecutor):
+        def run(self, argv, timeout):
+            result = super().run(argv, timeout)
+            if argv == ['ip', '-4', 'route', 'show', 'table', '100'] and not self.routes:
+                return SimpleNamespace(returncode=2, stdout=b'',
+                                       stderr=b'Error: ipv4: FIB table does not exist.\n')
+            result.stdout = result.stdout.encode()
+            return result
+
+    executor = ByteExecutor()
+    policy_route.PolicyRouteLoader(executor).apply()
+    assert executor.routes == ['local default dev lo scope host']
+    assert executor.rules == ['100: from all fwmark 0x100 lookup 100']
     executor.calls.clear()
-    loader.remove()
-    assert [argv for argv, _ in executor.calls] == delete
+    policy_route.PolicyRouteLoader(executor).apply()
+    assert _mutations(executor) == []
 
 
-def test_loader_add_failure_is_reload_failed_but_delete_is_tolerant():
-    executor = FakeExecutor()
+def test_loader_installs_only_missing_entry_without_tearing_down_peer():
+    add_rule, add_route = [list(argv) for argv in policy_route.commands("add")]
+    executor = PolicyStateExecutor(
+        rules=("100: from all fwmark 0x100 lookup 100",), routes=())
 
-    def run(argv, timeout):
-        executor.calls.append((argv, timeout))
-        # A missing entry on delete is not an error; a failing add is.
-        return SimpleNamespace(returncode=0 if "del" in argv else 1)
+    policy_route.PolicyRouteLoader(executor).apply()
 
-    executor.run = run
+    assert _mutations(executor) == [add_route]
+    assert executor.rules == ["100: from all fwmark 0x100 lookup 100"]
+    assert executor.routes == ["local default dev lo scope host"]
+    assert add_rule not in _mutations(executor)
+
+
+def test_loader_missing_rule_does_not_tear_down_healthy_route():
+    add_rule, _ = [list(argv) for argv in policy_route.commands("add")]
+    executor = PolicyStateExecutor(routes=("local default dev lo scope host",))
+
+    policy_route.PolicyRouteLoader(executor).apply()
+
+    assert _mutations(executor) == [add_rule]
+    assert executor.routes == ["local default dev lo scope host"]
+
+
+def test_loader_reports_conflicting_owned_rule_before_mutation():
+    executor = PolicyStateExecutor(
+        rules=("100: from all fwmark 0x100 lookup 200",),
+        routes=("local default dev lo scope host",),
+    )
+
     with pytest.raises(ApplyError, match="agent.reload_failed"):
         policy_route.PolicyRouteLoader(executor).apply()
+
+    assert _mutations(executor) == []
+
+
+def test_loader_reports_unrecognized_owned_table_route_before_mutation():
+    executor = PolicyStateExecutor(
+        rules=("100: from all fwmark 0x100 lookup 100",),
+        routes=("default via 192.0.2.1 dev eth0",),
+    )
+
+    with pytest.raises(ApplyError, match="agent.reload_failed"):
+        policy_route.PolicyRouteLoader(executor).apply()
+
+    assert _mutations(executor) == []
+
+
+def test_loader_probe_or_add_failure_is_reload_failed():
+    probes = (["ip", "-4", "rule", "show"],
+              ["ip", "-4", "route", "show", "table", "100"])
+    for failed in probes:
+        executor = PolicyStateExecutor(fail=(failed,))
+        with pytest.raises(ApplyError, match="agent.reload_failed"):
+            policy_route.PolicyRouteLoader(executor).apply()
+        assert _mutations(executor) == []
+
+    add_rule = list(policy_route.commands("add")[0])
+    executor = PolicyStateExecutor(
+        routes=("local default dev lo scope host",), fail=(add_rule,))
+    with pytest.raises(ApplyError, match="agent.reload_failed"):
+        policy_route.PolicyRouteLoader(executor).apply()
+
+
+def test_malformed_registry_fails_before_probe_or_mutation(monkeypatch):
+    bad = SimpleNamespace(table_id=100, rule_priority=100,
+                          fwmark="0x100; rm -rf /")
+    monkeypatch.setattr(marks, "POLICY_ROUTES", (bad,))
+    executor = PolicyStateExecutor()
+
+    with pytest.raises(ValueError, match="tproxy.policy_route_fwmark"):
+        policy_route.PolicyRouteLoader(executor).apply()
+
+    assert executor.calls == []
+
+
+def test_loader_remove_retains_exact_owned_deletion_semantics():
+    executor = PolicyStateExecutor()
+    policy_route.PolicyRouteLoader(executor).remove()
+    assert [argv for argv, _ in executor.calls] == [
+        list(argv) for argv in policy_route.commands("del")]

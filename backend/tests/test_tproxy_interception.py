@@ -279,16 +279,17 @@ def test_policy_route_helper_rejects_unknown_action():
 def test_agent_wires_interception_after_readiness():
     assert list(tproxy_apply.TPROXY_FILES) == [
         "tproxy_guards", "tproxy_unbound_selected", "tproxy_unbound_ordinary",
-        "singbox", "tproxy_interception"]
+        "subscriber_peers", "singbox", "tproxy_interception"]
     assert tproxy_apply.PHASE_ORDER == (
         ("guards", ("tproxy_guards",)),
-        ("readiness", ("tproxy_unbound_selected", "tproxy_unbound_ordinary", "singbox")),
+        ("readiness", ("tproxy_unbound_selected", "tproxy_unbound_ordinary",
+                       "subscriber_peers", "singbox")),
         ("interception", ("tproxy_interception",)))
     assert tproxy_apply.TPROXY_VALIDATORS["tproxy_interception"] == ["nft", "-c", "-f"]
     artifacts = tproxy_apply.build_artifacts(enabled())
     assert list(artifacts) == ["tproxy_guards", "tproxy_unbound_selected",
-                               "tproxy_unbound_ordinary", "singbox",
-                               "tproxy_interception"]
+                               "tproxy_unbound_ordinary", "subscriber_peers",
+                               "singbox", "tproxy_interception"]
     assert artifacts["tproxy_interception"] == generate_tproxy_interception(enabled())
 
 
@@ -319,8 +320,9 @@ def test_enabled_apply_installs_capture_last():
                               tproxy_apply.SINGBOX_PROCESS_STEP: (lambda: None)}
     result = engine.apply_version(enabled(), validators=validators)
     assert result.status == "confirmed"
-    assert order[-5:] == ["tproxy_guards", "tproxy_unbound_selected",
-                          "tproxy_unbound_ordinary", "singbox", "tproxy_interception"]
+    assert order[-6:] == ["tproxy_guards", "tproxy_unbound_selected",
+                          "tproxy_unbound_ordinary", "subscriber_peers", "singbox",
+                          "tproxy_interception"]
     capture = fs.read(APPLIED_DIR / tproxy_apply.TPROXY_FILES["tproxy_interception"])
     assert capture == generate_tproxy_interception(enabled())
 

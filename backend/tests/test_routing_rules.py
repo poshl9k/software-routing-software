@@ -14,7 +14,8 @@ from vs_router.agent.apply import ApplyEngine, ApplyError, host_files
 from vs_router.api.configuration import parse_configuration, structural_diff, validate
 from vs_router.api.errors import APIError
 from vs_router.api.versions import diff_summary
-from vs_router.generators.singbox import generate_singbox
+from vs_router.generators.singbox import (SUBSCRIBER_PEERS_RULE_SET_TAG,
+                                          generate_singbox, generate_subscriber_peers_rule_set)
 from vs_router.schema import Configuration, ConfigurationVersion
 from vs_router.secrets import encrypt_secret
 
@@ -384,8 +385,10 @@ def test_criterion_2_render_device_all_addresses_and_server_without_source():
     rules = render_document(data)['route']['rules']
     assert rules[0]['source_ip_cidr'] == ['10.66.66.2/32', '2001:db8::2/128']
     assert 'source_ip_cidr' not in rules[1]
-    assert rules[2] == {'source_ip_cidr': ['10.66.66.2/32', '2001:db8::2/128'],
-                        'action': 'reject'}
+    assert rules[2] == {'rule_set': [SUBSCRIBER_PEERS_RULE_SET_TAG], 'action': 'reject'}
+    version = ConfigurationVersion.model_validate({'profile': 'panel', 'configuration': data})
+    assert generate_subscriber_peers_rule_set(version)['rules'] == [
+        {'source_ip_cidr': ['10.66.66.2/32', '2001:db8::2/128']}]
     data['tunnels'][0]['peers'][0]['allowed_ips'] = []
     with pytest.raises(ValueError, match='routing.device_address_required'):
         render_document(data)
@@ -415,8 +418,11 @@ def test_criterion_3_render_destination_matchers_and_mixed_fields() -> None:
                       {'domain': ['api.example.net']}],
             'action': 'route', 'outbound': 'direct',
         },
-        {'source_ip_cidr': ['10.66.66.2/32'], 'action': 'reject'},
+        {'rule_set': [SUBSCRIBER_PEERS_RULE_SET_TAG], 'action': 'reject'},
     ]
+    version = ConfigurationVersion.model_validate({'profile': 'panel', 'configuration': data})
+    assert generate_subscriber_peers_rule_set(version)['rules'] == [
+        {'source_ip_cidr': ['10.66.66.2/32']}]
     # Domain destinations now carry exactly one system sniff row before them
     # (ADR-0031); the user rules above stay unchanged.
     rendered = render_document(data)['route']['rules']
@@ -478,8 +484,10 @@ def test_criterion_5_render_unmatched_devices_reject_before_legacy_egress(final)
     rules = user_rules(render_document(data))
     assert rules[0]['outbound'] == 'direct'
     assert rules[1]['outbound'] == 'routing-tunnel:client_vpn'
-    assert rules[2] == {'source_ip_cidr': ['10.66.66.2/32', '10.66.66.3/32',
-                                          '2001:db8::3/128'], 'action': 'reject'}
+    assert rules[2] == {'rule_set': [SUBSCRIBER_PEERS_RULE_SET_TAG], 'action': 'reject'}
+    version = ConfigurationVersion.model_validate({'profile': 'panel', 'configuration': data})
+    peer_cidrs = generate_subscriber_peers_rule_set(version)['rules'][0]['source_ip_cidr']
+    assert peer_cidrs == ['10.66.66.2/32', '10.66.66.3/32', '2001:db8::3/128']
     assert rules.index(rules[2]) < next(i for i, r in enumerate(rules)
                                         if r.get('source_ip_cidr') == ['10.66.66.0/24'])
     # For each device address, first terminal match for an unmatched destination is reject.
@@ -489,6 +497,8 @@ def test_criterion_5_render_unmatched_devices_reject_before_legacy_egress(final)
                           and (not r.get('source_ip_cidr') or any(
                               ip_address(source) in ip_network(cidr)
                               for cidr in r['source_ip_cidr']))
+                          and (not r.get('rule_set') or any(
+                              ip_address(source) in ip_network(cidr) for cidr in peer_cidrs))
                           and (not r.get('ip_cidr') or any(
                               ip_address(destination) in ip_network(cidr)
                               for cidr in r['ip_cidr']))
@@ -513,7 +523,7 @@ def test_criterion_6_render_exact_pipeline_repeat_and_no_mutation():
         {'action': 'sniff'}, {'action': 'route-options', 'udp_timeout': '60s'},
         {'ip_cidr': ['203.0.113.0/24'], 'action': 'route', 'outbound': 'direct'},
         {'ip_cidr': ['198.51.100.0/24'], 'action': 'route', 'outbound': 'direct'},
-        {'source_ip_cidr': ['10.66.66.2/32'], 'action': 'reject'},
+        {'rule_set': [SUBSCRIBER_PEERS_RULE_SET_TAG], 'action': 'reject'},
         {'ip_cidr': ['192.0.2.0/24'], 'action': 'route', 'outbound': 'direct'},
         {'ip_cidr': ['198.51.100.0/24'], 'action': 'route', 'outbound': 'direct'},
         {'ip_cidr': ['203.0.113.0/24'], 'action': 'reject'},

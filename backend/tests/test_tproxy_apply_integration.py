@@ -58,11 +58,12 @@ def engine_with(fs=None, executor=None, now=None, **kw):
 def test_scaffold_contract_is_ordered_and_closed():
     assert list(tproxy_apply.TPROXY_FILES) == [
         "tproxy_guards", "tproxy_unbound_selected", "tproxy_unbound_ordinary",
-        "singbox", "tproxy_interception"]
+        "subscriber_peers", "singbox", "tproxy_interception"]
     # Guards precede the readiness resolver configs/engine, which precede capture.
     assert tproxy_apply.PHASE_ORDER == (
         ("guards", ("tproxy_guards",)),
-        ("readiness", ("tproxy_unbound_selected", "tproxy_unbound_ordinary", "singbox")),
+        ("readiness", ("tproxy_unbound_selected", "tproxy_unbound_ordinary",
+                       "subscriber_peers", "singbox")),
         ("interception", ("tproxy_interception",)))
     assert set(tproxy_apply.TPROXY_FILES) <= set(tproxy_apply.TPROXY_VALIDATORS)
     assert tproxy_apply.build_artifacts(ConfigurationVersion()) == {}
@@ -141,15 +142,16 @@ def test_enabled_apply_installs_guards_before_engine():
     assert result.status == "confirmed"
     # Activation order: ordinary files, then guards, then the two readiness
     # resolver configs, then the engine/readiness file, then the capture table.
-    assert order[-5:] == ["tproxy_guards", "tproxy_unbound_selected",
-                          "tproxy_unbound_ordinary", "singbox", "tproxy_interception"]
+    assert order[-6:] == ["tproxy_guards", "tproxy_unbound_selected",
+                          "tproxy_unbound_ordinary", "subscriber_peers", "singbox",
+                          "tproxy_interception"]
     assert order.index("tproxy_guards") < order.index("tproxy_unbound_selected") \
-        < order.index("tproxy_unbound_ordinary") < order.index("singbox") \
-        < order.index("tproxy_interception")
+        < order.index("tproxy_unbound_ordinary") < order.index("subscriber_peers") \
+        < order.index("singbox") < order.index("tproxy_interception")
     marker = engine.status()
     assert marker["tproxy"]["files"] == ["tproxy_guards", "tproxy_unbound_selected",
-                                         "tproxy_unbound_ordinary", "singbox",
-                                         "tproxy_interception"]
+                                         "tproxy_unbound_ordinary", "subscriber_peers",
+                                         "singbox", "tproxy_interception"]
     assert marker["tproxy"]["phase_order"][-1] == ["interception", ["tproxy_interception"]]
     assert marker["tproxy"]["selected_uid"] == 29092
     assert marker["tproxy"]["readiness"]["selected_uid"] == 29092

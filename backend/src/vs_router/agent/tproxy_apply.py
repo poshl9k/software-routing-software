@@ -65,7 +65,7 @@ from ..generators.nftables import (generate_tproxy_containment,
                                    generate_tproxy_interception,
                                    generate_tproxy_ipv6_guard,
                                    generate_tproxy_preauthorization)
-from ..generators.singbox import generate_singbox
+from ..generators.singbox import generate_singbox, generate_subscriber_peers_rule_set
 from ..schema import ConfigurationVersion
 
 #: TProxy-owned artifacts that participate in the ordinary apply file map.
@@ -83,6 +83,7 @@ TPROXY_FILES: dict[str, str] = {
     "tproxy_guards": "tproxy-guards.nft",
     "tproxy_unbound_selected": "tproxy-unbound-selected.conf",
     "tproxy_unbound_ordinary": "tproxy-unbound-ordinary.conf",
+    "subscriber_peers": "subscriber-peers.json",
     "singbox": "singbox.json",
     "tproxy_interception": "tproxy-intercept.nft",
 }
@@ -101,6 +102,7 @@ TPROXY_VALIDATORS: dict[str, list[str]] = {
     "tproxy_guards": ["nft", "-c", "-f"],
     "tproxy_unbound_selected": ["unbound-checkconf"],
     "tproxy_unbound_ordinary": ["unbound-checkconf"],
+    "subscriber_peers": ["/usr/local/lib/vs-router/sing-box", "rule-set", "compile"],
     "singbox": ["/usr/local/lib/vs-router/sing-box", "check", "-c"],
     "tproxy_interception": ["nft", "-c", "-f"],
 }
@@ -117,7 +119,8 @@ TPROXY_CLEANUP_VALIDATOR: list[str] = ["nft", "-c", "-f"]
 #: is reachable only from an (offline) enabled configuration.
 PHASE_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("guards", ("tproxy_guards",)),
-    ("readiness", ("tproxy_unbound_selected", "tproxy_unbound_ordinary", "singbox")),
+    ("readiness", ("tproxy_unbound_selected", "tproxy_unbound_ordinary",
+                   "subscriber_peers", "singbox")),
     ("interception", ("tproxy_interception",)),
 )
 
@@ -234,6 +237,7 @@ def build_artifacts(version: ConfigurationVersion, key: bytes | None = None) -> 
         "tproxy_guards": guard_content(version),
         "tproxy_unbound_selected": composed.selected_unbound or "",
         "tproxy_unbound_ordinary": composed.ordinary_unbound or "",
+        "subscriber_peers": json.dumps(generate_subscriber_peers_rule_set(version), indent=2) + "\n",
         "singbox": json.dumps(generate_singbox(version, secret_provider=_secret_provider(key) if key is not None else None), indent=2) + "\n",
         "tproxy_interception": generate_tproxy_interception(version),
     }

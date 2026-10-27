@@ -282,7 +282,7 @@ class ApplyEngine:
             raise ApplyError('agent.tproxy_tables_missing')
 
     def _install(self, contents, marker, validators, files=None, steps=None,
-                 steps_before=None):
+                 steps_before=None, trusted_files=None, trusted_phases=None):
         files = self.files if files is None else files
         # Gated typed readiness steps, executed once just before ``steps_before``
         # is activated. Empty (no-op) for every ordinary configuration.
@@ -299,22 +299,91 @@ class ApplyEngine:
         for name in files:
             validator = validators[name]
             path = PENDING_DIR / files[name]
-            result = (validator(name, path) if callable(validator) else
-                      self.executor.run([*validator, str(path)], 15))
+            if (name == 'subscriber_peers' and not callable(validator)
+                    and 'singbox' in files):
+                # The compiler validates the source set; its binary output is
+                # disposable and must not become an untracked applied artifact.
+                output = PENDING_DIR / 'subscriber-peers-check.srs'
+                try:
+                    result = self.executor.run([*validator, '--output', str(output), str(path)], 15)
+                finally:
+                    self.fs.remove(output)
+            elif (name == 'singbox' and not callable(validator)
+                    and 'subscriber_peers' in files):
+                # Check against the staged set, not the old/live set (or a missing
+                # path on first apply). The actual config keeps the applied path.
+                from ..generators.singbox import SUBSCRIBER_PEERS_RULE_SET_PATH
+                staged = PENDING_DIR / 'singbox-check.json'
+                config = json.loads(self.fs.read(path))
+                for rule_set in config.get('route', {}).get('rule_set', []):
+                    if rule_set.get('path') == SUBSCRIBER_PEERS_RULE_SET_PATH:
+                        rule_set['path'] = str(PENDING_DIR / files['subscriber_peers'])
+                try:
+                    self.fs.write(staged, json.dumps(config))
+                    result = self.executor.run([*validator, str(staged)], 15)
+                finally:
+                    self.fs.remove(staged)
+            else:
+                result = (validator(name, path) if callable(validator) else
+                          self.executor.run([*validator, str(path)], 15))
             if result.returncode:
                 marker['phases'][name] = 'failed'
                 raise ApplyError('agent.validation_failed')
             marker['phases'][name] = 'validated'
+        # Compare only validated, staged bytes against both the confirmed backup
+        # and the live file. A marker from an interrupted/failed cycle is never
+        # authority for a no-op; rollback calls _install without trusted_files.
+        unchanged = set()
+        if trusted_files is not None and trusted_phases is not None:
+            for name in ('nftables', 'wireguard', 'tproxy_guards',
+                         'tproxy_interception', 'subscriber_peers', 'singbox'):
+                if name not in files or trusted_phases.get(name) != 'applied':
+                    continue
+                path = APPLIED_DIR / files[name]
+                try:
+                    if (self.fs.read(PENDING_DIR / files[name]) ==
+                            self.fs.read(path) == trusted_files.get(name)):
+                        unchanged.add(name)
+                except (OSError, UnicodeError):
+                    pass  # Missing/unreadable live artifact requires a full apply.
+        if 'nftables' in unchanged and self.executor.run(
+                ['nft', 'list', 'table', 'inet', 'vs_router'], 15).returncode:
+            unchanged.remove('nftables')
+        if {'tproxy_guards', 'tproxy_interception'} & unchanged:
+            try:
+                self._verify_tproxy_tables()
+            except ApplyError:
+                # Missing live tables cannot be repaired by skipping the files.
+                unchanged.difference_update(('tproxy_guards', 'tproxy_interception'))
+        if 'wireguard' in unchanged:
+            from ..generators.wireguard import deserialize_wireguard
+            try:
+                bundle = deserialize_wireguard(self.fs.read(PENDING_DIR / files['wireguard']))
+                manifest = json.loads(bundle['manifest.json'])
+                if any(self.executor.run(['ip', 'link', 'show', 'dev', iface], 15).returncode or
+                       self.executor.run([entry['protocol'], 'show', iface], 15).returncode
+                       for iface, entry in manifest.items()):
+                    unchanged.remove('wireguard')
+            except (OSError, ValueError, KeyError, TypeError):
+                unchanged.remove('wireguard')
+        # An explicitly injected argv may be a deliberate reload/failure probe.
+        unchanged.difference_update({name for name in unchanged
+                                     if isinstance(self.reload_commands.get(name), (list, tuple))})
+        skip_singbox = ('singbox' in unchanged and trusted_phases is not None and
+                        trusted_phases.get(tproxy_apply.SINGBOX_PROCESS_STEP) == 'applied')
         # Journal before the first live mutation, so interrupted applications roll back.
         self.marker(marker)
         if self.ssh_controller is not None:
             self.ssh_controller.close()
         for name, filename in files.items():
             if steps and name == steps_before:
-                self._run_steps(steps, marker)
+                self._run_steps(steps, marker, skip_singbox=skip_singbox)
                 steps = []
-            self.fs.atomic_move(PENDING_DIR / filename, APPLIED_DIR / filename)
-            self.reload_service(name)
+            if name in unchanged:
+                self.fs.remove(PENDING_DIR / filename)
+            else:
+                self.fs.atomic_move(PENDING_DIR / filename, APPLIED_DIR / filename)
+                self.reload_service(name)
             if name == 'tproxy_guards':
                 # Do not start DNS/engine or install the policy route if the
                 # containment/preauth/DNS boundary silently failed to load.
@@ -327,7 +396,7 @@ class ApplyEngine:
         if self.ssh_controller is not None:
             self.ssh_controller.activate(json.loads(contents['ssh']))
 
-    def _run_steps(self, steps, marker):
+    def _run_steps(self, steps, marker, *, skip_singbox=False):
         """Execute gated typed readiness steps and record them in the marker.
 
         A step is ``(name, callable)``. ``reload_commands`` may override the
@@ -335,6 +404,18 @@ class ApplyEngine:
         tests can supply a fake or failing engine without touching systemd.
         """
         for name, action in steps:
+            if name == tproxy_apply.SINGBOX_PROCESS_STEP and skip_singbox:
+                from .singbox_service import SINGBOX_UNIT
+                try:
+                    active = self.executor.run(
+                        ['systemctl', 'is-active', '--quiet', SINGBOX_UNIT], 15
+                    ).returncode == 0
+                except (OSError, subprocess.SubprocessError):
+                    active = False
+                if active:
+                    marker['phases'][name] = 'applied'
+                    self.marker(marker)
+                    continue
             command = self.reload_commands.get(name, action)
             if callable(command):
                 command()
@@ -415,6 +496,15 @@ class ApplyEngine:
              'version_snapshot': json.loads(self.fs.read(APPLIED_DIR / 'snapshot.json'))}))
         for name, content in contents.items():
             self.fs.write(CONFIRMED_DIR / files[name], content)
+
+    def _confirmed_snapshot_is_live(self, backup):
+        """A confirmed safe-mode apply removes its marker, not its live files."""
+        try:
+            return (backup.get('version_id') == backup['version_snapshot'].get('id') and
+                    json.loads(self.fs.read(APPLIED_DIR / 'snapshot.json')) ==
+                    backup['version_snapshot'])
+        except (OSError, KeyError, TypeError, ValueError):
+            return False
 
     def reveal_secret(self, secret):
         import os
@@ -559,10 +649,20 @@ class ApplyEngine:
                 version, key=os.environ.get('VS_ROUTER_SECRET_KEY', '').encode()))
             if doh_files:
                 contents['dnscrypt'] = generate_dnscrypt(version)
+            trusted = (bool(tproxy_files) and backup is not None and
+                       ((previous is not None and previous.get('status') == 'confirmed' and
+                         backup.get('version_id') == previous.get('version_id') and
+                         isinstance(previous.get('phases'), dict)) or
+                        (previous is None and self._confirmed_snapshot_is_live(backup))))
+            trusted_phases = (previous['phases'] if trusted and previous is not None else
+                              {**{name: 'applied' for name in tproxy_files},
+                               tproxy_apply.SINGBOX_PROCESS_STEP: 'applied'} if trusted else None)
             self._install(contents, marker, apply_validators, files=apply_files,
                           steps=self._readiness_steps(version, doh_files),
                           steps_before=('tproxy_interception' if tproxy_files else
-                                        'unbound' if doh_files else None))
+                                        'unbound' if doh_files else None),
+                          trusted_files=backup['files'] if trusted and backup is not None else None,
+                          trusted_phases=trusted_phases)
             if pppoe_files:
                 _, peer_names = pppoe_apply.interfaces(contents['pppoe'])
                 if not pppoe_apply.wait_ready(self.executor, peer_names):

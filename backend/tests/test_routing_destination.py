@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from vs_router.generators.singbox import generate_singbox
+from vs_router.generators.singbox import (SUBSCRIBER_PEERS_RULE_SET_PATH,
+                                          SUBSCRIBER_PEERS_RULE_SET_TAG, generate_singbox)
 from vs_router.schema import ConfigurationVersion
 
 SECRET = {'encrypted': True, 'ciphertext': 'gAAAAplaceholder'}
@@ -82,7 +83,9 @@ def test_criterion_B3_1_rule_set_destination_family_flat():
     # The engine learns the set from the same document (ADR-0031).
     assert output['route']['rule_set'] == [
         {'type': 'remote', 'tag': 'geosite-category-porn', 'format': 'binary',
-         'url': 'https://example.org/porn.srs'}]
+         'url': 'https://example.org/porn.srs'},
+        {'type': 'local', 'tag': SUBSCRIBER_PEERS_RULE_SET_TAG, 'format': 'source',
+         'path': SUBSCRIBER_PEERS_RULE_SET_PATH}]
 
 
 def test_criterion_B3_2_rule_set_is_an_alternative_in_the_or():

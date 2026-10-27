@@ -36,6 +36,30 @@ IMPLICIT_DIRECT_TAG = "direct"
 DNS_STUB_TAG = "dns-in"
 IMPLICIT_BLOCK_TAG = "block"
 
+# Generator-owned local set. Apply must materialize this file before sing-box
+# validates/reloads the main config; membership-only updates replace this file
+# atomically instead of rewriting ``singbox.json``.
+SUBSCRIBER_PEERS_RULE_SET_TAG = "vs_subscriber_peers"
+SUBSCRIBER_PEERS_RULE_SET_PATH = "/etc/vs-router/applied/subscriber-peers.json"
+
+
+def _subscriber_peer_addresses(configuration: Configuration) -> list[str]:
+    """Return every subscriber peer CIDR in stable order."""
+    return sorted({address for tunnel in configuration.tunnels
+                   for peer in tunnel.peers if peer.subscriber is not None
+                   for address in peer.allowed_ips})
+
+
+def generate_subscriber_peers_rule_set(version: ConfigurationVersion) -> dict:
+    """Render sing-box source rule-set for dynamic subscriber membership.
+
+    Empty membership produces no headless rules. It must not produce a rule with
+    an empty ``source_ip_cidr`` because an empty matcher can become match-all.
+    """
+    addresses = _subscriber_peer_addresses(version.configuration)
+    rules = [{"source_ip_cidr": addresses}] if addresses else []
+    return {"version": 3, "rules": rules}
+
 
 def _tls_block(outbound):
     if not outbound.tls:
@@ -268,16 +292,15 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
             subject_match, destination, {"action": "route", "outbound": tag}))
 
     # Unmatched devices are rejected BEFORE legacy bypass/routing/defaults,
-    # including devices with no individual rule. The final outbound remains for
-    # non-device traffic only. Use the route reject action, not a legacy block
-    # outbound. Runtime fail-closed remains agent.tproxy_apply's guards/readiness
-    # ordering and the existing containment/kill-switch machinery; bind_interface
-    # is not a replacement for those protections if a tunnel/engine goes down.
-    device_addresses = sorted({address for tunnel in configuration.tunnels
-                               for peer in tunnel.peers if peer.subscriber is not None
-                               for address in peer.allowed_ips})
-    if device_addresses:
-        rules.append({"source_ip_cidr": device_addresses, "action": "reject"})
+    # including devices with no individual rule. The dynamic local rule-set
+    # keeps this main config stable when subscriber membership alone changes;
+    # apply owns atomic materialization/reload of its source file. The final
+    # outbound remains for non-device traffic only. Use the route reject action,
+    # not a legacy block outbound. Runtime fail-closed remains
+    # agent.tproxy_apply's guards/readiness ordering and the existing
+    # containment/kill-switch machinery; bind_interface is not a replacement
+    # for those protections if a tunnel/engine goes down.
+    rules.append({"rule_set": [SUBSCRIBER_PEERS_RULE_SET_TAG], "action": "reject"})
     return rules, list(bound_outbounds.values())
 
 
@@ -413,6 +436,10 @@ def generate_singbox(version: ConfigurationVersion,
                         for part in (rule, *rule.logical_rules) for name in part.rule_sets}
     referenced_sets |= {name for rule in configuration.tproxy.dns.rules for name in rule.rule_sets}
     declared = {source.name: source for source in configuration.rule_sets}
+    if SUBSCRIBER_PEERS_RULE_SET_TAG in declared:
+        # This tag identifies a generator-owned local file; accepting a user
+        # declaration with the same tag would redirect fail-closed matching.
+        raise ValueError("routing.ruleset_tag_reserved")
     rule_set_entries = []
     for name in sorted(referenced_sets):
         source = declared.get(name)
@@ -423,6 +450,13 @@ def generate_singbox(version: ConfigurationVersion,
             raise ValueError(f"routing.ruleset_format: {source.format}")
         rule_set_entries.append({"type": "remote", "tag": name,
                                  "format": engine_format, "url": source.url})
+    if configuration.routing_rules:
+        rule_set_entries.append({
+            "type": "local",
+            "tag": SUBSCRIBER_PEERS_RULE_SET_TAG,
+            "format": "source",
+            "path": SUBSCRIBER_PEERS_RULE_SET_PATH,
+        })
     if rule_set_entries:
         result["route"]["rule_set"] = rule_set_entries
     if dns_policy.servers:

@@ -1,23 +1,9 @@
 """Typed policy-route adapter for the TProxy capture mark.
 
-The TProxy capture path steers marked packets into a dedicated loopback routing
-table (``ip rule ... fwmark ... lookup N``) and makes them deliverable to the
-loopback TProxy listeners (``ip route add local 0.0.0.0/0 dev lo table N``).
-This module is the *only* place the agent turns that into a process invocation.
-
-Safety
-------
-* Every argument is a fixed keyword or an integer rendered from the single
-  ownership registry (:data:`generators.marks.POLICY_ROUTES`). No caller-supplied
-  string ever reaches ``argv``; ``argv`` is passed as a list, never a shell.
-* The registry values are re-validated (int type, range, TProxy mark namespace)
-  before any command is built, so a corrupted registry fails closed with a
-  ``ValueError`` instead of emitting a malformed rule.
-* A defence-in-depth token check rejects any argument that is not a fixed
-  keyword/integer (nothing is ever "repaired").
-* The loader is idempotent: it removes exactly the owned entries (a missing
-  entry is not an error) and then adds them, so a repeated apply converges to
-  one rule and one route.
+The loader observes the owned rule and route before changing them. Healthy
+entries stay live across repeated applies; only missing entries are added.
+Ambiguous/conflicting state fails closed rather than deleting an entry that may
+belong to another writer.
 """
 from __future__ import annotations
 
@@ -74,27 +60,112 @@ def commands(action: str = "add") -> tuple[tuple[str, ...], ...]:
     return tuple(tuple(argv) for argv in built)
 
 
+def _route_table_aliases(table_id: int) -> set[str]:
+    """Return exact iproute2 names for ``table_id``; malformed rows are ignored."""
+    aliases = {str(table_id)}
+    for path in ("/usr/lib/iproute2/rt_tables", "/etc/iproute2/rt_tables"):
+        try:
+            with open(path, encoding="utf-8") as registry:
+                for raw in registry:
+                    fields = raw.split("#", 1)[0].split()
+                    if len(fields) != 2:
+                        continue
+                    number, name = fields
+                    if number.isdecimal() and int(number) == table_id:
+                        if name and not any(char in _FORBIDDEN for char in name):
+                            aliases.add(name)
+        except OSError:
+            continue
+    return aliases
+
+
+def _rule_state(output: str, route: marks.PolicyRoute) -> bool:
+    """Recognize one exact owned rule; reject ambiguity in its priority slot."""
+    aliases = _route_table_aliases(route.table_id)
+    mark_forms = {f"{route.fwmark:#x}", f"{route.fwmark:#x}/0xffffffff"}
+    found = 0
+    for raw in output.splitlines():
+        fields = raw.split()
+        if not fields or fields[0] != f"{route.rule_priority}:":
+            continue
+        exact = (len(fields) == 7 and fields[1:4] == ["from", "all", "fwmark"]
+                 and fields[4] in mark_forms and fields[5] == "lookup"
+                 and fields[6] in aliases)
+        if not exact:
+            raise ApplyError("agent.reload_failed")
+        found += 1
+    if found > 1:
+        # Repeated identical lines cannot be removed one-at-a-time without a
+        # transient gap, nor distinguished from another writer's duplicate.
+        raise ApplyError("agent.reload_failed")
+    return found == 1
+
+
+def _route_state(output: str) -> bool:
+    """Recognize the sole semantic rendering of our local default route."""
+    lines = [line.split() for line in output.splitlines() if line.split()]
+    if not lines:
+        return False
+    exact = (["local", "default", "dev", "lo", "scope", "host"],
+             ["local", "0.0.0.0/0", "dev", "lo", "scope", "host"])
+    if len(lines) == 1 and lines[0] in exact:
+        return True
+    # Table is owned, but arbitrary routes cannot safely be attributed or
+    # reconstructed from host-rendered tokens. Never delete them blindly.
+    raise ApplyError("agent.reload_failed")
+
+
 class PolicyRouteLoader:
     """Executor-backed, idempotent application of the owned policy route."""
 
     def __init__(self, executor):
         self.executor = executor
 
+    def _result(self, argv: tuple[str, ...]):
+        result = self.executor.run(list(argv), 15)
+        if result.returncode:
+            raise ApplyError("agent.reload_failed")
+        return result
+
     def _run(self, argv: tuple[str, ...]) -> int:
         return self.executor.run(list(argv), 15).returncode
 
     def apply(self) -> None:
-        """Idempotently install the owned rule+route.
+        """Install only absent entries; never interrupt a healthy peer entry."""
+        # Build and validate every mutation before observing or changing host
+        # state. A malformed ownership registry therefore causes zero commands.
+        add_rule, add_route = commands("add")
+        route = marks.POLICY_ROUTES[0]
+        rule_probe = ("ip", "-4", "rule", "show")
+        route_probe = ("ip", "-4", "route", "show", "table", str(route.table_id))
 
-        Delete first (a missing entry is not an error), then add: this converges
-        to exactly one owned rule and route even if a previous apply was
-        interrupted. A failing ``add`` is a hard ``agent.reload_failed``.
-        """
-        for argv in commands("del"):
-            self._run(argv)
-        for argv in commands("add"):
-            if self._run(argv):
+        rule_result = self._result(rule_probe)
+        route_result = self.executor.run(list(route_probe), 15)
+        if route_result.returncode:
+            # iproute2 exits 2 when a never-used table has no FIB; this is a
+            # normal first-apply state, not a failed health probe.
+            error = getattr(route_result, "stderr", b"") or b""
+            if isinstance(error, bytes):
+                error = error.decode("utf-8", "replace")
+            if not (route_result.returncode == 2 and
+                    "FIB table does not exist" in error and
+                    not getattr(route_result, "stdout", None)):
                 raise ApplyError("agent.reload_failed")
+        rule_output = getattr(rule_result, "stdout", "") or ""
+        route_output = getattr(route_result, "stdout", "") or ""
+        if isinstance(rule_output, bytes):
+            rule_output = rule_output.decode("utf-8", "replace")
+        if isinstance(route_output, bytes):
+            route_output = route_output.decode("utf-8", "replace")
+        rule_present = _rule_state(rule_output, route)
+        route_present = _route_state(route_output)
+
+        # Route first: until rule exists it is inert. Installing rule first can
+        # steer marked packets into an empty table between the two commands.
+        for present, argv in ((route_present, add_route),
+                              (rule_present, add_rule)):
+            if not present:
+                self._result(argv)
 
     add = apply
 

@@ -49,7 +49,8 @@ def test_criterion_1_suffix_tunnel_detour_and_no_mutation():
     output = generate_singbox(parsed)
     assert output["dns"]["servers"][0]["detour"] == "routing-tunnel:client_vpn"
     assert "detour" not in output["dns"]["servers"][1]
-    assert output["route"]["rules"][-1]["outbound"] == "routing-tunnel:client_vpn"
+    assert {"domain_suffix": ["example.org"], "action": "route",
+            "outbound": "routing-tunnel:client_vpn"} in output["route"]["rules"]
     assert {"type": "direct", "tag": "routing-tunnel:client_vpn",
             "bind_interface": "wg1"} in output["outbounds"]
     assert parsed.model_dump_json() == before
@@ -61,7 +62,8 @@ def test_criterion_2_suffix_outbound_detour():
     data["routing_rules"] = [rule(target=PROXY_EXIT)]
     output = generate_singbox(version(data))
     assert output["dns"]["servers"][0]["detour"] == "remote"
-    assert output["route"]["rules"][-1]["outbound"] == "remote"
+    assert {"domain_suffix": ["example.org"], "action": "route",
+            "outbound": "remote"} in output["route"]["rules"]
     assert any(o["tag"] == "remote" for o in output["outbounds"])
 
 

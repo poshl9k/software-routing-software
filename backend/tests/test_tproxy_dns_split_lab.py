@@ -45,7 +45,7 @@ def test_dns_split_fixture_comes_from_the_integrated_contour():
     assert fixture["selected_uid"] == 29092
     assert fixture["apply_files"] == [
         "tproxy_guards", "tproxy_unbound_selected", "tproxy_unbound_ordinary",
-        "singbox", "tproxy_interception"]
+        "subscriber_peers", "singbox", "tproxy_interception"]
     # The three VM-probe guards are the exact phase-1 guard components.
     for content in (fixture["listener_guard"], fixture["direct_guard"],
                     fixture["output_guard"]):
