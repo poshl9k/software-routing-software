@@ -160,6 +160,11 @@ if (( ! SKIP_BUILD )); then
     fi
 fi
 
+# Build tools leave caches and dependency trees inside the staged checkout.
+# They are neither runtime inputs nor part of the pinned source, and may
+# contain symlinks or other members rejected by the installer's safe extractor.
+rm -rf -- "$stage/backend/.uv-cache" "$stage/frontend/node_modules"
+
 tar -czf "$OUT/$name" -C "$stage" .
 
 sha256=$(sha256sum "$OUT/$name" | awk '{print $1}')
