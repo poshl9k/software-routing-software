@@ -66,6 +66,10 @@ prepare_etc_dir() {
 # The directories exist regardless of mode: unit sandboxing (ProtectSystem with
 # ReadWritePaths) refuses to start when a listed path is missing.
 install -d -m 0700 /etc/vs-router-ssh /var/lib/vs-router-ssh /run/vs-router-ssh
+# The agent sandbox requires this state directory on both router and panel
+# profiles. ISO bootstrap creates it via installer-prepare.sh, while an online
+# panel install reaches install.sh directly.
+install -d -m 0700 /var/lib/vs-router-bootstrap
 if [ "${VS_ROUTER_KEEP_SSH:-0}" = "1" ]; then
     echo 'VS_ROUTER_KEEP_SSH=1: leaving sshd and its units untouched'
     # Tell the agent (which starts further down) to leave SSH alone: it reads
