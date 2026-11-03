@@ -97,7 +97,11 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
 # The tree of exactly this commit, plus the pinned REVISION at the root.
-git -C "$REPO_ROOT" archive --format=tar "$COMMIT" | tar -x -C "$stage"
+# Force LF in exported text files: on Windows, core.autocrlf=true otherwise
+# puts CRLF into shell scripts in the release tarball, which Debian /bin/sh
+# cannot execute. The release artifact must be host-independent.
+git -C "$REPO_ROOT" -c core.autocrlf=false -c core.eol=lf \
+    archive --format=tar "$COMMIT" | tar -x -C "$stage"
 printf '%s\n' "$COMMIT" > "$stage/REVISION"
 
 log()  { printf '[make-release] %s\n' "$*" >&2; }
