@@ -1,5 +1,24 @@
 # vs-router — программный роутер на Linux
 
+## Быстрая установка панели на VPS
+
+Для чистого VPS с Debian 13 установите `vs-panel` по SSH из последнего
+опубликованного релиза. Нужны root-доступ (или `sudo`), публичный IPv4 и
+доступные извне порты 80 и 443. Установщик сохраняет SSH-доступ.
+
+```sh
+apt-get update
+apt-get install -y git
+git clone https://github.com/poshl9k/software-routing-software.git
+cd software-routing-software
+sudo backend/packaging/install-release.sh \
+  --manifest https://github.com/poshl9k/software-routing-software/releases/latest/download/release.json
+```
+
+Установщик выберет выпуск из `release.json` и проверит SHA-256 архива и его
+ревизию. После завершения откройте URL панели, напечатанный установщиком.
+Подробности и параметры установки: [`docs/install.md`](docs/install.md#автономная-установка-панели-одной-командой-install-releasesh).
+
 Веб-панель управления сетевым роутером на Linux: сеть, DHCP, DNS, firewall, VPN-туннели, входящий прокси и DDNS — без ручного редактирования конфигурационных файлов. Ошибочное изменение откатывается из панели или автоматически по таймеру.
 
 - **Платформа:** Debian 13 (Ubuntu — в планах), systemd-networkd, nftables, Kea DHCPv4, Unbound, WireGuard / AmneziaWG, Caddy
