@@ -45,9 +45,15 @@ class Management(Model):
     @model_validator(mode='after')
     def valid_address(self):
         value = IPv4Interface(self.address)
+        # A VPS provider may assign its public address as a host route (/32)
+        # or point-to-point address (/31). Those are valid panel endpoints on
+        # single-uplink hosts; a separate LAN still needs a usable subnet.
+        narrow_subnet = self.mode == 'separate-lan' and value.network.prefixlen > 30
+        subnet_edge = (value.network.prefixlen <= 30
+                       and value.ip in (value.network.network_address,
+                                        value.network.broadcast_address))
         if (value.ip.is_unspecified or value.ip.is_loopback or value.ip.is_multicast
-                or value.ip.is_link_local or value.network.prefixlen > 30
-                or value.ip in (value.network.network_address, value.network.broadcast_address)):
+                or value.ip.is_link_local or narrow_subnet or subnet_edge):
             raise ValueError('management.invalid_address')
         return self
 

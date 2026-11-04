@@ -507,6 +507,20 @@ VPS = Management(interface='eth0', mac='02:00:00:00:00:01',
 RESERVE = VPS.model_copy(update={'hostname': '92.51.36.131.nip.io'})
 
 
+@pytest.mark.parametrize('prefix', [31, 32])
+def test_single_uplink_accepts_provider_host_prefixes(prefix):
+    state = Management(interface='net0', mac='02:00:00:00:00:04',
+                       address=f'193.233.136.4/{prefix}', mode='single-uplink')
+    assert state.ip == '193.233.136.4'
+
+
+@pytest.mark.parametrize('prefix', [31, 32])
+def test_separate_lan_rejects_provider_host_prefixes(prefix):
+    with pytest.raises(ValueError, match='management.invalid_address'):
+        Management(interface='eth1', mac='02:00:00:00:00:02',
+                   address=f'193.233.136.4/{prefix}', mode='separate-lan')
+
+
 def one_port(tmp_path):
     port = tmp_path / 'sys/class/net/eth0'
     (port / 'device').mkdir(parents=True)
