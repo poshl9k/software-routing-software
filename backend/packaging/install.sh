@@ -434,7 +434,9 @@ systemctl daemon-reload
 if [ "$PROFILE" = panel ]; then
     mkdir -p /var/lib/vs-router/portal
     (
-        cd /opt/vs-router/backend
+        packaging_root=${PACKAGING:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
+        backend_root=$(CDPATH= cd -- "$packaging_root/.." && pwd)
+        cd "$backend_root"
         VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db \
             python3 -m alembic -c alembic-portal/alembic.ini upgrade head
     )
