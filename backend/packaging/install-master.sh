@@ -21,7 +21,7 @@ fi
 # Keep the master runtime separate from the panel's system Python.
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3-venv ca-certificates >/dev/null
+apt-get install -y -qq python3-venv ca-certificates acl curl >/dev/null
 
 if ! id "$APP_USER" >/dev/null 2>&1; then
     useradd --system --home-dir /var/lib/vs-router --no-create-home --shell /usr/sbin/nologin "$APP_USER"
@@ -29,6 +29,10 @@ fi
 
 install -d -m 0750 -o "$APP_USER" -g "$APP_GROUP" "$BASE" "$BASE/ui"
 install -d -m 0700 -o "$APP_USER" -g "$APP_GROUP" "$BASE/backups"
+# The panel's parent data directory may be 0770 vs-router-web. Grant only
+# traversal to this separate user; do not expose panel DBs or change its group.
+setfacl -m "u:$APP_USER:--x" "$(dirname "$BASE")"
+runuser -u "$APP_USER" -- test -w "$BASE"
 install -d -m 0755 -o root -g root /opt/vs-master
 python3 -m venv "$VENV"
 "$VENV/bin/python" -m pip install --require-hashes -r "$SCRIPT_DIR/requirements-runtime.txt"
@@ -104,5 +108,14 @@ install -m 0644 "$SCRIPT_DIR/caddy-master.conf" "$BASE/caddy-master.example"
 systemctl is-active --quiet vs-master-web.service || { journalctl -u vs-master-web -n 20 --no-pager; exit 1; }
 systemctl is-active --quiet vs-master-worker.service || { journalctl -u vs-master-worker -n 20 --no-pager; exit 1; }
 systemctl is-active --quiet vs-master-bot.service || { journalctl -u vs-master-bot -n 20 --no-pager; exit 1; }
+ready=0
+for attempt in $(seq 1 20); do
+    if curl -fsS --max-time 2 http://127.0.0.1:8440/health >/dev/null 2>&1; then
+        ready=1
+        break
+    fi
+    sleep 1
+done
+[ "$ready" = 1 ] || { journalctl -u vs-master-web -n 20 --no-pager; exit 1; }
 echo "vs-master installed; probe: curl http://127.0.0.1:8440/health"
 echo "Caddy was not modified; review $BASE/caddy-master.example before publishing"

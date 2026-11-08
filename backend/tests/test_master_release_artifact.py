@@ -90,6 +90,8 @@ def test_master_installer_keeps_panel_python_and_caddy_untouched():
     assert '"$VENV/bin/python" -m pip' in installer
     assert '"$VENV/bin/python" -m alembic' in installer
     assert 'VENV=/opt/vs-master/venv' in installer
+    assert 'setfacl -m "u:$APP_USER:--x" "$(dirname "$BASE")"' in installer
+    assert 'chmod o+x' not in installer
     assert 'if [ ! -d "$ETC" ]' in installer
     assert 'master.env' in installer and 'secrets.env' not in installer
     assert 'existing master DB requires its original key' in installer
