@@ -28,7 +28,7 @@ export function NodesPage() {
 
   async function load() {
     setBusy(true); setError(null);
-    try { setNodes((await masterApi.nodes()).nodes); } catch (reason) { setError(reason); } finally { setBusy(false); }
+    try { setNodes(await masterApi.nodes()); } catch (reason) { setError(reason); } finally { setBusy(false); }
   }
   useEffect(() => { void load(); }, []);
 
@@ -36,7 +36,7 @@ export function NodesPage() {
     event?.preventDefault(); setWorking("create"); setError(null);
     try {
       const created = await masterApi.addNode({ name: name.trim(), bridge_url: url.trim(), capacity: Number(capacity) || 1 });
-      setIssuedToken({ name: created.node.name, token: created.token });
+      setIssuedToken({ name: created.name, token: created.token });
       setAdding(false); setName(""); setUrl(""); setCapacity("20");
       await load();
     } catch (reason) { setError(reason); } finally { setWorking(null); }
@@ -69,7 +69,7 @@ export function NodesPage() {
           {nodes.map(node => <Box className="device" key={node.id}>
             <Box className="device-main">
               <Box>
-                <Typography fontWeight={600}>{node.name} <StateChip state={node.state} /></Typography>
+                <Typography component="div" fontWeight={600}>{node.name} <StateChip state={node.state} /></Typography>
                 <Typography variant="body2" color="text.secondary">{node.bridge_url}</Typography>
                 <Typography variant="body2" color="text.secondary">
                   Ёмкость {node.capacity} · Активных устройств {node.active_peers}
@@ -119,7 +119,7 @@ export function TariffsPage() {
   const [editing, setEditing] = useState<(Partial<MasterTariff> & { id?: number }) | null>(null);
   const [working, setWorking] = useState<number | "save" | null>(null);
 
-  async function load() { setBusy(true); try { setTariffs((await masterApi.tariffs()).tariffs); } catch (reason) { setError(reason); } finally { setBusy(false); } }
+  async function load() { setBusy(true); try { setTariffs(await masterApi.tariffs()); } catch (reason) { setError(reason); } finally { setBusy(false); } }
   useEffect(() => { void load(); }, []);
 
   async function save(event?: FormEvent) {
@@ -136,7 +136,7 @@ export function TariffsPage() {
 
   return <Box>
     <Box className="section-head"><Typography variant="h2">Тарифы</Typography>
-      <Button variant="contained" onClick={() => setEditing({})}>Добавить тариф</Button></Box>
+      <Button variant="contained" onClick={() => setEditing({ device_limit: 1, term_days: 30, price_amount: null })}>Добавить тариф</Button></Box>
     <ErrorNotice error={error} />
     {busy && !tariffs.length ? <Box className="loading"><CircularProgress /></Box> :
       tariffs.length === 0 ? <Typography color="text.secondary">Тарифов пока нет.</Typography> :
@@ -187,14 +187,14 @@ export function SubscribersPage() {
   const [tariffId, setTariffId] = useState("");
   const [working, setWorking] = useState<string | null>(null);
 
-  async function load() { setBusy(true); try { setSubscribers((await masterApi.subscribers()).subscribers); } catch (reason) { setError(reason); } finally { setBusy(false); } }
+  async function load() { setBusy(true); try { setSubscribers(await masterApi.subscribers()); } catch (reason) { setError(reason); } finally { setBusy(false); } }
   useEffect(() => { void load(); }, []);
 
   async function openSubscriber(subscriber: MasterSubscriber) {
     setOpen(subscriber); setError(null);
     try {
       const [d, t] = await Promise.all([masterApi.subscriber(subscriber.id), masterApi.tariffs()]);
-      setDetail(d.subscriber); setDevices(d.devices); setTariffs(t.tariffs);
+      setDetail(d); setDevices(d.devices); setTariffs(t);
     } catch (reason) { setError(reason); }
   }
   async function assign(event?: FormEvent) {

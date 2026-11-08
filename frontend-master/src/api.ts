@@ -85,22 +85,23 @@ export const masterApi = {
   configureTelegram: (body: { bot_token: string; public_url: string }) =>
     masterRequest<MasterTelegramSettings>("/api/master-admin/settings/telegram",
       { method: "PUT", body: JSON.stringify(body) }),
-  nodes: () => masterRequest<{ nodes: MasterNode[] }>("/api/master-admin/nodes"),
+  nodes: () => masterRequest<MasterNode[]>("/api/master-admin/nodes"),
   addNode: (body: { name: string; bridge_url: string; capacity: number }) =>
-    masterRequest<{ node: MasterNode; token: string }>("/api/master-admin/nodes", { method: "POST", body: JSON.stringify(body) }),
+    masterRequest<MasterNode & { token: string }>("/api/master-admin/nodes", { method: "POST", body: JSON.stringify(body) }),
   updateNode: (id: number, body: { bridge_url?: string; capacity?: number; enabled?: boolean }) =>
-    masterRequest<{ node: MasterNode }>(`/api/master-admin/nodes/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    masterRequest<MasterNode>(`/api/master-admin/nodes/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   removeNode: (id: number) => masterRequest<void>(`/api/master-admin/nodes/${id}`, { method: "DELETE" }),
   rotateNodeToken: (id: number) =>
     masterRequest<{ rotated: boolean }>(`/api/master-admin/nodes/${id}/rotate-token`, { method: "POST" }),
-  tariffs: () => masterRequest<{ tariffs: MasterTariff[] }>("/api/master-admin/tariffs"),
+  tariffs: () => masterRequest<MasterTariff[]>("/api/master-admin/tariffs"),
   saveTariff: (body: Partial<MasterTariff> & { name?: string }) =>
-    masterRequest<{ tariff: MasterTariff }>(`/api/master-admin/tariffs${body.id ? `/${body.id}` : ""}`,
-      { method: body.id ? "PUT" : "POST", body: JSON.stringify(body) }),
+    masterRequest<MasterTariff>(`/api/master-admin/tariffs${body.id ? `/${body.id}` : ""}`,
+      { method: body.id ? "PUT" : "POST", body: JSON.stringify({ name: body.name,
+        device_limit: body.device_limit, term_days: body.term_days, price_amount: body.price_amount ?? null }) }),
   removeTariff: (id: number) => masterRequest<void>(`/api/master-admin/tariffs/${id}`, { method: "DELETE" }),
-  subscribers: () => masterRequest<{ subscribers: MasterSubscriber[] }>("/api/master-admin/subscribers"),
-  subscriber: (id: number) => masterRequest<{ subscriber: MasterSubscriber; devices: MasterDevice[] }>(`/api/master-admin/subscribers/${id}`),
+  subscribers: () => masterRequest<MasterSubscriber[]>("/api/master-admin/subscribers"),
+  subscriber: (id: number) => masterRequest<MasterSubscriber & { devices: MasterDevice[] }>(`/api/master-admin/subscribers/${id}`),
   assignSubscription: (id: number, body: { tariff_id: number; days?: number }) =>
-    masterRequest<{ subscription: MasterSubscriber["subscription"] }>(`/api/master-admin/subscribers/${id}/subscription`,
+    masterRequest<NonNullable<MasterSubscriber["subscription"]>>(`/api/master-admin/subscribers/${id}/subscription`,
       { method: "PUT", body: JSON.stringify(body) }),
 };
