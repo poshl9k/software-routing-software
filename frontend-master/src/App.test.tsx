@@ -88,3 +88,31 @@ test("active subscriber can create a device and download only an applied config"
   expect(await screen.findByText(/Ноутбук/)).toBeInTheDocument();
   expect(fetcher).toHaveBeenCalledWith("/api/portal/devices", expect.objectContaining({ method: "POST" }));
 });
+
+test("admin configures a separate master bot without echoing its token", async () => {
+  window.history.replaceState({}, "", "/");
+  const token = "synthetic-master-token-not-live";
+  let configured = false;
+  const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/master-admin/nodes") return new Response(JSON.stringify({ nodes: [] }), { status: 200 });
+    if (input === "/api/master-admin/settings/telegram" && !init?.method) {
+      return new Response(JSON.stringify({ configured, public_url: configured ? "https://my.poshl9k.ru" : null }), { status: 200 });
+    }
+    if (input === "/api/master-admin/settings/telegram" && init?.method === "PUT") {
+      expect(JSON.parse(String(init.body))).toEqual({ bot_token: token, public_url: "https://my.poshl9k.ru" });
+      configured = true;
+      return new Response(JSON.stringify({ configured, public_url: "https://my.poshl9k.ru" }), { status: 200 });
+    }
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+  await userEvent.click(await screen.findByRole("tab", { name: "Telegram" }));
+  expect(await screen.findByText("Бот не настроен")).toBeInTheDocument();
+  await userEvent.type(screen.getByRole("textbox", { name: /Публичный адрес портала/ }), "https://my.poshl9k.ru");
+  await userEvent.type(screen.getByLabelText(/Токен отдельного мастер-бота/), token);
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  expect(await screen.findByText("Бот настроен")).toBeInTheDocument();
+  expect(screen.getByLabelText(/Токен отдельного мастер-бота/)).toHaveValue("");
+  expect(screen.queryByText(token)).not.toBeInTheDocument();
+});

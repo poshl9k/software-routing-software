@@ -43,6 +43,7 @@ export type MasterTariff = {
   id: number; name: string; device_limit: number; term_days: number;
   price_amount: number | null; created_at: string;
 };
+export type MasterTelegramSettings = { configured: boolean; public_url: string | null };
 export type MasterSubscriber = {
   id: number; display_name: string; telegram_chat_id: string; status: string;
   subscription: { tariff_id: number; tariff_name: string; expires_at: string; status: string } | null;
@@ -80,6 +81,10 @@ export const masterApi = {
   setup: (password: string) => masterRequest<void>("/api/admin/setup", { method: "POST", body: JSON.stringify({ password }) }),
   login: (password: string) => masterRequest<void>("/api/admin/login", { method: "POST", body: JSON.stringify({ password }) }),
   logout: () => masterRequest<void>("/api/admin/logout", { method: "POST" }),
+  telegramSettings: () => masterRequest<MasterTelegramSettings>("/api/master-admin/settings/telegram"),
+  configureTelegram: (body: { bot_token: string; public_url: string }) =>
+    masterRequest<MasterTelegramSettings>("/api/master-admin/settings/telegram",
+      { method: "PUT", body: JSON.stringify(body) }),
   nodes: () => masterRequest<{ nodes: MasterNode[] }>("/api/master-admin/nodes"),
   addNode: (body: { name: string; bridge_url: string; capacity: number }) =>
     masterRequest<{ node: MasterNode; token: string }>("/api/master-admin/nodes", { method: "POST", body: JSON.stringify(body) }),

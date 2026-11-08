@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { MasterApiError, masterApi } from "./api";
 import { NodesPage, SubscribersPage, TariffsPage } from "./pages";
+import { TelegramPage } from "./TelegramPage";
 import { MagicSignIn, PortalHome, PortalLogin } from "./SubscriberPortal";
 import { takeMagicProof } from "./magic";
 import { globalStyles, theme } from "../theme";
@@ -45,7 +46,7 @@ function AuthForm({ setup = false }: { setup?: boolean }) {
 function Dashboard() {
   const navigate = useNavigate();
   const [ready, setReady] = useState<boolean | null>(null);
-  const [tab, setTab] = useState<"nodes" | "subscribers" | "tariffs">("nodes");
+  const [tab, setTab] = useState<"nodes" | "subscribers" | "tariffs" | "telegram">("nodes");
   useEffect(() => {
     masterApi.nodes().then(() => { setReady(true); }).catch((reason) => {
       if (reason instanceof MasterApiError && reason.status === 401) navigate("/login", { replace: true });
@@ -65,9 +66,10 @@ function Dashboard() {
       <Button role="tab" aria-selected={tab === "nodes"} variant={tab === "nodes" ? "contained" : "text"} onClick={() => setTab("nodes")}>Ноды</Button>
       <Button role="tab" aria-selected={tab === "subscribers"} variant={tab === "subscribers" ? "contained" : "text"} onClick={() => setTab("subscribers")}>Абоненты</Button>
       <Button role="tab" aria-selected={tab === "tariffs"} variant={tab === "tariffs" ? "contained" : "text"} onClick={() => setTab("tariffs")}>Тарифы</Button>
+      <Button role="tab" aria-selected={tab === "telegram"} variant={tab === "telegram" ? "contained" : "text"} onClick={() => setTab("telegram")}>Telegram</Button>
     </Box>
     {ready === null && <Box className="loading"><CircularProgress /></Box>}
-    {ready === true && (tab === "nodes" ? <NodesPage /> : tab === "subscribers" ? <SubscribersPage /> : <TariffsPage />)}
+    {ready === true && (tab === "nodes" ? <NodesPage /> : tab === "subscribers" ? <SubscribersPage /> : tab === "tariffs" ? <TariffsPage /> : <TelegramPage />)}
   </Box></Box>;
 }
 
