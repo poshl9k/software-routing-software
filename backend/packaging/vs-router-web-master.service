@@ -1,0 +1,21 @@
+[Unit]
+Description=vs-router master-only node bridge
+After=network.target vs-router-web.service
+Requires=vs-router-web.service
+
+[Service]
+User=vs-router-web
+Group=vs-router-web
+EnvironmentFile=-/etc/vs-router/secrets.env
+Environment=VS_PORTAL_DATABASE_URL=sqlite:////var/lib/vs-router/portal/vs-portal.db
+Environment=VS_ROUTER_DATABASE_URL=sqlite:////var/lib/vs-router/vs-router.db
+WorkingDirectory=/var/lib/vs-router
+ExecStart=/usr/bin/python3 -m uvicorn vs_router.master_bridge_app:app --uds /run/vs-router/web/master.sock
+ExecStartPost=/bin/sh -c 'i=0; while [ $i -lt 20 ] && [ ! -S /run/vs-router/web/master.sock ]; do sleep 0.5; i=$((i+1)); done; chmod 0660 /run/vs-router/web/master.sock; chgrp vs-router-web /run/vs-router/web/master.sock'
+Restart=on-failure
+UMask=0007
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vs-router /run/vs-router/web
+
+[Install]
+WantedBy=multi-user.target

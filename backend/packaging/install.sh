@@ -219,6 +219,10 @@ if [ "$PROFILE" = panel ]; then
 fi
 install -d -m 0755 /usr/local/libexec/vs-router
 install -m 0644 "$packaging_dir/reconcile-networkd-boot.py" /usr/local/libexec/vs-router/reconcile-networkd-boot.py
+if [ "$PROFILE" = panel ]; then
+    install -m 0755 "$packaging_dir/master-bridge-token-bootstrap.sh" \
+        /usr/local/libexec/vs-router/master-bridge-token-bootstrap
+fi
 install -m 0644 "$packaging_dir/vs-router.conf" /etc/tmpfiles.d/vs-router.conf
 install -m 0644 "$packaging_dir/90-vs-router-forward.conf" /etc/sysctl.d/90-vs-router-forward.conf
 sysctl -w net.ipv4.ip_forward=1
@@ -229,7 +233,7 @@ if [ ! -f "$DB" ]; then
     install -m 0660 -o vs-router-web -g vs-router-web /dev/null "$DB"
 fi
 # Always migrate the installed DB, including reruns. Stop writers first.
-systemctl stop vs-router-web.service vs-router-agent.service
+systemctl stop vs-router-web.service vs-router-agent.service vs-router-web-master.service
 VS_ROUTER_DATABASE_URL="sqlite:///$DB" python3 -m alembic -c "$packaging_dir/../alembic.ini" upgrade head
 chown vs-router-web:vs-router-web "$DB"
 chmod 0660 "$DB"
@@ -458,9 +462,10 @@ if [ "$PROFILE" = panel ]; then
     chmod 0660 /var/lib/vs-router/portal/vs-portal.db \
         /var/lib/vs-router/portal/vs-portal.db-wal \
         /var/lib/vs-router/portal/vs-portal.db-shm 2>/dev/null || true
-    systemctl enable vs-router-portal.service vs-router-web-internal.service
-    systemctl restart vs-router-portal.service vs-router-web-internal.service
+    systemctl enable vs-router-portal.service vs-router-web-internal.service vs-router-web-master.service
+    systemctl restart vs-router-portal.service vs-router-web-internal.service vs-router-web-master.service
     systemctl is-active --quiet vs-router-portal.service
+    systemctl is-active --quiet vs-router-web-master.service
 fi
 # Telegram worker is panel-only; share the portal DB group (including WAL files).
 if [ "$PROFILE" = panel ]; then

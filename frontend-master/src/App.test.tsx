@@ -135,7 +135,7 @@ test("admin renders the bare-list responses returned by the master API", async (
 
 test("admin accepts a flat node creation response and shows its one-time token", async () => {
   window.history.replaceState({}, "", "/");
-  const node = { id: 5, name: "rg-test", bridge_url: "https://rg-test.example/internal",
+  const node = { id: 5, name: "rg3", bridge_url: "https://rg3.poshl9k.ru",
     capacity: 20, enabled: true, state: "down", active_peers: 0, last_seen: null };
   let nodes: typeof node[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
@@ -150,11 +150,13 @@ test("admin accepts a flat node creation response and shows its one-time token",
   }));
   render(<App />);
   await userEvent.click(await screen.findByRole("button", { name: "Добавить ноду" }));
+  expect(screen.getByRole("textbox", { name: /Bridge URL ноды/ })).toHaveAttribute("placeholder", "https://rg3.poshl9k.ru");
   await userEvent.type(screen.getByRole("textbox", { name: /Имя ноды/ }), node.name);
   await userEvent.type(screen.getByRole("textbox", { name: /Bridge URL ноды/ }), node.bridge_url);
   await userEvent.click(screen.getByRole("button", { name: "Создать" }));
   expect(await screen.findByText("synthetic-one-time-token")).toBeInTheDocument();
   expect(screen.getByRole("dialog", { name: `Токен ноды ${node.name}` })).toBeInTheDocument();
+  expect(screen.getByText(/vs-master-rg3/)).toBeInTheDocument();
 });
 
 test("admin opens subscriber detail and its tariffs with flat API responses", async () => {

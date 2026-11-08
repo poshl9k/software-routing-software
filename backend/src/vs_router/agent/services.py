@@ -1,6 +1,7 @@
 """Live service adapters; commands and HTTP transport are injectable."""
 import base64
 import json
+import logging
 import queue
 import re
 import socket
@@ -648,8 +649,25 @@ class CaddyReloader:
 
     def install(self, path):
         from ..generators.caddy import deserialize_caddy
+        from .master_bridge_publication import MARKER, publish_bridge
         files = deserialize_caddy(self.fs.read(path))
-        json.loads(files['caddy.json'])
+        config = json.loads(files['caddy.json'])
+        try:
+            marker = json.loads(self.fs.read(MARKER))
+        except (FileNotFoundError, KeyError):
+            pass
+        except (OSError, UnicodeError, ValueError):
+            logging.getLogger(__name__).warning('Master bridge publication skipped: unreadable marker')
+        else:
+            try:
+                config = publish_bridge(config, marker)
+            except (ValueError, TypeError, KeyError):
+                # The bridge is optional host metadata, not part of the
+                # confirmed configuration. An older rollback snapshot may no
+                # longer have this TLS name: drop the bridge, not the panel.
+                logging.getLogger(__name__).warning('Master bridge publication skipped: incompatible marker or snapshot')
+            else:
+                files['caddy.json'] = json.dumps(config, indent=2, sort_keys=True) + '\n'
         for name, content in files.items():
             if name != 'caddy.json':
                 if not name.endswith(('.crt', '.key')):

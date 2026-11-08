@@ -24,7 +24,7 @@ export function NodesPage() {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [capacity, setCapacity] = useState("20");
-  const [issuedToken, setIssuedToken] = useState<{ name: string; token: string } | null>(null);
+  const [issuedToken, setIssuedToken] = useState<{ name: string; token: string; bridgeUrl: string } | null>(null);
 
   async function load() {
     setBusy(true); setError(null);
@@ -36,7 +36,7 @@ export function NodesPage() {
     event?.preventDefault(); setWorking("create"); setError(null);
     try {
       const created = await masterApi.addNode({ name: name.trim(), bridge_url: url.trim(), capacity: Number(capacity) || 1 });
-      setIssuedToken({ name: created.name, token: created.token });
+      setIssuedToken({ name: created.name, token: created.token, bridgeUrl: created.bridge_url });
       setAdding(false); setName(""); setUrl(""); setCapacity("20");
       await load();
     } catch (reason) { setError(reason); } finally { setWorking(null); }
@@ -93,7 +93,7 @@ export function NodesPage() {
       <DialogContent>
         <Box component="form" onSubmit={add} className="form" sx={{ mt: 1 }}>
           <TextField label="Имя ноды" value={name} onChange={e => setName(e.target.value)} required fullWidth autoFocus />
-          <TextField label="Bridge URL ноды" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://rg2.example/internal" required fullWidth />
+          <TextField label="Bridge URL ноды" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://rg3.poshl9k.ru" required fullWidth />
           <TextField label="Ёмкость (активных устройств)" type="number" value={capacity} onChange={e => setCapacity(e.target.value)} inputProps={{ min: 1 }} required fullWidth />
         </Box>
       </DialogContent>
@@ -104,8 +104,14 @@ export function NodesPage() {
     <Dialog open={issuedToken !== null} onClose={() => setIssuedToken(null)} aria-labelledby="token-title" fullWidth maxWidth="sm">
       <DialogTitle id="token-title">Токен ноды {issuedToken?.name}</DialogTitle>
       <DialogContent>
-        <Alert severity="warning" sx={{ mb: 2 }}>Токен показывается один раз. Запишите его — он нужен для онбординга ноды.</Alert>
+        <Alert severity="warning" sx={{ mb: 2 }}>Токен показывается один раз. Не отправляйте его в чат: сохраните и установите на указанной ноде.</Alert>
         <Typography sx={{ wordBreak: "break-all", fontFamily: "monospace" }}>{issuedToken?.token}</Typography>
+        {issuedToken?.bridgeUrl === "https://rg3.poshl9k.ru" && <>
+          <Typography variant="body2" sx={{ mt: 2 }}>Для rg3 выполните в терминале мастер-ноды от root:</Typography>
+          <Typography component="pre" variant="body2" sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word", mt: 1, fontFamily: "monospace" }}>
+            {"read -r -s -p 'Токен ноды: ' token; echo\nprintf '%s\\n' \"$token\" | ssh -i /root/.ssh/vs-master-rg3 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes root@rg3.poshl9k.ru\nunset token"}
+          </Typography>
+        </>}
       </DialogContent>
       <DialogActions><Button variant="contained" onClick={() => setIssuedToken(null)}>Записал</Button></DialogActions>
     </Dialog>

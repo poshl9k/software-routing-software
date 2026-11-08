@@ -490,6 +490,22 @@ def test_apply_bundles_and_rollback(config):
     assert fs.read(Path('/etc/vs-router/wireguard/vpn.conf')) == original
 
 
+def test_rollback_restores_panel_when_master_bridge_marker_has_old_hostname(config):
+    from vs_router.agent.master_bridge_publication import MARKER
+    fs, executor = FakeFS(), FakeExecutor()
+    def http(*args, **kwargs):
+        response = io.BytesIO(b'')
+        setattr(response, 'status', 200)
+        return response
+    engine = ApplyEngine(filesystem=fs, executor=executor, reload_commands={
+        'wireguard': WireGuardReloader(executor, fs), 'caddy': CaddyReloader(executor, fs, http)})
+    assert engine.apply_version(config).status == 'confirmed'
+    fs.write(MARKER, json.dumps({'hostname': 'rg3.poshl9k.ru', 'source_ip': '85.209.159.130'}))
+    assert engine.apply_version({'id': 2, 'configuration': {}}, True).status == 'pending'
+    assert engine.rollback('old-hostname').status == 'rolled_back'
+    assert 'master.sock' not in fs.read(Path('/etc/caddy/caddy.json'))
+
+
 def test_apply_rollback_restores_opted_in_tunnel_route(config):
     fs, executor = FakeFS(), FakeExecutor()
     tunnel = config['configuration']['tunnels'][0]
