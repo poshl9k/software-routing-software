@@ -47,6 +47,30 @@ async def initialize(client):
     return response
 
 
+async def test_master_bot_settings_are_admin_only_encrypted_and_redacted(master):
+    client, engine, _, key, _ = master
+    token = '123456:synthetic-master-bot-token-not-live'
+    path = '/api/master-admin/settings/telegram'
+    body = {'bot_token': token, 'public_url': 'https://my.example'}
+    assert (await client.put(path, json=body)).status_code == 401
+    await initialize(client)
+    assert (await client.put(path, json={**body, 'public_url': 'http://bad.example'})).status_code == 422
+    result = await client.put(path, json=body)
+    assert result.status_code == 200
+    assert result.json() == {'configured': True, 'public_url': 'https://my.example'}
+    assert token not in result.text
+    listed = await client.get(path)
+    assert listed.json() == result.json()
+    with Session(engine) as db:
+        row = db.get(Setting, 'master_bot_token')
+        assert row is not None
+        assert token not in row.value
+        assert row.value.startswith('enc:')
+        from vs_router.schema import EncryptedSecret
+        assert decrypt_secret(EncryptedSecret(ciphertext=row.value[4:]), key) == token
+        assert any(item.action == 'master.bot.configure' for item in db.scalars(select(Audit)))
+
+
 async def create_tariff(client, name='Base', *, limit=3, days=30, price=9.99):
     response = await client.post('/api/master-admin/tariffs', json={
         'name': name, 'device_limit': limit, 'term_days': days, 'price_amount': price})

@@ -53,16 +53,16 @@ class BridgeClient:
 
     def state(self, subscriber: str):
         """Subscriber devices, subscription echo, and tunnel export state."""
-        return self._request('GET', f'/internal/portal/subscribers/{subscriber}/state')
+        return self._request('GET', f'/internal/master/subscribers/{subscriber}/state')
 
     def device_op(self, subscriber: str, payload: dict):
-        return self._request('POST', f'/internal/portal/subscribers/{subscriber}/device-op', payload)
+        return self._request('POST', f'/internal/master/subscribers/{subscriber}/device-op', payload)
 
-    def expire(self, subscriber: str):
-        return self._request('POST', f'/internal/portal/subscribers/{subscriber}/expire', {})
+    def expire(self, subscriber: str, payload: dict):
+        return self._request('POST', f'/internal/master/subscribers/{subscriber}/expire', payload)
 
-    def renew(self, subscriber: str):
-        return self._request('POST', f'/internal/portal/subscribers/{subscriber}/renew', {})
+    def renew(self, subscriber: str, payload: dict):
+        return self._request('POST', f'/internal/master/subscribers/{subscriber}/renew', payload)
 
     def rotate(self, new_token: str, token=None):
         return self._request('POST', '/internal/master/token-rotate',

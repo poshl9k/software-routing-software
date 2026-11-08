@@ -1,0 +1,16 @@
+[Unit]
+Description=Consistent local backup of vs-master SQLite
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=vs-master-web
+Group=vs-master-web
+WorkingDirectory=/var/lib/vs-router/master
+Environment=VS_MASTER_DATABASE_URL=sqlite:////var/lib/vs-router/master/vs-master.db
+ExecStart=/opt/vs-master/venv/bin/python -m vs_master.backup
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/vs-router/master/backups

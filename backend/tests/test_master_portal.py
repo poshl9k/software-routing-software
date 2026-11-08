@@ -257,6 +257,7 @@ async def test_criterion_8_expired_subscription_blocks_all_mutations_me_works(ma
     client, engine, clock, *_ = master_portal
     active_id = add_device(master_portal, name='active-one')
     inactive_id = add_device(master_portal, status='inactive', name='inactive-one')
+    master_portal[5][('https://n1', f"s{master_portal[-1]['account']}")] = tunnel_state()
     await login(master_portal)
     with Session(engine) as db:
         subscription = db.scalar(select(Subscription))
@@ -267,7 +268,9 @@ async def test_criterion_8_expired_subscription_blocks_all_mutations_me_works(ma
         await client.delete(f'/api/portal/devices/{active_id}'),
         await client.post(f'/api/portal/devices/{inactive_id}/activate'),
         await client.post(f'/api/portal/devices/{active_id}/deactivate'),
+        await client.get(f'/api/portal/devices/{active_id}/export?format=conf'),
     ]
+    assert responses[-1].status_code == 403, 'expired account must not retrieve private config'
     assert all(response.status_code == 403 for response in responses)
     assert all(response.json()['error']['code'] == 'portal.subscription_expired'
                for response in responses)

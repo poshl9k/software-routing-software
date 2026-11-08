@@ -16,7 +16,7 @@ from vs_router.secrets import decrypt_secret, encrypt_secret
 
 from .accounts import current_account, get_db
 from .models import Account, Node
-from .portal_api import device_owned, subscriber_state
+from .portal_api import device_owned, live_subscription, subscriber_state
 
 router = APIRouter(prefix='/api/portal', dependencies=[Depends(current_account)])
 
@@ -130,6 +130,7 @@ def export_device(identity: str, request: Request, format: str = Query('conf'),
                   account: Account = Depends(current_account), db: Session = Depends(get_db)):
     if format not in ('conf', 'qr', 'amnezia'):
         raise APIError(422, 'portal.export_format')
+    live_subscription(db, account.id, request.app.state.portal_auth.now())
     device = device_owned(db, identity, account.id)
     node = db.get(Node, device.node_id)
     if node is None:

@@ -22,7 +22,7 @@ from datetime import datetime
 import os
 
 from sqlalchemy import (JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String,
-                        UniqueConstraint, create_engine, event)
+                        Index, UniqueConstraint, create_engine, event)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.pool import StaticPool
 
@@ -64,9 +64,34 @@ class Account(Base):
     # Display text only; uniqueness is NOT required (D4).
     display_name: Mapped[str] = mapped_column(String(64), nullable=False)
     telegram_chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Only a verified private /start establishes notification consent/routing.
+    telegram_linked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    telegram_linked_chat_id: Mapped[str | None] = mapped_column(String(64))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(8), nullable=False, default='active')
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+
+class MagicLogin(Base):
+    """Short-lived, single-use proof sent only to the account's Telegram chat."""
+    __tablename__ = 'master_magic_logins'
+    __table_args__ = (Index('ix_master_magic_account', 'account_id'),)
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey('master_accounts.id'), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class PaymentReceipt(Base):
+    """Unexpected Telegram charges; no entitlement until manual reconciliation."""
+    __tablename__ = 'master_payment_receipts'
+    __table_args__ = (CheckConstraint('amount > 0', name='ck_master_receipt_amount'),)
+    telegram_charge_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    payer_chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
 class Tariff(Base):
@@ -92,6 +117,32 @@ class Subscription(Base):
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     status: Mapped[str] = mapped_column(String(8), nullable=False, default='active')
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    notification_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default='0')
+
+
+class SubscriptionNotification(Base):
+    """Transactional outbox; claims expire so a crashed sender cannot lose events."""
+    __tablename__ = 'master_subscription_notifications'
+    __table_args__ = (
+        UniqueConstraint('subscription_id', 'revision', 'kind', name='uq_master_notification_event'),
+        CheckConstraint("kind IN ('active', 'expired')", name='ck_master_notification_kind'),
+        CheckConstraint("status IN ('pending', 'delivered', 'suppressed')", name='ck_master_notification_status'),
+        CheckConstraint('revision >= 0 AND attempts >= 0', name='ck_master_notification_counters'),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey('master_subscriptions.id'), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default='pending')
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    claim_token: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    message_id: Mapped[int | None] = mapped_column(Integer)
 
 
 class Device(Base):

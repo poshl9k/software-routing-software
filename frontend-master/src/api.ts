@@ -25,7 +25,7 @@ export async function masterRequest<T>(path: `/api/${string}`, init: RequestInit
   if (!response.ok) {
     const payload = body as MasterErrorBody | undefined;
     const code = payload?.error?.code ?? payload?.code ?? `http.${response.status}`;
-    if (response.status === 401 && location.pathname !== "/login" && !redirecting) {
+    if (response.status === 401 && !path.startsWith("/api/portal/") && location.pathname !== "/login" && !redirecting) {
       redirecting = true;
       location.assign("/login");
     }
@@ -51,6 +51,29 @@ export type MasterSubscriber = {
 export type MasterDevice = {
   id: number; label: string; name: string | null; node_name: string;
   status: string; allowed_ips: string[];
+};
+
+export type PortalAccount = { id: number; display_name: string };
+export type PortalMe = {
+  account: PortalAccount;
+  subscription: { status: "active" | "expired"; expires_at: string; tariff: { name: string } | null } | null;
+};
+export type PortalDevice = {
+  id: number; name: string | null; label: string; status: string;
+  allowed_ips: string[]; applied: boolean; last_handshake: number | null;
+  pending_op?: string;
+};
+export type PortalDevices = { devices: PortalDevice[] };
+
+export const portalApi = {
+  magic: (token: string) => masterRequest<PortalAccount>("/api/portal/login/magic", {
+    method: "POST", body: JSON.stringify({ token }),
+  }),
+  me: () => masterRequest<PortalMe>("/api/portal/me"),
+  devices: () => masterRequest<PortalDevices>("/api/portal/devices"),
+  createDevice: (label: string) => masterRequest<{ status: string; operation_id: number; device_id: number }>(
+    "/api/portal/devices", { method: "POST", body: JSON.stringify({ label }) }),
+  logout: () => masterRequest<void>("/api/portal/logout", { method: "POST" }),
 };
 
 export const masterApi = {

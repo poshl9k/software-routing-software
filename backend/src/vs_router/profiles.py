@@ -33,12 +33,16 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_master.admin_api': 'master',
     'vs_master.app': 'master',
     'vs_master.auth': 'master',
+    'vs_master.backup': 'master',
     'vs_master.bridge': 'master',
     'vs_master.exports': 'master',
     'vs_master.migrate_node': 'master',
     'vs_master.models': 'master',
+    'vs_master.notifications': 'master',
     'vs_master.portal_api': 'master',
     'vs_master.worker': 'master',
+    'vs_master.worker_main': 'master',
+    'vs_master.telegram_bot': 'master',
     'vs_portal.errors': 'panel',
     'vs_portal.models': 'panel',
     'vs_portal.security': 'panel',
@@ -160,6 +164,10 @@ KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
         'Master portal uses the shared public error contract.',
     ('vs_master.portal_api', 'vs_router.secrets'):
         'Master portal decrypts persisted node bridge credentials.',
+    ('vs_master.telegram_bot', 'vs_router.schema'):
+        'Master bot uses the shared encrypted-secret schema to read its configured token.',
+    ('vs_master.telegram_bot', 'vs_router.secrets'):
+        'Master bot decrypts its token from master-owned encrypted settings.',
     ('vs_master.migrate_node', 'vs_portal.models'):
         'Migration reads the node portal schema it copies into the master.',
     ('vs_master.migrate_node', 'vs_router.secrets'):

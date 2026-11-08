@@ -1,23 +1,26 @@
 """Subscriber authentication for the master-owned public portal."""
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from threading import RLock
 
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
-from sqlalchemy import select
+from sqlalchemy import delete, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from vs_router.api.errors import APIError
 
-from .models import Account, Audit, Subscription, Tariff
+from .models import Account, Audit, MagicLogin, Subscription, Tariff
 
 COOKIE = 'vs_master_portal_session'
 TTL = 8 * 60 * 60
 LOGIN_WINDOW = 15 * 60
+MAGIC_TTL = 10 * 60
 router = APIRouter()
 
 
@@ -28,6 +31,71 @@ class Payload(BaseModel):
 class Credentials(Payload):
     username: str = Field(min_length=1, max_length=64)
     password: SecretStr = Field(min_length=1, max_length=1024)
+
+
+class MagicProof(Payload):
+    token: SecretStr = Field(min_length=1, max_length=128)
+
+
+def register_telegram(engine, message):
+    """Accept only a private Bot API message whose sender owns its chat ID."""
+    if not isinstance(message, dict) or message.get('text') != '/start':
+        return None
+    chat, sender = message.get('chat'), message.get('from')
+    if not isinstance(chat, dict) or not isinstance(sender, dict):
+        return None
+    identity = chat.get('id')
+    if (chat.get('type') != 'private' or type(identity) is not int or identity <= 0
+            or type(sender.get('id')) is not int or sender['id'] != identity):
+        return None
+    parts = [sender.get('first_name'), sender.get('last_name')]
+    display = ' '.join(part.strip() for part in parts if isinstance(part, str) and part.strip())
+    if not display:
+        username = sender.get('username')
+        display = username.strip() if isinstance(username, str) and username.strip() else f'tg{identity}'
+    with Session(engine) as db:
+        if db.get_bind().dialect.name == 'sqlite':
+            db.execute(text('BEGIN IMMEDIATE'))
+        account = db.scalar(select(Account).where(Account.telegram_chat_id == str(identity)))
+        if account is not None:
+            if account.status != 'active':
+                return None
+            if account.telegram_linked_at is None or account.telegram_linked_chat_id != str(identity):
+                account.telegram_linked_at = datetime.now(timezone.utc)
+                account.telegram_linked_chat_id = str(identity)
+                db.commit()
+            return account.id, False
+        account = Account(display_name=display[:64], telegram_chat_id=str(identity),
+                          telegram_linked_at=datetime.now(timezone.utc),
+                          telegram_linked_chat_id=str(identity),
+                          password_hash=PasswordHasher(type=Type.ID).hash(secrets.token_urlsafe(32)))
+        db.add(account)
+        db.flush()
+        db.add(Audit(actor=str(identity), action='portal.telegram.register', detail=str(account.id)))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            existing = db.scalar(select(Account).where(Account.telegram_chat_id == str(identity)))
+            return (existing.id, False) if existing is not None and existing.status == 'active' else None
+        return account.id, True
+
+
+def issue_magic_token(engine, account_id: int, now: datetime) -> str:
+    """Create one proof for a verified Telegram identity; never store raw tokens."""
+    with Session(engine) as db:
+        if db.get_bind().dialect.name == 'sqlite':
+            db.execute(text('BEGIN IMMEDIATE'))
+        account = db.get(Account, account_id)
+        if account is None or account.status != 'active':
+            db.rollback()
+            raise APIError(403, 'auth.forbidden')
+        token = secrets.token_urlsafe(32)
+        db.execute(delete(MagicLogin).where(MagicLogin.account_id == account.id))
+        db.add(MagicLogin(token_hash=sha256(token.encode()).hexdigest(),
+                          account_id=account.id, expires_at=now + timedelta(seconds=MAGIC_TTL)))
+        db.commit()
+        return token
 
 
 class AuthState:
@@ -131,6 +199,40 @@ def login(body: Credentials, request: Request, response: Response,
         token = secrets.token_urlsafe(32)
         state.sessions[token] = (account.id, state.tick() + TTL)
     response.set_cookie(COOKIE, token, max_age=TTL, httponly=True, secure=True,
+                        samesite='lax', path='/')
+    return public_account(account)
+
+
+@router.post('/login/magic')
+def login_magic(body: MagicProof, request: Request, response: Response,
+                db: Session = Depends(get_db)):
+    state = request.app.state.portal_auth
+    address = request.client.host if request.client else 'unknown'
+    rate_key = ('magic', address)
+    with state.lock:
+        state.prune()
+        count, deadline = state.failures.get(rate_key, (0, state.tick() + LOGIN_WINDOW))
+        if count >= 5:
+            raise APIError(429, 'auth.rate_limited')
+        if db.get_bind().dialect.name == 'sqlite':
+            db.execute(text('BEGIN IMMEDIATE'))
+        now = state.now()
+        digest = sha256(body.token.get_secret_value().encode()).hexdigest()
+        proof = db.get(MagicLogin, digest)
+        account = db.get(Account, proof.account_id) if proof else None
+        if (proof is None or proof.consumed_at is not None or proof.expires_at <= now
+                or account is None or account.status != 'active'):
+            db.rollback()
+            state.failures[rate_key] = (count + 1, deadline)
+            raise APIError(401, 'auth.invalid_credentials')
+        proof.consumed_at = now
+        _audit(db, account.id, 'portal.login.magic', None, state)
+        db.commit()
+        state.failures.pop(rate_key, None)
+        state.sessions.pop(request.cookies.get(COOKIE), None)
+        session = secrets.token_urlsafe(32)
+        state.sessions[session] = (account.id, state.tick() + TTL)
+    response.set_cookie(COOKIE, session, max_age=TTL, httponly=True, secure=True,
                         samesite='lax', path='/')
     return public_account(account)
 

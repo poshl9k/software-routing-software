@@ -3,6 +3,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { MasterApiError, masterApi } from "./api";
 import { NodesPage, SubscribersPage, TariffsPage } from "./pages";
+import { MagicSignIn, PortalHome, PortalLogin } from "./SubscriberPortal";
+import { takeMagicProof } from "./magic";
 import { globalStyles, theme } from "../theme";
 import { ThemeProvider } from "@mui/material/styles";
 
@@ -69,15 +71,18 @@ function Dashboard() {
   </Box></Box>;
 }
 
-function AppRoutes() {
+function AppRoutes({ magicProof }: { magicProof: string | null }) {
   return <Routes>
-    <Route path="/login" element={<AuthForm />} />
+    <Route path="/login" element={magicProof !== null ? <MagicSignIn proof={magicProof} /> : <AuthForm />} />
+    <Route path="/portal/login" element={<PortalLogin />} />
+    <Route path="/portal" element={<PortalHome />} />
     <Route path="/setup" element={<AuthForm setup />} />
     <Route path="/" element={<Dashboard />} />
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes>;
 }
 
-export function App() {
-  return <ThemeProvider theme={theme}><GlobalStyles styles={globalStyles} /><BrowserRouter><AppRoutes /></BrowserRouter></ThemeProvider>;
+export function App({ magicProof }: { magicProof?: string | null }) {
+  const proof = magicProof === undefined ? takeMagicProof() : magicProof;
+  return <ThemeProvider theme={theme}><GlobalStyles styles={globalStyles} /><BrowserRouter><AppRoutes magicProof={proof} /></BrowserRouter></ThemeProvider>;
 }

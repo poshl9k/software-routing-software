@@ -1,6 +1,7 @@
 """Host-free contract tests for the ADR-0035 master worker."""
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +26,7 @@ class FakeBridge:
         self.expire_error = expire_error
         self.state_error = state_error
         self.calls = []
+        self.renew_payloads = []
 
     def device_op(self, subscriber, payload):
         self.calls.append(('device_op', subscriber, payload))
@@ -32,14 +34,15 @@ class FakeBridge:
             raise self.device_error
         return self.device_result
 
-    def expire(self, subscriber):
+    def expire(self, subscriber, payload):
         self.calls.append(('expire', subscriber))
         if self.expire_error:
             raise self.expire_error
         return self.expire_result
 
-    def renew(self, subscriber):
+    def renew(self, subscriber, payload):
         self.calls.append(('renew', subscriber))
+        self.renew_payloads.append(payload)
         return {'status': 'applied'}
 
     def node_state(self):
@@ -116,7 +119,7 @@ def test_criterion_1_successful_create_persists_encrypted_material_and_audit(mon
         audit = db.scalar(select(Audit))
         assert (audit.actor, audit.action) == ('100', 'device.create.applied')
     payload = bridge.calls[0][2]
-    assert payload['device_id'] is None and payload['label'] == 'Phone'
+    assert payload['device_id'] == device_id and payload['label'] == 'Phone'
 
 
 def test_criterion_2_retryable_bridge_error_leaves_pending(monkeypatch):
@@ -128,6 +131,22 @@ def test_criterion_2_retryable_bridge_error_leaves_pending(monkeypatch):
     assert process_op(engine, lambda node: bridge, op_id, NOW).status == 'pending'
     with Session(engine) as db:
         assert db.get(DeviceOp, op_id).status == 'pending'
+        assert db.scalar(select(Audit)) is None
+
+
+@pytest.mark.parametrize('code', ['master.entitlement_stale', 'master.operation_stale'])
+def test_stale_fence_retries_create_without_discarding_key_material(monkeypatch, code):
+    engine, key, account_id, node_id, _ = rig(monkeypatch)
+    device_id = add_device(engine, account_id, node_id, key)
+    op_id = add_op(engine, account_id, node_id, 'create', device_id)
+    bridge = FakeBridge(device_error=BridgeError(409, code))
+
+    result = process_op(engine, lambda node: bridge, op_id, NOW)
+    assert result is not None and result.status == 'pending'
+    with Session(engine) as db:
+        device = db.get(Device, device_id)
+        assert device is not None and device.status == 'inactive'
+        assert device.public_key and device.private_key and device.preshared_key
         assert db.scalar(select(Audit)) is None
 
 
@@ -215,7 +234,27 @@ def test_criterion_6_renewal_cancels_pending_expire_and_calls_renew(monkeypatch)
     assert not any(call[0] == 'expire' for call in bridge.calls)
 
 
-def test_contract_payload_uses_master_material_and_never_master_device_id(monkeypatch):
+def test_renew_snapshot_carries_last_acked_operation_not_pending_one(monkeypatch):
+    engine, key, account_id, node_id, _ = rig(monkeypatch)
+    device_id = add_device(engine, account_id, node_id, key, status='active', complete=True)
+    acked_id = add_op(engine, account_id, node_id, 'create', device_id)
+    with Session(engine) as db:
+        acked = db.get(DeviceOp, acked_id)
+        assert acked is not None
+        acked.status = 'applied'
+        db.commit()
+    add_op(engine, account_id, node_id, 'deactivate', device_id)
+    expire_id = add_op(engine, account_id, node_id, 'expire')
+    bridge = FakeBridge()
+
+    result = process_op(engine, lambda node: bridge, expire_id, NOW)
+    assert result is not None and result.status == 'applied'
+    snapshot = bridge.renew_payloads[0]['devices'][0]
+    assert snapshot['operation_id'] == acked_id
+    assert snapshot['op'] == 'activate'
+
+
+def test_contract_payload_uses_master_material_and_master_namespace_id(monkeypatch):
     engine, key, account_id, node_id, _ = rig(monkeypatch)
     device_id = add_device(engine, account_id, node_id, key, complete=True)
     op_id = add_op(engine, account_id, node_id, 'deactivate', device_id)
@@ -225,7 +264,8 @@ def test_contract_payload_uses_master_material_and_never_master_device_id(monkey
 
     call = bridge.calls[0]
     assert call[1] == 'subscriber-100'
-    assert call[2] == {'op': 'deactivate', 'device_id': None, 'label': None,
+    assert call[2].pop('entitlement')['status'] == 'active'
+    assert call[2] == {'op': 'deactivate', 'operation_id': op_id, 'device_id': device_id, 'name': 'peer_subscriber-100', 'label': None,
                        'tunnel': 'awg0', 'keys': {
         'private_key': 'private-old', 'public_key': 'public-old',
         'preshared_key': 'psk-old', 'allowed_ips': ['10.0.0.2/32']}}
@@ -241,7 +281,7 @@ def test_contract_node_pending_and_incomplete_create_stay_retryable(monkeypatch)
     assert process_op(engine, lambda node: bridge, op_id, NOW).status == 'pending'
 
 
-def test_contract_expire_calls_each_active_subscriber_mapping(monkeypatch):
+def test_contract_expire_calls_each_retained_subscriber_mapping(monkeypatch):
     engine, key, account_id, node_id, _ = rig(monkeypatch)
     add_device(engine, account_id, node_id, key, status='active', complete=True,
                subscriber='subscriber-a')
@@ -249,12 +289,15 @@ def test_contract_expire_calls_each_active_subscriber_mapping(monkeypatch):
                subscriber='subscriber-b')
     add_device(engine, account_id, node_id, key, status='inactive', complete=True,
                subscriber='inactive')
+    with Session(engine) as db:
+        db.scalar(select(Subscription)).expires_at = NOW
+        db.commit()
     op_id = add_op(engine, account_id, node_id, 'expire')
     bridge = FakeBridge()
 
     assert process_op(engine, lambda node: bridge, op_id, NOW).status == 'applied'
-    assert [call for call in bridge.calls if call[0] == 'expire'] == [
-        ('expire', 'subscriber-a'), ('expire', 'subscriber-b')]
+    assert sorted(call for call in bridge.calls if call[0] == 'expire') == sorted([
+        ('expire', 'subscriber-a'), ('expire', 'subscriber-b'), ('expire', 'inactive')])
 
 
 def test_contract_delete_clears_keys_but_keeps_remote_identity(monkeypatch):
@@ -291,3 +334,53 @@ def test_contract_default_factory_decrypts_node_token(monkeypatch):
 
     assert result.status == 'applied'
     assert captured == {'base_url': 'https://n1', 'token': 'token'}
+
+
+def test_renewal_is_durable_until_ack(monkeypatch):
+    engine, key, account_id, node_id, _ = rig(monkeypatch)
+    add_device(engine, account_id, node_id, key, status='active', complete=True)
+    expire_id = add_op(engine, account_id, node_id, 'expire')
+
+    class LostRenew(FakeBridge):
+        attempts = 0
+
+        def renew(self, subscriber, payload=None):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise BridgeError(503, 'node.unreachable')
+            if self.attempts == 2:
+                return {'status': 'pending'}
+            return {'status': 'applied'}
+
+    bridge = LostRenew()
+    for attempt in range(3):
+        process_pending(engine, lambda node: bridge, NOW)
+        with Session(engine) as db:
+            expiration = db.get(DeviceOp, expire_id)
+            if attempt < 2:
+                assert expiration.detail != 'renewed'
+            else:
+                assert expiration.detail == 'renewed'
+    assert bridge.attempts == 3
+
+
+def test_entitlement_revision_is_durable_not_wall_clock_based(monkeypatch):
+    from vs_master.worker import _entitlement
+    engine, _, account_id, _, _ = rig(monkeypatch)
+    with Session(engine) as db:
+        first = _entitlement(db, account_id, NOW)
+    with Session(engine) as db:
+        subscription = db.scalar(select(Subscription))
+        subscription.updated_at = NOW - timedelta(days=5)  # clock stepped backwards
+        subscription.expires_at = NOW
+        db.commit()
+        expired = _entitlement(db, account_id, NOW)
+    with Session(engine) as db:
+        subscription = db.scalar(select(Subscription))
+        subscription.expires_at = NOW + timedelta(days=10)
+        subscription.updated_at = NOW - timedelta(days=6)
+        db.commit()
+        renewed = _entitlement(db, account_id, NOW)
+    assert first['version'] < expired['version'] < renewed['version']
+    with Session(engine) as db:
+        assert _entitlement(db, account_id, NOW) == renewed

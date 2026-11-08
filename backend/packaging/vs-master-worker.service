@@ -1,0 +1,20 @@
+[Unit]
+Description=vs-master subscription and device operation worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=vs-master-web
+EnvironmentFile=/etc/vs-router/master.env
+Environment=VS_MASTER_DATABASE_URL=sqlite:////var/lib/vs-router/master/vs-master.db
+ExecStart=/opt/vs-master/venv/bin/python -m vs_master.worker_main
+UMask=0007
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vs-router/master
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

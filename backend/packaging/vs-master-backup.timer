@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily local vs-master SQLite backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+Unit=vs-master-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,7 +17,8 @@ from vs_router.secrets import decrypt_secret, encrypt_secret
 
 from .auth import current_admin
 from .bridge import BridgeClient, BridgeError
-from .models import Account, Audit, Device, Node, Subscription, Tariff
+from .models import Account, Audit, Device, Node, Setting, Subscription, Tariff
+from .notifications import enqueue_subscription
 
 router = APIRouter(prefix='/api/master-admin', dependencies=[Depends(current_admin)])
 
@@ -102,6 +103,50 @@ class SubscriptionBody(Model):
         if (self.days is None) == (self.expires_at is None):
             raise ValueError('master.subscription_expiry_required')
         return self
+
+
+class TelegramSettingsBody(Model):
+    bot_token: SecretStr = Field(min_length=20, max_length=96)
+    public_url: str = Field(min_length=9, max_length=255)
+
+    @field_validator('public_url')
+    @classmethod
+    def valid_public_url(cls, value):
+        parsed = urlsplit(value)
+        if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
+                or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/')):
+            raise ValueError('master.public_url_invalid')
+        try:
+            _ = parsed.port
+        except ValueError:
+            raise ValueError('master.public_url_invalid') from None
+        return value.rstrip('/')
+
+
+@router.get('/settings/telegram')
+def get_telegram_settings(db: Session = Depends(get_db)):
+    token = db.get(Setting, 'master_bot_token')
+    public = db.get(Setting, 'master_public_url')
+    return {'configured': bool(token and token.value.startswith('enc:') and public and public.value),
+            'public_url': public.value if public else None}
+
+
+@router.put('/settings/telegram')
+def put_telegram_settings(body: TelegramSettingsBody, request: Request,
+                          db: Session = Depends(get_db)):
+    begin_write(db)
+    token = 'enc:' + encrypt_secret(body.bot_token.get_secret_value(), get_secret_key()).ciphertext
+    if len(token) > 256:
+        raise APIError(422, 'master.bot_token_invalid')
+    for key, value in (('master_bot_token', token), ('master_public_url', body.public_url)):
+        row = db.get(Setting, key)
+        if row is None:
+            db.add(Setting(key=key, value=value))
+        else:
+            row.value = value
+    audit(db, 'master.bot.configure', None, now(request))
+    db.commit()
+    return {'configured': True, 'public_url': body.public_url}
 
 
 def tariff_view(row):
@@ -331,6 +376,13 @@ def put_subscription(account_id: int, body: SubscriptionBody, request: Request,
     tariff = get_tariff(db, body.tariff_id)
     row = _subscription(db, account_id)
     timestamp = now(request)
+    previous = (row.tariff_id, row.expires_at, row.status) if row is not None else None
+    if (row is not None and body.days is None
+            and aware(body.expires_at) == row.expires_at and row.status == 'expired'
+            and tariff.id == row.tariff_id):
+        audit(db, 'subscription.update', str(account_id), timestamp)
+        db.commit()
+        return subscription_view(row, tariff)
     if row is None:
         expiry = timestamp + timedelta(days=body.days) if body.days is not None \
             else aware(body.expires_at)
@@ -340,14 +392,24 @@ def put_subscription(account_id: int, body: SubscriptionBody, request: Request,
         action = 'subscription.create'
     else:
         try:
-            row.expires_at = aware(row.expires_at) + timedelta(days=body.days) \
-                if body.days is not None else aware(body.expires_at)
+            if body.days is not None:
+                row.expires_at = utc(row.expires_at) + timedelta(days=body.days)
+            else:
+                assert body.expires_at is not None  # SubscriptionBody requires exactly one expiry.
+                row.expires_at = utc(body.expires_at)
         except OverflowError:
             raise APIError(422, 'master.subscription_term_invalid') from None
         row.tariff_id = tariff.id
-        row.status = 'active'
+        row.status = 'active' if row.expires_at > timestamp else 'expired'
         row.updated_at = timestamp
         action = 'subscription.renew' if body.days is not None else 'subscription.update'
+    if previous != (row.tariff_id, row.expires_at, row.status) and (
+            row.expires_at > timestamp or previous is None or previous[1] > timestamp):
+        row.notification_revision = (row.notification_revision or 0) + 1
+        if row.expires_at > timestamp:
+            enqueue_subscription(db, row, 'active', timestamp)
+    if previous is not None and previous[2] == 'active' and row.status == 'expired':
+        enqueue_subscription(db, row, 'expired', timestamp)
     audit(db, action, str(account_id), timestamp)
     db.commit()
     return subscription_view(row, tariff)
