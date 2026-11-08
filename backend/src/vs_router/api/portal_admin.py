@@ -10,8 +10,10 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from vs_portal.models import Account, Audit, Device, DeviceOp, Invite, Setting, Subscription, Tariff, make_engine
+from vs_portal.models import Account, Audit, Device, DeviceOp, Invite, Setting, Subscription, Tariff, TelegramLink, make_engine
 from vs_portal.internal import InternalClient
+from vs_portal.bot_token import encode_bot_token
+from vs_portal.security import get_secret_key
 
 from ..db import ConfigurationRow
 from ..generators.wireguard import materialize_addresses
@@ -253,7 +255,7 @@ def delete_subscriber(name: str, panel_db: Session = Depends(get_db),
     begin_write(db)
     # DeviceOp references Device by id (PRAGMA foreign_keys=ON), so the
     # operation queue must go first; the rest are plain subscriber-owned rows.
-    for model in (DeviceOp, Device, Invite, Subscription, Account):
+    for model in (DeviceOp, Device, Invite, TelegramLink, Subscription, Account):
         db.execute(delete(model).where(model.subscriber_name == name))
     audit(db, "subscriber.delete", name)
     db.commit()
@@ -339,7 +341,8 @@ def update_subscription(name: str, body: SubscriptionPatch, response: Response,
 def read_settings(response: Response, db: Session = Depends(get_portal_db)):
     values = {row.key: row.value for row in db.scalars(select(Setting))}
     response.headers["Cache-Control"] = "no-store"
-    return {"support_url": values.get("support_url"), "bot_token": values.get("bot_token") or None}
+    return {"support_url": values.get("support_url"),
+            "bot_token_configured": bool(values.get("bot_token"))}
 
 
 @router.put("/settings")
@@ -354,7 +357,7 @@ def update_settings(body: dict, response: Response, db: Session = Depends(get_po
         if value and not value.startswith(("https://t.me/", "https://telegram.me/")):
             raise APIError(422, "portal.support_url_invalid")
     if "bot_token" in body and body["bot_token"] and (
-        len(body["bot_token"]) > 256 or not re.fullmatch(
+        len(body["bot_token"]) > 96 or not re.fullmatch(
             r"\d+:[a-zA-Z0-9_-]+", body["bot_token"]
         )
     ):
@@ -373,12 +376,13 @@ def update_settings(body: dict, response: Response, db: Session = Depends(get_po
             audit(db, "settings.support_url", value or "removed")
         if "bot_token" in body:
             token = body["bot_token"]
+            stored = encode_bot_token(token, get_secret_key()) if token else ''
             row = db.get(Setting, "bot_token")
             if token:
                 if row is None:
-                    db.add(Setting(key="bot_token", value=token))
+                    db.add(Setting(key="bot_token", value=stored))
                 else:
-                    row.value = token
+                    row.value = stored
             elif row is not None:
                 db.delete(row)
             audit(db, "settings.bot_token", "updated" if token else "removed")

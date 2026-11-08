@@ -12,6 +12,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from vs_portal.models import Setting
+from vs_portal.bot_token import encode_bot_token
+from vs_portal.security import get_secret_key
 
 from ..db import UserRow
 from ..management import read_management
@@ -101,8 +103,10 @@ class SetupWizard:
 
     def prompt_token(self):
         while True:
-            token = self.password('Telegram bot token: ').strip()
-            if BOT_TOKEN_PATTERN.fullmatch(token) and len(token) <= 256:
+            token = self.password('Telegram bot token (Enter to skip): ').strip()
+            if not token:
+                return ''
+            if BOT_TOKEN_PATTERN.fullmatch(token) and len(token) <= 96:
                 return token
             self.print('Invalid Telegram bot token format.')
 
@@ -127,9 +131,10 @@ class SetupWizard:
 
     def write_settings(self, bot_token, support_url):
         cast(Table, Setting.__table__).create(self.portal_engine, checkfirst=True)
+        encrypted_token = encode_bot_token(bot_token, get_secret_key()) if bot_token else ''
         with Session(self.portal_engine) as db:
             db.execute(text('BEGIN IMMEDIATE'))
-            for key, value in (('bot_token', bot_token), ('support_url', support_url)):
+            for key, value in (('bot_token', encrypted_token), ('support_url', support_url)):
                 if db.get(Setting, key) is None:
                     db.execute(insert(Setting).values(key=key, value=value))
                 else:
@@ -151,7 +156,7 @@ class SetupWizard:
         self.print(f'Admin login: {login}')
         self.print('Admin password: [set]')
         self.print(f'Panel domain: {domain}')
-        self.print('Telegram bot token: [set]')
+        self.print(f'Telegram bot token: {"[set]" if token else "[skipped]"}')
         self.print(f'Support contact: {support_url}')
         if self.input('Write configuration? [y/n]: ').strip().lower() not in ('y', 'yes'):
             self.print('Setup cancelled.')

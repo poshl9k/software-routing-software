@@ -1,18 +1,19 @@
 """Portal-specific invite activation and process-local sessions."""
+import hashlib
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import RLock
 
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from vs_router.api.errors import APIError
-from .models import Account, Audit, Device, Invite, Setting, Subscription, Tariff, as_utc
+from .models import Account, Audit, Device, Invite, Setting, Subscription, Tariff, TelegramLink, as_utc
 
 COOKIE = 'vs_portal_session'
 TTL = 8 * 60 * 60
@@ -173,6 +174,19 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
         db.commit()
     response.delete_cookie(COOKIE, httponly=True, secure=True, samesite='lax', path='/')
 
+
+@router.post('/telegram/link')
+def issue_telegram_link(request: Request, account: Account = Depends(current_account),
+                        db: Session = Depends(get_db)):
+    """Only an authenticated subscriber can create a one-use bot binding proof."""
+    code = secrets.token_urlsafe(32)
+    expires_at = request.app.state.auth.now() + timedelta(minutes=10)
+    db.execute(text('BEGIN IMMEDIATE'))
+    db.execute(delete(TelegramLink).where(TelegramLink.subscriber_name == account.subscriber_name))
+    db.add(TelegramLink(code_hash=hashlib.sha256(code.encode()).hexdigest(),
+                        subscriber_name=account.subscriber_name, expires_at=expires_at))
+    db.commit()
+    return {'code': code, 'expires_at': expires_at.isoformat()}
 
 @router.get('/me')
 def me(request: Request, account: Account = Depends(current_account), db: Session = Depends(get_db)):

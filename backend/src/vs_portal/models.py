@@ -61,6 +61,13 @@ class Account(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
+class TelegramLink(Base):
+    """Short-lived, one-use proof issued to an authenticated portal account."""
+    __tablename__ = 'portal_telegram_links'
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subscriber_name: Mapped[str] = mapped_column(ForeignKey('portal_accounts.subscriber_name'), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
 class Invite(Base):
     __tablename__ = 'portal_invites'
     token: Mapped[str] = mapped_column(String(128), primary_key=True)

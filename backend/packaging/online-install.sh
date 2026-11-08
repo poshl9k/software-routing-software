@@ -215,7 +215,7 @@ if [ -d "${PACKAGING:-}" ]; then
     else
         run install -d -m 0755 "$update_root/backend/packaging" "$update_root/backend/dist"
         run cp -R "$PACKAGING/." "$update_root/backend/packaging/"
-        for item in alembic alembic.ini pyproject.toml; do
+        for item in alembic alembic.ini alembic-portal pyproject.toml; do
             if [ -e "$payload_root/backend/$item" ]; then
                 run cp -R "$payload_root/backend/$item" "$update_root/backend/"
             fi
@@ -231,10 +231,15 @@ if [ -d "${PACKAGING:-}" ]; then
             run rm -rf "$update_root/frontend/dist"
             run cp -R "$UI" "$update_root/frontend/dist"
         fi
+        if [ -f "$payload_root/frontend-portal/dist/index.html" ]; then
+            run install -d -m 0755 "$update_root/frontend-portal"
+            run rm -rf "$update_root/frontend-portal/dist"
+            run cp -R "$payload_root/frontend-portal/dist" "$update_root/frontend-portal/dist"
+        fi
         run chmod -R u+rwX,go+rX,go-w "$update_root/backend"
         run chmod 0755 "$update_root/backend/packaging/update-run.sh"
         run install -m 0644 "$payload_root/REVISION" "$update_root/REVISION"
-        echo "Update tree staged at $update_root: REVISION, backend/packaging, available migration metadata${WHEEL:+, backend/dist/$(basename -- "$WHEEL")}${UI:+, frontend/dist}"
+        echo "Update tree staged at $update_root: REVISION, backend/packaging, available migration metadata${WHEEL:+, backend/dist/$(basename -- "$WHEEL")}${UI:+, frontend/dist}, frontend-portal/dist"
     fi
 fi
 if [ -n "$UI" ]; then

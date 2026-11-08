@@ -432,6 +432,17 @@ install -d -m 0770 -o vs-router-portal -g vs-router-web /run/vs-router/portal
 install -d -m 0770 -o vs-router-web -g vs-router-web /run/vs-router/web
 systemctl daemon-reload
 if [ "$PROFILE" = panel ]; then
+    portal_ui_src="$repo_root/frontend-portal/dist"
+    [ -f "$portal_ui_src/index.html" ] && [ -d "$portal_ui_src/assets" ] || {
+        echo "ERROR: panel release is missing frontend-portal/dist (subscriber UI)" >&2
+        exit 1
+    }
+    rm -rf /var/lib/vs-router/portal/ui.new
+    cp -a "$portal_ui_src" /var/lib/vs-router/portal/ui.new
+    chown -R vs-router-portal:vs-router-portal /var/lib/vs-router/portal/ui.new
+    chmod -R a+rX /var/lib/vs-router/portal/ui.new
+    rm -rf /var/lib/vs-router/portal/ui
+    mv /var/lib/vs-router/portal/ui.new /var/lib/vs-router/portal/ui
     mkdir -p /var/lib/vs-router/portal
     (
         packaging_root=${PACKAGING:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
@@ -448,7 +459,8 @@ if [ "$PROFILE" = panel ]; then
         /var/lib/vs-router/portal/vs-portal.db-wal \
         /var/lib/vs-router/portal/vs-portal.db-shm 2>/dev/null || true
     systemctl enable vs-router-portal.service vs-router-web-internal.service
-    systemctl start vs-router-portal.service vs-router-web-internal.service
+    systemctl restart vs-router-portal.service vs-router-web-internal.service
+    systemctl is-active --quiet vs-router-portal.service
 fi
 # Telegram worker is panel-only; share the portal DB group (including WAL files).
 if [ "$PROFILE" = panel ]; then

@@ -333,6 +333,8 @@ def scratch_builder(tmp_path, *, template=None):
     # artifacts make-release.sh verifies before tarring the archive.
     (repo / 'frontend').mkdir()
     (repo / 'frontend/package.json').write_text('{"name": "fixture"}\n')
+    (repo / 'frontend-portal').mkdir()
+    (repo / 'frontend-portal/package.json').write_text('{"name": "fixture"}\n')
     tools = tmp_path / 'builder-bin'
     tools.mkdir()
     wheel_name = 'vs_router_backend-1.2.3-py3-none-any.whl'
@@ -343,7 +345,7 @@ def scratch_builder(tmp_path, *, template=None):
         script.chmod(0o755)
 
     tool('node', 'echo v22.12.0\n')
-    tool('npm', 'case "$1" in run) mkdir -p dist; printf UI > dist/index.html;; esac\nexit 0\n')
+    tool('npm', 'case "$1" in run) mkdir -p dist/assets; printf UI > dist/index.html;; esac\nexit 0\n')
     tool('uv', 'mkdir -p dist; printf WHEEL > "dist/%s"; exit 0\n' % wheel_name)
     env = {**os.environ, 'PATH': f'{tools}:{os.environ["PATH"]}',
            'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull}
@@ -400,6 +402,7 @@ def test_criterion_9_default_build_ships_prebuilt_artifacts(tmp_path):
     with tarfile.open(archive, 'r:gz') as tar:
         names = tar.getnames()
     assert './frontend/dist/index.html' in names
+    assert './frontend-portal/dist/index.html' in names
     assert './backend/dist/vs_router_backend-1.2.3-py3-none-any.whl' in names
     assert 'Prebuilt bundle' in result.stderr
 

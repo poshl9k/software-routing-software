@@ -12,7 +12,7 @@ from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from vs_portal.models import (Account, Audit, Device, DeviceOp, Invite, Setting,
-                              Subscription, Tariff, make_engine)
+                              Subscription, Tariff, TelegramLink, make_engine)
 from vs_router.api.errors import APIError
 from vs_router.app import create_app
 from vs_router.db import Base as PanelBase, ConfigurationRow, UserRow
@@ -33,6 +33,7 @@ def anyio_backend():
 @pytest.fixture
 async def portal_admin_api(monkeypatch):
     monkeypatch.delenv("VS_PORTAL_DATABASE_URL", raising=False)
+    monkeypatch.setenv('VS_ROUTER_SECRET_KEY', Fernet.generate_key().decode())
     panel_engine = make_engine("sqlite://")
     portal_engine = make_engine("sqlite://")
     PanelBase.metadata.create_all(panel_engine)
@@ -242,18 +243,23 @@ async def test_criterion_3_settings_get_and_valid_bot_token_roundtrip(portal_adm
     await login(client)
     response = await client.get("/api/portal-admin/settings")
     assert response.status_code == 200
-    assert response.json() == {"support_url": None, "bot_token": None}
+    assert response.json() == {"support_url": None, "bot_token_configured": False}
 
     token = "123456789:AbC_def-GHI"
     response = await client.put("/api/portal-admin/settings", json={"bot_token": token})
     assert response.status_code == 200, response.text
     assert response.headers["cache-control"] == "no-store"
-    assert response.json() == {"support_url": None, "bot_token": token}
+    assert response.json() == {"support_url": None, "bot_token_configured": True}
     assert (await client.get("/api/portal-admin/settings")).json() == {
-        "support_url": None, "bot_token": token}
+        "support_url": None, "bot_token_configured": True}
+    from vs_portal.bot_token import decode_bot_token
+    from vs_portal.security import get_secret_key
+    from vs_router.telegram_bot import Bot
     with Session(engine) as db:
         setting = db.get(Setting, "bot_token")
-        assert setting is not None and setting.value == token
+        assert setting is not None and token not in setting.value
+        assert decode_bot_token(setting.value, get_secret_key()) == token
+        assert Bot(engine, None).setting('bot_token') == token
         records = list(db.scalars(select(Audit).where(Audit.action == "settings.bot_token")))
         assert [(row.action, row.detail) for row in records] == [("settings.bot_token", "updated")]
         assert all(token not in (row.detail or "") for row in db.scalars(select(Audit)))
@@ -287,7 +293,7 @@ async def test_criterion_3_empty_bot_token_removes_setting_without_secret_in_aud
 
     response = await client.put("/api/portal-admin/settings", json={"bot_token": ""})
     assert response.status_code == 200, response.text
-    assert response.json() == {"support_url": None, "bot_token": None}
+    assert response.json() == {"support_url": None, "bot_token_configured": False}
     with Session(engine) as db:
         assert db.get(Setting, "bot_token") is None
         records = list(db.scalars(select(Audit).where(Audit.action == "settings.bot_token")))
@@ -301,16 +307,16 @@ async def test_criterion_3_support_url_roundtrip_and_delete_still_persist(portal
     url = "https://t.me/router_support"
     response = await client.put("/api/portal-admin/settings", json={"support_url": url})
     assert response.status_code == 200, response.text
-    assert response.json() == {"support_url": url, "bot_token": None}
+    assert response.json() == {"support_url": url, "bot_token_configured": False}
     assert (await client.get("/api/portal-admin/settings")).json() == {
-        "support_url": url, "bot_token": None}
+        "support_url": url, "bot_token_configured": False}
     with Session(engine) as db:
         setting = db.get(Setting, "support_url")
         assert setting is not None and setting.value == url
 
     response = await client.put("/api/portal-admin/settings", json={"support_url": ""})
     assert response.status_code == 200, response.text
-    assert response.json() == {"support_url": None, "bot_token": None}
+    assert response.json() == {"support_url": None, "bot_token_configured": False}
     with Session(engine) as db:
         assert db.get(Setting, "support_url") is None
         records = list(db.scalars(select(Audit).where(Audit.action == "settings.support_url")))
@@ -325,9 +331,9 @@ async def test_criterion_9_portal_migrated_separate_from_panel(portal_admin_api)
     assert "configuration_versions" not in portal_tables
     assert portal_tables == {"alembic_version", "portal_accounts", "portal_invites", "portal_tariffs",
                              "portal_subscriptions", "portal_devices", "portal_device_ops",
-                             "portal_audit", "portal_settings"}
+                             "portal_audit", "portal_settings", "portal_telegram_links"}
     with portal.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == "0005"
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == "0006"
 
 
 async def test_criterion_8_panel_second_engine_lazy_and_sqlite_wal(tmp_path, monkeypatch):
@@ -387,6 +393,8 @@ async def test_criterion_8_deleting_a_subscriber_cascades_config_and_portal(port
     with Session(portal) as db:
         db.add_all([
             Account(subscriber_name="alice", password_hash="x", status="active"),
+            TelegramLink(code_hash="0" * 64, subscriber_name="alice",
+                         expires_at=now + timedelta(minutes=10)),
             Invite(token="tok1", subscriber_name="alice", expires_at=now + timedelta(days=1), created_at=now),
             Subscription(subscriber_name="alice", tariff_id=1, expires_at=now + timedelta(days=30),
                          status="active", updated_at=now),
@@ -402,7 +410,7 @@ async def test_criterion_8_deleting_a_subscriber_cascades_config_and_portal(port
     assert response.status_code == 204, response.text
     # Portal rows of the deleted subscriber are gone; nothing leaks into audit detail.
     with Session(portal) as db:
-        for model in (Account, Invite, Subscription, Device, DeviceOp):
+        for model in (Account, TelegramLink, Invite, Subscription, Device, DeviceOp):
             assert db.scalar(select(model).where(model.subscriber_name == "alice")) is None, model.__name__
         assert {row.action for row in db.scalars(select(Audit))} >= {"subscriber.delete"}
     # The cascade lands in a NEW draft built from the confirmed row.

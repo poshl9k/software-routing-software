@@ -30,7 +30,7 @@ Usage: install-release.sh [--release 40-hex-commit] [--manifest URL] [--source D
   manifest_url in VS_ROUTER_UPDATE_CONFIG (/etc/vs-router/update.json).
 VS_ROUTER_INSTALL_OS_RELEASE overrides /etc/os-release for platform checks.
 --fresh removes the contents of the selected --work directory.
---skip-build requires exactly one existing wheel and frontend/dist/index.html.
+--skip-build requires exactly one existing wheel and both frontend bundles.
 --dry-run verifies source and prints build/install plan without building or apt.
 Python 3 is required beforehand; release downloads additionally require curl.
 EOF
@@ -396,12 +396,14 @@ python3 - "$source" <<'PY' || fail 'source contains unsafe paths'
 import os, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 for part in ('backend', 'backend/packaging', 'backend/dist', 'frontend',
-             'frontend/dist', 'frontend/node_modules'):
+             'frontend/dist', 'frontend/node_modules', 'frontend-portal',
+             'frontend-portal/dist', 'frontend-portal/node_modules'):
     node = root / part
     if node.is_symlink():
         raise ValueError('symlink in source: ' + str(node))
 for part in ('backend/packaging/install.sh', 'backend/packaging/online-install.sh',
-             'backend/pyproject.toml', 'frontend/package.json'):
+             'backend/pyproject.toml', 'frontend/package.json',
+             'frontend-portal/package.json'):
     node = root / part
     if not node.is_file() or node.is_symlink():
         raise ValueError('source missing safe file: ' + str(node))
@@ -465,9 +467,10 @@ if (( ! skip_build )); then
     shopt -s nullglob
     prebuilt_wheels=("$source/backend/dist"/*.whl)
     shopt -u nullglob
-    if (( ${#prebuilt_wheels[@]} == 1 )) && [[ -f $source/frontend/dist/index.html ]]; then
+    if (( ${#prebuilt_wheels[@]} == 1 )) && [[ -f $source/frontend/dist/index.html ]] \
+        && [[ -f $source/frontend-portal/dist/index.html ]]; then
         skip_build=1
-        log "Release ships prebuilt artifacts (${prebuilt_wheels[0]#$source/} + frontend/dist); skipping the host build"
+        log "Release ships prebuilt artifacts (${prebuilt_wheels[0]#$source/} + frontend/dist + frontend-portal/dist); skipping the host build"
     fi
 fi
 
@@ -522,6 +525,8 @@ if (( ! skip_build )); then
         fi
         log 'Building frontend with npm ci && npm run build'
         (cd "$source/frontend" && npm ci && npm run build)
+        log 'Building subscriber portal with npm ci && npm run build'
+        (cd "$source/frontend-portal" && npm ci && npm run build)
     else
         log 'Would build backend wheel and run npm ci && npm run build in frontend'
     fi
@@ -543,6 +548,10 @@ fi
 ui="$source/frontend/dist"
 if [[ ! -f $ui/index.html || -L $ui/index.html ]]; then
     (( dry_run && ! skip_build )) || fail "frontend bundle missing: $ui/index.html"
+fi
+portal_ui="$source/frontend-portal/dist"
+if [[ ! -f $portal_ui/index.html || -L $portal_ui/index.html || ! -d $portal_ui/assets ]]; then
+    (( dry_run && ! skip_build )) || fail "subscriber portal bundle missing: $portal_ui/index.html"
 fi
 
 args=(--wheel "$wheel" --ui "$ui" --hostname "$hostname")

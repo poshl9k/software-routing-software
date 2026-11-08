@@ -121,9 +121,11 @@ if (( ! SKIP_BUILD )); then
             && python3 -c 'import setuptools, wheel' >/dev/null 2>&1 \
             || fail 'uv or python3+pip+setuptools+wheel is required to build the backend wheel (or pass --skip-build)'
     fi
-    rm -rf "$stage/frontend/dist" "$stage/backend/dist"
+    rm -rf "$stage/frontend/dist" "$stage/frontend-portal/dist" "$stage/backend/dist"
     log 'Building frontend bundle (npm ci && npm run build)'
     (cd "$stage/frontend" && npm ci && npm run build)
+    log 'Building subscriber portal bundle'
+    (cd "$stage/frontend-portal" && npm ci && npm run build)
     log 'Building backend wheel'
     if command -v uv >/dev/null 2>&1; then
         (cd "$stage/backend" && uv build --wheel --out-dir dist)
@@ -137,7 +139,9 @@ if (( ! SKIP_BUILD )); then
         || fail "expected exactly one backend wheel in backend/dist (found ${#wheels[@]})"
     [[ -f $stage/frontend/dist/index.html && ! -L $stage/frontend/dist/index.html ]] \
         || fail 'frontend bundle missing after the build: frontend/dist/index.html'
-    log "Prebuilt bundle: ${wheels[0]#$stage/} + frontend/dist"
+    [[ -f $stage/frontend-portal/dist/index.html && -d $stage/frontend-portal/dist/assets ]] \
+        || fail 'subscriber portal bundle missing: frontend-portal/dist/index.html'
+    log "Prebuilt bundle: ${wheels[0]#$stage/} + frontend/dist + frontend-portal/dist"
 fi
 
 # Toolchain section (default build only): a release whose pins have a built
@@ -167,7 +171,7 @@ fi
 # Build tools leave caches and dependency trees inside the staged checkout.
 # They are neither runtime inputs nor part of the pinned source, and may
 # contain symlinks or other members rejected by the installer's safe extractor.
-rm -rf -- "$stage/backend/.uv-cache" "$stage/frontend/node_modules"
+rm -rf -- "$stage/backend/.uv-cache" "$stage/frontend/node_modules" "$stage/frontend-portal/node_modules"
 
 tar -czf "$OUT/$name" -C "$stage" .
 

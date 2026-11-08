@@ -35,6 +35,8 @@ def rig(tmp_path):
     (source / 'backend/pyproject.toml').write_text('[project]\nname="vs-router-backend"\n')
     (source / 'frontend').mkdir()
     (source / 'frontend/package.json').write_text('{}\n')
+    (source / 'frontend-portal').mkdir()
+    (source / 'frontend-portal/package.json').write_text('{}\n')
     (source / 'REVISION').write_text(COMMIT + '\n')
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
@@ -57,7 +59,7 @@ def rig(tmp_path):
     fake('nft', 'echo DANGEROUS_NFT >> "$CALLS"; exit 99\n')
     fake('npm', 'printf "NPM %s\\n" "$*" >> "$CALLS"\n'
          '[ "${NPM_FAIL:-0}" = 1 ] && exit 19\n'
-         'if [ "$1" = run ]; then mkdir -p dist; printf UI > dist/index.html; fi\n')
+         'if [ "$1" = run ]; then mkdir -p dist/assets; printf UI > dist/index.html; fi\n')
     fake('node', 'printf "NODE %s\\n" "$*" >> "$CALLS"; echo "${NODE_VERSION:-v22.12.0}"\n')
     fake('uv', 'printf "UV %s\\n" "$*" >> "$CALLS"\n'
          '[ "${UV_FAIL:-0}" = 1 ] && exit 21\n'
@@ -123,6 +125,9 @@ def built(source):
     ui = source / 'frontend/dist'
     ui.mkdir(exist_ok=True)
     (ui / 'index.html').write_text('UI fixture')
+    portal = source / 'frontend-portal/dist'
+    (portal / 'assets').mkdir(parents=True, exist_ok=True)
+    (portal / 'index.html').write_text('Portal UI fixture')
     return wheel
 
 
