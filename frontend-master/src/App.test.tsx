@@ -29,12 +29,13 @@ test("Telegram proof is cleared from the URL before magic login and opens subscr
     if (input === "/api/portal/me") return new Response(JSON.stringify({
       account: { id: 1, display_name: "Анна" }, subscription: null,
     }), { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [] }), { status: 200 });
     throw new Error(`Unexpected request ${input}`);
   });
   vi.stubGlobal("fetch", fetcher);
   render(<App />);
   expect(await screen.findByText("Подписка пока не активна")).toBeInTheDocument();
-  expect(screen.getByText("Анна")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Здравствуйте, Анна" })).toBeInTheDocument();
   expect(screen.queryByText("Ноды")).not.toBeInTheDocument();
   expect(fetcher).toHaveBeenCalledWith("/api/portal/login/magic", expect.anything());
 });
@@ -60,14 +61,15 @@ test("subscriber cabinet without session never mounts admin dashboard", async ()
   expect(screen.queryByText("Ноды")).not.toBeInTheDocument();
 });
 
-test("active subscriber can create a device and download only an applied config", async () => {
+test("active subscriber can create a device and download its config", async () => {
   window.history.replaceState({}, "", "/portal");
   let devices = [{ id: 7, name: "master_7", label: "Телефон", status: "active",
     allowed_ips: ["10.66.0.7/32"], applied: true, last_handshake: null }];
   const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
     if (input === "/api/portal/me") return new Response(JSON.stringify({
       account: { id: 1, display_name: "Анна" },
-      subscription: { status: "active", expires_at: "2026-12-08T00:00:00Z", tariff: { name: "Базовый" } },
+      subscription: { status: "active", expires_at: "2026-12-08T00:00:00Z",
+        tariff: { name: "Базовый", device_limit: 2, term_days: 30 } },
     }), { status: 200 });
     if (input === "/api/portal/devices" && !init?.method) return new Response(JSON.stringify({ devices }), { status: 200 });
     if (input === "/api/portal/devices" && init?.method === "POST") {
@@ -81,12 +83,175 @@ test("active subscriber can create a device and download only an applied config"
   vi.stubGlobal("fetch", fetcher);
   render(<App />);
   expect(await screen.findByText(/Телефон/)).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "Скачать конфигурацию Телефон" })).toHaveAttribute(
-    "href", "/api/portal/devices/7/export?format=conf");
-  await userEvent.type(screen.getByLabelText("Название устройства", { exact: false }), "Ноутбук");
+  expect(screen.getByRole("button", { name: "Скачать .conf" })).toBeEnabled();
   await userEvent.click(screen.getByRole("button", { name: "Добавить устройство" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Метка устройства" }), "Ноутбук");
+  await userEvent.click(screen.getByRole("button", { name: "Добавить" }));
   expect(await screen.findByText(/Ноутбук/)).toBeInTheDocument();
   expect(fetcher).toHaveBeenCalledWith("/api/portal/devices", expect.objectContaining({ method: "POST" }));
+});
+
+test("subscriber cabinet matches the node's subscription and device layout", async () => {
+  window.history.replaceState({}, "", "/portal");
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" },
+      subscription: { status: "active", expires_at: "2099-12-08T00:00:00Z",
+        tariff: { name: "Базовый", device_limit: 3, term_days: 30 } },
+    }), { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [
+      { id: 7, name: "master_7", label: "Телефон", status: "active", applied: true, last_handshake: null },
+      { id: 8, name: "master_8", label: "Ноутбук", status: "inactive", applied: false, last_handshake: null },
+    ] }), { status: 200 });
+    throw new Error(`Unexpected request ${input}`);
+  }));
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "Здравствуйте, Анна" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /VS PORTAL/ })).toHaveAttribute("href", "/portal");
+  expect(screen.getByText(/На этом тарифе разрешено 3 устройства/)).toBeInTheDocument();
+  expect(screen.getByText(/Используется: 2/)).toBeInTheDocument();
+  expect(screen.getByText("Включено")).toBeInTheDocument();
+  expect(screen.getByText("Отключено")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "QR" })[0]).toBeEnabled();
+  expect(screen.getAllByRole("button", { name: "QR" })[1]).toBeEnabled();
+  expect(screen.getAllByRole("button", { name: "Amnezia" })[0]).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Деактивировать" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Активировать" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Добавить устройство" })).toBeEnabled();
+});
+
+test("subscriber can view QR, deactivate and remove a device through the master API", async () => {
+  window.history.replaceState({}, "", "/portal");
+  const objectUrl = vi.fn(() => "blob:synthetic-qr");
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: objectUrl });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+  let devices = [{ id: 7, name: "master_7", label: "Телефон", status: "active",
+    applied: true, last_handshake: null }];
+  const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: { status: "active",
+        expires_at: "2099-12-08T00:00:00Z", tariff: { name: "Базовый", device_limit: 2, term_days: 30 } },
+    }), { status: 200 });
+    if (input === "/api/portal/devices" && !init?.method) return new Response(JSON.stringify({ devices }), { status: 200 });
+    if (input === "/api/portal/devices/7/export?format=qr") {
+      return new Response(new Uint8Array([137, 80, 78, 71]), { status: 200, headers: { "Content-Type": "image/png" } });
+    }
+    if (input === "/api/portal/devices/7/deactivate") {
+      devices = [{ ...devices[0], status: "inactive", applied: false }];
+      return new Response(JSON.stringify({ status: "applied", operation_id: 9, device_id: 7 }), { status: 200 });
+    }
+    if (input === "/api/portal/devices/7" && init?.method === "DELETE") {
+      devices = [];
+      return new Response(JSON.stringify({ status: "applied", operation_id: 10, device_id: 7 }), { status: 200 });
+    }
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "QR" }));
+    expect(await screen.findByRole("dialog", { name: "QR: Телефон" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /QR-код конфигурации/ })).toHaveAttribute("src", "blob:synthetic-qr");
+    await userEvent.click(screen.getByRole("button", { name: "Закрыть" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Деактивировать" }));
+    expect(await screen.findByText("Отключено")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Удалить устройство Телефон" }));
+    expect(await screen.findByRole("dialog", { name: "Удалить устройство?" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Удалить устройство" }));
+    expect(await screen.findByText("Устройств пока нет")).toBeInTheDocument();
+    expect(fetcher).toHaveBeenCalledWith("/api/portal/devices/7/deactivate", expect.objectContaining({ method: "POST" }));
+    expect(fetcher).toHaveBeenCalledWith("/api/portal/devices/7", expect.objectContaining({ method: "DELETE" }));
+  } finally {
+    Reflect.deleteProperty(URL, "createObjectURL");
+    Reflect.deleteProperty(URL, "revokeObjectURL");
+  }
+});
+
+test("no subscription never claims access or enables new devices", async () => {
+  window.history.replaceState({}, "", "/portal");
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: null,
+    }), { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [] }), { status: 200 });
+    throw new Error(`Unexpected request ${input}`);
+  }));
+  render(<App />);
+  expect(await screen.findByText("Подписка пока не активна")).toBeInTheDocument();
+  expect(screen.queryByText("Активна")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Добавить устройство" })).toBeDisabled();
+});
+
+test("inactive devices still use a tariff slot; expired entitlement blocks exports", async () => {
+  window.history.replaceState({}, "", "/portal");
+  let expired = false;
+  const fetcher = vi.fn(async (input: string) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: {
+        status: expired ? "expired" : "active", expires_at: "2099-12-08T00:00:00Z",
+        tariff: { name: "Базовый", device_limit: 2, term_days: 30 },
+      },
+    }), { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [
+      { id: 7, name: "master_7", label: "Телефон", status: "active", applied: true },
+      { id: 8, name: "master_8", label: "Ноутбук", status: "inactive", applied: false },
+    ] }), { status: 200 });
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const view = render(<App />);
+  expect(await screen.findByText(/Используется: 2/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Добавить устройство" })).toBeDisabled();
+  expect(screen.getAllByRole("button", { name: "QR" })[1]).toBeEnabled();
+  expired = true;
+  view.unmount();
+  render(<App />);
+  expect(await screen.findByText(/Подписка истекла/)).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "QR" })[1]).toBeDisabled();
+  expect(fetcher).not.toHaveBeenCalledWith("/api/portal/devices/8/export?format=qr", expect.anything());
+});
+
+test("device load failure shows a safe error and allows refresh", async () => {
+  window.history.replaceState({}, "", "/portal");
+  let attempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: null,
+    }), { status: 200 });
+    if (input === "/api/portal/devices") {
+      attempts += 1;
+      if (attempts === 1) return new Response(JSON.stringify({
+        error: { code: "portal.internal_unavailable", message: "secret-detail-do-not-show" },
+      }), { status: 503 });
+      return new Response(JSON.stringify({ devices: [] }), { status: 200 });
+    }
+    throw new Error(`Unexpected request ${input}`);
+  }));
+  render(<App />);
+  expect(await screen.findByRole("button", { name: "Обновить" })).toBeInTheDocument();
+  expect(screen.queryByText("secret-detail-do-not-show")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Обновить" }));
+  expect(await screen.findByText("Устройств пока нет")).toBeInTheDocument();
+});
+
+test("failed configuration export never renders raw network exception details", async () => {
+  window.history.replaceState({}, "", "/portal");
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: { status: "active",
+        expires_at: "2099-12-08T00:00:00Z", tariff: { name: "Базовый", device_limit: 1, term_days: 30 } },
+    }), { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [
+      { id: 7, name: "master_7", label: "Телефон", status: "active", applied: true },
+    ] }), { status: 200 });
+    if (input === "/api/portal/devices/7/export?format=qr") throw new Error("secret-private");
+    throw new Error(`Unexpected request ${input}`);
+  }));
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "QR" }));
+  expect(await screen.findByText(/Не удалось скачать конфигурацию/)).toBeInTheDocument();
+  expect(screen.queryByText("secret-private")).not.toBeInTheDocument();
 });
 
 test("admin configures a separate master bot without echoing its token", async () => {

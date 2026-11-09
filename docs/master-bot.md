@@ -10,6 +10,95 @@ A private `/start` message from the Telegram user creates an account idempotentl
 
 **Stars charging is disabled.** There is no `sendInvoice` path. Every pre-checkout query is rejected; an unexpected successful-payment update is retained once in `master_payment_receipts` for manual review and never grants a subscription. Do not enter a live price or issue a live invoice until the tariff, integer XTR amount, term, device limit, refund/fulfilment policy, and an end-to-end sandbox provisioning test are approved.
 
+## Device management (offline-tested candidate)
+
+This slice extends the original ADR-0035 MVP bot non-goal with subscriber device
+operations; it does **not** change the master/node ownership or bridge contract.
+There is no local-portal HTTP login/session in the bot. `device_service.py` is the
+shared domain used by the HTTP portal and bot; exports use the same guarded
+renderer. Master `Device`/`DeviceOp` rows remain authoritative, and only the
+existing worker/`BridgeClient` talks to the assigned node's internal bridge.
+
+Open **Устройства** from `/menu`, or use these commands in the master's private
+bot chat (numeric IDs come from `/devices`):
+
+| Command | Result |
+| --- | --- |
+| `/devices` | Own devices, master status, pending operation, applied flag and last-handshake timestamp from bridge state; five devices per page with navigation/actions |
+| `/new Телефон` | Create with a 1–128-character label; existing tariff limit and automatic node selection apply |
+| `/activate 12`, `/deactivate 12` | Enable/disable an owned device; preserve its identity and keys |
+| `/delete 12` | Ask for explicit **Удалить навсегда** / **Отмена**, never delete on the initial command/button |
+| `/conf 12` | Upload the wg-quick `.conf` using `sendDocument` |
+| `/qr 12` | Upload the same configuration as a PNG using `sendPhoto` |
+| `/amnezia 12` | For supported AWG state, upload an Amnezia `vpn://` URI in `device-12-amnezia.txt`; ordinary WG is rejected |
+
+Every device entry point, including list, callbacks and deletion confirmation,
+requires a positive private chat ID equal to the sender ID, an active master
+account with **both** its Telegram identity and separately verified `/start` link
+matching that chat, and the latest subscription with active status, future expiry
+and an existing tariff. Group/mismatched senders cannot invoke operations.
+An administrator-entered numeric Telegram ID without private `/start` is not a
+verified link. Device lookup is restricted to that account; a forged foreign ID
+never reaches the bridge or export renderer. The subscription status/menu and
+cabinet-login flow remain available separately, without granting device access.
+
+Deletion confirmations are random single-use proofs, bound to the chat, account,
+exact verified-link timestamp and device ID. They expire after two minutes;
+cancel, a replacement prompt, consumption or bot restart invalidates them. Only
+one pending proof per chat is retained, with an overall bound of 1,000 unexpired
+chats. Ownership/subscription/pending-operation checks run again on confirmation.
+A repeated or forged callback cannot enqueue another deletion.
+
+Mutation acceptance and a non-secret Telegram-update receipt are committed in
+one master DB writer transaction. `master_settings` keys in the `tgdev:` namespace
+contain only a hash of bot identity/chat/update ID and a `DeviceOp` ID; no token,
+configuration or private key is stored there. Redelivery after a lost Telegram
+reply, process restart or token rotation of the **same bot** cannot enqueue a
+second operation: create/toggle receipts return the existing operation; an
+already consumed deletion proof is rejected. Receipts currently have no
+retention/purge policy: deleting them manually removes this replay protection.
+A second, intentionally sent `/new` command is a new operation and still counts
+against the tariff. Pending bridge operations remain in the existing durable
+queue; bot replies distinguish queued from applied, and never claim successful
+provisioning merely because Telegram accepted a reply.
+
+Exports contain private keys and are a deliberate disclosure **to Telegram and
+the verified subscriber**, not an end-to-end encrypted channel. They are sent
+as in-memory multipart uploads with `protect_content=true`, with no secret in
+ordinary messages, captions, callback data, audit details, URLs or temporary
+files. Amnezia URIs are files, not clickable message links. Immediately before
+upload, the bot rereads the exact account/link, live subscription and device
+ownership after bridge I/O. It validates the Telegram response's message ID and
+private recipient. A Telegram failure has no secret-text fallback and no device
+mutation rollback; ambiguous upload success may cause a duplicate attachment on
+retry. Protection against forwarding is not protection against screenshots,
+downloads or Telegram's access. Prefer the HTTPS cabinet if that disclosure is
+unacceptable. Changes after an authorized request/send is already in flight
+cannot retract an accepted operation or attachment.
+
+The bot runs synchronous DB/crypto/bridge work via `asyncio.to_thread`, with one
+bounded I/O slot per bot instance; Telegram I/O remains asynchronous and no DB
+writer lock spans it. One authorized polling consumer per bot token is still
+required. A missing/down bridge fails closed for lists/exports; a queued mutation
+must be checked with `/devices` after recovery. Large or unsupported QR/AWG
+exports may be rejected; use `.conf` or the cabinet rather than a text fallback.
+No new migration, service setting, Stars path or proactive-notification behavior
+is introduced by device management.
+
+Regression tests in `backend/tests/test_master_bot_devices.py` use a disposable
+file-backed SQLite database, synthetic `httpx.MockTransport` Telegram multipart
+requests, and an injected node bridge. They cover own list/create/toggles,
+subscription/link/ownership denials, limit, confirmation expiry/cancel/replay,
+restart/token-rotation receipts, pending operations, guarded exports,
+post-bridge revocation, Telegram failures/invalid ACKs, and bounded off-loop I/O.
+Observed TDD: initial **62 failed / 4 passed**, then **66 passed**; two additional
+failing regressions for queued-time entitlement and token rotation were fixed.
+Final focused candidate checks: **75 passed**. Broader `test_master*.py` run on
+Windows: **219 passed, 1 deselected**, with an import-only `pwd` shim; the deselected
+boot-restore test requires Unix `grp`/`os.chown`. These are offline source/API/DB
+checks, not Linux host, real Telegram/client import, deployment or live-node
+acceptance. Existing FastAPI/Python deprecation and Pydantic warnings remain.
+
 ## Subscription notifications (Stage-2 candidate)
 
 Migration `0004_master` adds a transactional outbox (`master_subscription_notifications`), a subscription notification revision, and a verified private-chat link. Existing numeric Telegram IDs are **not** backfilled as links: each active subscriber must send a private `/start` to this master bot. Group chats and mismatched senders cannot link; disabled accounts cannot link or receive subscription details/magic links. The verified recipient is stored separately from the account identity, so changing an identity cannot silently transfer the link.

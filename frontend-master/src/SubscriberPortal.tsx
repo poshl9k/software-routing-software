@@ -1,13 +1,22 @@
-import { Alert, Box, Button, CircularProgress, Stack, TextField, Typography } from "@mui/material";
-import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
-import { MasterApiError, portalApi, type PortalDevice, type PortalMe } from "./api";
+import { Alert, Box, Button, Card as MuiCard, Chip, CircularProgress, Dialog, DialogActions,
+  DialogContent, DialogTitle, Stack, TextField, Typography } from "@mui/material";
+import { useEffect, useState, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { MasterApiError, portalApi, type PortalDevice, type PortalMe, type PortalOperation } from "./api";
 
-function Page({ title, children }: { title: string; children: React.ReactNode }) {
-  return <Box className="page"><Box component="main" className="content">
-    <Typography component="h1" variant="h1" sx={{ mb: 3, fontSize: { xs: "2rem", sm: "3rem" } }}>{title}</Typography>
-    {children}
-  </Box></Box>;
+function Page({ title, children }: { title: string; children: ReactNode }) {
+  return <Box className="page">
+    <Box component="header" className="topbar">
+      <Link className="brand" to="/portal">VS <span>PORTAL</span></Link>
+      <Typography color="text.secondary">Защищённый доступ</Typography>
+    </Box>
+    <Box component="main" className="content">
+      <Typography component="h1" variant="h1" sx={{ mb: 3, overflowWrap: "anywhere",
+        fontSize: { xs: "2rem", sm: "3rem", md: "3.6rem" } }}>{title}</Typography>
+      {children}
+    </Box>
+    <Box component="footer" className="footer">Портал абонента · vs-master</Box>
+  </Box>;
 }
 
 export function PortalLogin() {
@@ -40,71 +49,259 @@ export function MagicSignIn({ proof }: { proof: string }) {
   </Page>;
 }
 
+function ErrorNotice({ error, onRetry }: { error: string | null; onRetry?: () => void }) {
+  return error ? <Alert severity="error" action={onRetry &&
+    <Button color="inherit" size="small" onClick={onRetry}>Обновить</Button>}>{error}</Alert> : null;
+}
+
+function operationText(result: PortalOperation) {
+  return result.status === "applied" ? "Применено" : "Ожидает применения";
+}
+
+function handshake(value: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "Нет данных";
+  const days = Math.floor(Math.max(0, Date.now() - value * 1000) / 86_400_000);
+  return days === 0 ? "Недавно" : `${days} дн. назад`;
+}
+
 export function PortalHome() {
   const navigate = useNavigate();
   const [me, setMe] = useState<PortalMe | null>(null);
   const [devices, setDevices] = useState<PortalDevice[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+  const [dialog, setDialog] = useState<"add" | "remove" | null>(null);
+  const [target, setTarget] = useState<PortalDevice | null>(null);
   const [label, setLabel] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [working, setWorking] = useState<number | "create" | null>(null);
+  const [qr, setQr] = useState<{ title: string; url: string } | null>(null);
+  const [amnezia, setAmnezia] = useState<{ title: string; uri: string } | null>(null);
+
+  function showError(reason: unknown, fallback: string) {
+    if (reason instanceof MasterApiError && reason.status === 401) {
+      navigate("/portal/login", { replace: true });
+      return;
+    }
+    const known: Record<string, string> = {
+      "portal.device_limit": "Достигнут лимит устройств по тарифу.",
+      "portal.subscription_expired": "Подписка не активна. Обновите страницу.",
+      "portal.export_unavailable": "Конфигурация пока недоступна. Попробуйте позже.",
+      "portal.operation_pending": "Операция ещё выполняется. Обновите страницу позже.",
+      "master.no_node_available": "Сейчас нет доступной ноды. Попробуйте позже.",
+      "amnezia.role_unsupported": "Amnezia недоступна для этого устройства.",
+    };
+    setError(reason instanceof MasterApiError && reason.status === 0 ? reason.message
+      : reason instanceof MasterApiError ? known[reason.code] ?? fallback : fallback);
+  }
+
+  async function load() {
+    setError(null);
+    try {
+      const account = await portalApi.me();
+      setMe(account);
+      const list = await portalApi.devices();
+      setDevices(list.devices.filter(device => device.status !== "removed"));
+    } catch (reason) {
+      setDevices(null);
+      showError(reason, "Не удалось загрузить кабинет. Попробуйте позже.");
+    }
+  }
+
+  useEffect(() => { void load(); }, []);
   useEffect(() => {
-    let mounted = true;
-    void portalApi.me().then(async (result) => {
-      if (!mounted) return;
-      setMe(result);
-      if (result.subscription?.status === "active") {
-        const data = await portalApi.devices();
-        if (mounted) setDevices(data.devices);
-      }
-    }).catch((reason: unknown) => {
-      if (!mounted) return;
-      if (reason instanceof MasterApiError && reason.status === 401) navigate("/portal/login", { replace: true });
-      else setError("Не удалось загрузить кабинет. Попробуйте позже.");
-    });
-    return () => { mounted = false; };
-  }, [navigate]);
+    if (!devices?.some(device => device.pending_op)) return;
+    const timer = window.setTimeout(() => { void load(); }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [devices]);
+  useEffect(() => () => { if (qr) URL.revokeObjectURL(qr.url); }, [qr]);
+
   async function logout() {
     try { await portalApi.logout(); navigate("/portal/login", { replace: true }); }
-    catch { setError("Не удалось завершить сеанс. Попробуйте ещё раз."); }
+    catch (reason) { showError(reason, "Не удалось завершить сеанс. Попробуйте ещё раз."); }
   }
-  async function createDevice(event: FormEvent) {
-    event.preventDefault();
+
+  async function add() {
     const name = label.trim();
-    if (!name || creating) return;
-    setCreating(true); setError(null);
+    if (!name || working !== null) return;
+    setWorking("create"); setError(null);
     try {
-      await portalApi.createDevice(name);
-      const data = await portalApi.devices();
-      setDevices(data.devices);
-      setLabel("");
-    } catch { setError("Не удалось добавить устройство. Проверьте состояние подписки и ноды."); }
-    finally { setCreating(false); }
+      const result = await portalApi.createDevice(name);
+      setNotice(operationText(result));
+      setLabel(""); setDialog(null);
+      await load();
+    } catch (reason) { showError(reason, "Не удалось добавить устройство. Проверьте состояние подписки и ноды."); }
+    finally { setWorking(null); }
   }
-  return <Page title="Личный кабинет">
-    {error && <Alert severity="error">{error}</Alert>}
-    {!me && !error && <CircularProgress aria-label="Загрузка кабинета" />}
-    {me && <Stack spacing={3}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center">
-        <Typography variant="h6">{me.account.display_name}</Typography>
-        <Button onClick={() => void logout()}>Выйти</Button>
-      </Stack>
-      {me.subscription?.status === "active" ? <>
-        <Alert severity="success">Подписка активна: {me.subscription.tariff?.name ?? "тариф не указан"}. До {new Date(me.subscription.expires_at).toLocaleDateString("ru-RU")}.</Alert>
-        <Typography component="h2" variant="h5">Устройства</Typography>
-        <Box component="form" onSubmit={event => void createDevice(event)} className="form" sx={{ maxWidth: 420 }}>
-          <TextField label="Название устройства" value={label} onChange={event => setLabel(event.target.value)}
-            inputProps={{ maxLength: 128 }} fullWidth required />
-          <Button type="submit" variant="contained" disabled={creating || !label.trim()}>Добавить устройство</Button>
-        </Box>
-        {devices === null && !error && <CircularProgress aria-label="Загрузка устройств" />}
-        {devices?.length === 0 && <Alert severity="info">Устройств пока нет.</Alert>}
-        {devices?.map(device => <Box key={device.id}>
-          <Typography>{device.label} — {device.status === "active" && device.applied ? "Подключено" : "Не подключено"}</Typography>
-          {device.status === "active" && device.applied && <Button component="a" download
-            aria-label={`Скачать конфигурацию ${device.label}`}
-            href={`/api/portal/devices/${device.id}/export?format=conf`}>Скачать конфигурацию</Button>}
-        </Box>)}
-      </> : <Alert severity="info">{me.subscription ? "Подписка истекла" : "Подписка пока не активна"}</Alert>}
+
+  async function change(device: PortalDevice, kind: "delete" | "toggle") {
+    if (working !== null) return;
+    setWorking(device.id); setError(null);
+    try {
+      const result = kind === "delete" ? await portalApi.removeDevice(device.id)
+        : await portalApi.setDeviceActive(device.id, device.status !== "active");
+      setNotice(operationText(result));
+      setDialog(null); setTarget(null);
+      await load();
+    } catch (reason) { showError(reason, "Не удалось изменить устройство. Попробуйте ещё раз."); }
+    finally { setWorking(null); }
+  }
+
+  async function exportConfig(device: PortalDevice, format: "conf" | "qr" | "amnezia") {
+    setError(null);
+    try {
+      const blob = await portalApi.exportDevice(device.id, format);
+      const title = device.label || device.name || `Устройство ${device.id}`;
+      if (format === "qr") {
+        setQr({ title, url: URL.createObjectURL(blob) });
+      } else if (format === "amnezia") {
+        const uri = await blob.text();
+        if (!uri.startsWith("vpn://")) throw new MasterApiError(400, "amnezia.role_unsupported", "Неверный формат");
+        setAmnezia({ title, uri });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `${title}.conf`; a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (reason) { showError(reason, "Не удалось скачать конфигурацию."); }
+  }
+
+  const subscription = me?.subscription;
+  const active = subscription?.status === "active";
+  const count = devices?.length ?? 0;
+  const limit = subscription?.tariff?.device_limit;
+  const canAdd = active && devices !== null && limit !== undefined && count < limit;
+  const remaining = subscription ? Math.ceil((new Date(subscription.expires_at).getTime() - Date.now()) / 86_400_000) : null;
+
+  return <Page title={me ? `Здравствуйте, ${me.account.display_name}` : "Личный кабинет"}>
+    {me && <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+      <Typography color="text.secondary">Управляйте своими устройствами</Typography>
+      <Button onClick={() => void logout()} aria-label="Выйти из аккаунта">Выйти</Button>
     </Stack>}
+    {dialog === null && <ErrorNotice error={error} onRetry={() => void load()} />}
+    {notice && <Alert severity="info" onClose={() => setNotice("")}>{notice}</Alert>}
+    {!me && !error && <Box className="loading"><CircularProgress aria-label="Загрузка кабинета" /></Box>}
+    {me && <>
+      <MuiCard className="surface subscription" elevation={0}>
+        <Typography variant="overline" color="text.secondary">ПОДПИСКА</Typography>
+        <Box className="subscription-line">
+          <Box>
+            <Typography variant="h2">{subscription?.tariff?.name ?? "Тариф не указан"}</Typography>
+            <Typography color="text.secondary">{subscription
+              ? `Действует до ${new Date(subscription.expires_at).toLocaleDateString("ru-RU")}`
+              : "Срок действия не указан"}</Typography>
+          </Box>
+          <Chip label={active ? "Активна" : subscription ? "Истекла" : "Не назначена"}
+            color={active ? "success" : subscription ? "error" : "default"} variant="outlined" />
+        </Box>
+        {!subscription && <Alert severity="info" sx={{ mt: 2 }}>Подписка пока не активна</Alert>}
+        {subscription?.status === "expired" && <Alert severity="error" sx={{ mt: 2 }}>
+          Подписка истекла. Обратитесь к администратору для продления.
+        </Alert>}
+        {active && remaining !== null && remaining <= 7 && <Alert severity="warning" sx={{ mt: 2 }}>
+          Подписка истекает через {remaining} дн.
+        </Alert>}
+        {subscription?.tariff && <Typography className="limit-note" color="text.secondary">
+          На этом тарифе разрешено {limit} устройства. Используется: {count}.
+        </Typography>}
+      </MuiCard>
+
+      <MuiCard className="surface devices" elevation={0}>
+        <Box className="section-head">
+          <Box><Typography variant="h2">Устройства</Typography>
+            <Typography color="text.secondary" variant="body2">Ключи и адреса сохраняются при деактивации</Typography>
+          </Box>
+          <Button variant="contained" disabled={!canAdd || working !== null} onClick={() => setDialog("add")}>Добавить устройство</Button>
+        </Box>
+        {active && limit !== undefined && count >= limit && <Alert severity="warning" sx={{ mt: 2 }}>
+          Достигнут лимит тарифа. Удалите устройство или обратитесь к администратору.
+        </Alert>}
+        {devices === null ? !error && <Box className="loading"><CircularProgress aria-label="Загрузка устройств" /></Box>
+          : devices.length === 0 ? <Box sx={{ py: 5, textAlign: "center", color: "text.secondary" }}>
+            <Typography fontWeight={600} color="text.primary">Устройств пока нет</Typography>
+            <Typography sx={{ mt: 1 }}>Добавьте первое устройство, чтобы подключиться к VPN.</Typography>
+          </Box> : <Stack spacing={1.2} sx={{ mt: 2 }}>{devices.map(device => {
+            const exportReady = active && !!device.name && !device.pending_op;
+            return <Box className="device" key={device.id}>
+              <Box className="device-main">
+                <Box className="device-avatar" aria-hidden="true">
+                  {(device.label || device.name || "?").slice(0, 1).toUpperCase()}
+                </Box>
+                <Box><Typography fontWeight={600}>{device.label || device.name || `Устройство ${device.id}`}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {device.name ?? `#${device.id}`} · {handshake(device.last_handshake)}
+                  </Typography>
+                  <Stack direction="row" spacing={1} sx={{ mt: 0.7 }}>
+                    <Chip size="small" label={device.pending_op ? "Применяется…"
+                      : device.status === "active" ? "Включено" : "Отключено"}
+                      color={device.pending_op ? "info" : device.status === "active" ? "success" : "default"}
+                      variant="outlined" />
+                    <Chip size="small" label={device.applied ? "Применено"
+                      : device.pending_op ? "Ожидает применения" : "Не применено"} variant="outlined" />
+                  </Stack>
+                </Box>
+              </Box>
+              <Box className="device-actions">
+                <Button variant="outlined" size="small" disabled={!exportReady || working !== null}
+                  onClick={() => void exportConfig(device, "conf")}>Скачать .conf</Button>
+                <Button variant="outlined" size="small" disabled={!exportReady || working !== null}
+                  onClick={() => void exportConfig(device, "qr")}>QR</Button>
+                <Button variant="outlined" size="small" disabled={!exportReady || working !== null}
+                  onClick={() => void exportConfig(device, "amnezia")}>Amnezia</Button>
+                <Button variant="outlined" size="small" disabled={!active || !!device.pending_op || working !== null}
+                  onClick={() => void change(device, "toggle")}>{working === device.id ? <CircularProgress size={16} />
+                    : device.status === "active" ? "Деактивировать" : "Активировать"}</Button>
+                <Button variant="outlined" size="small" color="error" aria-label={`Удалить устройство ${device.label || device.name || device.id}`}
+                  disabled={!active || !!device.pending_op || working !== null}
+                  onClick={() => { setTarget(device); setDialog("remove"); }}>Удалить</Button>
+              </Box>
+            </Box>;
+          })}</Stack>}
+      </MuiCard>
+    </>}
+
+    <Dialog open={dialog === "add"} onClose={() => setDialog(null)} aria-labelledby="add-title" fullWidth maxWidth="sm">
+      <DialogTitle id="add-title">Добавить устройство</DialogTitle>
+      <DialogContent><TextField autoFocus margin="dense" label="Метка устройства" value={label}
+        onChange={event => setLabel(event.target.value)} inputProps={{ maxLength: 128 }} fullWidth />
+        <ErrorNotice error={error} /></DialogContent>
+      <DialogActions><Button onClick={() => setDialog(null)}>Отмена</Button>
+        <Button variant="contained" disabled={!label.trim() || working !== null} onClick={() => void add()}>
+          {working === "create" ? <CircularProgress size={16} /> : "Добавить"}</Button></DialogActions>
+    </Dialog>
+    <Dialog open={dialog === "remove"} onClose={() => setDialog(null)} aria-labelledby="remove-title" fullWidth maxWidth="sm">
+      <DialogTitle id="remove-title">Удалить устройство?</DialogTitle>
+      <DialogContent><Typography>«{target?.label || target?.name}» будет удалено безвозвратно. Ключи восстановить нельзя.</Typography>
+        <ErrorNotice error={error} /></DialogContent>
+      <DialogActions><Button onClick={() => setDialog(null)}>Отмена</Button>
+        <Button variant="contained" color="error" disabled={working !== null || !target}
+          onClick={() => { if (target) void change(target, "delete"); }}>Удалить устройство</Button></DialogActions>
+    </Dialog>
+    <Dialog open={qr !== null} onClose={() => setQr(null)} aria-labelledby="qr-title" fullWidth maxWidth="sm">
+      <DialogTitle id="qr-title">QR: {qr?.title}</DialogTitle>
+      <DialogContent sx={{ textAlign: "center" }}>
+        {qr && <img src={qr.url} alt={`QR-код конфигурации устройства ${qr.title}`}
+          style={{ width: "min(280px, 100%)", height: "auto" }} />}
+      </DialogContent>
+      <DialogActions><Button onClick={() => {
+        if (!qr) return;
+        const a = document.createElement("a"); a.href = qr.url; a.download = `${qr.title}.png`; a.click();
+      }}>Скачать PNG</Button><Button onClick={() => setQr(null)}>Закрыть</Button></DialogActions>
+    </Dialog>
+    <Dialog open={amnezia !== null} onClose={() => setAmnezia(null)} aria-labelledby="amnezia-title" fullWidth maxWidth="sm">
+      <DialogTitle id="amnezia-title">Подключение в Amnezia: {amnezia?.title}</DialogTitle>
+      <DialogContent><Typography variant="body2">На телефоне откройте ссылку в Amnezia. На компьютере скопируйте её и вставьте в приложении.</Typography>
+        {amnezia && <Box sx={{ mt: 2, textAlign: "center", display: "grid", gap: 1.5 }}>
+          <Button variant="contained" component="a" href={amnezia.uri}>Открыть в Amnezia</Button>
+          <Button onClick={() => {
+            const blob = new Blob([amnezia.uri], { type: "text/plain" });
+            const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+            a.download = `${amnezia.title}-amnezia.txt`; a.click(); URL.revokeObjectURL(a.href);
+          }}>Скачать файлом (.txt)</Button>
+        </Box>}</DialogContent>
+      <DialogActions><Button onClick={() => {
+        if (amnezia) void navigator.clipboard.writeText(amnezia.uri).catch(() => setError("Не удалось скопировать ссылку."));
+      }}>Скопировать vpn://</Button><Button onClick={() => setAmnezia(null)}>Закрыть</Button></DialogActions>
+    </Dialog>
   </Page>;
 }

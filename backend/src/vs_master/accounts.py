@@ -261,4 +261,5 @@ def me(request: Request, account: Account = Depends(current_account),
     return {'account': public_account(account),
             'subscription': {'status': 'expired' if expired else 'active',
                              'expires_at': subscription.expires_at,
-                             'tariff': {'name': tariff.name} if tariff is not None else None}}
+                             'tariff': {'name': tariff.name, 'device_limit': tariff.device_limit,
+                                        'term_days': tariff.term_days} if tariff is not None else None}}

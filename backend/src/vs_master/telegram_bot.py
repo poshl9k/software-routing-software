@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 from .accounts import issue_magic_token, register_telegram
 from .models import Account, Audit, PaymentReceipt, Setting, Subscription, Tariff, make_engine
 from .notifications import claim_notification, due_notifications, finish_notification
+from .device_bot import ACTIONS, DeviceController, error_reply
+from .worker import _default_node_client
+from vs_router.api.errors import APIError
 from vs_router.schema import EncryptedSecret
 from vs_router.secrets import decrypt_secret
 
@@ -25,6 +28,7 @@ def _menu():
     return {'inline_keyboard': [
         [{'text': 'Подписка', 'callback_data': 'status'},
          {'text': 'Личный кабинет', 'callback_data': 'login'}],
+        [{'text': 'Устройства', 'callback_data': 'dev:devices:0'}],
     ]}
 
 
@@ -36,13 +40,23 @@ def _private_sender(chat, sender):
 
 
 class Bot:
-    def __init__(self, engine, client, *, public_url=None, notifications_enabled=False, clock=None):
+    def __init__(self, engine, client, *, public_url=None, notifications_enabled=False, clock=None,
+                 node_client_factory=None):
         self.engine = engine
         self.client = client
         self.public_url = self._public_url(public_url) if public_url else None
         self.offset = None
         self.notifications_enabled = notifications_enabled
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.node_client_factory = node_client_factory or _default_node_client
+        self.device_controller = DeviceController(engine)
+        self.io_limit = asyncio.Semaphore(1)
+
+    async def _io(self, function, *args):
+        # DB/crypto/synchronous bridge work must not block the polling loop or
+        # build an unbounded executor queue when handlers are invoked together.
+        async with self.io_limit:
+            return await asyncio.to_thread(function, *args)
 
     @staticmethod
     def _public_url(value):
@@ -112,7 +126,51 @@ class Bot:
                         f'Истекает: {subscription.expires_at:%d.%m.%Y}.')
         return text, {'inline_keyboard': [[{'text': 'Назад', 'callback_data': 'menu'}]]}
 
-    async def handle_callback(self, token, query):
+    async def device_interaction(self, token, identity, action, argument, update_id,
+                                 message_id=None):
+        receipt_key = 'tgdev:' + sha256(
+            f'{token.partition(":")[0]}:{identity}:{update_id}'.encode()).hexdigest()[:56]
+        try:
+            answer = await self._io(lambda: self.device_controller.execute(
+                identity, action, argument, self.clock(), self.node_client_factory, receipt_key))
+            if answer.attachment:
+                # Re-read the exact owner/link/subscription after slow bridge
+                # I/O and immediately before disclosing key material.
+                await self._io(lambda: self.device_controller.authorize_export(
+                    identity, answer.authorization, self.clock()))
+        except APIError as exc:
+            answer = error_reply(exc)
+        except Exception as exc:
+            logger.error('Telegram device operation failed (%s)', type(exc).__name__)
+            answer = error_reply(exc)
+        if answer.attachment:
+            kind, content, media_type, filename = answer.attachment
+            field = 'photo' if kind == 'qr' else 'document'
+            method = 'sendPhoto' if kind == 'qr' else 'sendDocument'
+            # In-memory multipart bytes only: no URL/file-id reuse, temporary
+            # files, captions with keys, or sendMessage fallback for a secret.
+            response = await self.client.post(f'https://api.telegram.org/bot{token}/{method}',
+                data={'chat_id': str(identity), 'protect_content': 'true'},
+                files={field: (filename, content, media_type)})
+            response.raise_for_status()
+            data = response.json()
+            result = data.get('result') if isinstance(data, dict) else None
+            chat = result.get('chat') if isinstance(result, dict) else None
+            if (not isinstance(data, dict) or data.get('ok') is not True
+                    or not isinstance(result, dict) or type(result.get('message_id')) is not int
+                    or result['message_id'] <= 0 or not isinstance(chat, dict)
+                    or type(chat.get('id')) is not int or chat['id'] != identity
+                    or chat.get('type') != 'private'):
+                raise ValueError('Telegram returned an invalid attachment acknowledgement')
+            return
+        payload = {'chat_id': identity, 'text': answer.text}
+        if answer.markup:
+            payload['reply_markup'] = answer.markup
+        if message_id is not None:
+            payload['message_id'] = message_id
+        await self.request(token, 'editMessageText' if message_id is not None else 'sendMessage', payload)
+
+    async def handle_callback(self, token, query, update_id=None):
         query_id = query.get('id')
         if not isinstance(query_id, str) or not query_id:
             return
@@ -120,11 +178,23 @@ class Bot:
         message = message if isinstance(message, dict) else {}
         identity = _private_sender(message.get('chat'), query.get('from'))
         view = query.get('data')
+        if isinstance(view, str) and view.startswith('dev:'):
+            parts = view.split(':', 2)
+            message_id = message.get('message_id')
+            if (identity is None or len(parts) != 3 or parts[1] not in ACTIONS
+                    or parts[1] == 'new' or len(view) > 64 or type(update_id) is not int
+                    or type(message_id) is not int or message_id <= 0):
+                await self.request(token, 'answerCallbackQuery', {
+                    'callback_query_id': query_id, 'text': 'Недоступно.'})
+                return
+            await self.request(token, 'answerCallbackQuery', {'callback_query_id': query_id})
+            await self.device_interaction(token, identity, parts[1], parts[2], update_id, message_id)
+            return
         if identity is None or view not in VIEWS:
             await self.request(token, 'answerCallbackQuery', {
                 'callback_query_id': query_id, 'text': 'Недоступно.'})
             return
-        answer = await asyncio.to_thread(self.reply, identity, view)
+        answer = await self._io(self.reply, identity, view)
         await self.request(token, 'answerCallbackQuery', {'callback_query_id': query_id})
         if answer is None:
             return
@@ -192,19 +262,27 @@ class Bot:
                     continue
                 query = update.get('callback_query')
                 if isinstance(query, dict):
-                    await self.handle_callback(token, query)
+                    await self.handle_callback(token, query, update_id)
                 else:
                     message = update.get('message')
                     message = message if isinstance(message, dict) else {}
                     if 'successful_payment' in message:
-                        await asyncio.to_thread(self.retain_unexpected_payment, message)
+                        await self._io(self.retain_unexpected_payment, message)
                         self.offset = update_id + 1
                         continue
                     identity = _private_sender(message.get('chat'), message.get('from'))
                     content = message.get('text')
+                    if identity is not None and isinstance(content, str):
+                        parts = content.strip().split(maxsplit=1)
+                        action = parts[0][1:] if parts and parts[0].startswith('/') else None
+                        if action in ACTIONS - {'confirm', 'cancel'}:
+                            argument = parts[1] if len(parts) == 2 else ''
+                            await self.device_interaction(token, identity, action, argument, update_id)
+                            self.offset = update_id + 1
+                            continue
                     if identity is not None and isinstance(content, str) and content.strip() in COMMANDS:
                         view = 'start' if content.strip() == '/start' else content.strip()[1:]
-                        answer = await asyncio.to_thread(self.reply, identity, view, message)
+                        answer = await self._io(self.reply, identity, view, message)
                         if answer is not None:
                             text, markup = answer
                             payload = {'chat_id': identity, 'text': text}
@@ -221,9 +299,9 @@ class Bot:
         """At-least-once sends: Telegram success precedes the durable local ACK."""
         if not self.notifications_enabled:
             return
-        event_ids = await asyncio.to_thread(due_notifications, self.engine, self.clock())
+        event_ids = await self._io(due_notifications, self.engine, self.clock())
         for event_id in event_ids:
-            claim = await asyncio.to_thread(claim_notification, self.engine, event_id, self.clock())
+            claim = await self._io(claim_notification, self.engine, event_id, self.clock())
             if claim is None:
                 continue
             claim_token, payload = claim
@@ -240,14 +318,14 @@ class Bot:
             except Exception as exc:
                 # Never log exception text/URLs, raw chat IDs, or message bodies.
                 logger.error('Telegram notification failed (%s)', type(exc).__name__)
-            await asyncio.to_thread(finish_notification, self.engine, event_id, claim_token,
-                                    self.clock(), message_id=message_id)
+            await self._io(lambda: finish_notification(self.engine, event_id, claim_token,
+                                                       self.clock(), message_id=message_id))
 
     async def run(self, token=None, *, sleep=asyncio.sleep):
         while True:
             try:
-                current = token or await asyncio.to_thread(self.setting, 'master_bot_token')
-                public = await asyncio.to_thread(self.setting, 'master_public_url')
+                current = token or await self._io(self.setting, 'master_bot_token')
+                public = await self._io(self.setting, 'master_public_url')
                 if not current or not public:
                     await sleep(30)
                     continue

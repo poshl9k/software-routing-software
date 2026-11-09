@@ -155,7 +155,7 @@ async def test_criterion_2_cookie_separation_and_me_expired_state(master_portal)
     assert me.json()['account'] == {'id': master_portal[-1]['account'],
                                     'display_name': 'Alice'}
     assert me.json()['subscription']['status'] == 'expired'
-    assert me.json()['subscription']['tariff'] == {'name': 'Base'}
+    assert me.json()['subscription']['tariff'] == {'name': 'Base', 'device_limit': 8, 'term_days': 30}
 
 
 async def test_criterion_3_list_merges_node_state(master_portal):

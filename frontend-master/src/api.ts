@@ -57,14 +57,29 @@ export type MasterDevice = {
 export type PortalAccount = { id: number; display_name: string };
 export type PortalMe = {
   account: PortalAccount;
-  subscription: { status: "active" | "expired"; expires_at: string; tariff: { name: string } | null } | null;
+  subscription: { status: "active" | "expired"; expires_at: string;
+    tariff: { name: string; device_limit: number; term_days: number } | null } | null;
 };
 export type PortalDevice = {
-  id: number; name: string | null; label: string; status: string;
+  id: number; name: string | null; label: string; status: "active" | "inactive" | "pending" | "removed";
   allowed_ips: string[]; applied: boolean; last_handshake: number | null;
   pending_op?: string;
 };
 export type PortalDevices = { devices: PortalDevice[] };
+export type PortalOperation = { status: "applied" | "pending"; operation_id: number; device_id: number };
+
+async function exportPortalDevice(id: number, format: "conf" | "qr" | "amnezia"): Promise<Blob> {
+  const response = await fetch(`/api/portal/devices/${id}/export?format=${format}`, {
+    credentials: "include", cache: "no-store",
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => undefined) as MasterErrorBody | undefined;
+    const code = body?.error?.code ?? body?.code ?? `http.${response.status}`;
+    throw new MasterApiError(response.status, code,
+      body?.error?.message ?? body?.message ?? "Не удалось экспортировать конфигурацию");
+  }
+  return response.blob();
+}
 
 export const portalApi = {
   magic: (token: string) => masterRequest<PortalAccount>("/api/portal/login/magic", {
@@ -72,8 +87,12 @@ export const portalApi = {
   }),
   me: () => masterRequest<PortalMe>("/api/portal/me"),
   devices: () => masterRequest<PortalDevices>("/api/portal/devices"),
-  createDevice: (label: string) => masterRequest<{ status: string; operation_id: number; device_id: number }>(
+  createDevice: (label: string) => masterRequest<PortalOperation>(
     "/api/portal/devices", { method: "POST", body: JSON.stringify({ label }) }),
+  removeDevice: (id: number) => masterRequest<PortalOperation>(`/api/portal/devices/${id}`, { method: "DELETE" }),
+  setDeviceActive: (id: number, active: boolean) => masterRequest<PortalOperation>(
+    `/api/portal/devices/${id}/${active ? "activate" : "deactivate"}`, { method: "POST" }),
+  exportDevice: exportPortalDevice,
   logout: () => masterRequest<void>("/api/portal/logout", { method: "POST" }),
 };
 

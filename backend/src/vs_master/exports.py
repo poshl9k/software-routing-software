@@ -16,7 +16,8 @@ from vs_router.secrets import decrypt_secret, encrypt_secret
 
 from .accounts import current_account, get_db
 from .models import Account, Node
-from .portal_api import device_owned, live_subscription, subscriber_state
+from .device_service import device_owned, live_subscription, subscriber_state
+from .portal_api import _client_factory
 
 router = APIRouter(prefix='/api/portal', dependencies=[Depends(current_account)])
 
@@ -125,18 +126,17 @@ def _amnezia_uri(device, tunnel, key, account_name):
         raise APIError(503, 'portal.export_unavailable') from exc
 
 
-@router.get('/devices/{identity}/export')
-def export_device(identity: str, request: Request, format: str = Query('conf'),
-                  account: Account = Depends(current_account), db: Session = Depends(get_db)):
+def device_export(db, account, identity, format, now, node_client_factory):
+    """Guarded shared export: bytes, media type, and filename; never a message."""
     if format not in ('conf', 'qr', 'amnezia'):
         raise APIError(422, 'portal.export_format')
-    live_subscription(db, account.id, request.app.state.portal_auth.now())
+    live_subscription(db, account.id, now)
     device = device_owned(db, identity, account.id)
     node = db.get(Node, device.node_id)
     if node is None:
         raise APIError(503, 'portal.export_unavailable')
     try:
-        state = subscriber_state(request, node, device.node_subscriber)
+        state = subscriber_state(node_client_factory, node, device.node_subscriber)
     except APIError:
         raise APIError(503, 'portal.export_unavailable') from None
     tunnel = state.get('tunnel')
@@ -146,14 +146,22 @@ def export_device(identity: str, request: Request, format: str = Query('conf'),
         image = qrcode.make(_conf_text(device, tunnel, key))
         out = io.BytesIO()
         image.save(out, 'PNG')
-        return Response(out.getvalue(), media_type='image/png',
-                        headers={'Cache-Control': 'no-store'})
+        return out.getvalue(), 'image/png', f'{filename}.png'
     if format == 'amnezia':
+        if not isinstance(tunnel, dict):
+            raise APIError(503, 'portal.export_unavailable')
         uri = _amnezia_uri(device, tunnel, key, device.node_subscriber)
-        return Response(uri, media_type='text/plain; charset=utf-8',
-                        headers={'Content-Disposition':
-                                 f'attachment; filename="{filename}-amnezia.txt"',
-                                 'Cache-Control': 'no-store'})
-    return Response(_conf_text(device, tunnel, key), media_type='text/plain; charset=utf-8',
-                    headers={'Content-Disposition': f'attachment; filename="{filename}.conf"',
-                             'Cache-Control': 'no-store'})
+        return uri.encode(), 'text/plain; charset=utf-8', f'{filename}-amnezia.txt'
+    return (_conf_text(device, tunnel, key).encode(), 'text/plain; charset=utf-8',
+            f'{filename}.conf')
+
+
+@router.get('/devices/{identity}/export')
+def export_device(identity: str, request: Request, format: str = Query('conf'),
+                  account: Account = Depends(current_account), db: Session = Depends(get_db)):
+    content, media_type, filename = device_export(
+        db, account, identity, format, request.app.state.portal_auth.now(), _client_factory(request))
+    headers = {'Cache-Control': 'no-store'}
+    if format != 'qr':
+        headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return Response(content, media_type=media_type, headers=headers)
