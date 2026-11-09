@@ -22,14 +22,14 @@ from vs_router.secrets import decrypt_secret
 logger = logging.getLogger(__name__)
 COMMANDS = {'/start', '/menu', '/status', '/login'}
 VIEWS = {'menu', 'status', 'login'}
+MENU_LABELS = {'Подписка': 'status', 'Личный кабинет': 'login', 'Устройства': 'devices'}
 
 
 def _menu():
-    return {'inline_keyboard': [
-        [{'text': 'Подписка', 'callback_data': 'status'},
-         {'text': 'Личный кабинет', 'callback_data': 'login'}],
-        [{'text': 'Устройства', 'callback_data': 'dev:devices:0'}],
-    ]}
+    return {'keyboard': [
+        [{'text': 'Подписка'}, {'text': 'Личный кабинет'}],
+        [{'text': 'Устройства'}],
+    ], 'resize_keyboard': True, 'is_persistent': True}
 
 
 def _private_sender(chat, sender):
@@ -112,7 +112,6 @@ class Bot:
                     {'inline_keyboard': [
                         [{'text': 'Открыть кабинет',
                           'url': f'{self.public_url}/login#token={proof}'}],
-                        [{'text': 'Назад', 'callback_data': 'menu'}],
                     ]})
         with Session(self.engine) as db:
             subscription = db.scalar(select(Subscription).where(
@@ -124,7 +123,7 @@ class Bot:
                 tariff = db.get(Tariff, subscription.tariff_id)
                 text = (f'Тариф: {tariff.name if tariff else "неизвестен"}. '
                         f'Истекает: {subscription.expires_at:%d.%m.%Y}.')
-        return text, {'inline_keyboard': [[{'text': 'Назад', 'callback_data': 'menu'}]]}
+        return text, None
 
     async def device_interaction(self, token, identity, action, argument, update_id,
                                  message_id=None):
@@ -202,10 +201,14 @@ class Bot:
         if type(message_id) is not int or message_id <= 0:
             return
         text, markup = answer
-        payload = {'chat_id': identity, 'message_id': message_id, 'text': text}
+        # Telegram can only edit inline keyboards; a chat-level reply keyboard
+        # must arrive on a new message, including from older inline menus.
+        payload = {'chat_id': identity, 'text': text}
+        if view != 'menu':
+            payload['message_id'] = message_id
         if markup:
             payload['reply_markup'] = markup
-        await self.request(token, 'editMessageText', payload)
+        await self.request(token, 'sendMessage' if view == 'menu' else 'editMessageText', payload)
 
     def retain_unexpected_payment(self, message):
         """Never grant access for a payment without a matching approved order."""
@@ -273,7 +276,23 @@ class Bot:
                     identity = _private_sender(message.get('chat'), message.get('from'))
                     content = message.get('text')
                     if identity is not None and isinstance(content, str):
-                        parts = content.strip().split(maxsplit=1)
+                        selection = content.strip()
+                        view = MENU_LABELS.get(selection)
+                        if view == 'devices':
+                            await self.device_interaction(token, identity, 'devices', '', update_id)
+                            self.offset = update_id + 1
+                            continue
+                        if view is not None:
+                            answer = await self._io(self.reply, identity, view)
+                            if answer is not None:
+                                text, markup = answer
+                                payload = {'chat_id': identity, 'text': text}
+                                if markup:
+                                    payload['reply_markup'] = markup
+                                await self.request(token, 'sendMessage', payload)
+                            self.offset = update_id + 1
+                            continue
+                        parts = selection.split(maxsplit=1)
                         action = parts[0][1:] if parts and parts[0].startswith('/') else None
                         if action in ACTIONS - {'confirm', 'cancel'}:
                             argument = parts[1] if len(parts) == 2 else ''

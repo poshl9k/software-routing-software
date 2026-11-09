@@ -150,6 +150,50 @@ def operations(engine):
         return [(op.op, op.status) for op in db.scalars(select(DeviceOp).order_by(DeviceOp.id))]
 
 
+async def test_chat_keyboard_stays_available_and_labels_route_to_existing_actions(rig):
+    calls = await send(rig, command('/start'))
+    menu = messages(calls)[0]['reply_markup']
+    assert menu == {'keyboard': [
+        [{'text': 'Подписка'}, {'text': 'Личный кабинет'}],
+        [{'text': 'Устройства'}]],
+        'resize_keyboard': True, 'is_persistent': True}
+    assert 'inline_keyboard' not in menu
+
+    calls = await send(rig, command('Подписка', 2))
+    assert 'Base' in messages(calls)[0]['text']
+    assert 'reply_markup' not in messages(calls)[0]
+    calls = await send(rig, command('Личный кабинет', 3))
+    assert messages(calls)[0]['reply_markup']['inline_keyboard'][0][0]['url'].startswith(
+        'https://master.example/login#token=')
+    calls = await send(rig, command('Устройства', 4))
+    assert 'Phone' in messages(calls)[0]['text']
+    assert 'inline_keyboard' in messages(calls)[0]['reply_markup'], 'device-specific controls stay inline'
+    assert all(button.get('callback_data') != 'menu'
+               for row in messages(calls)[0]['reply_markup']['inline_keyboard'] for button in row)
+    assert operations(rig[2]) == []
+
+async def test_old_inline_menu_callback_opens_chat_keyboard_without_editing_it(rig):
+    calls = await send(rig, callback('menu'))
+    assert [method for method, _ in calls] == [
+        'getUpdates', 'answerCallbackQuery', 'sendMessage']
+    assert messages(calls)[0]['reply_markup']['is_persistent'] is True
+
+async def test_empty_device_list_omits_empty_inline_keyboard(rig):
+    with Session(rig[2]) as db:
+        db.delete(db.get(Device, 1))
+        db.commit()
+    rig[4]['devices'] = []
+    calls = await send(rig, command('Устройства'))
+    assert 'Устройств пока нет' in messages(calls)[0]['text']
+    assert 'reply_markup' not in messages(calls)[0]
+
+@pytest.mark.parametrize('update', [command('Устройства', sender=200),
+                                   command('Подписка', chat_type='group'),
+                                   command('Личный кабинет', sender=200)])
+async def test_chat_keyboard_text_never_bypasses_private_sender_check(rig, update):
+    calls = await send(rig, update)
+    assert not messages(calls) and not rig[3]
+
 async def test_list_shows_own_status_and_actions_without_node_or_secret(rig):
     calls = await send(rig, command('/devices'))
     assert messages(calls), 'device list must be reachable from bot'

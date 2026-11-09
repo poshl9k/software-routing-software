@@ -161,5 +161,4 @@ class DeviceController:
             nav.append({'text': 'Далее', 'callback_data': f'dev:devices:{offset + PAGE_SIZE}'})
         if nav:
             rows.append(nav)
-        rows.append([{'text': 'Меню', 'callback_data': 'menu'}])
-        return DeviceReply('\n'.join(lines), {'inline_keyboard': rows})
+        return DeviceReply('\n'.join(lines), {'inline_keyboard': rows} if rows else None)
