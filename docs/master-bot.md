@@ -208,6 +208,35 @@ bridges (including both existing devices and multiple nodes). These prove local
 DB/bot/worker behavior only, not Telegram capture, Linux host apply, production
 refunds or live node activation. No live invoice was sent by these checks.
 
+### Operator reconciliation (read-only)
+
+`GET /api/master-admin/payments/reconciliation` requires an administrator session.
+It returns ledger-wide **row counts**, not a deduplicated number of incidents
+(orders, receipts, granted/review/unmatched events, receipts without an event,
+pending renewals and review orders), plus order snapshots
+in descending ID order with `limit` (1–100, default 50), optional `before_id` and
+`next_before_id`. Each order includes a non-secret account ID, fixed price,
+timestamps, grant/fulfillment states and per-node ticket status. A `sending`
+invoice older than five minutes is flagged `invoice.ack_unknown`; a paid renewal
+still pending after five minutes is `renewal.overdue`; review state is
+`payment.review`. An expired unpaid `sent` order is history, not proof of a charge.
+Amounts are integer XTR units, not the tariff's display price. The response omits
+charge IDs, Telegram chat IDs, payload hashes, tokens and arbitrary node error
+details; only the verified `renewed` ticket detail is exposed. All counts are
+from one SQLite read snapshot, including when the list is paginated. The endpoint
+does not refund, replay a provider update, retry a failed operation, contact a
+node or change an entitlement. A flagged case requires an operator to inspect
+the protected ledger and reconcile it before taking a separately approved action.
+
+After the one-charge test, a copy of the paid master SQLite backup was restored
+into an isolated root-only directory and checked for revision `0006_master`,
+SQLite integrity and foreign keys, one receipt/granted event, the paid order,
+matching subscription expiry and an acknowledged renewal ticket. This was an
+offline recovery drill, **not** an overwrite of the live database. Never restore
+a pre-payment backup on top of a paid ledger: it loses the durable receipt and
+can grant or charge inconsistently. The master key must also be preserved
+separately for an actual recovery.
+
 Reproduce the platform-independent focused checks from `backend/` (use a fresh
 scratch path for `--basetemp` on Windows):
 

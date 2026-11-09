@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from vs_portal.errors import install_errors, nested
 
-from . import accounts, admin_api, auth, exports, portal_api
+from . import accounts, admin_api, auth, exports, payments_api, portal_api
 from .models import make_engine
 
 
@@ -37,6 +37,7 @@ def create_master_app(engine=None, database_url=None, clock=None):
     app.include_router(auth.router, prefix='/api/admin')
     app.include_router(accounts.router, prefix='/api/portal')
     app.include_router(admin_api.router)
+    app.include_router(payments_api.router)
     app.include_router(portal_api.router)
     app.include_router(exports.router)
 
