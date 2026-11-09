@@ -20,6 +20,7 @@ from .models import (Account, Audit, Device, DeviceOp, Node, PaymentReceipt, Sta
 from .notifications import enqueue_subscription
 
 SLOT = 'super-30d-1xtr-v1'
+RETRY_SLOT = 'super-30d-1xtr-retry-v1'
 
 
 class PaymentValues(TypedDict):
@@ -86,7 +87,7 @@ def _ready(db, account_id, payer, now, order=None):
 
 
 def prepare_invoice(engine, bot_id, payer, clock):
-    """Reserve the sole slot BEFORE send; ambiguous send is never retried."""
+    """Reserve a new slot before sending; never reuse an ambiguous invoice."""
     account_id = opted_account()
     if account_id is None:
         return None
@@ -94,11 +95,29 @@ def prepare_invoice(engine, bot_id, payer, clock):
         _write(db)
         now = clock()
         ready = _ready(db, account_id, payer, now)
-        if ready is None or db.scalar(select(StarsOrder.id)) is not None:
+        if ready is None:
+            return None
+        orders = list(db.scalars(select(StarsOrder).order_by(StarsOrder.id)))
+        if not orders:
+            slot = SLOT
+        elif len(orders) == 1:
+            prior = orders[0]
+            if (prior.test_slot != SLOT or prior.state != 'sent' or prior.bot_id != bot_id
+                    or prior.account_id != account_id or prior.payer_chat_id != str(payer)
+                    or prior.expires_at > now or prior.sent_at is None
+                    or type(prior.message_id) is not int or prior.message_id <= 0
+                    or prior.checkout_id is not None or prior.approved_at is not None
+                    or prior.paid_charge_id is not None or prior.fulfillment_status != 'pending'
+                    or _ready(db, account_id, payer, now, prior) is None
+                    or db.scalar(select(PaymentReceipt.telegram_charge_id)) is not None
+                    or db.scalar(select(StarsPaymentEvent.fingerprint)) is not None):
+                return None
+            slot = RETRY_SLOT
+        else:
             return None
         account, subscription, tariff = ready
         payload = secrets.token_urlsafe(32)
-        order = StarsOrder(test_slot=SLOT, bot_id=bot_id, account_id=account.id,
+        order = StarsOrder(test_slot=slot, bot_id=bot_id, account_id=account.id,
                            subscription_id=subscription.id, tariff_id=tariff.id, tariff_name=tariff.name,
                            device_limit=tariff.device_limit, payer_chat_id=str(payer),
                            linked_at=account.telegram_linked_at, currency='XTR', amount=1, term_days=30,
@@ -147,6 +166,8 @@ def approve_checkout(engine, bot_id, query, clock, deadline):
         order = db.scalar(select(StarsOrder).where(
             StarsOrder.payload_hash == sha256(payload.encode()).hexdigest()))
         if (order is None or order.bot_id != bot_id or order.state != 'sent'
+                or (order.test_slot == SLOT and db.scalar(select(StarsOrder.id).where(
+                    StarsOrder.test_slot == RETRY_SLOT)) is not None)
                 or order.account_id != account_id or order.payer_chat_id != str(payer['id'])
                 or order.expires_at <= now or now < order.created_at
                 or (order.checkout_id is not None and order.checkout_id != query['id'])

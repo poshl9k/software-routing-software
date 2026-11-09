@@ -135,14 +135,20 @@ does not resolve merchant payment disputes. Paying the invoice indicates
 acceptance of the `/terms` terms; this test is limited to the explicitly
 consenting allowlisted buyer.
 
-A unique database-wide test slot permits **one invoice attempt ever**, not one
-per update/process/account setting. The transaction records account, verified-link
+A unique database-wide first slot permits one invoice attempt, not one per
+update/process/account setting. Migration `0006_master` adds **one fixed retry
+slot** without deleting or rewriting the first order. It can be used only after
+the first invoice's ten-minute deadline, with a valid private ACK and no
+approved checkout, payment receipt/event, account relink, subscription change
+or pending device operation. An ambiguous send/ACK or checkout approval forbids
+the retry; a second retry is never available. A late checkout on the expired
+first invoice is rejected. The transaction records account, verified-link
 timestamp, stable bot identity, exact subscription/tariff, price/term/limit, prior
 expiry and a hashed opaque payload before Telegram I/O. The raw payload is never
 stored/logged. The order is `sending` until a valid private-message ACK, then
 `sent`. Send failure, lost ACK, crash or invoice expiry does **not** release the
 slot or resend an invoice; operator reconciliation is required. Do not delete
-orders or reset the slot to retry: an earlier invoice may still exist remotely.
+orders or reset a slot to retry: an earlier invoice may still exist remotely.
 
 Pre-checkout rechecks the exact order, sender, link, live subscription, tariff,
 price, currency, ten-minute deadline and local fulfillment readiness. It persists
@@ -191,9 +197,10 @@ the charge, order/ledger, exact subscription, outbox revision, all node tickets 
 actual existing peers separately before claiming end-to-end success.
 
 The new tables are `master_stars_orders`, `master_stars_payment_events`, and
-`master_stars_fulfillments`. Downgrade refuses if any contains history; stop the
-processes and use a reviewed backup instead of dropping payment evidence. Empty
-migration rollback preserves old unmatched receipts. Tests cover disposable
+`master_stars_fulfillments`. Downgrade `0006_master` → `0005_master` refuses if
+the retry order exists; downgrade `0005_master` → `0004_master` refuses any Stars
+history. Stop processes and use a reviewed backup rather than dropping payment
+evidence. Empty migration rollback preserves old unmatched receipts. Tests cover disposable
 file-backed SQLite/WAL, prior-data upgrades and metadata/constraint parity, mocked
 Telegram exact XTR invoice payloads, concurrent/restarted/reordered receipts,
 rollback on ticket persistence failure and actual worker replay against fake

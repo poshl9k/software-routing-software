@@ -160,6 +160,88 @@ async def test_invoice_is_durable_exact_one_time_price_and_never_resent(rig):
         assert db.scalar(select(PaymentReceipt)) is None
 
 
+async def test_expired_unapproved_invoice_allows_only_one_new_durable_attempt(rig):
+    await send(rig, command())
+    old_payload = invoices(rig)[0]['payload']
+    await send(rig, command(2), restart=True)
+    assert len(invoices(rig)) == 1
+    rig[3][0] += timedelta(minutes=11)
+    await send(rig, command(3), restart=True)
+    assert len(invoices(rig)) == 2
+    assert invoices(rig)[1]['payload'] != old_payload
+    await send(rig, command(4), restart=True)
+    assert len(invoices(rig)) == 2
+    with rig[2].connect() as db:
+        orders = db.execute(text('SELECT test_slot, state, approved_at FROM master_stars_orders ORDER BY id')).all()
+    assert orders == [('super-30d-1xtr-v1', 'sent', None),
+                      ('super-30d-1xtr-retry-v1', 'sent', None)]
+    await send(rig, checkout(old_payload, update_id=5), restart=True)
+    assert [p for m, p in rig[1].calls if m == 'answerPreCheckoutQuery'][-1]['ok'] is False
+    await send(rig, checkout(invoices(rig)[1]['payload'], update_id=6), restart=True)
+    assert [p for m, p in rig[1].calls if m == 'answerPreCheckoutQuery'][-1]['ok'] is True
+
+
+async def test_concurrent_retry_reserves_only_one_new_order(rig):
+    from vs_master.stars import prepare_invoice
+
+    await send(rig, command())
+    rig[3][0] += timedelta(minutes=11)
+    results = await asyncio.gather(*(
+        asyncio.to_thread(prepare_invoice, rig[2], '900', 100, lambda: rig[3][0])
+        for _ in range(2)))
+    assert sum(result is not None for result in results) == 1
+    with rig[2].connect() as db:
+        assert db.scalar(text('SELECT COUNT(*) FROM master_stars_orders')) == 2
+
+
+async def test_clock_rollback_cannot_reapprove_first_invoice_after_retry(rig):
+    await send(rig, command())
+    old_payload = invoices(rig)[0]['payload']
+    initial_time = rig[3][0]
+    rig[3][0] += timedelta(minutes=11)
+    await send(rig, command(2), restart=True)
+    assert len(invoices(rig)) == 2
+    rig[3][0] = initial_time + timedelta(minutes=9)
+    await send(rig, checkout(old_payload, update_id=3), restart=True)
+    assert [p for m, p in rig[1].calls if m == 'answerPreCheckoutQuery'][-1]['ok'] is False
+    rig[3][0] = initial_time + timedelta(minutes=11)
+    await send(rig, checkout(invoices(rig)[1]['payload'], update_id=4), restart=True)
+    assert [p for m, p in rig[1].calls if m == 'answerPreCheckoutQuery'][-1]['ok'] is True
+    with rig[2].connect() as db:
+        assert db.execute(text('SELECT approved_at IS NOT NULL FROM master_stars_orders ORDER BY id')).scalars().all() == [0, 1]
+
+
+@pytest.mark.parametrize('risk', ['approved', 'ambiguous_send', 'receipt', 'relinked', 'changed_grant'])
+async def test_retry_refused_if_first_attempt_or_entitlement_is_ambiguous(rig, risk):
+    if risk == 'ambiguous_send':
+        rig[1].fail_invoice = True
+    await send(rig, command())
+    if risk == 'ambiguous_send':
+        rig[1].fail_invoice = False
+    elif risk == 'approved':
+        await send(rig, checkout(invoices(rig)[0]['payload']), restart=True)
+        assert [p for m, p in rig[1].calls if m == 'answerPreCheckoutQuery'][-1]['ok'] is True
+    elif risk in ('receipt', 'relinked', 'changed_grant'):
+        with Session(rig[2]) as db:
+            if risk == 'receipt':
+                db.add(PaymentReceipt(telegram_charge_id='unexpected', payer_chat_id='100',
+                                      currency='XTR', amount=1, payload_hash='a' * 64))
+            elif risk == 'relinked':
+                account = db.get(Account, 1)
+                assert account is not None and account.telegram_linked_at is not None
+                account.telegram_linked_at += timedelta(seconds=1)
+            else:
+                subscription = db.get(Subscription, 1)
+                assert subscription is not None
+                subscription.expires_at += timedelta(days=1)
+            db.commit()
+    rig[3][0] += timedelta(minutes=11)
+    await send(rig, command(4), restart=True)
+    assert len(invoices(rig)) == 1
+    with rig[2].connect() as db:
+        assert db.scalar(text('SELECT COUNT(*) FROM master_stars_orders')) == 1
+
+
 def checkout(payload, update_id=2, **changes):
     query = {'id': 'synthetic-checkout', 'from': {'id': 100}, 'currency': 'XTR',
              'total_amount': 1, 'invoice_payload': payload}

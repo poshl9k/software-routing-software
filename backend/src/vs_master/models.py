@@ -95,13 +95,14 @@ class PaymentReceipt(Base):
 
 
 class StarsOrder(Base):
-    """Single production-priced test slot, never a general-sale catalogue."""
+    """Two fixed pilot attempts; immutable first order, never a sale catalogue."""
     __tablename__ = 'master_stars_orders'
     __table_args__ = (
         UniqueConstraint('test_slot', name='uq_master_stars_slot'),
         UniqueConstraint('payload_hash', name='uq_master_stars_payload'),
         UniqueConstraint('paid_charge_id', name='uq_master_stars_charge'),
-        CheckConstraint("test_slot = 'super-30d-1xtr-v1'", name='ck_master_stars_slot'),
+        CheckConstraint("test_slot IN ('super-30d-1xtr-v1', 'super-30d-1xtr-retry-v1')",
+                        name='ck_master_stars_slot'),
         CheckConstraint("currency = 'XTR' AND amount = 1 AND term_days = 30 AND device_limit = 50 AND tariff_id = 3",
                         name='ck_master_stars_product'),
         CheckConstraint("state IN ('sending', 'sent', 'paid', 'review')", name='ck_master_stars_state'),

@@ -55,6 +55,28 @@ async def test_payment_atomically_extends_super_once_and_queues_node_renewal(rig
         assert db.get(SubscriptionNotification, 1).status == 'suppressed'
 
 
+async def test_paid_retry_extends_once_and_preserves_expired_first_order(rig):
+    await send(rig, command())
+    old_payload = invoices(rig)[0]['payload']
+    rig[3][0] += timedelta(minutes=11)
+    await send(rig, command(2), restart=True)
+    assert len(invoices(rig)) == 2
+    new_payload = invoices(rig)[1]['payload']
+    await send(rig, checkout(old_payload, update_id=3), restart=True)
+    assert [p for m, p in rig[1].calls if m == 'answerPreCheckoutQuery'][-1]['ok'] is False
+    await send(rig, checkout(new_payload, update_id=4, id='retry-checkout'), restart=True)
+    assert [p for m, p in rig[1].calls if m == 'answerPreCheckoutQuery'][-1]['ok'] is True
+    await send(rig, payment(new_payload, update_id=5), restart=True)
+    await send(rig, payment(new_payload, update_id=5), restart=True)
+    with Session(rig[2]) as db:
+        subscription = db.get(Subscription, 1)
+        assert subscription is not None and subscription.expires_at == EXPIRY + timedelta(days=30)
+        assert len(db.scalars(select(DeviceOp)).all()) == 1
+    with rig[2].connect() as db:
+        assert db.execute(text('SELECT state FROM master_stars_orders ORDER BY id')).scalars().all() == ['sent', 'paid']
+        assert db.scalar(text("SELECT COUNT(*) FROM master_stars_payment_events WHERE status='granted'")) == 1
+
+
 @pytest.mark.parametrize('result', ['pending', 'timeout', 'invalid', 'denied'])
 async def test_bridge_fulfillment_remains_durable_until_all_acknowledged(rig, result):
     from vs_master.bridge import BridgeError
