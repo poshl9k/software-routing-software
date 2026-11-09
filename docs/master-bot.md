@@ -19,8 +19,16 @@ shared domain used by the HTTP portal and bot; exports use the same guarded
 renderer. Master `Device`/`DeviceOp` rows remain authoritative, and only the
 existing worker/`BridgeClient` talks to the assigned node's internal bridge.
 
-Open **Устройства** from `/menu`, or use these commands in the master's private
-bot chat (numeric IDs come from `/devices`):
+Open **Устройства** from `/menu` to see the chat-level submenu **Список устройств**,
+**Добавить устройство**, **Главное меню**. The add button asks for a device name
+using Telegram's reply interface: reply to that exact prompt within two minutes
+(1–128 characters). Unrelated chat messages never create a device. Navigation,
+expiry or a bot restart cancels the prompt; entitlement and the verified link are
+rechecked when submitting the name. The existing `/new Имя` command remains an
+alternative. A successful submission may initiate a real node apply, so opening
+the submenu or prompt alone must not create anything. Device-specific controls
+stay inline on list messages. The commands below also work in the master's
+private bot chat (numeric IDs come from `/devices`):
 
 | Command | Result |
 | --- | --- |

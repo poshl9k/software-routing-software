@@ -67,6 +67,12 @@ class DeviceController:
         self.lock = RLock()
         self.confirmations = {}
 
+    def menu_access(self, identity, now):
+        with Session(self.engine) as db:
+            account = verified_account(db, identity)
+            devices.live_subscription(db, account.id, now)
+            return account.id, account.telegram_linked_at
+
     def authorize_export(self, identity, authorization, now):
         with Session(self.engine) as db:
             account = verified_account(db, identity)
@@ -133,7 +139,7 @@ class DeviceController:
     @staticmethod
     def _list(items, offset):
         offset = min(offset, max(len(items) - 1, 0))
-        lines = ['Устройства. Создать: /new Метка']
+        lines = ['Устройства. Создать: «Добавить устройство» или /new Метка']
         rows = []
         for item in items[offset:offset + PAGE_SIZE]:
             device_id = item['id']

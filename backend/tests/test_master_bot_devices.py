@@ -120,10 +120,13 @@ async def rig(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def command(text, update_id=1, *, identity=100, sender=None, chat_type='private'):
-    return {'update_id': update_id, 'message': {
+def command(text, update_id=1, *, identity=100, sender=None, chat_type='private', reply_to=None):
+    message = {
         'message_id': 10, 'chat': {'id': identity, 'type': chat_type},
-        'from': {'id': identity if sender is None else sender}, 'text': text}}
+        'from': {'id': identity if sender is None else sender}, 'text': text}
+    if reply_to is not None:
+        message['reply_to_message'] = {'message_id': reply_to}
+    return {'update_id': update_id, 'message': message}
 
 
 def callback(data, update_id=1, *, identity=100, sender=None, chat_type='private'):
@@ -166,11 +169,94 @@ async def test_chat_keyboard_stays_available_and_labels_route_to_existing_action
     assert messages(calls)[0]['reply_markup']['inline_keyboard'][0][0]['url'].startswith(
         'https://master.example/login#token=')
     calls = await send(rig, command('Устройства', 4))
+    submenu = messages(calls)[0]['reply_markup']
+    assert submenu == {'keyboard': [
+        [{'text': 'Список устройств'}, {'text': 'Добавить устройство'}],
+        [{'text': 'Главное меню'}]], 'resize_keyboard': True, 'is_persistent': True}
+    assert not rig[3]
+    calls = await send(rig, command('Список устройств', 5))
     assert 'Phone' in messages(calls)[0]['text']
     assert 'inline_keyboard' in messages(calls)[0]['reply_markup'], 'device-specific controls stay inline'
     assert all(button.get('callback_data') != 'menu'
                for row in messages(calls)[0]['reply_markup']['inline_keyboard'] for button in row)
     assert operations(rig[2]) == []
+
+    calls = await send(rig, command('Главное меню', 6))
+    assert messages(calls)[0]['reply_markup'] == menu
+
+async def test_add_button_requires_reply_to_prompt_then_uses_existing_device_domain(rig):
+    calls = await send(rig, command('Добавить устройство'))
+    prompt = messages(calls)[0]
+    assert prompt['reply_markup'] == {'force_reply': True}
+    assert 'название' in prompt['text'].lower()
+    assert not operations(rig[2]) and not rig[3]
+    await send(rig, command('Случайный текст', 2))
+    await send(rig, command('Ноутбук', 3, reply_to=49))
+    assert not operations(rig[2]), 'only a reply to this prompt may create a device'
+
+    calls = await send(rig, command('Ноутбук', 4, reply_to=50))
+    assert operations(rig[2]) == [('create', 'applied')]
+    assert messages(calls)[0]['reply_markup']['keyboard'][0][1]['text'] == 'Добавить устройство'
+    with Session(rig[2]) as db:
+        created = db.scalar(select(Device).where(Device.label == 'Ноутбук'))
+        assert created is not None and created.account_id == 1
+    await send(rig, command('Ноутбук', 4, reply_to=50))
+    assert operations(rig[2]) == [('create', 'applied')], 'replayed update must not create twice'
+
+async def test_add_prompt_is_short_lived_and_cancelled_on_navigation(rig):
+    await send(rig, command('Добавить устройство'))
+    await send(rig, command('Главное меню', 2))
+    await send(rig, command('Phone', 3, reply_to=50))
+    assert not operations(rig[2])
+    await send(rig, command('Добавить устройство', 4))
+    rig[6][0] += timedelta(minutes=3)
+    calls = await send(rig, command('Phone', 5, reply_to=50))
+    assert 'истекло' in messages(calls)[0]['text']
+    assert not operations(rig[2])
+
+@pytest.mark.parametrize('gate', ['expired', 'disabled', 'relinked'])
+async def test_add_button_and_pending_reply_recheck_entitlement_and_link(rig, gate):
+    await send(rig, command('Добавить устройство'))
+    with Session(rig[2]) as db:
+        account = db.get(Account, 1)
+        subscription = db.scalar(select(Subscription).where(Subscription.account_id == 1))
+        assert account is not None and subscription is not None
+        if gate == 'expired':
+            subscription.expires_at = NOW
+        elif gate == 'disabled':
+            account.status = 'disabled'
+        else:
+            account.telegram_linked_at = NOW + timedelta(seconds=1)
+        db.commit()
+    calls = await send(rig, command('Phone', 2, reply_to=50))
+    assert messages(calls) and not operations(rig[2]) and not rig[3]
+    assert 'force_reply' not in messages(calls)[0].get('reply_markup', {})
+
+async def test_add_button_denies_unverified_or_expired_accounts_before_prompt(rig):
+    with Session(rig[2]) as db:
+        account = db.get(Account, 1)
+        assert account is not None
+        account.telegram_linked_at = None
+        db.commit()
+    calls = await send(rig, command('Добавить устройство'))
+    assert 'force_reply' not in messages(calls)[0].get('reply_markup', {})
+    assert not operations(rig[2]) and not rig[3]
+
+async def test_add_prompt_rejects_wrong_private_recipient_ack(rig, caplog):
+    rig[1].ack_chat = 200
+    calls = await send(rig, command('Добавить устройство'))
+    assert messages(calls)[0]['reply_markup'] == {'force_reply': True}
+    assert not rig[0].pending_names
+    assert 'Telegram update failed (ValueError)' in caplog.text
+    await send(rig, command('Phone', 2, reply_to=50))
+    assert not operations(rig[2]) and not rig[3]
+
+@pytest.mark.parametrize('update', [command('Добавить устройство', sender=200),
+                                   command('Добавить устройство', chat_type='group'),
+                                   command('Phone', 2, sender=200, reply_to=50)])
+async def test_add_prompt_requires_matching_private_sender(rig, update):
+    calls = await send(rig, update)
+    assert not messages(calls) and not operations(rig[2]) and not rig[3]
 
 async def test_old_inline_menu_callback_opens_chat_keyboard_without_editing_it(rig):
     calls = await send(rig, callback('menu'))
@@ -183,7 +269,7 @@ async def test_empty_device_list_omits_empty_inline_keyboard(rig):
         db.delete(db.get(Device, 1))
         db.commit()
     rig[4]['devices'] = []
-    calls = await send(rig, command('Устройства'))
+    calls = await send(rig, command('Список устройств'))
     assert 'Устройств пока нет' in messages(calls)[0]['text']
     assert 'reply_markup' not in messages(calls)[0]
 

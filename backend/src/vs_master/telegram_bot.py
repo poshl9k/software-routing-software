@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from urllib.parse import urlsplit
 
@@ -23,12 +23,19 @@ logger = logging.getLogger(__name__)
 COMMANDS = {'/start', '/menu', '/status', '/login'}
 VIEWS = {'menu', 'status', 'login'}
 MENU_LABELS = {'Подписка': 'status', 'Личный кабинет': 'login', 'Устройства': 'devices'}
+DEVICE_LABELS = {'Список устройств', 'Добавить устройство', 'Главное меню'}
 
 
 def _menu():
     return {'keyboard': [
         [{'text': 'Подписка'}, {'text': 'Личный кабинет'}],
         [{'text': 'Устройства'}],
+    ], 'resize_keyboard': True, 'is_persistent': True}
+
+def _device_menu():
+    return {'keyboard': [
+        [{'text': 'Список устройств'}, {'text': 'Добавить устройство'}],
+        [{'text': 'Главное меню'}],
     ], 'resize_keyboard': True, 'is_persistent': True}
 
 
@@ -51,6 +58,7 @@ class Bot:
         self.node_client_factory = node_client_factory or _default_node_client
         self.device_controller = DeviceController(engine)
         self.io_limit = asyncio.Semaphore(1)
+        self.pending_names = {}
 
     async def _io(self, function, *args):
         # DB/crypto/synchronous bridge work must not block the polling loop or
@@ -126,7 +134,7 @@ class Bot:
         return text, None
 
     async def device_interaction(self, token, identity, action, argument, update_id,
-                                 message_id=None):
+                                 message_id=None, keyboard=None):
         receipt_key = 'tgdev:' + sha256(
             f'{token.partition(":")[0]}:{identity}:{update_id}'.encode()).hexdigest()[:56]
         try:
@@ -139,6 +147,8 @@ class Bot:
                     identity, answer.authorization, self.clock()))
         except APIError as exc:
             answer = error_reply(exc)
+            if keyboard is not None and exc.code in ('auth.forbidden', 'portal.subscription_expired'):
+                keyboard = _menu()
         except Exception as exc:
             logger.error('Telegram device operation failed (%s)', type(exc).__name__)
             answer = error_reply(exc)
@@ -163,11 +173,73 @@ class Bot:
                 raise ValueError('Telegram returned an invalid attachment acknowledgement')
             return
         payload = {'chat_id': identity, 'text': answer.text}
-        if answer.markup:
+        if keyboard is not None:
+            payload['reply_markup'] = keyboard
+        elif answer.markup:
             payload['reply_markup'] = answer.markup
         if message_id is not None:
             payload['message_id'] = message_id
         await self.request(token, 'editMessageText' if message_id is not None else 'sendMessage', payload)
+
+    async def device_menu(self, token, identity):
+        try:
+            await self._io(lambda: self.device_controller.menu_access(identity, self.clock()))
+        except APIError as exc:
+            await self.request(token, 'sendMessage', {
+                'chat_id': identity, 'text': error_reply(exc).text, 'reply_markup': _menu()})
+            return
+        await self.request(token, 'sendMessage', {
+            'chat_id': identity, 'text': 'Устройства. Выберите действие.',
+            'reply_markup': _device_menu()})
+
+    async def ask_device_name(self, token, identity):
+        try:
+            owner = await self._io(lambda: self.device_controller.menu_access(identity, self.clock()))
+        except APIError as exc:
+            await self.request(token, 'sendMessage', {
+                'chat_id': identity, 'text': error_reply(exc).text, 'reply_markup': _menu()})
+            return
+        now = self.clock()
+        self.pending_names = {chat: pending for chat, pending in self.pending_names.items()
+                              if pending[1] > now}
+        if len(self.pending_names) >= 1000 and identity not in self.pending_names:
+            await self.request(token, 'sendMessage', {
+                'chat_id': identity, 'text': 'Бот занят. Попробуйте позже.'})
+            return
+        result = await self.request(token, 'sendMessage', {
+            'chat_id': identity, 'text': 'Ответьте на это сообщение названием устройства (до 128 символов).',
+            'reply_markup': {'force_reply': True}})
+        chat = result.get('chat') if isinstance(result, dict) else None
+        if (not isinstance(result, dict) or type(result.get('message_id')) is not int
+                or result['message_id'] <= 0 or not isinstance(chat, dict)
+                or type(chat.get('id')) is not int or chat['id'] != identity
+                or chat.get('type') != 'private'):
+            raise ValueError('Telegram returned an invalid device prompt acknowledgement')
+        self.pending_names[identity] = (result['message_id'], self.clock() + timedelta(minutes=2), owner)
+
+    async def receive_device_name(self, token, identity, message, update_id):
+        pending = self.pending_names.get(identity)
+        reply = message.get('reply_to_message')
+        if (pending is None or not isinstance(reply, dict)
+                or type(reply.get('message_id')) is not int or reply['message_id'] != pending[0]):
+            return False
+        del self.pending_names[identity]
+        if pending[1] <= self.clock():
+            await self.request(token, 'sendMessage', {
+                'chat_id': identity, 'text': 'Время для названия истекло. Нажмите «Добавить устройство» ещё раз.',
+                'reply_markup': _device_menu()})
+            return True
+        try:
+            owner = await self._io(lambda: self.device_controller.menu_access(identity, self.clock()))
+            if owner != pending[2]:
+                raise APIError(403, 'auth.forbidden')
+        except APIError as exc:
+            await self.request(token, 'sendMessage', {
+                'chat_id': identity, 'text': error_reply(exc).text, 'reply_markup': _menu()})
+            return True
+        await self.device_interaction(token, identity, 'new', message['text'].strip(), update_id,
+                                      keyboard=_device_menu())
+        return True
 
     async def handle_callback(self, token, query, update_id=None):
         query_id = query.get('id')
@@ -177,6 +249,8 @@ class Bot:
         message = message if isinstance(message, dict) else {}
         identity = _private_sender(message.get('chat'), query.get('from'))
         view = query.get('data')
+        if identity is not None:
+            self.pending_names.pop(identity, None)
         if isinstance(view, str) and view.startswith('dev:'):
             parts = view.split(':', 2)
             message_id = message.get('message_id')
@@ -277,12 +351,28 @@ class Bot:
                     content = message.get('text')
                     if identity is not None and isinstance(content, str):
                         selection = content.strip()
+                        if selection in DEVICE_LABELS:
+                            self.pending_names.pop(identity, None)
+                            if selection == 'Список устройств':
+                                await self.device_interaction(token, identity, 'devices', '', update_id)
+                            elif selection == 'Добавить устройство':
+                                await self.ask_device_name(token, identity)
+                            else:
+                                answer = await self._io(self.reply, identity, 'menu')
+                                if answer is not None:
+                                    await self.request(token, 'sendMessage', {
+                                        'chat_id': identity, 'text': answer[0],
+                                        'reply_markup': answer[1] or _menu()})
+                            self.offset = update_id + 1
+                            continue
                         view = MENU_LABELS.get(selection)
                         if view == 'devices':
-                            await self.device_interaction(token, identity, 'devices', '', update_id)
+                            self.pending_names.pop(identity, None)
+                            await self.device_menu(token, identity)
                             self.offset = update_id + 1
                             continue
                         if view is not None:
+                            self.pending_names.pop(identity, None)
                             answer = await self._io(self.reply, identity, view)
                             if answer is not None:
                                 text, markup = answer
@@ -290,6 +380,11 @@ class Bot:
                                 if markup:
                                     payload['reply_markup'] = markup
                                 await self.request(token, 'sendMessage', payload)
+                            self.offset = update_id + 1
+                            continue
+                        if selection.startswith('/'):
+                            self.pending_names.pop(identity, None)
+                        elif await self.receive_device_name(token, identity, message, update_id):
                             self.offset = update_id + 1
                             continue
                         parts = selection.split(maxsplit=1)
