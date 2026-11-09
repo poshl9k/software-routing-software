@@ -94,6 +94,76 @@ class PaymentReceipt(Base):
     received_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
+class StarsOrder(Base):
+    """Single production-priced test slot, never a general-sale catalogue."""
+    __tablename__ = 'master_stars_orders'
+    __table_args__ = (
+        UniqueConstraint('test_slot', name='uq_master_stars_slot'),
+        UniqueConstraint('payload_hash', name='uq_master_stars_payload'),
+        UniqueConstraint('paid_charge_id', name='uq_master_stars_charge'),
+        CheckConstraint("test_slot = 'super-30d-1xtr-v1'", name='ck_master_stars_slot'),
+        CheckConstraint("currency = 'XTR' AND amount = 1 AND term_days = 30 AND device_limit = 50 AND tariff_id = 3",
+                        name='ck_master_stars_product'),
+        CheckConstraint("state IN ('sending', 'sent', 'paid', 'review')", name='ck_master_stars_state'),
+        CheckConstraint("fulfillment_status IN ('pending', 'applied', 'review')", name='ck_master_stars_fulfillment'),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    test_slot: Mapped[str] = mapped_column(String(64), nullable=False)
+    bot_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_id: Mapped[int] = mapped_column(ForeignKey('master_accounts.id'), nullable=False)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey('master_subscriptions.id'), nullable=False)
+    tariff_id: Mapped[int] = mapped_column(ForeignKey('master_tariffs.id'), nullable=False)
+    tariff_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    device_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    payer_chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    term_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    prior_expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    state: Mapped[str] = mapped_column(String(8), nullable=False, default='sending')
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    message_id: Mapped[int | None] = mapped_column(Integer)
+    checkout_id: Mapped[str | None] = mapped_column(String(255))
+    approved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    paid_charge_id: Mapped[str | None] = mapped_column(ForeignKey('master_payment_receipts.telegram_charge_id'))
+    paid_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    granted_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    fulfillment_status: Mapped[str] = mapped_column(String(8), nullable=False, default='pending')
+
+
+class StarsPaymentEvent(Base):
+    """Immutable observations, including altered replays retained for review."""
+    __tablename__ = 'master_stars_payment_events'
+    __table_args__ = (
+        CheckConstraint("status IN ('granted', 'review', 'unmatched')", name='ck_master_stars_event_status'),
+        CheckConstraint('amount > 0', name='ck_master_stars_event_amount'),
+    )
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    telegram_charge_id: Mapped[str] = mapped_column(
+        ForeignKey('master_payment_receipts.telegram_charge_id'), nullable=False)
+    order_id: Mapped[int | None] = mapped_column(ForeignKey('master_stars_orders.id'))
+    payer_chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(9), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(64))
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+class StarsFulfillment(Base):
+    """Each paid order/node points at its durable existing worker reconcile ticket."""
+    __tablename__ = 'master_stars_fulfillments'
+    __table_args__ = (UniqueConstraint('op_id', name='uq_master_stars_fulfillment_op'),)
+    order_id: Mapped[int] = mapped_column(ForeignKey('master_stars_orders.id'), primary_key=True)
+    node_id: Mapped[int] = mapped_column(ForeignKey('master_nodes.id'), primary_key=True)
+    op_id: Mapped[int] = mapped_column(ForeignKey('master_device_ops.id'), nullable=False)
+
+
 class Tariff(Base):
     """Rule for issuing access: device limit and term. Same shape as the portal tariff."""
     __tablename__ = 'master_tariffs'

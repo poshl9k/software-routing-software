@@ -325,3 +325,7 @@ def process_pending(engine, node_client_factory=None, now=None):
             DeviceOp.status == 'pending').order_by(DeviceOp.id)))
     for op_id in pending:
         process_op(engine, node_client_factory, op_id, now)
+    # Charges/master grants are not node ACKs; expose durable reconciliation
+    # completion only after the existing bridge replay has actually succeeded.
+    from .stars import refresh_fulfillments
+    refresh_fulfillments(engine)

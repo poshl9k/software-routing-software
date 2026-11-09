@@ -8,7 +8,7 @@ Configure via an authenticated administrator request to `PUT /api/master-admin/s
 
 A private `/start` message from the Telegram user creates an account idempotently, **without a subscription**. The subscriber cannot create devices until an administrator grants an active subscription. `/start` and `/menu` show a persistent chat-level Telegram reply keyboard (Подписка, Личный кабинет, Устройства); tapping a label sends ordinary text that is checked against the private sender before invoking the existing action. Older inline **Меню** buttons open that chat keyboard with a new message. Device-specific actions, deletion confirmation and the cabinet URL remain inline on their own messages. Telegram clients may still hide a persistent keyboard manually. The bot's cabinet button issues a 10-minute single-use proof. Its raw token travels in the HTTPS link's URL fragment; the browser removes the fragment before submitting the proof to `POST /api/portal/login/magic`. The `frontend-master` cabinet shows subscription/device state and allows creation and configuration download only under an active subscription. This is tested with a simulated API, not a real Telegram/browser/node round trip.
 
-**Stars charging is disabled.** There is no `sendInvoice` path. Every pre-checkout query is rejected; an unexpected successful-payment update is retained once in `master_payment_receipts` for manual review and never grants a subscription. Do not enter a live price or issue a live invoice until the tariff, integer XTR amount, term, device limit, refund/fulfilment policy, and an end-to-end sandbox provisioning test are approved.
+**General Stars billing is disabled.** The default still rejects every pre-checkout query and retains unexpected successful payments once in `master_payment_receipts`, without granting access. An offline-tested, explicitly gated **single real-price test purchase** is described below; this is not a billing launch or tariff selector.
 
 ## Device management (offline-tested candidate)
 
@@ -107,13 +107,106 @@ boot-restore test requires Unix `grp`/`os.chown`. These are offline source/API/D
 checks, not Linux host, real Telegram/client import, deployment or live-node
 acceptance. Existing FastAPI/Python deprecation and Pydantic warnings remain.
 
+## One-off Stars test purchase (offline-tested candidate)
+
+Migration `0005_master` must be applied to the **master** database before running
+this candidate bot/worker. Neither the migration nor this change enables payment.
+No installer/service setting is changed. Normal subscriptions and registration
+remain administrator-controlled.
+
+This is an ordinary-production **real charge**, not a Telegram sandbox. Only when
+both `VS_MASTER_STARS_TEST_ENABLED=1` and
+`VS_MASTER_STARS_TEST_ACCOUNT_ID=<one canonical positive master Account ID>` are
+set can that account's verified private sender request `/buy`. Missing, malformed,
+list-valued or whitespace-padded account configuration fails closed. The account
+must be active and have an active, future-dated **Super tariff ID 3, limit 50**.
+The fixed one-time price is **1 XTR for +30 days**, preserving that tariff and
+extending from `max(current time, current subscription expiry)`; no Base switch,
+`provider_token`, `subscription_period`, automatic renewal or general sale is
+included. Node readiness is checked from the existing master cache and decryptable
+stored material, not by a live bridge call during checkout; pending device
+operations block checkout. A node can still fail after that local check.
+
+A unique database-wide test slot permits **one invoice attempt ever**, not one
+per update/process/account setting. The transaction records account, verified-link
+timestamp, stable bot identity, exact subscription/tariff, price/term/limit, prior
+expiry and a hashed opaque payload before Telegram I/O. The raw payload is never
+stored/logged. The order is `sending` until a valid private-message ACK, then
+`sent`. Send failure, lost ACK, crash or invoice expiry does **not** release the
+slot or resend an invoice; operator reconciliation is required. Do not delete
+orders or reset the slot to retry: an earlier invoice may still exist remotely.
+
+Pre-checkout rechecks the exact order, sender, link, live subscription, tariff,
+price, currency, ten-minute deadline and local fulfillment readiness. It persists
+one approved checkout identity; a different checkout is rejected. Queue/DB work
+has a two-second budget and answering has a three-second budget, below Telegram's
+ten-second deadline. Saturated I/O rejects, rather than waiting behind a slow
+bridge; a cancelled waiter retains its capacity until its DB thread finishes.
+No database writer lock spans a Telegram request. A send/answer transport failure
+is ambiguous and is not proof of a remote rejection. The bot retries the same
+pre-checkout only within the provider's ten-second deadline; after that it
+advances past the stale query so a subsequent successful-payment update cannot
+be blocked by an unanswerable old query. An HTTP 400 for an already rejected
+answer likewise cannot be treated as a new approval.
+
+Successful payment commits the unique Telegram charge receipt, immutable event
+observation, one master renewal, increased notification revision, fresh active
+notification and one durable reconciliation ticket per device node **atomically**.
+Previously queued obsolete notices are suppressed at claim time. Proactive notice
+delivery remains controlled by its separate disabled-by-default flag. An approval
+already committed while opted in remains fulfillable after restart, flag removal
+or delayed payment delivery; removing the flag stops new invoices/checkouts, not
+an already approved captured payment. Delayed fulfillment preserves a newer admin
+extension and starts from now if the old grant has elapsed. Account disable,
+relink, changed subscription/tariff, shortened grant, altered amount/payer/currency,
+recurring payment or a second charge goes to review without a grant. An unapproved
+or conflicting matched order is frozen in `review`, not reopened on replay.
+Unknown charges remain unmatched without access: their receipt and unmatched
+event are committed before the offset advances, and a warning signals manual
+review. Malformed/conflicting updates never advance the poll offset; review
+evidence is retained once. This intentionally halts subsequent polling progress
+until a reviewed operator recovery. There is no automatic refund, charge dispute
+handling, replay/offset repair UI, history purge
+or test-slot reset endpoint; the operator must reconcile/refund through a separately
+approved procedure. Do not treat this as a public paid service launch.
+
+The worker's existing active-subscription pass does **not** infer an extension for
+already-active devices. Therefore payment creates `DeviceOp(op='expire')` tickets,
+linked by `master_stars_fulfillments`; the worker chooses `renew` while the grant
+is active. It sends only this account's retained device mappings and preserves
+identities/keys and user-disabled states. Missing/failed/pending/malformed node
+ACKs leave the ticket and order fulfillment `pending` for restart-safe retry.
+Only all acknowledged `renewed` tickets mark fulfillment `applied`; expiry or hard
+failure before renewal completion requires `review`. A master ledger grant is not
+proof of live service activation. After any future authorized real capture, verify
+the charge, order/ledger, exact subscription, outbox revision, all node tickets and
+actual existing peers separately before claiming end-to-end success.
+
+The new tables are `master_stars_orders`, `master_stars_payment_events`, and
+`master_stars_fulfillments`. Downgrade refuses if any contains history; stop the
+processes and use a reviewed backup instead of dropping payment evidence. Empty
+migration rollback preserves old unmatched receipts. Tests cover disposable
+file-backed SQLite/WAL, prior-data upgrades and metadata/constraint parity, mocked
+Telegram exact XTR invoice payloads, concurrent/restarted/reordered receipts,
+rollback on ticket persistence failure and actual worker replay against fake
+bridges (including both existing devices and multiple nodes). These prove local
+DB/bot/worker behavior only, not Telegram capture, Linux host apply, production
+refunds or live node activation. No live invoice was sent by these checks.
+
+Reproduce the platform-independent focused checks from `backend/` (use a fresh
+scratch path for `--basetemp` on Windows):
+
+```bash
+uv run --no-sync pytest -q tests/test_master_stars*.py tests/test_master_migrations.py tests/test_master_magic.py tests/test_master_bot_devices.py
+```
+
 ## Subscription notifications (Stage-2 candidate)
 
 Migration `0004_master` adds a transactional outbox (`master_subscription_notifications`), a subscription notification revision, and a verified private-chat link. Existing numeric Telegram IDs are **not** backfilled as links: each active subscriber must send a private `/start` to this master bot. Group chats and mismatched senders cannot link; disabled accounts cannot link or receive subscription details/magic links. The verified recipient is stored separately from the account identity, so changing an identity cannot silently transfer the link.
 
 The real administrator `PUT /api/master-admin/subscribers/{id}/subscription` queues an activation/assignment notice in the **same transaction** as a changed, future-dated grant. An identical absolute-expiry PUT does not queue another event; `days` remains the existing additive renewal operation, so repeating it grants another extension and produces a new revision. The master worker queues expiry only on the `active` → `expired` transition, even when there are no devices or the nodes are unavailable. Notices describe the master entitlement, **not** confirmed node provisioning. No historical assignment backfill or advance-expiry reminders are included.
 
-**Proactive delivery is off by default**, independently of the existing configured interactive bot. The runner drains at most 20 due events before each long poll only when started with `VS_MASTER_TELEGRAM_NOTIFICATIONS=1`; token and public HTTPS URL must also be configured as above. Do not enable this against a real bot until separately authorized. These changes neither configure a token nor change installation/service files. The billing prohibition above is unchanged.
+**Proactive delivery is off by default**, independently of the existing configured interactive bot. The runner drains at most 20 due events before each long poll only when started with `VS_MASTER_TELEGRAM_NOTIFICATIONS=1`; token and public HTTPS URL must also be configured as above. Do not enable this against a real bot until separately authorized. These changes neither configure a token nor change installation/service files. General-sale billing remains disabled; the separately gated one-off test above is the only exception.
 
 Each send has a committed 60-second claim lease; no SQLite transaction/writer lock is held across the Telegram request. Failed attempts remain durable and retry after 30 seconds, doubling to a one-hour cap; bot restart does not reset the attempt/lease schedule. An abandoned lease becomes eligible again. Delivery is recorded only after a successful `sendMessage` response containing a private-chat message ID for the expected recipient. Immediately before attempting delivery the claim transaction rechecks active account, exact verified link/recipient, subscription revision and current expiry. Obsolete or unauthorized events are terminally suppressed (not delivered), rather than sending stale activation/expiry information. A change made after a send is already in flight cannot retract that message.
 

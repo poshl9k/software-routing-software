@@ -2,16 +2,18 @@
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from urllib.parse import urlsplit
 
 import httpx
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import stars
 from .accounts import issue_magic_token, register_telegram
-from .models import Account, Audit, PaymentReceipt, Setting, Subscription, Tariff, make_engine
+from .models import Account, Setting, Subscription, Tariff, make_engine
 from .notifications import claim_notification, due_notifications, finish_notification
 from .device_bot import ACTIONS, DeviceController, error_reply
 from .worker import _default_node_client
@@ -63,8 +65,18 @@ class Bot:
     async def _io(self, function, *args):
         # DB/crypto/synchronous bridge work must not block the polling loop or
         # build an unbounded executor queue when handlers are invoked together.
-        async with self.io_limit:
-            return await asyncio.to_thread(function, *args)
+        await self.io_limit.acquire()
+        # A timed-out checkout cannot cancel a running SQLite thread. Keep its
+        # slot until actual completion, including when its waiter was cancelled.
+        task = asyncio.create_task(asyncio.to_thread(function, *args))
+
+        def finished(done):
+            self.io_limit.release()
+            if not done.cancelled():
+                done.exception()  # Observe exceptions even if the waiter timed out.
+
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
 
     @staticmethod
     def _public_url(value):
@@ -285,37 +297,7 @@ class Bot:
         await self.request(token, 'sendMessage' if view == 'menu' else 'editMessageText', payload)
 
     def retain_unexpected_payment(self, message):
-        """Never grant access for a payment without a matching approved order."""
-        payer = message.get('from')
-        payment = message.get('successful_payment')
-        if not isinstance(payer, dict) or not isinstance(payment, dict):
-            raise ValueError('Invalid payment update')
-        payer_id = payer.get('id')
-        charge = payment.get('telegram_payment_charge_id')
-        currency = payment.get('currency')
-        amount = payment.get('total_amount')
-        payload = payment.get('invoice_payload')
-        if (type(payer_id) is not int or payer_id <= 0
-                or not isinstance(charge, str) or not 1 <= len(charge) <= 255
-                or not isinstance(currency, str) or len(currency) != 3
-                or type(amount) is not int or amount <= 0
-                or not isinstance(payload, str)):
-            raise ValueError('Invalid payment update')
-        digest = sha256(payload.encode()).hexdigest()
-        with Session(self.engine) as db:
-            if db.get_bind().dialect.name == 'sqlite':
-                db.execute(text('BEGIN IMMEDIATE'))
-            existing = db.get(PaymentReceipt, charge)
-            if existing is not None:
-                if (existing.payer_chat_id != str(payer_id) or existing.currency != currency
-                        or existing.amount != amount or existing.payload_hash != digest):
-                    raise ValueError('Conflicting payment update')
-                return
-            db.add(PaymentReceipt(telegram_charge_id=charge, payer_chat_id=str(payer_id),
-                                  currency=currency, amount=amount, payload_hash=digest))
-            db.add(Audit(actor='master', action='payment.unmatched'))
-            db.commit()
-        logger.warning('Unmatched Telegram payment recorded for manual review')
+        stars.accept_payment(self.engine, '', message, self.clock)
 
     async def poll(self, token):
         updates = await self.request(token, 'getUpdates', {
@@ -332,9 +314,37 @@ class Bot:
             try:
                 checkout = update.get('pre_checkout_query')
                 if isinstance(checkout, dict) and isinstance(checkout.get('id'), str):
-                    await self.request(token, 'answerPreCheckoutQuery', {
-                        'pre_checkout_query_id': checkout['id'], 'ok': False,
-                        'error_message': 'Оплата пока недоступна.'})
+                    bot_id = token.partition(':')[0]
+                    try:
+                        stale = await asyncio.wait_for(self._io(
+                            stars.checkout_answer_expired, self.engine,
+                            bot_id, checkout, self.clock), timeout=1)
+                    except Exception:
+                        stale = False
+                    if stale:
+                        self.offset = update_id + 1
+                        continue
+                    # Queue/DB validation + the answer request are bounded below
+                    # Telegram's 10-second deadline. A busy bridge fails closed.
+                    approved = False
+                    try:
+                        approved = await asyncio.wait_for(self._io(
+                            stars.approve_checkout, self.engine, bot_id,
+                            checkout, self.clock, time.monotonic() + 2), timeout=2)
+                    except Exception:
+                        logger.warning('Stars pre-checkout validation unavailable')
+                    answer = {'pre_checkout_query_id': checkout['id'], 'ok': approved}
+                    if not approved:
+                        answer['error_message'] = 'Оплата пока недоступна.'
+                    try:
+                        await asyncio.wait_for(self.request(token, 'answerPreCheckoutQuery', answer), timeout=3)
+                    except httpx.HTTPStatusError as exc:
+                        if exc.response.status_code != 400:
+                            raise
+                        # Telegram has rejected this answer; no later retry can
+                        # turn a rejected pre-checkout into a charge. A prior
+                        # accepted answer is still reconciled by payment update.
+                        logger.warning('Stars pre-checkout answer rejected by Telegram')
                     self.offset = update_id + 1
                     continue
                 query = update.get('callback_query')
@@ -344,13 +354,30 @@ class Bot:
                     message = update.get('message')
                     message = message if isinstance(message, dict) else {}
                     if 'successful_payment' in message:
-                        await self._io(self.retain_unexpected_payment, message)
+                        payment_status = await self._io(stars.accept_payment, self.engine,
+                                                        token.partition(':')[0], message, self.clock)
+                        if payment_status == 'unmatched':
+                            logger.warning('Unmatched Telegram payment retained for manual review')
                         self.offset = update_id + 1
                         continue
                     identity = _private_sender(message.get('chat'), message.get('from'))
                     content = message.get('text')
                     if identity is not None and isinstance(content, str):
                         selection = content.strip()
+                        if selection == '/buy':
+                            self.pending_names.pop(identity, None)
+                            prepared = await self._io(
+                                stars.prepare_invoice, self.engine, token.partition(':')[0], identity, self.clock)
+                            if prepared is None:
+                                await self.request(token, 'sendMessage', {
+                                    'chat_id': identity, 'text': 'Тестовая оплата недоступна.'})
+                            else:
+                                order_id, invoice = prepared
+                                result = await self.request(token, 'sendInvoice', invoice)
+                                await self._io(stars.invoice_sent, self.engine, order_id,
+                                               identity, result, self.clock)
+                            self.offset = update_id + 1
+                            continue
                         if selection in DEVICE_LABELS:
                             self.pending_names.pop(identity, None)
                             if selection == 'Список устройств':

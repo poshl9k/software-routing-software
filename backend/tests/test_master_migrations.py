@@ -24,6 +24,9 @@ MASTER_TABLES = {
     "master_magic_logins",
     "master_payment_receipts",
     "master_subscription_notifications",
+    "master_stars_orders",
+    "master_stars_payment_events",
+    "master_stars_fulfillments",
 }
 
 
@@ -168,7 +171,7 @@ def test_subscription_notifications_upgrade_preserves_prior_rows_and_guards_down
         assert 'master_subscription_notifications' in inspect(engine).get_table_names(), \
             'Upgrade must add the durable outbox'
         with engine.connect() as connection:
-            assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '0004_master'
+            assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '0005_master'
             assert connection.execute(text('SELECT display_name, telegram_linked_at FROM master_accounts')).one() == ('Prior', None)
             assert connection.execute(text('SELECT status, notification_revision FROM master_subscriptions')).one() == ('active', 0)
             assert connection.scalar(text('PRAGMA journal_mode')) == 'wal'

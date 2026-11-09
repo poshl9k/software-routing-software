@@ -40,6 +40,7 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_master.models': 'master',
     'vs_master.notifications': 'master',
     'vs_master.portal_api': 'master',
+    'vs_master.stars': 'master',
     'vs_master.worker': 'master',
     'vs_master.worker_main': 'master',
     'vs_master.telegram_bot': 'master',
@@ -167,6 +168,10 @@ KNOWN_CROSS_PROFILE_EDGES: dict[tuple[str, str], str] = {
         'Master portal uses the shared public error contract.',
     ('vs_master.portal_api', 'vs_router.secrets'):
         'Master portal decrypts persisted node bridge credentials.',
+    ('vs_master.stars', 'vs_portal.security'):
+        'The gated Stars test verifies worker key availability without reading node portal state.',
+    ('vs_master.stars', 'vs_router.secrets'):
+        'The gated Stars test checks stored bridge/device material is decryptable before checkout.',
     ('vs_master.telegram_bot', 'vs_router.schema'):
         'Master bot uses the shared encrypted-secret schema to read its configured token.',
     ('vs_master.telegram_bot', 'vs_router.secrets'):
