@@ -108,13 +108,38 @@ def invoices(rig):
     return [p for m, p in rig[1].calls if m == 'sendInvoice']
 
 
+@pytest.mark.parametrize('text', ['/paysupport', '/support', '/terms'])
+async def test_payment_terms_and_support_reachable_without_purchase_or_link(rig, text):
+    update = command(identity=200, sender=200)
+    update['message']['text'] = text
+    await send(rig, update)
+    messages = [p for method, p in rig[1].calls if method == 'sendMessage']
+    assert len(messages) == 1
+    assert messages[0]['chat_id'] == 200
+    assert '@poshl9k' in messages[0]['text']
+    if text == '/terms':
+        assert all(value in messages[0]['text'] for value in ('1 Star', '30 дней', '50 устройств',
+                                                             'Автопродления нет'))
+    else:
+        assert 'возврата' in messages[0]['text']
+    assert not invoices(rig)
+
+
+async def test_payment_support_never_replies_to_group_or_mismatched_sender(rig):
+    for update in (command(kind='group'), command(sender=200)):
+        update['message']['text'] = '/paysupport'
+        await send(rig, update, restart=True)
+    assert not [p for method, p in rig[1].calls if method == 'sendMessage']
+
+
 async def test_invoice_is_durable_exact_one_time_price_and_never_resent(rig):
     await send(rig, command())
     assert len(invoices(rig)) == 1
     invoice = invoices(rig)[0]
     assert invoice == {
         'chat_id': 100, 'title': 'Super: тестовое продление',
-        'description': 'Реальная разовая оплата 1 Star: +30 дней Super, 50 устройств. Без автопродления.',
+        'description': ('Реальная разовая оплата 1 Star: +30 дней Super, 50 устройств. '
+                        'Без автопродления. Условия: /terms. Поддержка: /paysupport (@poshl9k).'),
         'payload': invoice['payload'], 'currency': 'XTR',
         'prices': [{'label': 'Super +30 дней', 'amount': 1}],
         'start_parameter': 'super-test', 'protect_content': True}

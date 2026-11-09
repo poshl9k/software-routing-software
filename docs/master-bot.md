@@ -126,6 +126,11 @@ extending from `max(current time, current subscription expiry)`; no Base switch,
 included. Node readiness is checked from the existing master cache and decryptable
 stored material, not by a live bridge call during checkout; pending device
 operations block checkout. A node can still fail after that local check.
+The invoice refers to `/terms` (one-off price, duration, no recurring payment,
+possible delayed node reconciliation) and `/paysupport`. Both commands are
+available in a private chat even without a linked account; the approved pilot's
+payment/refund contact is `@poshl9k`. The operator handles disputes manually;
+the bot does not promise an automatic refund.
 
 A unique database-wide test slot permits **one invoice attempt ever**, not one
 per update/process/account setting. The transaction records account, verified-link

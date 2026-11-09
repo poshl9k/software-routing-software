@@ -364,6 +364,20 @@ class Bot:
                     content = message.get('text')
                     if identity is not None and isinstance(content, str):
                         selection = content.strip()
+                        if selection in ('/paysupport', '/support', '/terms'):
+                            self.pending_names.pop(identity, None)
+                            text = (
+                                'Условия тестовой покупки: один платёж 1 Star за продление '
+                                'действующего Super на 30 дней с лимитом 50 устройств. '
+                                'Автопродления нет. Доступ на ноде может обновиться с задержкой; '
+                                'по вопросам оплаты и возврата обращайтесь к @poshl9k (/paysupport).'
+                                if selection == '/terms' else
+                                'По вопросам оплаты и возврата напишите @poshl9k. '
+                                'Приложите квитанцию Telegram; повторно оплачивать не нужно.'
+                            )
+                            await self.request(token, 'sendMessage', {'chat_id': identity, 'text': text})
+                            self.offset = update_id + 1
+                            continue
                         if selection == '/buy':
                             self.pending_names.pop(identity, None)
                             prepared = await self._io(
