@@ -111,7 +111,8 @@ def prepare_invoice(engine, bot_id, payer, clock):
     return order_id, {
         'chat_id': payer, 'title': 'Super: тестовое продление',
         'description': ('Реальная разовая оплата 1 Star: +30 дней Super, 50 устройств. '
-                        'Без автопродления. Условия: /terms. Поддержка: /paysupport (@poshl9k).'),
+                        'Без автопродления. Оплачивая счёт, вы соглашаетесь с /terms. '
+                        'Поддержка: /paysupport (@poshl9k).'),
         'payload': payload, 'currency': 'XTR', 'prices': [{'label': 'Super +30 дней', 'amount': 1}],
         'start_parameter': 'super-test', 'protect_content': True}
 

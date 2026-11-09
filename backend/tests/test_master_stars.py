@@ -122,6 +122,7 @@ async def test_payment_terms_and_support_reachable_without_purchase_or_link(rig,
                                                              'Автопродления нет'))
     else:
         assert 'возврата' in messages[0]['text']
+    assert 'Поддержка Telegram' in messages[0]['text']
     assert not invoices(rig)
 
 
@@ -139,7 +140,8 @@ async def test_invoice_is_durable_exact_one_time_price_and_never_resent(rig):
     assert invoice == {
         'chat_id': 100, 'title': 'Super: тестовое продление',
         'description': ('Реальная разовая оплата 1 Star: +30 дней Super, 50 устройств. '
-                        'Без автопродления. Условия: /terms. Поддержка: /paysupport (@poshl9k).'),
+                        'Без автопродления. Оплачивая счёт, вы соглашаетесь с /terms. '
+                        'Поддержка: /paysupport (@poshl9k).'),
         'payload': invoice['payload'], 'currency': 'XTR',
         'prices': [{'label': 'Super +30 дней', 'amount': 1}],
         'start_parameter': 'super-test', 'protect_content': True}

@@ -130,7 +130,10 @@ The invoice refers to `/terms` (one-off price, duration, no recurring payment,
 possible delayed node reconciliation) and `/paysupport`. Both commands are
 available in a private chat even without a linked account; the approved pilot's
 payment/refund contact is `@poshl9k`. The operator handles disputes manually;
-the bot does not promise an automatic refund.
+the bot does not promise an automatic refund and explains that Telegram support
+does not resolve merchant payment disputes. Paying the invoice indicates
+acceptance of the `/terms` terms; this test is limited to the explicitly
+consenting allowlisted buyer.
 
 A unique database-wide test slot permits **one invoice attempt ever**, not one
 per update/process/account setting. The transaction records account, verified-link
