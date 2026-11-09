@@ -1,4 +1,4 @@
-# Master Telegram bot (candidate, not deployed)
+# Master Telegram bot
 
 The **master** uses its own bot and database. The node's local portal bot remains a separate service and must not share this bot token. Installation enables `vs-master-bot.service`; without settings it idles and does not poll Telegram.
 
@@ -113,4 +113,4 @@ Delivery is **at least once, not exactly once**: if Telegram accepted the messag
 
 Upgrade only the master DB using the usual `alembic-master` migration workflow before starting the updated worker/bot. Downgrade refuses once verified links, revised grants, or any outbox rows exist: stop the processes and use a reviewed backup/restore procedure instead of dropping delivery history or pending retries. The new migration was exercised against a disposable file-backed SQLite DB with prior `0003_master` rows, WAL, uniqueness/check/foreign-key rejects and metadata comparison. Tests use synthetic Telegram transport only; Windows runs use an import-only `pwd` shim and do not validate Linux host behavior.
 
-Checks so far: backend/API/SQLite tests, browser UI tests with simulated responses, and native systemd unit parse on a disposable VPS staging path. The active master service, real Telegram delivery, web login, and live master→node provisioning have **not** been verified by these checks.
+Checks: backend/API/SQLite tests, browser UI tests with simulated responses, and native systemd unit parse on a disposable VPS staging path. On November 9, 2026, master release `57818dbf459de080610582ebf47dae758a161e14` was installed on test VPS `85.209.159.130` after an integrity-checked database/UI rollback backup. The installed wheel matched the release, master web/worker/bot and backup timer were active, the loopback/public health checks passed, and the anonymous browser reached the Telegram-login screen. Proactive notifications and Stars invoices remained off; the Caddy configuration checksum was unchanged. Linux master tests against that commit: 220 passed. **Real Telegram device commands, authenticated cabinet access and live master→node provisioning were not exercised**; the five existing service peers on rg3 were not changed by the master installation.
