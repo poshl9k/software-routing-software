@@ -67,8 +67,7 @@ def fake_source(monkeypatch, body=b'', status=200, address=PUBLIC_IP):
 
 async def test_import_geosite_source_and_publish_version(master, monkeypatch):
     client, engine, _ = master
-    fake_source(monkeypatch, b'# comment\ndomain:example.ru\nfull:mail.ru\ninclude:tinkoff.ru\n'
-                             b'plain.org\n')
+    fake_source(monkeypatch, b'# comment\ndomain:example.ru\nfull:mail.ru\n\nplain.org\nru\n')
     await initialize(client)
     response = await client.post('/api/master-admin/rulesets/import', json={
         'kind': 'domain', 'version': 'ru-domains-1',
@@ -77,7 +76,8 @@ async def test_import_geosite_source_and_publish_version(master, monkeypatch):
     assert response.json()['entries'] == 4
     served = await client.get('/api/rulesets/domain/ru-domains-1.yaml')
     assert served.text == ('payload:\n'
-                           '  - "example.ru"\n  - "mail.ru"\n  - "tinkoff.ru"\n  - "plain.org"\n')
+                           '  - "example.ru"\n  - "mail.ru"\n  - "plain.org"\n'
+                           '  - "+.ru"\n')
     with Session(engine) as db:
         assert db.scalar(select(RuleSet.version)) == 'ru-domains-1'
         assert {audit.action for audit in db.scalars(select(Audit))} >= {'master.ruleset.import'}
@@ -121,6 +121,7 @@ async def test_import_refuses_private_resolution(master, monkeypatch, address):
 
 @pytest.mark.parametrize('body,code', [
     (b'keyword:bank', 'master.ruleset_format_unsupported'),
+    (b'include:tld-ru', 'master.ruleset_format_unsupported'),
     (b'[\n{"domain": "example.ru"}\n]', 'master.ruleset_format_unsupported'),
     (b'', 'master.ruleset_content'),
 ])
@@ -280,3 +281,26 @@ async def test_import_rejects_unpublishable_json_matchers(master, monkeypatch, p
         'kind': 'domain', 'version': 'v1', 'url': 'https://lists.example/ru.json'})
     assert response.status_code == 422
     assert response.json()['error']['code'] == code
+
+
+async def test_import_ripe_delegated_ru_prefixes(master, monkeypatch):
+    client, _, _ = master
+    body = (b'2|ripencc|1794265199|167930|19700101|20261109|+0100\n'
+            b'ripencc|*|ipv4|*|100858|summary\n'
+            b'ripencc|RU|ipv4|2.56.24.0|512|20190313|allocated\n'
+            b'ripencc|RU|ipv4|10.0.0.0|384|20190313|allocated\n'
+            b'ripencc|DE|ipv4|9.9.9.0|256|20190313|allocated\n'
+            b'ripencc|RU|ipv6|2001:640::|32|19991115|allocated\n')
+    fake_source(monkeypatch, body)
+    await initialize(client)
+    response = await client.post('/api/master-admin/rulesets/import', json={
+        'kind': 'ipcidr', 'version': 'ru-ripe-1',
+        'url': 'https://ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-latest'})
+    assert response.status_code == 201, response.text
+    served = await client.get('/api/rulesets/ipcidr/ru-ripe-1.yaml')
+    payload = [line.strip('  - "') for line in served.text.splitlines()[1:]]
+    # Summarized ranges, DE excluded, IPv6 kept as its own prefix.
+    assert '2.56.24.0/23' in payload
+    assert '10.0.0.0/24' in payload and '10.0.1.0/25' in payload
+    assert not any(entry.startswith('9.9.9.') for entry in payload)
+    assert '2001:640::/32' in payload

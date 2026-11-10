@@ -17,9 +17,15 @@ from vs_router.api.errors import APIError
 
 from . import rulesets
 
-MAX_BYTES = rulesets.MAX_BYTES
-TIMEOUT = 10.0
+MAX_BYTES = 16 * 1024 * 1024  # RIPE delegated stats is ~8 MiB; payload caps still apply
+TIMEOUT = 20.0
 USER_AGENT = 'vs-master-ruleset-import/1'
+
+#: Default sources seeded by migration 0011: the authoritative RU registry data
+#: for addresses and the v2fly category list for domains (the same upstream
+#: family the panel's own catalog already references).
+RIPE_URL = 'https://ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-latest'
+V2FLY_RU_URL = 'https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/tld-ru'
 
 
 def _public_address(host):
@@ -116,8 +122,41 @@ def _parse_json(kind, text):
     return '\n'.join(entries) + ('\n' if entries else '')
 
 
+def _parse_ripe(text):
+    """RIPE delegated stats → RU CIDRs (official registry data, no licence issue).
+
+    Records carry a start address and a count that is not always a power of two,
+    so ranges are summarized into minimal CIDRs instead of assuming /24s.
+    """
+    entries = []
+    for raw in text.splitlines():
+        parts = raw.strip().split('|')
+        if len(parts) < 7 or parts[0] != 'ripencc' or parts[1] != 'RU':
+            continue
+        kind, start, count = parts[2], parts[3], parts[4]
+        if not count.isdigit() or int(count) <= 0:
+            continue
+        try:
+            if kind == 'ipv4':
+                first = ipaddress.IPv4Address(start)
+                last = ipaddress.IPv4Address(int(first) + int(count) - 1)
+            elif kind == 'ipv6':
+                # For IPv6 the count field is the prefix length, not an address count.
+                prefix = int(count)
+                if not 1 <= prefix <= 128:
+                    continue
+                entries.append(f'{ipaddress.IPv6Address(start)}/{prefix}')
+                continue
+            else:
+                continue
+        except ValueError:
+            continue
+        entries.extend(str(net) for net in ipaddress.summarize_address_range(first, last))
+    return '\n'.join(entries) + ('\n' if entries else '')
+
+
 def parse_entries(kind, text):
-    """Accept plain lines, the line-oriented geosite/geoip grammars and JSON.
+    """Accept plain lines, geosite/geoip grammars, sing-box JSON and RIPE stats.
 
     ``srs`` (binary sing-box rule-set) is rejected explicitly: neither the
     master nor the node decodes it, guessing would publish an empty or wrong
@@ -127,6 +166,9 @@ def parse_entries(kind, text):
         raise APIError(422, 'master.ruleset_kind')
     if text.lstrip().startswith('{'):
         return _parse_json(kind, text.lstrip())
+    head = [line.strip() for line in text.splitlines()[:5] if line.strip()]
+    if any(line.startswith('ripencc|') for line in head) and kind == 'ipcidr':
+        return _parse_ripe(text)
     entries = []
     for raw in text.splitlines():
         line = raw.strip()
@@ -142,14 +184,16 @@ def parse_entries(kind, text):
                 # mihomo rule-providers of behaviour "domain" cannot express
                 # these; publishing them silently would change matching.
                 raise APIError(422, 'master.ruleset_format_unsupported')
-            if head == 'full':
-                entries.append(value)
-            elif head in ('domain', 'include'):
-                entries.append(value)
-            elif head in ('cidr', 'ip'):
+            if head == 'include':
+                # An include pulls in another upstream file; resolving it here
+                # would silently change the set, so it is an explicit failure.
+                raise APIError(422, 'master.ruleset_format_unsupported')
+            if head in ('domain', 'full', 'cidr', 'ip'):
                 entries.append(value)
             continue
-        entries.append(line)
+        # A single-label entry is a TLD (e.g. "ru"), which must become a suffix
+        # rule: a bare "ru" in a mihomo domain payload is ambiguous.
+        entries.append(line if '.' in line else f'+.{line}')
     return '\n'.join(entries) + ('\n' if entries else '')
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
 from vs_master.models import (Account, Audit, Device, DeviceOp, MagicLogin, Node, PaymentReceipt, Setting,
@@ -41,6 +41,10 @@ def test_master_migration_round_trip(tmp_path, monkeypatch):
     command.upgrade(config, "head")
 
     engine = make_engine(database_url)
+    with engine.connect() as connection:
+        sources = [row[0] for row in connection.execute(
+            text("SELECT name FROM master_rule_set_sources ORDER BY name"))]
+    assert sources == ['ru-domains', 'ru-ips'], 'default RU sources must be seeded once'
     now = datetime.now(timezone.utc)
     bridge_token = EncryptedSecret(ciphertext="gAAAA-master-bridge-token")
     private_key = EncryptedSecret(ciphertext="gAAAA-master-private-key")
