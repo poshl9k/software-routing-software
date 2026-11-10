@@ -329,3 +329,10 @@ def process_pending(engine, node_client_factory=None, now=None):
     # completion only after the existing bridge replay has actually succeeded.
     from .stars import refresh_fulfillments
     refresh_fulfillments(engine)
+    # Upstream rule-set sources (the panel's built-in lists) refresh here: a
+    # changed upstream publishes a new immutable version, never a rewrite.
+    from .ruleset_import import refresh_due_sources
+    try:
+        refresh_due_sources(engine, now)
+    except Exception:
+        pass

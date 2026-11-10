@@ -1,6 +1,6 @@
 import { Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField, Typography } from "@mui/material";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { masterApi, MasterApiError, type MasterNode, type MasterRuleSets, type MasterSubscriber, type MasterTariff } from "./api";
+import { masterApi, MasterApiError, type MasterNode, type MasterRuleSets, type MasterRuleSetSource, type MasterSubscriber, type MasterTariff } from "./api";
 
 export function ErrorNotice({ error }: { error: unknown }) {
   return error ? <Alert severity="error" sx={{ mb: 2 }}>{error instanceof Error ? error.message : "Ошибка"}</Alert> : null;
@@ -412,10 +412,55 @@ export function RuleSetsPage() {
   const [kind, setKind] = useState<"domain" | "ipcidr">("domain");
   const [version, setVersion] = useState("");
   const [content, setContent] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [sources, setSources] = useState<MasterRuleSetSource[] | null>(null);
+  const [srcName, setSrcName] = useState("");
+  const [srcUrl, setSrcUrl] = useState("");
+  const [srcKind, setSrcKind] = useState<"domain" | "ipcidr">("domain");
+
+  async function loadSources() {
+    setSources(await masterApi.ruleSetSources().catch(() => []));
+  }
+
+  async function addSource() {
+    setBusy(true); setError(null);
+    try {
+      await masterApi.addRuleSetSource({ name: srcName.trim(), kind: srcKind, url: srcUrl.trim() });
+      setSrcName(""); setSrcUrl("");
+      await loadSources();
+    } catch (reason) { setError(reason); } finally { setBusy(false); }
+  }
+
+  async function refreshSource(id: number) {
+    setBusy(true); setError(null);
+    try {
+      await masterApi.refreshRuleSetSource(id);
+      setData(await masterApi.rulesets());
+      await loadSources();
+    } catch (reason) { setError(reason); } finally { setBusy(false); }
+  }
+
+  async function removeSource(id: number) {
+    setBusy(true); setError(null);
+    try {
+      await masterApi.deleteRuleSetSource(id);
+      await loadSources();
+    } catch (reason) { setError(reason); } finally { setBusy(false); }
+  }
 
   useEffect(() => {
     masterApi.rulesets().then(setData).catch(setError);
+    void loadSources();
   }, []);
+
+  async function importSource() {
+    setBusy(true); setError(null);
+    try {
+      await masterApi.importRuleSet({ kind, version: version.trim(), url: sourceUrl.trim() });
+      setData(await masterApi.rulesets());
+      setVersion(""); setSourceUrl(""); setContent("");
+    } catch (reason) { setError(reason); } finally { setBusy(false); }
+  }
 
   async function publish(event: FormEvent) {
     event.preventDefault();
@@ -465,6 +510,17 @@ export function RuleSetsPage() {
           placeholder={kind === "domain" ? "example.com\n+.example.net" : "5.5.5.0/24"} />
         <Button type="submit" variant="contained" disabled={busy || !version.trim() || !content.trim()}>
           {busy ? <CircularProgress size={18} /> : "Опубликовать"}</Button>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+          Или импортировать объявленный источник списка по HTTPS: мастер скачает его один раз
+          и сохранит версию ({kind === "domain" ? "domain/full/include" : "cidr/ip"} и обычные строки).
+        </Typography>
+        <TextField label="URL источника списка" value={sourceUrl} margin="dense" fullWidth
+          onChange={event => setSourceUrl(event.target.value)}
+          placeholder="https://lists.example/ru-domains.txt"
+          inputProps={{ maxLength: 2048, spellCheck: false }} />
+        <Button variant="outlined" sx={{ mt: 1 }} disabled={busy || !version.trim() || !sourceUrl.trim()}
+          onClick={() => void importSource()}>
+          {busy ? <CircularProgress size={18} /> : "Импортировать"}</Button>
       </Box>
       <Stack spacing={1}>
         {data.rulesets.map(row => <Box key={row.id} sx={{ display: "flex", gap: 2, alignItems: "center",
@@ -477,6 +533,49 @@ export function RuleSetsPage() {
         {data.rulesets.length === 0 && <Typography color="text.secondary">
           Пока нет опубликованных версий.</Typography>}
       </Stack>
+      <Box sx={{ mt: 4 }}>
+        <Typography component="h3" variant="h6">Источники с автообновлением</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Те же списки, что панель обновляет сама: мастер периодически перечитывает источник и
+          публикует новую версию, только если содержимое изменилось.
+        </Typography>
+        <Stack spacing={1} sx={{ mb: 2 }}>
+          {(sources ?? []).map(source => <Box key={source.id} sx={{ display: "flex", gap: 2,
+            alignItems: "center", p: 1, borderBottom: "1px solid", borderColor: "divider" }}>
+            <Chip size="small" variant="outlined" label={source.kind === "domain" ? "домены" : "IP"} />
+            <Typography sx={{ minWidth: 140 }}>{source.name}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+              {source.version ?? "ещё не загружен"}
+              {source.last_error ? ` · ошибка: ${source.last_error}` : ""}
+            </Typography>
+            <Button size="small" variant="outlined" disabled={busy}
+              onClick={() => void refreshSource(source.id)}>Обновить</Button>
+            <Button size="small" color="error" disabled={busy}
+              onClick={() => void removeSource(source.id)}>Удалить</Button>
+          </Box>)}
+          {(sources ?? []).length === 0 && <Typography color="text.secondary">
+            Источников нет.</Typography>}
+        </Stack>
+        <Box component="form" className="form" sx={{ maxWidth: 640 }}
+          onSubmit={event => { event.preventDefault(); void addSource(); }}>
+          <Typography component="h4" variant="subtitle1">Добавить источник</Typography>
+          <TextField label="Имя источника" value={srcName} margin="dense" fullWidth
+            onChange={event => setSrcName(event.target.value)} placeholder="ru-domains"
+            inputProps={{ maxLength: 64 }} />
+          <TextField select label="Тип" value={srcKind} margin="dense" fullWidth
+            onChange={event => setSrcKind(event.target.value as "domain" | "ipcidr")}
+            SelectProps={{ native: true }}>
+            <option value="domain">Домены</option>
+            <option value="ipcidr">IP-сети</option>
+          </TextField>
+          <TextField label="URL источника (HTTPS)" value={srcUrl} margin="dense" fullWidth
+            onChange={event => setSrcUrl(event.target.value)}
+            placeholder="https://raw.githubusercontent.com/…/geoip-ru.txt"
+            inputProps={{ maxLength: 2048, spellCheck: false }} />
+          <Button type="submit" variant="contained" sx={{ mt: 1 }}
+            disabled={busy || !srcName.trim() || !srcUrl.trim()}>Добавить источник</Button>
+        </Box>
+      </Box>
     </>}
   </Box>;
 }

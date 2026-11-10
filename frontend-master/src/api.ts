@@ -48,6 +48,10 @@ export type MasterRuleSets = {
   rulesets: MasterRuleSet[];
   current: Record<string, { kind: string; version: string; entries: number; sha256: string } | null>;
 };
+export type MasterRuleSetSource = {
+  id: number; name: string; kind: "domain" | "ipcidr"; url: string; interval_seconds: number;
+  version: string | null; last_checked_at: string | null; last_error: string | null;
+};
 export type MasterTariff = {
   id: number; name: string; device_limit: number; term_days: number;
   price_amount: number | null; created_at: string;
@@ -119,6 +123,18 @@ export const masterApi = {
   publishRuleSet: (body: { kind: "domain" | "ipcidr"; version: string; content: string }) =>
     masterRequest<MasterRuleSet>("/api/master-admin/rulesets",
       { method: "POST", body: JSON.stringify(body) }),
+  importRuleSet: (body: { kind: "domain" | "ipcidr"; version: string; url: string }) =>
+    masterRequest<MasterRuleSet>("/api/master-admin/rulesets/import",
+      { method: "POST", body: JSON.stringify(body) }),
+  ruleSetSources: () => masterRequest<MasterRuleSetSource[]>("/api/master-admin/rulesets/sources"),
+  addRuleSetSource: (body: { name: string; kind: "domain" | "ipcidr"; url: string;
+    interval_seconds?: number }) =>
+    masterRequest<MasterRuleSetSource>("/api/master-admin/rulesets/sources",
+      { method: "POST", body: JSON.stringify(body) }),
+  deleteRuleSetSource: (id: number) => masterRequest<void>(
+    `/api/master-admin/rulesets/sources/${id}`, { method: "DELETE" }),
+  refreshRuleSetSource: (id: number) => masterRequest<{ version: string | null; published: boolean }>(
+    `/api/master-admin/rulesets/sources/${id}/refresh`, { method: "POST" }),
   setup: (password: string) => masterRequest<void>("/api/admin/setup", { method: "POST", body: JSON.stringify({ password }) }),
   login: (password: string) => masterRequest<void>("/api/admin/login", { method: "POST", body: JSON.stringify({ password }) }),
   logout: () => masterRequest<void>("/api/admin/logout", { method: "POST" }),

@@ -29,6 +29,7 @@ MASTER_TABLES = {
     "master_stars_fulfillments",
     "master_rule_sets",
     "master_device_subscriptions",
+    "master_rule_set_sources",
 }
 
 

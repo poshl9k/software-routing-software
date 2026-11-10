@@ -16,10 +16,11 @@ from vs_router.api.errors import APIError
 from vs_router.schema import Model
 from vs_router.secrets import decrypt_secret, encrypt_secret
 
-from . import rulesets
+from . import ruleset_import, rulesets
 from .auth import current_admin
 from .bridge import BridgeClient, BridgeError
-from .models import Account, Audit, Device, Node, RuleSet, Setting, Subscription, Tariff
+from .models import (Account, Audit, Device, Node, RuleSet, RuleSetSource, Setting, Subscription,
+                     Tariff)
 from .notifications import enqueue_subscription
 
 router = APIRouter(prefix='/api/master-admin', dependencies=[Depends(current_admin)])
@@ -589,3 +590,83 @@ def publish_ruleset(body: RuleSetBody, request: Request, db: Session = Depends(g
         db.rollback()
         raise APIError(409, 'master.ruleset_exists') from None
     return rulesets.view(row)
+
+
+class RuleSetImportBody(Model):
+    """Publish a declared source (https URL) as a new immutable version."""
+    kind: StrictStr
+    version: StrictStr = Field(min_length=1, max_length=32)
+    url: StrictStr = Field(min_length=1, max_length=2048)
+
+
+@router.post('/rulesets/import', status_code=201)
+def import_ruleset(body: RuleSetImportBody, request: Request, db: Session = Depends(get_db)):
+    timestamp = now(request)
+    begin_write(db)
+    row = ruleset_import.import_source(db, body.kind, body.version, body.url, timestamp)
+    audit(db, 'master.ruleset.import', f'{body.kind}:{body.version}', timestamp)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise APIError(409, 'master.ruleset_exists') from None
+    return rulesets.view(row)
+
+
+class RuleSetSourceBody(Model):
+    """Auto-refreshing upstream list, e.g. the panel's built-in geoip/domain sources."""
+    name: StrictStr = Field(min_length=1, max_length=64, pattern=r'^[a-z0-9][a-z0-9-]{0,63}$')
+    kind: StrictStr
+    url: StrictStr = Field(min_length=1, max_length=2048)
+    interval_seconds: int = Field(default=86400, ge=3600, le=2592000)
+
+
+@router.get('/rulesets/sources')
+def list_ruleset_sources(db: Session = Depends(get_db)):
+    rows = db.scalars(select(RuleSetSource).order_by(RuleSetSource.id))
+    return [ruleset_import.source_view(row) for row in rows]
+
+
+@router.post('/rulesets/sources', status_code=201)
+def create_ruleset_source(body: RuleSetSourceBody, request: Request,
+                          db: Session = Depends(get_db)):
+    if body.kind not in rulesets.KINDS:
+        raise APIError(422, 'master.ruleset_kind')
+    if not rulesets.valid_version(body.name):
+        raise APIError(422, 'master.ruleset_source_invalid')
+    ruleset_import.validate_source_url(body.url)
+    begin_write(db)
+    timestamp = now(request)
+    row = RuleSetSource(name=body.name, kind=body.kind, url=body.url,
+                        interval_seconds=body.interval_seconds, created_at=timestamp)
+    db.add(row)
+    audit(db, 'master.ruleset_source.create', body.name, timestamp)
+    commit_unique(db, 'master.ruleset_source_exists')
+    return ruleset_import.source_view(row)
+
+
+@router.delete('/rulesets/sources/{source_id}', status_code=204)
+def delete_ruleset_source(source_id: int, request: Request, db: Session = Depends(get_db)):
+    begin_write(db)
+    row = db.get(RuleSetSource, source_id)
+    if row is None:
+        raise APIError(404, 'master.ruleset_source_not_found')
+    db.delete(row)
+    audit(db, 'master.ruleset_source.delete', str(source_id), now(request))
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post('/rulesets/sources/{source_id}/refresh')
+def refresh_ruleset_source(source_id: int, request: Request, db: Session = Depends(get_db)):
+    begin_write(db)
+    row = db.get(RuleSetSource, source_id)
+    if row is None:
+        raise APIError(404, 'master.ruleset_source_not_found')
+    timestamp = now(request)
+    published = ruleset_import.refresh_source(db, row, timestamp)
+    row.last_checked_at = timestamp
+    row.last_error = None
+    audit(db, 'master.ruleset_source.refresh', row.name, timestamp)
+    db.commit()
+    return {'version': row.version, 'published': published is not None}

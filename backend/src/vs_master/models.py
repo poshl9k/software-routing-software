@@ -293,6 +293,30 @@ class DeviceSubscription(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
+class RuleSetSource(Base):
+    """Auto-refreshing upstream list (e.g. the panel's built-in geoip/domain sources).
+
+    The master keeps only the URL and interval; content lives in immutable
+    ``RuleSet`` versions, so a refresh publishes a new version instead of
+    rewriting history.
+    """
+    __tablename__ = 'master_rule_set_sources'
+    __table_args__ = (UniqueConstraint('name', name='uq_master_ruleset_source_name'),
+                      CheckConstraint("kind IN ('domain', 'ipcidr')",
+                                      name='ck_master_ruleset_source_kind'),
+                      CheckConstraint('interval_seconds >= 3600',
+                                      name='ck_master_ruleset_source_interval'))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=86400)
+    version: Mapped[str | None] = mapped_column(String(32))
+    last_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_error: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+
 class RuleSet(Base):
     """Immutable rule-set version served to clients by exact version (ADR-0035 split rules).
 
