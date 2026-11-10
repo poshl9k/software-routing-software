@@ -512,7 +512,9 @@ export function RuleSetsPage() {
           {busy ? <CircularProgress size={18} /> : "Опубликовать"}</Button>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
           Или импортировать объявленный источник списка по HTTPS: мастер скачает его один раз
-          и сохранит версию ({kind === "domain" ? "domain/full/include" : "cidr/ip"} и обычные строки).
+          и сохранит версию. Принимаются обычные строки, grammar панели
+          ({kind === "domain" ? "domain/full/include" : "cidr/ip"}) и sing-box JSON rule-set
+          ({"{"}"version": 3, "rules": […]{"}"}).
         </Typography>
         <TextField label="URL источника списка" value={sourceUrl} margin="dense" fullWidth
           onChange={event => setSourceUrl(event.target.value)}

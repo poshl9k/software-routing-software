@@ -7,6 +7,7 @@ normalized payload. Fetching here is deliberate but narrow: HTTPS only, no
 redirects, every resolved address must be public, bounded size and timeout.
 """
 import ipaddress
+import json
 import socket
 from urllib.parse import urlsplit
 
@@ -74,14 +75,58 @@ def fetch_source(url):
         raise APIError(422, 'master.ruleset_format_unsupported') from None
 
 
-def parse_entries(kind, text):
-    """Accept plain lines and the line-oriented geosite/geoip grammars.
+def _parse_json(kind, text):
+    """Accept a sing-box rule-set document (``{"version": 3, "rules": [...]}``).
 
-    ``srs`` (binary sing-box rule-set) and other binary formats are rejected
-    explicitly: guessing here would publish an empty or wrong list.
+    Only matchers mihomo's ``behavior: domain``/``ipcidr`` can express are
+    taken: ``domain`` (exact upstream, plain payload entry here), ``domain_suffix``
+    (``+.suffix``) and ``ip_cidr``. Anything else is rejected rather than
+    silently dropped, because dropping a matcher changes routing.
+    """
+    try:
+        document = json.loads(text)
+    except ValueError:
+        raise APIError(422, 'master.ruleset_format_unsupported') from None
+    if not isinstance(document, dict) or not isinstance(document.get('rules'), list):
+        raise APIError(422, 'master.ruleset_format_unsupported')
+    domain_keys = {'domain', 'domain_suffix'}
+    ip_keys = {'ip_cidr'}
+    entries = []
+    for rule in document['rules']:
+        if not isinstance(rule, dict):
+            raise APIError(422, 'master.ruleset_format_unsupported')
+        for key, value in rule.items():
+            if key in domain_keys:
+                if kind != 'domain':
+                    continue
+                if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+                    raise APIError(422, 'master.ruleset_format_unsupported')
+                for item in value:
+                    entries.append(item if key == 'domain' else f'+.{item.lstrip(".")}')
+            elif key in ip_keys:
+                if kind != 'ipcidr':
+                    continue
+                if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+                    raise APIError(422, 'master.ruleset_format_unsupported')
+                entries.extend(value)
+            else:
+                # A matcher we cannot publish faithfully (domain_keyword,
+                # domain_regex, process_name, ports, …).
+                raise APIError(422, 'master.ruleset_format_unsupported')
+    return '\n'.join(entries) + ('\n' if entries else '')
+
+
+def parse_entries(kind, text):
+    """Accept plain lines, the line-oriented geosite/geoip grammars and JSON.
+
+    ``srs`` (binary sing-box rule-set) is rejected explicitly: neither the
+    master nor the node decodes it, guessing would publish an empty or wrong
+    list.
     """
     if kind not in rulesets.KINDS:
         raise APIError(422, 'master.ruleset_kind')
+    if text.lstrip().startswith('{'):
+        return _parse_json(kind, text.lstrip())
     entries = []
     for raw in text.splitlines():
         line = raw.strip()

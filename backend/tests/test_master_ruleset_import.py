@@ -229,3 +229,54 @@ def test_refresh_due_sources_records_error_and_respects_interval(monkeypatch):
     with Session(engine) as db:
         source = db.scalar(select(RuleSetSource))
         assert source.last_error is None and source.version is not None
+
+
+async def test_import_singbox_json_rule_set(master, monkeypatch):
+    client, _, _ = master
+    payload = (b'{"version": 3, "rules": ['
+               b'{"domain": ["exact.ru"], "domain_suffix": [".suffix.ru", "plain.ru"]},'
+               b'{"ip_cidr": ["5.5.5.0/24"]}]}')
+    fake_source(monkeypatch, payload)
+    await initialize(client)
+    response = await client.post('/api/master-admin/rulesets/import', json={
+        'kind': 'domain', 'version': 'ru-domains-json-1',
+        'url': 'https://lists.example/ru.json'})
+    assert response.status_code == 201, response.text
+    assert response.json()['entries'] == 3
+    served = await client.get('/api/rulesets/domain/ru-domains-json-1.yaml')
+    assert served.text == ('payload:\n'
+                           '  - "exact.ru"\n'
+                           '  - "+.suffix.ru"\n'
+                           '  - "+.plain.ru"\n')
+
+
+async def test_import_singbox_json_ip_cidr(master, monkeypatch):
+    client, _, _ = master
+    fake_source(monkeypatch, b'{"version": 3, "rules": [{"ip_cidr": ["5.5.5.0/24", "77.88.8.0/24"],'
+                             b' "domain": ["ignored.ru"]}]}')
+    await initialize(client)
+    response = await client.post('/api/master-admin/rulesets/import', json={
+        'kind': 'ipcidr', 'version': 'ru-ips-json-1', 'url': 'https://lists.example/ru.json'})
+    assert response.status_code == 201, response.text
+    assert response.json()['entries'] == 2
+
+
+@pytest.mark.parametrize('payload,code', [
+    (b'{"version": 3, "rules": [{"domain_keyword": ["bank"]}]}',
+     'master.ruleset_format_unsupported'),
+    (b'{"version": 3, "rules": [{"domain_regex": ["^a\\.ru$"]}]}',
+     'master.ruleset_format_unsupported'),
+    (b'{"version": 3, "rules": [{"network": "udp"}]}',
+     'master.ruleset_format_unsupported'),
+    (b'{not json', 'master.ruleset_format_unsupported'),
+    (b'{"version": 3}', 'master.ruleset_format_unsupported'),
+    (b'{"version": 3, "rules": [{"ip_cidr": ["5.5.5.0/24"]}]}', 'master.ruleset_content'),
+])
+async def test_import_rejects_unpublishable_json_matchers(master, monkeypatch, payload, code):
+    client, _, _ = master
+    fake_source(monkeypatch, payload)
+    await initialize(client)
+    response = await client.post('/api/master-admin/rulesets/import', json={
+        'kind': 'domain', 'version': 'v1', 'url': 'https://lists.example/ru.json'})
+    assert response.status_code == 422
+    assert response.json()['error']['code'] == code
