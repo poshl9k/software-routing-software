@@ -39,6 +39,7 @@ private bot chat (numeric IDs come from `/devices`):
 | `/conf 12` | Upload the wg-quick `.conf` using `sendDocument` |
 | `/qr 12` | Upload the same configuration as a PNG using `sendPhoto` |
 | `/amnezia 12` | For supported AWG state, upload an Amnezia `vpn://` URI in `device-12-amnezia.txt`; ordinary WG is rejected |
+| `/mihomo 12` | Upload a mihomo (Clash Meta) profile in `device-12.yaml`: AWG 3.1 parameters plus a client-side split where destinations in Russia go direct through the subscriber's own provider and only the rest enters the tunnel |
 
 Every device entry point, including list, callbacks and deletion confirmation,
 requires a positive private chat ID equal to the sender ID, an active master

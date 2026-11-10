@@ -2,7 +2,7 @@ import { Alert, Box, Button, CircularProgress, GlobalStyles, Stack, TextField, T
 import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { MasterApiError, masterApi } from "./api";
-import { NodesPage, SubscribersPage, TariffsPage } from "./pages";
+import { NodesPage, RuleSetsPage, SubscribersPage, TariffsPage } from "./pages";
 import { TelegramPage } from "./TelegramPage";
 import { MagicSignIn, PortalHome, PortalLogin } from "./SubscriberPortal";
 import { takeMagicProof } from "./magic";
@@ -46,7 +46,7 @@ function AuthForm({ setup = false }: { setup?: boolean }) {
 function Dashboard() {
   const navigate = useNavigate();
   const [ready, setReady] = useState<boolean | null>(null);
-  const [tab, setTab] = useState<"nodes" | "subscribers" | "tariffs" | "telegram">("nodes");
+  const [tab, setTab] = useState<"nodes" | "subscribers" | "tariffs" | "telegram" | "rules">("nodes");
   useEffect(() => {
     masterApi.nodes().then(() => { setReady(true); }).catch((reason) => {
       if (reason instanceof MasterApiError && reason.status === 401) navigate("/login", { replace: true });
@@ -67,9 +67,10 @@ function Dashboard() {
       <Button role="tab" aria-selected={tab === "subscribers"} variant={tab === "subscribers" ? "contained" : "text"} onClick={() => setTab("subscribers")}>Абоненты</Button>
       <Button role="tab" aria-selected={tab === "tariffs"} variant={tab === "tariffs" ? "contained" : "text"} onClick={() => setTab("tariffs")}>Тарифы</Button>
       <Button role="tab" aria-selected={tab === "telegram"} variant={tab === "telegram" ? "contained" : "text"} onClick={() => setTab("telegram")}>Telegram</Button>
+      <Button role="tab" aria-selected={tab === "rules"} variant={tab === "rules" ? "contained" : "text"} onClick={() => setTab("rules")}>Правила</Button>
     </Box>
     {ready === null && <Box className="loading"><CircularProgress /></Box>}
-    {ready === true && (tab === "nodes" ? <NodesPage /> : tab === "subscribers" ? <SubscribersPage /> : tab === "tariffs" ? <TariffsPage /> : <TelegramPage />)}
+    {ready === true && (tab === "nodes" ? <NodesPage /> : tab === "subscribers" ? <SubscribersPage /> : tab === "tariffs" ? <TariffsPage /> : tab === "rules" ? <RuleSetsPage /> : <TelegramPage />)}
   </Box></Box>;
 }
 

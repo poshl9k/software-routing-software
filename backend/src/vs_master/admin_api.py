@@ -16,9 +16,10 @@ from vs_router.api.errors import APIError
 from vs_router.schema import Model
 from vs_router.secrets import decrypt_secret, encrypt_secret
 
+from . import rulesets
 from .auth import current_admin
 from .bridge import BridgeClient, BridgeError
-from .models import Account, Audit, Device, Node, Setting, Subscription, Tariff
+from .models import Account, Audit, Device, Node, RuleSet, Setting, Subscription, Tariff
 from .notifications import enqueue_subscription
 
 router = APIRouter(prefix='/api/master-admin', dependencies=[Depends(current_admin)])
@@ -469,3 +470,39 @@ def put_subscription(account_id: int, body: SubscriptionBody, request: Request,
     audit(db, action, str(account_id), timestamp)
     db.commit()
     return subscription_view(row, tariff)
+
+
+class RuleSetBody(Model):
+    """One immutable rule-set version; a correction is a new version."""
+    kind: StrictStr
+    version: StrictStr = Field(min_length=1, max_length=32)
+    content: StrictStr = Field(min_length=1, max_length=rulesets.MAX_BYTES)
+
+
+@router.get('/rulesets')
+def list_rulesets(db: Session = Depends(get_db)):
+    rows = list(db.scalars(select(RuleSet).order_by(RuleSet.id.desc())))
+    current = {}
+    for kind in rulesets.KINDS:
+        row = rulesets.current(db, kind)
+        current[kind] = {k: v for k, v in rulesets.view(row).items()
+                         if k in ('kind', 'version', 'entries', 'sha256')} if row else None
+    return {'rulesets': [rulesets.view(row) for row in rows], 'current': current}
+
+
+@router.post('/rulesets', status_code=201)
+def publish_ruleset(body: RuleSetBody, request: Request, db: Session = Depends(get_db)):
+    if not rulesets.valid_version(body.version):
+        raise APIError(422, 'master.ruleset_version')
+    text, entries, digest = rulesets.normalize(body.kind, body.content)
+    begin_write(db)
+    row = RuleSet(kind=body.kind, version=body.version, sha256=digest, entries=entries,
+                  content=text, created_at=now(request))
+    db.add(row)
+    audit(db, 'master.ruleset.publish', f'{body.kind}:{body.version}', now(request))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise APIError(409, 'master.ruleset_exists') from None
+    return rulesets.view(row)

@@ -22,7 +22,7 @@ from datetime import datetime
 import os
 
 from sqlalchemy import (JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String,
-                        Index, UniqueConstraint, create_engine, event)
+                        Text, Index, UniqueConstraint, create_engine, event)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.pool import StaticPool
 
@@ -269,6 +269,39 @@ class Setting(Base):
     __tablename__ = 'master_settings'
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(String(256), nullable=False)
+
+
+class DeviceSubscription(Base):
+    """Revocable per-device subscription link; only the token hash is stored.
+
+    The raw token is shown once at issue time and travels only inside the URL a
+    client fetches, so deleting the device or reissuing makes the old link dead.
+    """
+    __tablename__ = 'master_device_subscriptions'
+    device_id: Mapped[int] = mapped_column(ForeignKey('master_devices.id'), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class RuleSet(Base):
+    """Immutable rule-set version served to clients by exact version (ADR-0035 split rules).
+
+    Clients fetch a pinned version through a `rule-provider`, so a published row
+    must never change: a correction is a new version, and the served hash is
+    verified on read.
+    """
+    __tablename__ = 'master_rule_sets'
+    __table_args__ = (UniqueConstraint('kind', 'version', name='uq_master_ruleset_version'),
+                      CheckConstraint("kind IN ('domain', 'ipcidr')", name='ck_master_ruleset_kind'),
+                      CheckConstraint('entries > 0', name='ck_master_ruleset_entries'))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    entries: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
 def make_engine(database_url=None):

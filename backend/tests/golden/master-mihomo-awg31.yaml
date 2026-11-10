@@ -1,0 +1,69 @@
+mode: "rule"
+log-level: "info"
+ipv6: false
+proxies:
+  - name: "vell"
+    type: "wireguard"
+    server: "vpn.example"
+    port: 51820
+    private-key: "private-test-material"
+    public-key: "server-public"
+    ip: "10.66.0.2/32"
+    allowed-ips:
+      - "0.0.0.0/0"
+    udp: true
+    mtu: 1380
+    persistent-keepalive: 25
+    amnezia-wg-option:
+      version: 3
+      jc: 8
+      jmin: 25
+      jmax: 87
+      s1: 97
+      s2: 60
+      s3: 97
+      s4: 97
+      h1: 462728319
+      h2: 1
+      h3: 2
+      h4: 3
+      header-protection-key: "hpk-secret"
+      random-trailers: true
+      disable-cookies: true
+    preshared-key: "preshared-test-material"
+proxy-groups:
+  - name: "PROXY"
+    type: "select"
+    proxies:
+      - "vell"
+rules:
+  - "GEOIP,RU,DIRECT"
+  - "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve"
+  - "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve"
+  - "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"
+  - "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve"
+  - "MATCH,PROXY"
+dns:
+  enable: true
+  enhanced-mode: "fake-ip"
+  fake-ip-range: "198.18.0.1/16"
+  default-nameserver:
+    - "77.88.8.8"
+    - "223.5.5.5"
+  nameserver:
+    - "10.0.0.1"
+  proxy-server-nameserver:
+    - "77.88.8.8"
+    - "223.5.5.5"
+  nameserver-policy:
+    +.ru:
+      - "77.88.8.8"
+      - "223.5.5.5"
+    +.su:
+      - "77.88.8.8"
+      - "223.5.5.5"
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "+.ru"
+    - "+.su"

@@ -2,7 +2,7 @@ import { Alert, Box, Button, Card as MuiCard, Chip, CircularProgress, Dialog, Di
   DialogContent, DialogTitle, Stack, TextField, Typography } from "@mui/material";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { MasterApiError, portalApi, type PortalDevice, type PortalMe, type PortalOperation } from "./api";
+import { MasterApiError, portalApi, type PortalDevice, type PortalExportFormat, type PortalMe, type PortalOperation, type PortalSubscription } from "./api";
 
 function Page({ title, children }: { title: string; children: ReactNode }) {
   return <Box className="page">
@@ -76,6 +76,8 @@ export function PortalHome() {
   const [working, setWorking] = useState<number | "create" | null>(null);
   const [qr, setQr] = useState<{ title: string; url: string } | null>(null);
   const [amnezia, setAmnezia] = useState<{ title: string; uri: string } | null>(null);
+  const [link, setLink] = useState<{ device: PortalDevice; url: string | null;
+    state: PortalSubscription } | null>(null);
 
   function showError(reason: unknown, fallback: string) {
     if (reason instanceof MasterApiError && reason.status === 401) {
@@ -146,7 +148,7 @@ export function PortalHome() {
     finally { setWorking(null); }
   }
 
-  async function exportConfig(device: PortalDevice, format: "conf" | "qr" | "amnezia") {
+  async function exportConfig(device: PortalDevice, format: PortalExportFormat) {
     setError(null);
     try {
       const blob = await portalApi.exportDevice(device.id, format);
@@ -160,10 +162,37 @@ export function PortalHome() {
       } else {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url; a.download = `${title}.conf`; a.click();
+        a.href = url; a.download = `${title}${format === "mihomo" ? ".yaml" : ".conf"}`; a.click();
         URL.revokeObjectURL(url);
       }
     } catch (reason) { showError(reason, "Не удалось скачать конфигурацию."); }
+  }
+
+  async function openSubscription(device: PortalDevice) {
+    setError(null);
+    try {
+      const state = await portalApi.subscriptionState(device.id);
+      setLink({ device, url: null, state });
+    } catch (reason) { showError(reason, "Не удалось открыть подписку."); }
+  }
+
+  async function issueSubscription() {
+    if (!link) return;
+    setError(null);
+    try {
+      const issued = await portalApi.issueSubscription(link.device.id);
+      setLink({ ...link, url: issued.url,
+        state: { active: true, created_at: issued.created_at, last_used_at: null } });
+    } catch (reason) { showError(reason, "Не удалось создать ссылку."); }
+  }
+
+  async function revokeSubscription() {
+    if (!link) return;
+    setError(null);
+    try {
+      await portalApi.revokeSubscription(link.device.id);
+      setLink({ ...link, url: null, state: { active: false, created_at: null, last_used_at: null } });
+    } catch (reason) { showError(reason, "Не удалось отозвать ссылку."); }
   }
 
   const subscription = me?.subscription;
@@ -248,6 +277,10 @@ export function PortalHome() {
                   onClick={() => void exportConfig(device, "qr")}>QR</Button>
                 <Button variant="outlined" size="small" disabled={!exportReady || working !== null}
                   onClick={() => void exportConfig(device, "amnezia")}>Amnezia</Button>
+                <Button variant="outlined" size="small" disabled={!exportReady || working !== null}
+                  onClick={() => void exportConfig(device, "mihomo")}>Clash / mihomo</Button>
+                <Button variant="outlined" size="small" disabled={!exportReady || working !== null}
+                  onClick={() => void openSubscription(device)}>Ссылка-подписка</Button>
                 <Button variant="outlined" size="small" disabled={!active || !!device.pending_op || working !== null}
                   onClick={() => void change(device, "toggle")}>{working === device.id ? <CircularProgress size={16} />
                     : device.status === "active" ? "Деактивировать" : "Активировать"}</Button>
@@ -287,6 +320,35 @@ export function PortalHome() {
         if (!qr) return;
         const a = document.createElement("a"); a.href = qr.url; a.download = `${qr.title}.png`; a.click();
       }}>Скачать PNG</Button><Button onClick={() => setQr(null)}>Закрыть</Button></DialogActions>
+    </Dialog>
+    <Dialog open={link !== null} onClose={() => setLink(null)} aria-labelledby="link-title" fullWidth maxWidth="sm">
+      <DialogTitle id="link-title">Ссылка-подписка: {link?.device.label || link?.device.name}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2">
+          Клиент забирает профиль по этой ссылке сам. Не пересылайте её: она равнозначна паролю устройства.
+          Сайты в России идут напрямую через вашего провайдера, в туннель попадает только остальное.
+        </Typography>
+        {link?.url ? <TextField margin="dense" value={link.url} label="Ссылка" fullWidth multiline minRows={2}
+          inputProps={{ readOnly: true }} onFocus={event => event.currentTarget.select()} /> :
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            {link?.state.active
+              ? "Ссылка уже создана. Перевыпустите её, чтобы получить новую."
+              : "Ссылка ещё не создана."}
+          </Typography>}
+        <ErrorNotice error={error} />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setLink(null)}>Закрыть</Button>
+        {link?.url && <Button component="a"
+          href={`clash://install-config?url=${encodeURIComponent(link.url)}`}>Открыть в Clash</Button>}
+        {link?.url && <Button onClick={() => {
+          const url = link.url ?? "";
+          void navigator.clipboard.writeText(url).catch(() => setError("Не удалось скопировать ссылку."));
+        }}>Скопировать</Button>}
+        <Button variant="contained" onClick={() => void issueSubscription()}>
+          {link?.state.active ? "Перевыпустить" : "Создать ссылку"}</Button>
+        {link?.state.active && <Button color="error" onClick={() => void revokeSubscription()}>Отозвать</Button>}
+      </DialogActions>
     </Dialog>
     <Dialog open={amnezia !== null} onClose={() => setAmnezia(null)} aria-labelledby="amnezia-title" fullWidth maxWidth="sm">
       <DialogTitle id="amnezia-title">Подключение в Amnezia: {amnezia?.title}</DialogTitle>

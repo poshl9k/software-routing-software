@@ -14,7 +14,7 @@ from .exports import device_export
 from .models import Account
 
 ACTIONS = {'devices', 'new', 'activate', 'deactivate', 'delete', 'conf', 'qr', 'amnezia',
-           'confirm', 'cancel'}
+           'mihomo', 'confirm', 'cancel'}
 PAGE_SIZE = 5
 
 
@@ -123,9 +123,10 @@ class DeviceController:
                         [{'text': 'Отмена', 'callback_data': f'dev:cancel:{nonce}'}]]})
             if action in ('activate', 'deactivate'):
                 return self._operation(devices.change_device(db, account, device_id, action, **context))
-            if action in ('conf', 'qr', 'amnezia'):
+            if action in ('conf', 'qr', 'amnezia', 'mihomo'):
                 content, media_type, _ = device_export(db, account, device_id, action, now, node_client_factory)
-                suffix = {'conf': '.conf', 'qr': '.png', 'amnezia': '-amnezia.txt'}[action]
+                suffix = {'conf': '.conf', 'qr': '.png', 'amnezia': '-amnezia.txt',
+                          'mihomo': '.yaml'}[action]
                 return DeviceReply(attachment=(action, content, media_type, f'device-{device_id}{suffix}'),
                                    authorization=(account.id, account.telegram_linked_at, device_id))
             raise APIError(422, 'portal.operation_invalid')
@@ -157,7 +158,8 @@ class DeviceController:
                  {'text': 'Удалить', 'callback_data': f'dev:delete:{device_id}'}],
                 [{'text': '.conf', 'callback_data': f'dev:conf:{device_id}'},
                  {'text': 'QR', 'callback_data': f'dev:qr:{device_id}'},
-                 {'text': 'Amnezia', 'callback_data': f'dev:amnezia:{device_id}'}]])
+                 {'text': 'Amnezia', 'callback_data': f'dev:amnezia:{device_id}'}],
+                [{'text': 'Clash', 'callback_data': f'dev:mihomo:{device_id}'}]])
         if not items:
             lines.append('Устройств пока нет.')
         nav = []

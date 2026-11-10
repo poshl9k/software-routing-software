@@ -1,5 +1,6 @@
 """Master subscriber exports from master-owned keys and exact node state."""
 import io
+import json
 from types import SimpleNamespace
 
 import qrcode
@@ -14,6 +15,7 @@ from vs_router.generators.amnezia import amnezia_uri
 from vs_router.generators.wireguard import AWG_ORDER
 from vs_router.secrets import decrypt_secret, encrypt_secret
 
+from . import rulesets
 from .accounts import current_account, get_db
 from .models import Account, Node
 from .device_service import device_owned, live_subscription, subscriber_state
@@ -126,9 +128,211 @@ def _amnezia_uri(device, tunnel, key, account_name):
         raise APIError(503, 'portal.export_unavailable') from exc
 
 
+def _host_port(tunnel):
+    """Split the exported endpoint into host and port for a mihomo proxy."""
+    endpoint = tunnel.get('endpoint')
+    port = tunnel.get('listen_port')
+    if not isinstance(endpoint, str) or not endpoint:
+        raise APIError(503, 'portal.export_unavailable')
+    if endpoint.startswith('['):
+        host, _, rest = endpoint.partition(']')
+        host = host[1:]
+        if rest.startswith(':') and rest[1:].isdigit():
+            port = int(rest[1:])
+    elif endpoint.count(':') == 1:
+        host, _, raw = endpoint.partition(':')
+        if raw.isdigit():
+            port = int(raw)
+    else:
+        host = endpoint
+    if not host or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise APIError(503, 'portal.export_unavailable')
+    return host, port
+
+
+# mihomo spells the AmneziaWG 3+ parameters in lower case with dashes.
+_MIHOMO_AWG_KEYS = {
+    'Jc': 'jc', 'Jmin': 'jmin', 'Jmax': 'jmax',
+    'S1': 's1', 'S2': 's2', 'S3': 's3', 'S4': 's4',
+    'H1': 'h1', 'H2': 'h2', 'H3': 'h3', 'H4': 'h4',
+    'I1': 'i1', 'I2': 'i2', 'I3': 'i3', 'I4': 'i4', 'I5': 'i5',
+    'ContentPaddingAddition': 'content-padding-addition',
+    'RekeyAfterTime': 'rekey-after-time', 'RekeyTimeout': 'rekey-timeout',
+    'RejectAfterTime': 'reject-after-time', 'KeepaliveTimeout': 'keepalive-timeout',
+    'MaxHandshakeAttempts': 'max-handshake-attempts',
+}
+
+_MIHOMO_PRIVATE = ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.0/8')
+
+
+def _yaml_scalar(value):
+    if value is True:
+        return 'true'
+    if value is False:
+        return 'false'
+    if isinstance(value, int):
+        return str(value)
+    return json.dumps(_line(str(value)))
+
+
+def _yaml_lines(node, indent=0):
+    """Deterministic block-style YAML for the small shapes we emit.
+
+    Values are JSON-escaped so keys and rules cannot break the document; no
+    third-party YAML dependency is added to the master profile for one export.
+    """
+    pad = '  ' * indent
+    lines = []
+    for key, value in node.items():
+        if isinstance(value, dict):
+            if not value:
+                lines.append(f'{pad}{key}: {{}}')
+                continue
+            lines.append(f'{pad}{key}:')
+            lines.extend(_yaml_lines(value, indent + 1))
+        elif isinstance(value, list):
+            if not value:
+                lines.append(f'{pad}{key}: []')
+                continue
+            lines.append(f'{pad}{key}:')
+            for item in value:
+                if isinstance(item, dict):
+                    block = _yaml_lines(item, indent + 2)
+                    block[0] = f'{pad}  - ' + block[0][len(pad) + 4:]
+                    lines.extend(block)
+                elif isinstance(item, list):
+                    raise APIError(503, 'portal.export_unavailable')
+                else:
+                    lines.append(f'{pad}  - {_yaml_scalar(item)}')
+        else:
+            lines.append(f'{pad}{key}: {_yaml_scalar(value)}')
+    return lines
+
+
+def _awg_option(tunnel):
+    """mihomo `amnezia-wg-option`; mirrors what the node actually runs."""
+    obfuscation = dict(tunnel.get('obfuscation') or {})
+    if not obfuscation:
+        raise APIError(503, 'portal.export_unavailable')
+    hp_key = tunnel.get('header_protection_key')
+    if any(name in obfuscation for name in ('S3', 'S4', 'I1')) and not hp_key:
+        raise APIError(503, 'portal.export_unavailable')
+    option: dict[str, object] = {'version': 3}
+    for name, key in _MIHOMO_AWG_KEYS.items():
+        if name not in obfuscation:
+            continue
+        raw = obfuscation[name]
+        if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+            raise APIError(503, 'portal.export_unavailable')
+        text = str(raw)
+        # Plain counters must be YAML integers; patterned values (e.g. "0-32")
+        # stay strings. Never emit a boolean as a counter.
+        option[key] = int(text) if text.isdigit() else text
+    if hp_key:
+        option['header-protection-key'] = _line(str(hp_key))
+    if tunnel.get('random_trailers'):
+        option['random-trailers'] = True
+    if tunnel.get('disable_cookies'):
+        option['disable-cookies'] = True
+    return option
+
+
+def _rule_providers(db, origin):
+    """Published rule-sets as mihomo providers pinned to an exact version."""
+    providers, rules = {}, []
+    for kind, name in (('domain', 'ru-domains'), ('ipcidr', 'ru-ips')):
+        row = rulesets.current(db, kind)
+        if row is None:
+            continue
+        providers[name] = {
+            'type': 'http', 'behavior': kind,
+            'url': f'{origin}/api/rulesets/{kind}/{row.version}.yaml',
+            'path': f'./ruleset-{kind}.yaml', 'interval': 86400}
+        rules.append(f'RULE-SET,{name},DIRECT')
+    return providers, rules
+
+
+def _mihomo_yaml(device, tunnel, key, db=None):
+    """mihomo (Clash Meta) profile: AWG tunnel plus a client-side RU split.
+
+    The split is the contract: destinations in Russia resolve and leave through
+    the subscriber's own provider, so no Russian-to-Russian traffic ever reaches
+    a node. Everything else enters the tunnel.
+    """
+    if not isinstance(tunnel, dict) or not device.private_key or not device.allowed_ips:
+        raise APIError(503, 'portal.export_unavailable')
+    protocol = tunnel.get('protocol')
+    if protocol not in ('wg', 'awg'):
+        raise APIError(503, 'portal.export_unavailable')
+    try:
+        private = decrypt_secret(device.private_key, key)
+    except (InvalidToken, ValueError):
+        raise APIError(503, 'portal.export_unavailable') from None
+    host, port = _host_port(tunnel)
+    server_key = tunnel.get('public_key')
+    allowed = tunnel.get('allowed_ips')
+    dns_servers = tunnel.get('dns_servers')
+    if not server_key or not allowed or not dns_servers:
+        raise APIError(503, 'portal.export_unavailable')
+    addresses = [str(value) for value in device.allowed_ips]
+    v4 = next((value for value in addresses if ':' not in value), None)
+    v6 = next((value for value in addresses if ':' in value), None)
+    if v4 is None:
+        raise APIError(503, 'portal.export_unavailable')
+
+    proxy = {'name': 'vell', 'type': 'wireguard', 'server': _line(str(host)),
+             'port': port, 'private-key': _line(private),
+             'public-key': _line(str(server_key)), 'ip': _line(v4),
+             'allowed-ips': [_line(str(value)) for value in allowed], 'udp': True}
+    if v6 is not None:
+        proxy['ipv6'] = _line(v6)
+    if tunnel.get('mtu'):
+        proxy['mtu'] = int(tunnel['mtu'])
+    proxy['persistent-keepalive'] = int(tunnel.get('keepalive') or 25)
+    if protocol == 'awg':
+        proxy['amnezia-wg-option'] = _awg_option(tunnel)
+    if device.preshared_key:
+        try:
+            proxy['preshared-key'] = _line(decrypt_secret(device.preshared_key, key))
+        except (InvalidToken, ValueError):
+            raise APIError(503, 'portal.export_unavailable') from None
+
+    # RU resolvers answer Russian domains locally; the tunnel resolver only sees
+    # what actually goes through the tunnel.
+    local_dns = ['77.88.8.8', '223.5.5.5']
+    dns = {'enable': True, 'enhanced-mode': 'fake-ip',
+           'fake-ip-range': '198.18.0.1/16',
+           'default-nameserver': local_dns,
+           'nameserver': [_line(str(value)) for value in dns_servers],
+           'proxy-server-nameserver': local_dns,
+           'nameserver-policy': {'+.ru': local_dns, '+.su': local_dns},
+           'fake-ip-filter': ['*.lan', '*.local', '+.ru', '+.su']}
+    rules = ['GEOIP,RU,DIRECT']
+    rules += [f'IP-CIDR,{value},DIRECT,no-resolve' for value in _MIHOMO_PRIVATE]
+    rules.append('MATCH,PROXY')
+    providers = {}
+    origin = rulesets.public_url(db) if db is not None else None
+    if origin:
+        providers, published = _rule_providers(db, origin)
+        rules = published + rules
+
+    document = {
+        'mode': 'rule',
+        'log-level': 'info',
+        'ipv6': v6 is not None,
+        'proxies': [proxy],
+        'proxy-groups': [{'name': 'PROXY', 'type': 'select', 'proxies': ['vell']}],
+        'rules': rules,
+        'dns': dns,
+    }
+    if providers:
+        document['rule-providers'] = providers
+    return '\n'.join(_yaml_lines(document)) + '\n'
+
+
 def device_export(db, account, identity, format, now, node_client_factory):
     """Guarded shared export: bytes, media type, and filename; never a message."""
-    if format not in ('conf', 'qr', 'amnezia'):
+    if format not in ('conf', 'qr', 'amnezia', 'mihomo'):
         raise APIError(422, 'portal.export_format')
     live_subscription(db, account.id, now)
     device = device_owned(db, identity, account.id)
@@ -152,6 +356,9 @@ def device_export(db, account, identity, format, now, node_client_factory):
             raise APIError(503, 'portal.export_unavailable')
         uri = _amnezia_uri(device, tunnel, key, device.node_subscriber)
         return uri.encode(), 'text/plain; charset=utf-8', f'{filename}-amnezia.txt'
+    if format == 'mihomo':
+        return (_mihomo_yaml(device, tunnel, key, db).encode(), 'application/yaml; charset=utf-8',
+                f'{filename}.yaml')
     return (_conf_text(device, tunnel, key).encode(), 'text/plain; charset=utf-8',
             f'{filename}.conf')
 

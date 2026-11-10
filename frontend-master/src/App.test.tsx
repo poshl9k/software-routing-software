@@ -168,6 +168,64 @@ test("subscriber can view QR, deactivate and remove a device through the master 
   }
 });
 
+test("clash export downloads a mihomo yaml profile from the master API", async () => {
+  window.history.replaceState({}, "", "/portal");
+  const objectUrl = vi.fn(() => "blob:synthetic-yaml");
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: objectUrl });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+  const fetcher = vi.fn(async (input: string) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: { status: "active",
+        expires_at: "2099-12-08T00:00:00Z", tariff: { name: "Базовый", device_limit: 2, term_days: 30 } } }),
+      { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [
+      { id: 7, name: "master_7", label: "Телефон", status: "active", applied: true, last_handshake: null }] }),
+      { status: 200 });
+    if (input === "/api/portal/devices/7/export?format=mihomo") return new Response(
+      'mode: "rule"\n', { status: 200, headers: { "Content-Type": "application/yaml" } });
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Clash / mihomo" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
+      "/api/portal/devices/7/export?format=mihomo", expect.anything()));
+    expect(objectUrl).toHaveBeenCalled();
+  } finally {
+    Reflect.deleteProperty(URL, "createObjectURL");
+    Reflect.deleteProperty(URL, "revokeObjectURL");
+  }
+});
+
+test("subscriber issues a revocable subscription link and can open it in Clash", async () => {
+  window.history.replaceState({}, "", "/portal");
+  const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: { status: "active",
+        expires_at: "2099-12-08T00:00:00Z", tariff: { name: "Базовый", device_limit: 2, term_days: 30 } } }),
+      { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [
+      { id: 7, name: "master_7", label: "Телефон", status: "active", applied: true, last_handshake: null }] }),
+      { status: 200 });
+    if (input === "/api/portal/devices/7/subscription" && !init?.method) return new Response(
+      JSON.stringify({ active: false, created_at: null, last_used_at: null }), { status: 200 });
+    if (input === "/api/portal/devices/7/subscription" && init?.method === "POST") return new Response(
+      JSON.stringify({ url: "https://master.test/api/portal/sub/token-abc", created_at: "2026-11-10T00:00:00Z" }),
+      { status: 201 });
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "Ссылка-подписка" }));
+  expect(await screen.findByRole("dialog", { name: /Ссылка-подписка: Телефон/ })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Создать ссылку" }));
+  const field = await screen.findByLabelText("Ссылка");
+  expect(field).toHaveValue("https://master.test/api/portal/sub/token-abc");
+  expect(screen.getByRole("link", { name: "Открыть в Clash" })).toHaveAttribute(
+    "href", "clash://install-config?url=https%3A%2F%2Fmaster.test%2Fapi%2Fportal%2Fsub%2Ftoken-abc");
+});
+
 test("no subscription never claims access or enables new devices", async () => {
   window.history.replaceState({}, "", "/portal");
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {
@@ -181,6 +239,37 @@ test("no subscription never claims access or enables new devices", async () => {
   expect(await screen.findByText("Подписка пока не активна")).toBeInTheDocument();
   expect(screen.queryByText("Активна")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Добавить устройство" })).toBeDisabled();
+});
+
+test("admin lists and publishes rule-set versions", async () => {
+  window.history.replaceState({}, "", "/");
+  let listing = { rulesets: [{ id: 1, kind: "domain", version: "ru-2026-11-01", entries: 2,
+    sha256: "a".repeat(64), created_at: "2026-11-10T00:00:00Z" }],
+    current: { domain: { kind: "domain", version: "ru-2026-11-01", entries: 2, sha256: "a".repeat(64) },
+      ipcidr: null } };
+  const published: unknown[] = [];
+  const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/master-admin/nodes") return new Response(JSON.stringify([]), { status: 200 });
+    if (input === "/api/master-admin/rulesets" && !init?.method) return new Response(
+      JSON.stringify(listing), { status: 200 });
+    if (input === "/api/master-admin/rulesets" && init?.method === "POST") {
+      published.push(JSON.parse(String(init.body)));
+      listing = { ...listing, rulesets: [
+        { id: 2, kind: "ipcidr", version: "ru-ips-1", entries: 1, sha256: "b".repeat(64),
+          created_at: "2026-11-10T00:00:00Z" }, ...listing.rulesets] };
+      return new Response(JSON.stringify({ id: 2 }), { status: 201 });
+    }
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+  await userEvent.click(await screen.findByRole("tab", { name: "Правила" }));
+  expect(await screen.findByText(/ru-2026-11-01 · 2 записей/)).toBeInTheDocument();
+  await userEvent.type(screen.getByRole("textbox", { name: "Версия" }), "ru-ips-1");
+  await userEvent.type(screen.getByRole("textbox", { name: "Содержимое" }), "5.5.5.0/24");
+  await userEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
+  await waitFor(() => expect(published).toHaveLength(1));
+  expect(published[0]).toEqual({ kind: "domain", version: "ru-ips-1", content: "5.5.5.0/24" });
 });
 
 test("inactive devices still use a tariff slot; expired entitlement blocks exports", async () => {

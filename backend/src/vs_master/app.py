@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from vs_portal.errors import install_errors, nested
 
-from . import accounts, admin_api, auth, exports, payments_api, portal_api
+from . import accounts, admin_api, auth, exports, payments_api, portal_api, rulesets_api, subscriptions_api
 from .models import make_engine
 
 
@@ -40,6 +40,8 @@ def create_master_app(engine=None, database_url=None, clock=None):
     app.include_router(payments_api.router)
     app.include_router(portal_api.router)
     app.include_router(exports.router)
+    app.include_router(rulesets_api.router)
+    app.include_router(subscriptions_api.router)
 
     @app.get('/health')
     async def health():

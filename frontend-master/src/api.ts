@@ -39,6 +39,14 @@ export type MasterNode = {
   id: number; name: string; bridge_url: string; capacity: number; enabled: boolean;
   state: "ok" | "stale" | "down"; active_peers: number; last_seen: string | null;
 };
+export type MasterRuleSet = {
+  id: number; kind: "domain" | "ipcidr"; version: string; entries: number;
+  sha256: string; created_at: string;
+};
+export type MasterRuleSets = {
+  rulesets: MasterRuleSet[];
+  current: Record<string, { kind: string; version: string; entries: number; sha256: string } | null>;
+};
 export type MasterTariff = {
   id: number; name: string; device_limit: number; term_days: number;
   price_amount: number | null; created_at: string;
@@ -67,8 +75,11 @@ export type PortalDevice = {
 };
 export type PortalDevices = { devices: PortalDevice[] };
 export type PortalOperation = { status: "applied" | "pending"; operation_id: number; device_id: number };
+export type PortalSubscription = { active: boolean; created_at: string | null; last_used_at: string | null };
 
-async function exportPortalDevice(id: number, format: "conf" | "qr" | "amnezia"): Promise<Blob> {
+export type PortalExportFormat = "conf" | "qr" | "amnezia" | "mihomo";
+
+async function exportPortalDevice(id: number, format: PortalExportFormat): Promise<Blob> {
   const response = await fetch(`/api/portal/devices/${id}/export?format=${format}`, {
     credentials: "include", cache: "no-store",
   });
@@ -93,10 +104,20 @@ export const portalApi = {
   setDeviceActive: (id: number, active: boolean) => masterRequest<PortalOperation>(
     `/api/portal/devices/${id}/${active ? "activate" : "deactivate"}`, { method: "POST" }),
   exportDevice: exportPortalDevice,
+  subscriptionState: (id: number) => masterRequest<PortalSubscription>(
+    `/api/portal/devices/${id}/subscription`),
+  issueSubscription: (id: number) => masterRequest<{ url: string; created_at: string }>(
+    `/api/portal/devices/${id}/subscription`, { method: "POST" }),
+  revokeSubscription: (id: number) => masterRequest<void>(
+    `/api/portal/devices/${id}/subscription`, { method: "DELETE" }),
   logout: () => masterRequest<void>("/api/portal/logout", { method: "POST" }),
 };
 
 export const masterApi = {
+  rulesets: () => masterRequest<MasterRuleSets>("/api/master-admin/rulesets"),
+  publishRuleSet: (body: { kind: "domain" | "ipcidr"; version: string; content: string }) =>
+    masterRequest<MasterRuleSet>("/api/master-admin/rulesets",
+      { method: "POST", body: JSON.stringify(body) }),
   setup: (password: string) => masterRequest<void>("/api/admin/setup", { method: "POST", body: JSON.stringify({ password }) }),
   login: (password: string) => masterRequest<void>("/api/admin/login", { method: "POST", body: JSON.stringify({ password }) }),
   logout: () => masterRequest<void>("/api/admin/logout", { method: "POST" }),

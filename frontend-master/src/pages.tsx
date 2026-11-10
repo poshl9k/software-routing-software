@@ -1,6 +1,6 @@
 import { Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField, Typography } from "@mui/material";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { masterApi, MasterApiError, type MasterNode, type MasterSubscriber, type MasterTariff } from "./api";
+import { masterApi, MasterApiError, type MasterNode, type MasterRuleSets, type MasterSubscriber, type MasterTariff } from "./api";
 
 export function ErrorNotice({ error }: { error: unknown }) {
   return error ? <Alert severity="error" sx={{ mb: 2 }}>{error instanceof Error ? error.message : "Ошибка"}</Alert> : null;
@@ -376,5 +376,81 @@ export function SubscribersPage() {
         <Button variant="contained" disabled={!tariffId || working === "assign"} onClick={() => void assign()}>
           {working === "assign" ? <CircularProgress size={16} /> : "Назначить"}</Button></DialogActions>
     </Dialog>
+  </Box>;
+}
+
+export function RuleSetsPage() {
+  const [data, setData] = useState<MasterRuleSets | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const [kind, setKind] = useState<"domain" | "ipcidr">("domain");
+  const [version, setVersion] = useState("");
+  const [content, setContent] = useState("");
+
+  useEffect(() => {
+    masterApi.rulesets().then(setData).catch(setError);
+  }, []);
+
+  async function publish(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true); setError(null);
+    try {
+      await masterApi.publishRuleSet({ kind, version: version.trim(), content });
+      setData(await masterApi.rulesets());
+      setVersion(""); setContent("");
+    } catch (reason) { setError(reason); } finally { setBusy(false); }
+  }
+
+  return <Box>
+    <Typography component="h2" variant="h5" sx={{ mb: 1 }}>Наборы правил</Typography>
+    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      Версии неизменяемы: исправление — новая версия. Клиент забирает набор по точной версии,
+      а сами адреса РФ идут мимо туннеля.
+    </Typography>
+    <ErrorNotice error={error} />
+    {data === null ? <Box className="loading"><CircularProgress /></Box> : <>
+      <Stack direction="row" spacing={2} sx={{ mb: 2, flexWrap: "wrap" }}>
+        {(["domain", "ipcidr"] as const).map(key => {
+          const current = data.current[key];
+          return <Box key={key} sx={{ p: 1.5, border: "1px solid", borderColor: "divider",
+            borderRadius: 1, minWidth: 240 }}>
+            <Typography fontWeight={600}>{key === "domain" ? "Домены" : "IP-сети"}</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {current ? `${current.version} · ${current.entries} записей` : "не опубликован"}
+            </Typography>
+            {current && <Typography variant="caption" color="text.secondary">
+              {current.sha256.slice(0, 12)}…</Typography>}
+          </Box>;
+        })}
+      </Stack>
+      <Box component="form" onSubmit={publish} className="form" sx={{ maxWidth: 640, mb: 3 }}>
+        <Typography component="h3" variant="h6">Опубликовать версию</Typography>
+        <TextField select label="Тип" value={kind} margin="dense" fullWidth
+          onChange={event => setKind(event.target.value as "domain" | "ipcidr")}
+          SelectProps={{ native: true }}>
+          <option value="domain">Домены</option>
+          <option value="ipcidr">IP-сети</option>
+        </TextField>
+        <TextField label="Версия" value={version} margin="dense" fullWidth
+          onChange={event => setVersion(event.target.value)} placeholder="ru-2026-11-01"
+          inputProps={{ maxLength: 32 }} />
+        <TextField label="Содержимое" value={content} margin="dense" fullWidth multiline minRows={8}
+          onChange={event => setContent(event.target.value)}
+          placeholder={kind === "domain" ? "example.com\n+.example.net" : "5.5.5.0/24"} />
+        <Button type="submit" variant="contained" disabled={busy || !version.trim() || !content.trim()}>
+          {busy ? <CircularProgress size={18} /> : "Опубликовать"}</Button>
+      </Box>
+      <Stack spacing={1}>
+        {data.rulesets.map(row => <Box key={row.id} sx={{ display: "flex", gap: 2, alignItems: "center",
+          p: 1, borderBottom: "1px solid", borderColor: "divider" }}>
+          <Chip size="small" variant="outlined" label={row.kind === "domain" ? "домены" : "IP"} />
+          <Typography sx={{ minWidth: 180 }}>{row.version}</Typography>
+          <Typography variant="body2" color="text.secondary">{row.entries} записей</Typography>
+          <Typography variant="caption" color="text.secondary">{row.sha256.slice(0, 12)}…</Typography>
+        </Box>)}
+        {data.rulesets.length === 0 && <Typography color="text.secondary">
+          Пока нет опубликованных версий.</Typography>}
+      </Stack>
+    </>}
   </Box>;
 }

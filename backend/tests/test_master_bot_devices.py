@@ -394,11 +394,14 @@ async def test_delete_confirmation_revalidates_and_cancel_or_restart_invalidates
 
 
 @pytest.mark.parametrize('fmt,method,field,suffix', [('conf', 'sendDocument', 'document', '.conf'),
-    ('qr', 'sendPhoto', 'photo', '.png'), ('amnezia', 'sendDocument', 'document', '-amnezia.txt')])
+    ('qr', 'sendPhoto', 'photo', '.png'), ('amnezia', 'sendDocument', 'document', '-amnezia.txt'),
+    ('mihomo', 'sendDocument', 'document', '.yaml')])
 async def test_exports_only_as_protected_private_multipart_attachments(rig, fmt, method, field, suffix):
-    if fmt == 'amnezia':
-        rig[4]['tunnel'].update(protocol='awg', obfuscation={'Jc': 8, 'Jmin': 25, 'Jmax': 87,
-            'S1': 97, 'S2': 60, 'H1': 462728319, 'H2': 1, 'H3': 2, 'H4': 3})
+    if fmt in ('amnezia', 'mihomo'):
+        rig[4]['tunnel'].update(protocol='awg', mtu=1380, header_protection_key='hpk-secret',
+            random_trailers=True, disable_cookies=True,
+            obfuscation={'Jc': 8, 'Jmin': 25, 'Jmax': 87, 'S1': 97, 'S2': 60,
+                         'S3': 97, 'S4': 97, 'H1': 462728319, 'H2': 1, 'H3': 2, 'H4': 3})
     calls = await send(rig, command(f'/{fmt} 1'))
     uploads = [payload for name, payload in calls if name == method]
     assert len(uploads) == 1
@@ -410,6 +413,10 @@ async def test_exports_only_as_protected_private_multipart_attachments(rig, fmt,
         assert ('PrivateKey = ' + PRIVATE).encode() in content
     elif fmt == 'qr':
         assert content.startswith(b'\x89PNG\r\n\x1a\n')
+    elif fmt == 'mihomo':
+        assert b'amnezia-wg-option:' in content and b'version: 3' in content
+        assert b'GEOIP,RU,DIRECT' in content and b'MATCH,PROXY' in content
+        assert PRIVATE.encode() in content
     else:
         assert content.startswith(b'vpn://')
     assert PRIVATE not in json.dumps(messages(calls))

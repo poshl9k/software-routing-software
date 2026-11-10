@@ -1,5 +1,6 @@
 """Host-free acceptance tests for the ADR-0035 master subscriber portal."""
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -11,8 +12,8 @@ from vs_master.accounts import COOKIE as PORTAL_COOKIE
 from vs_master.app import create_master_app
 from vs_master.auth import COOKIE as ADMIN_COOKIE
 from vs_master.bridge import BridgeError
-from vs_master.models import (Account, Base, Device, DeviceOp, Node, Subscription,
-                              Tariff, make_engine)
+from vs_master.models import (Account, Base, Device, DeviceOp, DeviceSubscription, Node, RuleSet,
+                              Setting, Subscription, Tariff, make_engine)
 from vs_router.secrets import encrypt_secret
 
 pytestmark = pytest.mark.anyio
@@ -251,6 +252,178 @@ async def test_criterion_7_conf_qr_amnezia_and_export_errors(master_portal):
     missing = await client.get(f'/api/portal/devices/{device_id}/export')
     assert missing.status_code == 503
     assert missing.json()['error']['code'] == 'portal.export_unavailable'
+
+
+def awg31_state():
+    state = tunnel_state()
+    state['tunnel'].update({
+        'obfuscation': {'Jc': '8', 'Jmin': '25', 'Jmax': '87', 'S1': '97', 'S2': '60',
+                        'S3': '97', 'S4': '97', 'H1': '462728319', 'H2': '1',
+                        'H3': '2', 'H4': '3'},
+        'header_protection_key': 'hpk-secret', 'random_trailers': True,
+        'disable_cookies': True, 'mtu': 1380})
+    return state
+
+
+async def test_mihomo_export_routes_ru_directly_and_carries_awg31(master_portal):
+    client, _, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    states[('https://n1', f"s{ids['account']}")] = awg31_state()
+    await login(master_portal)
+    response = await client.get(f'/api/portal/devices/{device_id}/export?format=mihomo')
+    assert response.status_code == 200, response.text
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert response.headers['content-type'].startswith('application/yaml')
+    assert 'filename="peer-one.yaml"' in response.headers['content-disposition']
+    text = response.text
+    golden = (Path(__file__).parent / 'golden' / 'master-mihomo-awg31.yaml').read_text(encoding='utf-8')
+    assert text == golden
+    # Device identity and keys come from the master, the server key from the node.
+    assert f'private-key: "{PRIVATE}"' in text
+    assert f'preshared-key: "{PRESHARED}"' in text
+    assert 'public-key: "server-public"' in text
+    assert 'server: "vpn.example"' in text and 'port: 51820' in text
+    assert 'ip: "10.66.0.2/32"' in text
+    assert 'mtu: 1380' in text
+    # AWG 3.1 must be selected explicitly, otherwise mihomo uses the legacy
+    # implementation and rejects header protection and random trailers.
+    assert 'amnezia-wg-option:' in text and 'version: 3' in text
+    assert 'header-protection-key: "hpk-secret"' in text
+    assert 'random-trailers: true' in text and 'disable-cookies: true' in text
+    assert 'h1: 462728319' in text and 's4: 97' in text
+    # Split contract: RU destinations leave through the subscriber's own
+    # provider; only the rest enters the tunnel.
+    assert 'enhanced-mode: "fake-ip"' in text
+    assert '- "GEOIP,RU,DIRECT"' in text
+    assert '- "MATCH,PROXY"' in text
+    rules = text[text.index('rules:'):]
+    assert rules.index('GEOIP,RU,DIRECT') < rules.index('MATCH,PROXY')
+
+
+async def test_mihomo_export_pins_published_rule_providers(master_portal):
+    client, engine, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    states[('https://n1', f"s{ids['account']}")] = tunnel_state()
+    with Session(engine) as db:
+        db.add(Setting(key='master_public_url', value='https://my.example'))
+        db.add(RuleSet(kind='domain', version='ru-2026-11-01', sha256='a' * 64, entries=2,
+                       content='example.com\n+.example.net\n', created_at=NOW))
+        db.add(RuleSet(kind='ipcidr', version='ru-ips-1', sha256='b' * 64, entries=1,
+                       content='5.5.5.0/24\n', created_at=NOW))
+        db.commit()
+    await login(master_portal)
+    response = await client.get(f'/api/portal/devices/{device_id}/export?format=mihomo')
+    assert response.status_code == 200, response.text
+    text = response.text
+    assert 'rule-providers:' in text
+    assert 'url: "https://my.example/api/rulesets/domain/ru-2026-11-01.yaml"' in text
+    assert 'url: "https://my.example/api/rulesets/ipcidr/ru-ips-1.yaml"' in text
+    assert 'behavior: "domain"' in text and 'behavior: "ipcidr"' in text
+    rules = text[text.index('rules:'):text.index('dns:')]
+    assert rules.index('RULE-SET,ru-domains,DIRECT') < rules.index('GEOIP,RU,DIRECT')
+    assert rules.index('RULE-SET,ru-ips,DIRECT') < rules.index('MATCH,PROXY')
+
+
+async def test_mihomo_export_omits_providers_without_public_url(master_portal):
+    client, engine, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    states[('https://n1', f"s{ids['account']}")] = tunnel_state()
+    with Session(engine) as db:
+        db.add(RuleSet(kind='domain', version='ru-2026-11-01', sha256='a' * 64, entries=1,
+                       content='example.com\n', created_at=NOW))
+        db.commit()
+    await login(master_portal)
+    response = await client.get(f'/api/portal/devices/{device_id}/export?format=mihomo')
+    assert response.status_code == 200, response.text
+    assert 'rule-providers' not in response.text
+
+
+async def test_subscription_link_is_issued_once_serves_yaml_and_is_revocable(master_portal):
+    client, engine, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    states[('https://n1', f"s{ids['account']}")] = awg31_state()
+    assert (await client.post(f'/api/portal/devices/{device_id}/subscription')).status_code == 401
+    await login(master_portal)
+
+    issued = await client.post(f'/api/portal/devices/{device_id}/subscription')
+    assert issued.status_code == 201, issued.text
+    url = issued.json()['url']
+    assert url.startswith('https://master.test/api/portal/sub/')
+    token = url.rsplit('/', 1)[-1]
+    with Session(engine) as db:
+        row = db.get(DeviceSubscription, device_id)
+        assert row is not None and row.token_hash != token and len(row.token_hash) == 64
+
+    served = await client.get(f'/api/portal/sub/{token}')
+    assert served.status_code == 200, served.text
+    assert served.headers['Cache-Control'] == 'no-store'
+    assert 'amnezia-wg-option:' in served.text and 'GEOIP,RU,DIRECT' in served.text
+
+    state = (await client.get(f'/api/portal/devices/{device_id}/subscription')).json()
+    assert state['active'] is True and state['last_used_at'] is not None
+
+    reissued = await client.post(f'/api/portal/devices/{device_id}/subscription')
+    assert reissued.status_code == 201
+    assert (await client.get(f'/api/portal/sub/{token}')).status_code == 404
+
+    new_token = reissued.json()['url'].rsplit('/', 1)[-1]
+    assert (await client.delete(f'/api/portal/devices/{device_id}/subscription')).status_code == 204
+    assert (await client.get(f'/api/portal/sub/{new_token}')).status_code == 404
+
+
+async def test_subscription_link_dies_with_expired_subscription_and_removed_device(master_portal):
+    client, engine, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    states[('https://n1', f"s{ids['account']}")] = tunnel_state()
+    await login(master_portal)
+    token = (await client.post(
+        f'/api/portal/devices/{device_id}/subscription')).json()['url'].rsplit('/', 1)[-1]
+    with Session(engine) as db:
+        subscription = db.scalar(select(Subscription).where(Subscription.account_id == ids['account']))
+        assert subscription is not None
+        subscription.expires_at = NOW - timedelta(days=1)
+        db.commit()
+    expired = await client.get(f'/api/portal/sub/{token}')
+    assert expired.status_code == 403
+    assert expired.json()['error']['code'] == 'portal.subscription_expired'
+    with Session(engine) as db:
+        subscription = db.scalar(select(Subscription).where(Subscription.account_id == ids['account']))
+        assert subscription is not None
+        subscription.expires_at = NOW + timedelta(days=30)
+        device = db.get(Device, device_id)
+        assert device is not None
+        device.status = 'removed'
+        db.commit()
+    gone = await client.get(f'/api/portal/sub/{token}')
+    assert gone.status_code == 404
+    assert gone.json()['error']['code'] == 'portal.subscription_link_invalid'
+
+
+async def test_mihomo_export_refuses_awg3_without_header_protection(master_portal):
+    client, _, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    state = awg31_state()
+    state['tunnel']['header_protection_key'] = None
+    states[('https://n1', f"s{ids['account']}")] = state
+    await login(master_portal)
+    response = await client.get(f'/api/portal/devices/{device_id}/export?format=mihomo')
+    assert response.status_code == 503
+    assert response.json()['error']['code'] == 'portal.export_unavailable'
+    assert 'hpk-secret' not in response.text
+
+
+async def test_mihomo_export_plain_wireguard_has_no_awg_block(master_portal):
+    client, _, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    state = tunnel_state()
+    state['tunnel']['protocol'] = 'wg'
+    states[('https://n1', f"s{ids['account']}")] = state
+    await login(master_portal)
+    response = await client.get(f'/api/portal/devices/{device_id}/export?format=mihomo')
+    assert response.status_code == 200, response.text
+    assert 'amnezia-wg-option' not in response.text
+    assert 'type: "wireguard"' in response.text
+
 
 
 async def test_criterion_8_expired_subscription_blocks_all_mutations_me_works(master_portal):
