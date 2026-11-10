@@ -11,6 +11,15 @@ function StateChip({ state }: { state: MasterNode["state"] }) {
   return <Chip size="small" label={label} color={state === "ok" ? "success" : state === "stale" ? "warning" : "error"} variant="outlined" />;
 }
 
+const ROLE_LABELS: Record<MasterNode["role"], string> = {
+  entry: "Вход", egress: "Выход", both: "Вход и выход",
+};
+
+function RoleChip({ role }: { role: MasterNode["role"] }) {
+  return <Chip size="small" label={ROLE_LABELS[role]} variant="outlined"
+    color={role === "entry" ? "info" : "default"} />;
+}
+
 function isSecureBridgeUrl(value: string) {
   try {
     const parsed = new URL(value);
@@ -51,6 +60,8 @@ export function NodesPage() {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [capacity, setCapacity] = useState("20");
+  const [role, setRole] = useState<MasterNode["role"]>("both");
+  const [publicEntry, setPublicEntry] = useState("");
   const [issuedToken, setIssuedToken] = useState<{ name: string; token: string; bridgeUrl: string; masterHostname: string } | null>(null);
   const [reissueTarget, setReissueTarget] = useState<MasterNode | null>(null);
 
@@ -69,7 +80,9 @@ export function NodesPage() {
     if (!name.trim() || !isSecureBridgeUrl(url)) return;
     setWorking("create"); setError(null);
     try {
-      const created = await masterApi.addNode({ name: name.trim(), bridge_url: url.trim(), capacity: Number(capacity) || 1 });
+      const created = await masterApi.addNode({ name: name.trim(), bridge_url: url.trim(),
+        capacity: Number(capacity) || 1, role,
+        public_entry: publicEntry.trim() ? publicEntry.trim() : null });
       showIssuedToken(created.name, created.token, created.bridge_url);
       setAdding(false); setName(""); setUrl(""); setCapacity("20");
       await load();
@@ -112,8 +125,10 @@ export function NodesPage() {
           {nodes.map(node => <Box className="device" key={node.id}>
             <Box className="device-main">
               <Box>
-                <Typography component="div" fontWeight={600}>{node.name} <StateChip state={node.state} /></Typography>
+                <Typography component="div" fontWeight={600}>{node.name} <StateChip state={node.state} /> <RoleChip role={node.role} /></Typography>
                 <Typography variant="body2" color="text.secondary">{node.bridge_url}</Typography>
+                {node.public_entry && <Typography variant="body2" color="text.secondary">
+                  Адрес для клиентов: {node.public_entry}</Typography>}
                 <Typography variant="body2" color="text.secondary">
                   Ёмкость {node.capacity} · Активных устройств {node.active_peers}
                   {node.last_seen ? ` · Отзыв ${new Date(node.last_seen).toLocaleString("ru-RU")}` : " · Опроса ещё не было"}
@@ -142,6 +157,17 @@ export function NodesPage() {
           <TextField label="Bridge URL ноды" name="node-bridge-url" autoComplete="off" value={url} onChange={e => setUrl(e.target.value)} type="url" inputProps={{ maxLength: 255, spellCheck: false }} required fullWidth
             error={!!url && !isSecureBridgeUrl(url)} helperText="Например, https://rg3.poshl9k.ru. Только HTTPS; без логина, пароля, пути (кроме /), query-параметров и fragment" />
           <TextField label="Ёмкость (активных устройств)" name="node-capacity" autoComplete="off" type="number" value={capacity} onChange={e => setCapacity(e.target.value)} inputProps={{ min: 1 }} required fullWidth />
+          <TextField select label="Роль ноды" name="node-role" value={role} fullWidth margin="dense"
+            onChange={e => setRole(e.target.value as MasterNode["role"])} SelectProps={{ native: true }}
+            helperText="Устройства подключаются только к нодам-входам; выход — зарубежная нода цепочки">
+            <option value="both">Вход и выход</option>
+            <option value="entry">Только вход</option>
+            <option value="egress">Только выход</option>
+          </TextField>
+          <TextField label="Адрес для клиентов" name="node-public-entry" autoComplete="off"
+            value={publicEntry} onChange={e => setPublicEntry(e.target.value)} fullWidth
+            placeholder="vpn.example.com:51820"
+            helperText="Хост или хост:порт без схемы; заполняется для ноды-входа" />
         </Box>
       </DialogContent>
       <DialogActions><Button onClick={() => setAdding(false)}>Отмена</Button>

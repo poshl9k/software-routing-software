@@ -167,7 +167,8 @@ def create_device(db, account, label, *, engine, node_client_factory, device_loc
             Device.status == 'active').group_by(Device.node_id)).all()}
     candidates = []
     for node in db.scalars(select(Node).where(
-            Node.enabled.is_(True), Node.state == 'ok').order_by(Node.id)):
+            Node.enabled.is_(True), Node.state == 'ok',
+            Node.role.in_(('entry', 'both'))).order_by(Node.id)):
         free = node.capacity - int(active_counts.get(node.id, 0))
         if free > 0:
             candidates.append((free, node))

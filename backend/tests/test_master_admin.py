@@ -175,7 +175,7 @@ async def test_criterion_3_nodes_token_once_safe_get_duplicate_patch_and_in_use(
     assert created.headers['cache-control'] == 'no-store'
     assert len(token) >= 43 and created.text.count(token) == 1
     safe_keys = {'id', 'name', 'bridge_url', 'capacity', 'enabled', 'state',
-                 'active_peers', 'last_seen'}
+                 'role', 'public_entry', 'active_peers', 'last_seen'}
     assert set(data) == safe_keys
     with Session(engine) as db:
         row = db.get(Node, data['id'])
@@ -370,6 +370,7 @@ async def test_criterion_5_subscribers_hide_keys_and_subscription_create_renew_u
     device = detail.json()['devices'][0]
     assert device == {'id': device['id'], 'label': 'Phone', 'name': 'peer-alice',
                       'node_name': 'rg2', 'status': 'active',
+                      'egress_node_id': None, 'egress_node_name': None,
                       'allowed_ips': ['10.66.0.2/32']}
     for response in (collection, detail, await client.get('/api/master-admin/nodes')):
         assert onboarding_token not in response.text
@@ -461,3 +462,69 @@ async def test_admin_can_create_unlinked_subscriber_for_telegram_registration(ma
     invalid_chat_id = await client.post(path, json={
         'display_name': 'Invalid ID', 'telegram_chat_id': 'not-a-telegram-id'})
     assert invalid_chat_id.status_code == 422
+
+
+async def test_node_roles_and_public_entry_are_validated_and_exposed(master):
+    client, _, _, _, _ = master
+    await initialize(client)
+    base = {'name': 'n1', 'bridge_url': 'https://n1.example', 'capacity': 5}
+    created = await client.post('/api/master-admin/nodes', json=base)
+    assert created.status_code == 201, created.text
+    assert created.json()['role'] == 'both'
+    assert created.json()['public_entry'] is None
+    node_id = created.json()['id']
+
+    bad_role = await client.post('/api/master-admin/nodes',
+                                 json={**base, 'name': 'n2', 'role': 'exit'})
+    assert bad_role.status_code == 422
+    for value in ('https://vpn.example', 'vpn.example/path', 'vpn.example:0', ' vpn.example'):
+        invalid = await client.post('/api/master-admin/nodes',
+                                    json={**base, 'name': f'n-{value}', 'public_entry': value})
+        assert invalid.status_code == 422, value
+
+    patched = await client.patch(f'/api/master-admin/nodes/{node_id}',
+                                 json={'role': 'entry', 'public_entry': '[2001:db8::1]:51820'})
+    assert patched.status_code == 200, patched.text
+    assert patched.json()['role'] == 'entry'
+    assert patched.json()['public_entry'] == '[2001:db8::1]:51820'
+    assert (await client.patch(f'/api/master-admin/nodes/{node_id}',
+                               json={'role': 'edge'})).status_code == 422
+
+
+async def test_device_egress_preference_is_validated_and_blocks_node_deletion(master):
+    client, engine, _, _, _ = master
+    await initialize(client)
+
+    async def node(name, role):
+        response = await client.post('/api/master-admin/nodes', json={
+            'name': name, 'bridge_url': f'https://{name}.example', 'capacity': 5, 'role': role})
+        assert response.status_code == 201, response.text
+        return response.json()['id']
+
+    entry = await node('entry1', 'entry')
+    exit_node = await node('exit1', 'egress')
+    other_entry = await node('entry2', 'entry')
+
+    created = await client.post('/api/master-admin/subscribers', json={
+        'display_name': 'Alice', 'telegram_chat_id': '4242'})
+    assert created.status_code == 201, created.text
+    account_id = created.json()['id']
+    with Session(engine) as db:
+        device = Device(account_id=account_id, node_id=entry, node_subscriber=f's{account_id}',
+                        label='Phone', allowed_ips=[], status='inactive', created_at=NOW)
+        db.add(device)
+        db.commit()
+        device_id = device.id
+    path = f'/api/master-admin/subscribers/{account_id}/devices/{device_id}'
+
+    assert (await client.patch(path, json={'egress_node_id': exit_node})).status_code == 200
+    detail = (await client.get(f'/api/master-admin/subscribers/{account_id}')).json()
+    assert detail['devices'][0]['egress_node_id'] == exit_node
+    assert detail['devices'][0]['egress_node_name'] == 'exit1'
+    assert (await client.delete(f'/api/master-admin/nodes/{exit_node}')).status_code == 409
+
+    assert (await client.patch(path, json={'egress_node_id': entry})).status_code == 422
+    assert (await client.patch(path, json={'egress_node_id': other_entry})).status_code == 422
+    cleared = await client.patch(path, json={'egress_node_id': None})
+    assert cleared.status_code == 200 and cleared.json()['egress_node_id'] is None
+    assert (await client.delete(f'/api/master-admin/nodes/{exit_node}')).status_code == 204

@@ -38,6 +38,7 @@ export async function masterRequest<T>(path: `/api/${string}`, init: RequestInit
 export type MasterNode = {
   id: number; name: string; bridge_url: string; capacity: number; enabled: boolean;
   state: "ok" | "stale" | "down"; active_peers: number; last_seen: string | null;
+  role: "entry" | "egress" | "both"; public_entry: string | null;
 };
 export type MasterRuleSet = {
   id: number; kind: "domain" | "ipcidr"; version: string; entries: number;
@@ -126,9 +127,11 @@ export const masterApi = {
     masterRequest<MasterTelegramSettings>("/api/master-admin/settings/telegram",
       { method: "PUT", body: JSON.stringify(body) }),
   nodes: () => masterRequest<MasterNode[]>("/api/master-admin/nodes"),
-  addNode: (body: { name: string; bridge_url: string; capacity: number }) =>
+  addNode: (body: { name: string; bridge_url: string; capacity: number;
+    role?: "entry" | "egress" | "both"; public_entry?: string | null }) =>
     masterRequest<MasterNode & { token: string }>("/api/master-admin/nodes", { method: "POST", body: JSON.stringify(body) }),
-  updateNode: (id: number, body: { bridge_url?: string; capacity?: number; enabled?: boolean }) =>
+  updateNode: (id: number, body: { bridge_url?: string; capacity?: number; enabled?: boolean;
+    role?: "entry" | "egress" | "both"; public_entry?: string }) =>
     masterRequest<MasterNode>(`/api/master-admin/nodes/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   removeNode: (id: number) => masterRequest<void>(`/api/master-admin/nodes/${id}`, { method: "DELETE" }),
   reissueNodeToken: (id: number) =>

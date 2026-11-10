@@ -48,6 +48,13 @@ class Node(Base):
     # Admin-set capacity in active devices; the load-balancing metric (D4).
     capacity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # Topology role: the node a subscriber connects to ("entry"), a foreign exit
+    # ("egress"), or both. Existing installations default to "both" so device
+    # placement keeps working until roles are assigned explicitly.
+    role: Mapped[str] = mapped_column(String(6), nullable=False, default='both',
+                                      server_default='both')
+    # Client-facing address (host or host:port) when this node accepts entries.
+    public_entry: Mapped[str | None] = mapped_column(String(255))
     # Telemetry cache (D7): master polls ~every 30-60 s.
     state: Mapped[str] = mapped_column(String(8), nullable=False, default='down')
     active_peers: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -234,6 +241,8 @@ class Device(Base):
     preshared_key: Mapped[EncryptedSecret | None] = mapped_column(SecretJSON())
     allowed_ips: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(8), nullable=False, default='inactive')
+    # Preferred foreign exit for this device's chain; None keeps the node default.
+    egress_node_id: Mapped[int | None] = mapped_column(ForeignKey('master_nodes.id'))
     tunnel_name: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 

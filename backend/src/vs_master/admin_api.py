@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import Field, SecretStr, StrictStr, field_validator, model_validator
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from vs_portal.security import get_secret_key
 from vs_router.api.errors import APIError
@@ -82,22 +82,46 @@ class NodeBody(Model):
     name: str = Field(min_length=1, max_length=64)
     bridge_url: str = Field(min_length=1, max_length=255)
     capacity: int = Field(ge=1)
+    role: StrictStr = 'both'
+    public_entry: str | None = Field(default=None, max_length=255)
 
     @field_validator('bridge_url')
     @classmethod
     def bridge_url_valid(cls, value):
         return _valid_bridge_url(value)
 
+    @field_validator('role')
+    @classmethod
+    def role_valid(cls, value):
+        return _valid_role(value)
+
+    @field_validator('public_entry')
+    @classmethod
+    def public_entry_valid(cls, value):
+        return _valid_public_entry(value)
+
 
 class NodePatch(Model):
     bridge_url: str | None = Field(default=None, min_length=1, max_length=255)
     capacity: int | None = Field(default=None, ge=1)
     enabled: bool | None = None
+    role: StrictStr | None = None
+    public_entry: str | None = Field(default=None, max_length=255)
 
     @field_validator('bridge_url')
     @classmethod
     def bridge_url_valid(cls, value):
         return _valid_bridge_url(value) if value is not None else value
+
+    @field_validator('role')
+    @classmethod
+    def role_valid(cls, value):
+        return _valid_role(value) if value is not None else value
+
+    @field_validator('public_entry')
+    @classmethod
+    def public_entry_valid(cls, value):
+        return _valid_public_entry(value) if value is not None else value
 
 
 class SubscriptionBody(Model):
@@ -176,9 +200,36 @@ def tariff_view(row):
             'created_at': aware(row.created_at)}
 
 
+def _valid_role(value):
+    if value not in ('entry', 'egress', 'both'):
+        raise ValueError('master.node_role_invalid')
+    return value
+
+
+def _valid_public_entry(value):
+    """Client-facing address: bare host or host:port, never a scheme or path."""
+    if value is None:
+        return None
+    text = value.strip()
+    if not text or len(text) > 255 or text != value:
+        raise ValueError('master.node_entry_invalid')
+    if '://' in text or '/' in text or ' ' in text:
+        raise ValueError('master.node_entry_invalid')
+    host, _, port = text.rpartition(':') if text.count(':') == 1 else (text, '', '')
+    if text.startswith('['):
+        host, _, rest = text.partition(']')
+        host, port = host[1:], rest[1:] if rest.startswith(':') else ''
+    if not host:
+        raise ValueError('master.node_entry_invalid')
+    if port and not (port.isdigit() and 1 <= int(port) <= 65535):
+        raise ValueError('master.node_entry_invalid')
+    return text
+
+
 def node_view(row):
     return {'id': row.id, 'name': row.name, 'bridge_url': row.bridge_url,
             'capacity': row.capacity, 'enabled': row.enabled, 'state': row.state,
+            'role': row.role, 'public_entry': row.public_entry,
             'active_peers': row.active_peers, 'last_seen': aware(row.last_seen)}
 
 
@@ -310,7 +361,8 @@ def update_node(node_id: int, body: NodePatch, request: Request,
 def delete_node(node_id: int, request: Request, db: Session = Depends(get_db)):
     begin_write(db)
     row = get_node(db, node_id)
-    if db.scalar(select(Device.id).where(Device.node_id == node_id)) is not None:
+    if (db.scalar(select(Device.id).where(Device.node_id == node_id)) is not None
+            or db.scalar(select(Device.id).where(Device.egress_node_id == node_id)) is not None):
         raise APIError(409, 'master.node_in_use')
     db.delete(row)
     audit(db, 'node.delete', str(node_id), now(request))
@@ -383,13 +435,17 @@ def subscriber_view(db, account, *, devices=False):
               'subscription': subscription_view(subscription, tariff)
               if subscription is not None else None}
     if devices:
-        rows = db.execute(select(Device, Node.name).outerjoin(Node, Device.node_id == Node.id).where(
-            Device.account_id == account.id).order_by(Device.id))
+        Exit = aliased(Node)
+        rows = db.execute(select(Device, Node.name, Exit.name)
+                          .outerjoin(Node, Device.node_id == Node.id)
+                          .outerjoin(Exit, Device.egress_node_id == Exit.id)
+                          .where(Device.account_id == account.id).order_by(Device.id))
         result['devices'] = [
             {'id': device.id, 'label': device.label, 'name': device.name,
              'node_name': node_name, 'status': device.status,
+             'egress_node_id': device.egress_node_id, 'egress_node_name': egress_name,
              'allowed_ips': list(device.allowed_ips)}
-            for device, node_name in rows
+            for device, node_name, egress_name in rows
         ]
     return result
 
@@ -418,6 +474,33 @@ def create_subscriber(body: SubscriberBody, request: Request, db: Session = Depe
 @router.get('/subscribers')
 def list_subscribers(db: Session = Depends(get_db)):
     return [subscriber_view(db, row) for row in db.scalars(select(Account).order_by(Account.id))]
+
+
+class DeviceEgressBody(Model):
+    """Preferred foreign exit for one device's chain; null clears the preference."""
+    egress_node_id: int | None = Field(default=None, ge=1)
+
+
+@router.patch('/subscribers/{account_id}/devices/{device_id}')
+def set_device_egress(account_id: int, device_id: int, body: DeviceEgressBody, request: Request,
+                      db: Session = Depends(get_db)):
+    begin_write(db)
+    get_account(db, account_id)
+    device = db.get(Device, device_id)
+    if device is None or device.account_id != account_id or device.status == 'removed':
+        raise APIError(404, 'master.device_not_found')
+    if body.egress_node_id is not None:
+        target = db.get(Node, body.egress_node_id)
+        if target is None or target.role not in ('egress', 'both'):
+            raise APIError(422, 'master.node_role_invalid')
+        if not target.enabled:
+            raise APIError(409, 'master.node_disabled')
+        if target.id == device.node_id:
+            raise APIError(422, 'master.device_egress_invalid')
+    device.egress_node_id = body.egress_node_id
+    audit(db, 'device.egress', str(device_id), now(request))
+    db.commit()
+    return {'id': device.id, 'egress_node_id': device.egress_node_id}
 
 
 @router.get('/subscribers/{account_id}')
