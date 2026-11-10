@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Button, Checkbox, FormControlLabel } from "@mui/material";
 import { Link, useSearchParams } from "react-router-dom";
 import { useConfiguration } from "../state";
 import { api, ApiError } from "../api";
 import { applyErrorText } from "./ApplyScreen";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../query";
 import { Card } from "../components/Card";
 import { Badge } from "../components/Badge";
@@ -17,10 +17,11 @@ import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 import { InterfaceSelect } from "../components/Select";
 import { PageTabs } from "../components/Tabs";
-import type { UpdateStatus } from "../types";
+import { FormActions, FormGrid, FormWide } from "../components/Form";
+import type { MasterBridgeStatus, UpdateStatus } from "../types";
 
-const tabs = ["Резервные копии", "Диагностика", "Выпуск установки", "Домен панели"];
-const tabKeys = ["backup", "diagnostics", "release", "domain"];
+const tabs = ["Резервные копии", "Диагностика", "Выпуск установки", "Домен панели", "Мастер"];
+const tabKeys = ["backup", "diagnostics", "release", "domain", "master"];
 type Backup = { schema_version: number; versions: unknown[]; users: unknown[] };
 
 /** A public panel name: labels separated by dots, no leading/trailing dot or hyphen. */
@@ -30,6 +31,68 @@ function friendlyPanelError(error: unknown) {
   return error instanceof ApiError
     ? new ApiError(error.status, error.code, applyErrorText(error), error.details)
     : error;
+}
+
+function masterBridgeMessage(status: MasterBridgeStatus) {
+  const credential = {
+    not_installed: "Токен ещё не установлен.",
+    pending_verification: "Токен сохранён. Ожидается подтверждение мастера.",
+    verified: "Мастер подтвердил токен.",
+    unknown: "Состояние токена неизвестно; повторная установка недоступна.",
+  }[status.credential_state];
+  const publication = {
+    absent: "Маршрут Caddy ещё не опубликован.",
+    configured_on_disk: "Конфигурация Caddy содержит ожидаемый маршрут.",
+    drift: "Обнаружено расхождение конфигурации Caddy.",
+    invalid_marker: "Маркер маршрута Caddy повреждён.",
+    incompatible: "Маршрут не совместим с текущей конфигурацией панели.",
+    unavailable: "Не удалось прочитать состояние маршрута Caddy.",
+  }[status.publication_state];
+  return `${credential} ${publication}`;
+}
+
+function masterBridgeFieldIssue(error: unknown) {
+  if (!(error instanceof ApiError) || error.code !== "request.invalid") return null;
+  const fields: Record<string, { field: "token" | "hostname" | "source_ip"; inputName: string; summary: string; message: string }> = {
+    token: {
+      field: "token", inputName: "master-bridge-token",
+      summary: "Мастер не принял токен. Проверьте поле ниже.",
+      message: "Мастер не принял токен. Убедитесь, что он выдан для этой ноды и скопирован полностью.",
+    },
+    hostname: {
+      field: "hostname", inputName: "master-bridge-hostname",
+      summary: "Имя мастера не принято. Проверьте поле ниже.",
+      message: "Укажите доменное имя мастера без https://, порта и пути.",
+    },
+    source_ip: {
+      field: "source_ip", inputName: "master-bridge-source-ip",
+      summary: "Адрес мастера не принят. Проверьте поле ниже.",
+      message: "Введите внешний IPv4- или IPv6-адрес мастера без порта и маски сети.",
+    },
+  };
+  for (const detail of error.details) {
+    if (!detail || typeof detail !== "object") continue;
+    const validation = detail as { path?: unknown; message?: unknown };
+    if (!Array.isArray(validation.path) || typeof validation.path[validation.path.length - 1] !== "string") continue;
+    const field = validation.path[validation.path.length - 1] as string;
+    if (field === "token") return fields.token;
+    if (field === "source_ip") return fields.source_ip;
+    if (field === "hostname") return fields.hostname;
+  }
+  return null;
+}
+
+function masterBridgeError(error: unknown) {
+  if (!(error instanceof ApiError)) return error;
+  const fieldIssue = masterBridgeFieldIssue(error);
+  const messages: Record<string, string> = {
+    "master_bridge.already_configured": "Токен уже подтверждён. Для его замены используйте ротацию на мастере.",
+    "master_bridge.publication_unavailable": "Токен сохранён, но маршрут не настроен. Проверьте состояние службы и повторите попытку с тем же токеном.",
+    "agent.unavailable": "Токен сохранён, но служба управления нодой недоступна. Проверьте её состояние и повторите попытку с тем же токеном.",
+    "request.cross_origin": "Запрос отклонён. Откройте панель ноды по её HTTPS-адресу и повторите действие.",
+  };
+  const message = fieldIssue?.summary ?? messages[error.code];
+  return message ? new ApiError(error.status, error.code, message, fieldIssue ? [] : error.details) : error;
 }
 
 function download(data: Blob, filename: string) {
@@ -43,6 +106,7 @@ function download(data: Blob, filename: string) {
 
 export default function Maintenance() {
   const { configuration, versions, refresh, user } = useConfiguration();
+  const queryClient = useQueryClient();
   const admin = user?.role === "admin";
   const [params, setParams] = useSearchParams();
   const tab = Math.max(0, tabKeys.indexOf(params.get("tab") ?? "backup"));
@@ -63,6 +127,9 @@ export default function Maintenance() {
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [confirmRelease, setConfirmRelease] = useState(false);
   const [domain, setDomain] = useState("");
+  const [bridgeToken, setBridgeToken] = useState("");
+  const [masterHostname, setMasterHostname] = useState("");
+  const [masterSourceIp, setMasterSourceIp] = useState("");
   const perform = async (fn: () => Promise<void>) => {
     setError(null);
     setNotice("");
@@ -71,8 +138,33 @@ export default function Maintenance() {
   };
   const counters = useQuery({ queryKey: queryKeys.rulesCounters(), queryFn: () => api.rulesCounters(), enabled: admin && tab === 1 });
   const panel = useQuery({ queryKey: queryKeys.hostManagement(), queryFn: api.hostManagement, enabled: admin && tab === 3 });
+  const masterBridge = useQuery({ queryKey: queryKeys.masterBridge(), queryFn: api.masterBridgeStatus,
+    enabled: admin && tab === 4, retry: false });
+  const setupMasterBridge = useMutation({
+    mutationFn: api.setupMasterBridge,
+    onSuccess: async () => {
+      setBridgeToken("");
+      setNotice("Токен сохранён. Подтверждение появится после первого запроса мастера.");
+      await queryClient.invalidateQueries({ queryKey: queryKeys.masterBridge() });
+    },
+  });
+  const bridgeFieldIssue = masterBridgeFieldIssue(setupMasterBridge.error);
+  useEffect(() => {
+    if (masterBridge.data && !["not_installed", "pending_verification"].includes(masterBridge.data.credential_state)) {
+      setBridgeToken("");
+    }
+  }, [masterBridge.data]);
+  useEffect(() => {
+    if (bridgeFieldIssue) {
+      document.querySelector<HTMLInputElement>(`[name="${bridgeFieldIssue.inputName}"]`)?.focus();
+    }
+  }, [bridgeFieldIssue?.inputName, setupMasterBridge.error]);
   const panelRecord = panel.data ?? null;
   const domainValid = hostnamePattern.test(domain);
+  const masterHostnameValid = hostnamePattern.test(masterHostname);
+  const bridgeTokenValid = /^[A-Za-z0-9_-]{43}$/.test(bridgeToken);
+  const tokenIssue = bridgeFieldIssue?.field === "token" ? bridgeFieldIssue : null;
+  const sourceIpIssue = bridgeFieldIssue?.field === "source_ip" ? bridgeFieldIssue : null;
   const restoreFile = async (file?: File) => {
     if (!file) return;
     void perform(async () => {
@@ -221,5 +313,40 @@ export default function Maintenance() {
         })}>Убрать свой домен</Button>
       </div>
     </Card>}
+    {tab === 4 && (!admin ? <InfoNote severity="warning">Подключение к мастер-порталу доступно только администратору ноды.</InfoNote> : <Card title="Подключение к мастер-порталу"
+      action={<Button onClick={() => void masterBridge.refetch()} disabled={masterBridge.isFetching}>Обновить статус</Button>}>
+      <InfoNote>Токен выдаётся в админке мастера и вводится здесь по HTTPS. Он хранится зашифрованным; после успешной проверки мастера поле токена исчезнет.</InfoNote>
+      {masterBridge.error && <ErrorNotice error={masterBridge.error} />}
+      {masterBridge.data && <InfoNote severity={masterBridge.data.credential_state === "verified"
+        && masterBridge.data.publication_state === "configured_on_disk" ? "info" : "warning"}>
+        {masterBridgeMessage(masterBridge.data)}
+      </InfoNote>}
+      {masterBridge.isPending && <InfoNote>Чтение состояния подключения…</InfoNote>}
+      {setupMasterBridge.error && <ErrorNotice error={masterBridgeError(setupMasterBridge.error)} />}
+      {masterBridge.data && !masterBridge.error
+        && ["not_installed", "pending_verification"].includes(masterBridge.data.credential_state) && <form onSubmit={(event) => {
+          event.preventDefault();
+          setNotice("");
+          setupMasterBridge.mutate({ token: bridgeToken, hostname: masterHostname, source_ip: masterSourceIp });
+        }}>
+        <FormGrid>
+          <Field label="Токен из мастер-портала" type="password" autoComplete="off"
+            maxLength={43} value={bridgeToken} onChange={value => { setBridgeToken(value); setupMasterBridge.reset(); }}
+            valid={!tokenIssue && (!bridgeToken || bridgeTokenValid)}
+            inputProps={{ name: "master-bridge-token", spellCheck: false, translate: "no", pattern: "[A-Za-z0-9_-]{43}" }}
+            hint={tokenIssue?.message ?? (bridgeToken && !bridgeTokenValid ? "Токен должен содержать 43 символа без пробелов" : "Вставьте одноразовый токен из админки мастера")} required />
+          <Field label="Домен мастера" value={masterHostname} onChange={value => { setMasterHostname(value); setupMasterBridge.reset(); }} autoComplete="off"
+            inputProps={{ name: "master-bridge-hostname", spellCheck: false, pattern: "[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?" }}
+            valid={!masterHostname || masterHostnameValid} hint="Имя хоста мастера без https:// и пути" required />
+          <Field label="Исходящий IP мастера" value={masterSourceIp} onChange={value => { setMasterSourceIp(value); setupMasterBridge.reset(); }} autoComplete="off"
+            inputProps={{ name: "master-bridge-source-ip", spellCheck: false }} valid={!sourceIpIssue}
+            hint={sourceIpIssue?.message ?? "Публичный IPv4 или IPv6, с которого мастер обращается к этой ноде"} required />
+          <FormWide><InfoNote>Если токен введён неверно, его можно заменить до первого успешного запроса мастера. После подтверждения повторная установка будет заблокирована.</InfoNote></FormWide>
+          <FormWide><FormActions><Button type="submit" variant="contained" disabled={setupMasterBridge.isPending}>
+            {setupMasterBridge.isPending ? "Подключаем…" : "Сохранить и подключить"}
+          </Button></FormActions></FormWide>
+        </FormGrid>
+      </form>}
+    </Card>)}
   </>;
 }

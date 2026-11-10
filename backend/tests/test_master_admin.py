@@ -78,7 +78,7 @@ async def create_tariff(client, name='Base', *, limit=3, days=30, price=9.99):
     return response.json()
 
 
-async def create_node(client, name='rg2', url='https://rg2.example/internal', capacity=20):
+async def create_node(client, name='rg2', url='https://rg2.example', capacity=20):
     response = await client.post('/api/master-admin/nodes', json={
         'name': name, 'bridge_url': url, 'capacity': capacity})
     assert response.status_code == 201, response.text
@@ -172,6 +172,7 @@ async def test_criterion_3_nodes_token_once_safe_get_duplicate_patch_and_in_use(
     created = await create_node(client)
     data = created.json()
     token = data.pop('token')
+    assert created.headers['cache-control'] == 'no-store'
     assert len(token) >= 43 and created.text.count(token) == 1
     safe_keys = {'id', 'name', 'bridge_url', 'capacity', 'enabled', 'state',
                  'active_peers', 'last_seen'}
@@ -190,10 +191,22 @@ async def test_criterion_3_nodes_token_once_safe_get_duplicate_patch_and_in_use(
     assert duplicate.json()['error']['code'] == 'master.node_exists'
     assert (await client.post('/api/master-admin/nodes', json={
         'name': 'bad', 'bridge_url': 'ftp://bad.example', 'capacity': 1})).status_code == 422
+    assert (await client.post('/api/master-admin/nodes', json={
+        'name': 'insecure', 'bridge_url': 'http://bad.example', 'capacity': 1})).status_code == 422
+    for index, bridge_url in enumerate((
+        'https://user:password@bad.example',
+        'https://bad.example?token=synthetic',
+        'https://bad.example#fragment',
+        'https://bad.example/internal',
+        'https://bad.example:invalid',
+    )):
+        rejected = await client.post('/api/master-admin/nodes', json={
+            'name': f'invalid-{index}', 'bridge_url': bridge_url, 'capacity': 1})
+        assert rejected.status_code == 422
     assert (await client.patch(f"/api/master-admin/nodes/{data['id']}",
                                json={'capacity': None})).status_code == 422
     patched = await client.patch(f"/api/master-admin/nodes/{data['id']}", json={
-        'capacity': 30, 'bridge_url': 'http://rg2.internal', 'enabled': False})
+        'capacity': 30, 'bridge_url': 'https://rg2.internal', 'enabled': False})
     assert patched.status_code == 200
     assert (patched.json()['capacity'], patched.json()['enabled']) == (30, False)
 
@@ -237,7 +250,7 @@ async def test_criterion_4_rotation_current_auth_success_and_failures_are_atomic
     monkeypatch.setattr('vs_master.admin_api.BridgeClient', SuccessfulBridge)
     result = await client.post(f'/api/master-admin/nodes/{node_id}/rotate-token')
     assert result.status_code == 200 and result.json() == {'rotated': True}
-    assert calls[0] == ('init', 'https://rg2.example/internal', onboarding_token)
+    assert calls[0] == ('init', 'https://rg2.example', onboarding_token)
     proposed = calls[1][1]
     assert proposed != onboarding_token
     with Session(engine) as db:
@@ -270,6 +283,59 @@ async def test_criterion_4_rotation_current_auth_success_and_failures_are_atomic
             Audit.action == 'node.rotate_token')))
         assert len(rotation_audits) == 1
         assert all(onboarding_token not in (row.detail or '') and proposed not in (row.detail or '')
+                   for row in db.scalars(select(Audit)))
+
+
+async def test_unseen_node_onboarding_token_can_be_reissued_without_ssh(master):
+    client, engine, clock, key, _ = master
+    assert (await client.post('/api/master-admin/nodes/1/reissue-token')).status_code == 401
+    await initialize(client)
+    created = await create_node(client)
+    node = created.json()
+    node_id = node['id']
+    original = node['token']
+
+    first = await client.post(f'/api/master-admin/nodes/{node_id}/reissue-token')
+    assert first.status_code == 200
+    assert first.headers['cache-control'] == 'no-store'
+    token = first.json()['token']
+    assert token != original and len(token) >= 43
+    assert token not in (await client.get('/api/master-admin/nodes')).text
+    with Session(engine) as db:
+        row = db.get(Node, node_id)
+        assert row is not None
+        assert decrypt_secret(row.bridge_token, key) == token
+
+    second = await client.post(f'/api/master-admin/nodes/{node_id}/reissue-token')
+    assert second.status_code == 200
+    replacement = second.json()['token']
+    assert replacement != token
+    with Session(engine) as db:
+        row = db.get(Node, node_id)
+        assert row is not None
+        assert decrypt_secret(row.bridge_token, key) == replacement
+        row.last_seen = clock[0]
+        db.commit()
+    contacted = await client.post(f'/api/master-admin/nodes/{node_id}/reissue-token')
+    assert contacted.status_code == 409
+    assert contacted.json()['error']['code'] == 'master.node_reissue_not_allowed'
+
+    unused = (await create_node(client, 'unused-with-device')).json()
+    with Session(engine) as db:
+        account = Account(display_name='Alice', telegram_chat_id='100', password_hash='x')
+        db.add(account)
+        db.flush()
+        db.add(Device(account_id=account.id, node_id=unused['id'], node_subscriber='alice',
+                      label='Phone', status='inactive', allowed_ips=[]))
+        db.commit()
+    has_devices = await client.post(
+        f"/api/master-admin/nodes/{unused['id']}/reissue-token")
+    assert has_devices.status_code == 409
+    assert has_devices.json()['error']['code'] == 'master.node_reissue_not_allowed'
+    with Session(engine) as db:
+        audits = list(db.scalars(select(Audit).where(Audit.action == 'node.reissue_token')))
+        assert len(audits) == 2
+        assert all(token not in (row.detail or '') and replacement not in (row.detail or '')
                    for row in db.scalars(select(Audit)))
 
 
@@ -346,3 +412,52 @@ async def test_criterion_5_subscribers_hide_keys_and_subscription_create_renew_u
         assert all(secret not in detail for detail in details
                    for secret in (onboarding_token, private, preshared, public,
                                   'subscriber-password-hash', PASSWORD))
+
+
+async def test_admin_can_create_unlinked_subscriber_for_telegram_registration(master):
+    client, engine, _, _, _ = master
+    path = '/api/master-admin/subscribers'
+    body = {'display_name': ' Test Subscriber ', 'telegram_chat_id': '987654321'}
+    assert (await client.post(path, json=body)).status_code == 401
+    await initialize(client)
+
+    created = await client.post(path, json=body)
+    assert created.status_code == 201, created.text
+    result = created.json()
+    assert result['display_name'] == 'Test Subscriber'
+    assert result['telegram_chat_id'] == '987654321'
+    assert result['subscription'] is None and result['device_count'] == 0
+    assert 'password_hash' not in result
+
+    with Session(engine) as db:
+        account = db.scalar(select(Account).where(Account.telegram_chat_id == '987654321'))
+        assert account is not None
+        assert account.password_hash.startswith('$argon2id$')
+        assert account.telegram_linked_at is None
+        assert account.telegram_linked_chat_id is None
+        audit_row = db.scalar(select(Audit).where(Audit.action == 'subscriber.create'))
+        assert audit_row is not None and audit_row.detail == str(account.id)
+        assert '987654321' not in (audit_row.detail or '')
+        account_id = account.id
+
+    from vs_master.accounts import register_telegram
+    telegram_message = {'chat': {'id': 987654321, 'type': 'private'},
+                        'from': {'id': 987654321, 'first_name': 'Test'}, 'text': '/start'}
+    assert register_telegram(engine, telegram_message) == (account_id, False)
+    with Session(engine) as db:
+        account = db.get(Account, account_id)
+        assert account is not None
+        assert account.telegram_linked_at is not None
+        assert account.telegram_linked_chat_id == '987654321'
+        assert len(list(db.scalars(select(Account)))) == 1
+
+    duplicate = await client.post(path, json={
+        'display_name': 'Duplicate', 'telegram_chat_id': '987654321'})
+    assert duplicate.status_code == 409
+    assert duplicate.json()['error']['code'] == 'master.subscriber_exists'
+    invalid_name = await client.post(path, json={
+        'display_name': '  ', 'telegram_chat_id': '987654322'})
+    assert invalid_name.status_code == 422
+    invalid_chat_id = await client.post(path, json={
+        'display_name': 'Invalid ID', 'telegram_chat_id': 'not-a-telegram-id'})
+    assert invalid_chat_id.status_code == 422

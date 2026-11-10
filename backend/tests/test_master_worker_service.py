@@ -46,7 +46,12 @@ def test_master_bot_is_separate_and_waits_for_encrypted_settings():
     assert 'master-bot.env' not in unit
     assert 'vs-master-bot.service' in (ROOT / 'packaging/make-master-release.sh').read_text()
     installer = (ROOT / 'packaging/install-master.sh').read_text()
-    assert 'systemctl enable --now vs-master-bot.service' in installer
+    assert 'systemctl enable vs-master-bot.service' in installer
+    assert 'VS_MASTER_SKIP_ACTIVE_BOT_RESTART' in installer
+    guard = ('if [ "${VS_MASTER_SKIP_ACTIVE_BOT_RESTART:-0}" = 1 ] && \\\n'
+             '    systemctl is-active --quiet vs-master-bot.service; then')
+    assert guard in installer
+    assert installer.index(guard) < installer.index('systemctl restart vs-master-bot.service')
     assert 'systemctl is-active --quiet vs-master-bot.service' in installer
     assert module_profile('vs_master.telegram_bot') == 'master'
 

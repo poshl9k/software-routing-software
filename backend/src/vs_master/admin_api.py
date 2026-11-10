@@ -3,9 +3,10 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
+from argon2 import PasswordHasher, Type
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, StrictStr, field_validator, model_validator
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -52,8 +53,13 @@ def audit(db, action, detail, at):
 
 def _valid_bridge_url(value):
     parsed = urlsplit(value)
-    if parsed.scheme not in {'http', 'https'} or not parsed.netloc or len(value) > 255:
+    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in ('', '/') or parsed.query or parsed.fragment or len(value) > 255):
         raise ValueError('master.node_url_invalid')
+    try:
+        parsed.port
+    except ValueError:
+        raise ValueError('master.node_url_invalid') from None
     return value
 
 
@@ -103,6 +109,19 @@ class SubscriptionBody(Model):
         if (self.days is None) == (self.expires_at is None):
             raise ValueError('master.subscription_expiry_required')
         return self
+
+
+class SubscriberBody(Model):
+    display_name: StrictStr = Field(min_length=1, max_length=64)
+    telegram_chat_id: StrictStr = Field(pattern=r'^[1-9][0-9]{0,63}$')
+
+    @field_validator('display_name')
+    @classmethod
+    def display_name_valid(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError('master.subscriber_name_required')
+        return value
 
 
 class TelegramSettingsBody(Model):
@@ -298,6 +317,22 @@ def delete_node(node_id: int, request: Request, db: Session = Depends(get_db)):
     return Response(status_code=204)
 
 
+@router.post('/nodes/{node_id}/reissue-token')
+def reissue_node_token(node_id: int, request: Request, db: Session = Depends(get_db)):
+    """Replace a lost onboarding token only before the node has connected."""
+    begin_write(db)
+    row = get_node(db, node_id)
+    has_devices = db.scalar(select(Device.id).where(Device.node_id == node_id)) is not None
+    if row.last_seen is not None or has_devices:
+        db.rollback()
+        raise APIError(409, 'master.node_reissue_not_allowed')
+    token = secrets.token_urlsafe(32)
+    row.bridge_token = encrypt_secret(token, get_secret_key())
+    audit(db, 'node.reissue_token', str(node_id), now(request))
+    db.commit()
+    return {'token': token}
+
+
 @router.post('/nodes/{node_id}/rotate-token')
 def rotate_node_token(node_id: int, request: Request, db: Session = Depends(get_db)):
     begin_write(db)
@@ -356,6 +391,27 @@ def subscriber_view(db, account, *, devices=False):
             for device, node_name in rows
         ]
     return result
+
+
+@router.post('/subscribers', status_code=201)
+def create_subscriber(body: SubscriberBody, request: Request, db: Session = Depends(get_db)):
+    """Create an admin-owned identity that the subscriber can verify with /start."""
+    password_hash = PasswordHasher(type=Type.ID).hash(secrets.token_urlsafe(32))
+    begin_write(db)
+    timestamp = now(request)
+    account = Account(display_name=body.display_name,
+                      telegram_chat_id=body.telegram_chat_id,
+                      telegram_linked_at=None, telegram_linked_chat_id=None,
+                      password_hash=password_hash, status='active', created_at=timestamp)
+    db.add(account)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise APIError(409, 'master.subscriber_exists') from None
+    audit(db, 'subscriber.create', str(account.id), timestamp)
+    commit_unique(db, 'master.subscriber_exists')
+    return subscriber_view(db, account)
 
 
 @router.get('/subscribers')

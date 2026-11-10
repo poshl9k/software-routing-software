@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 
@@ -315,13 +315,80 @@ test("admin accepts a flat node creation response and shows its one-time token",
   }));
   render(<App />);
   await userEvent.click(await screen.findByRole("button", { name: "Добавить ноду" }));
-  expect(screen.getByRole("textbox", { name: /Bridge URL ноды/ })).toHaveAttribute("placeholder", "https://rg3.poshl9k.ru");
+  const bridgeUrlField = screen.getByRole("textbox", { name: /Bridge URL ноды/ });
+  expect(bridgeUrlField).toHaveAttribute("name", "node-bridge-url");
+  expect(bridgeUrlField).toHaveAttribute("autocomplete", "off");
+  expect(screen.getByText(/Например, https:\/\/rg3\.poshl9k\.ru/)).toBeVisible();
   await userEvent.type(screen.getByRole("textbox", { name: /Имя ноды/ }), node.name);
-  await userEvent.type(screen.getByRole("textbox", { name: /Bridge URL ноды/ }), node.bridge_url);
+  await userEvent.type(bridgeUrlField, node.bridge_url);
   await userEvent.click(screen.getByRole("button", { name: "Создать" }));
   expect(await screen.findByText("synthetic-one-time-token")).toBeInTheDocument();
   expect(screen.getByRole("dialog", { name: `Токен ноды ${node.name}` })).toBeInTheDocument();
-  expect(screen.getByText(/vs-master-rg3/)).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Открыть панель ноды" })).toHaveAttribute("href", node.bridge_url);
+  expect(screen.getByText(/без SSH/i)).toBeInTheDocument();
+  expect(screen.queryByText(/ssh -i/i)).not.toBeInTheDocument();
+});
+
+test("node creation blocks insecure and path-prefixed bridge URLs before submitting", async () => {
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+    if (input === "/api/master-admin/nodes") return new Response(JSON.stringify([]), { status: 200 });
+    throw new Error(`Unexpected request ${input}`);
+  }));
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Добавить ноду" }));
+  await user.type(screen.getByRole("textbox", { name: /Имя ноды/ }), "rg4");
+  const bridgeUrl = screen.getByRole("textbox", { name: /Bridge URL ноды/ });
+  await user.type(bridgeUrl, "http://rg4.example");
+  expect(screen.getByRole("button", { name: "Создать" })).toBeDisabled();
+  await user.clear(bridgeUrl);
+  await user.type(bridgeUrl, "https://rg4.example/internal");
+  expect(screen.getByRole("button", { name: "Создать" })).toBeDisabled();
+  await user.clear(bridgeUrl);
+  await user.type(bridgeUrl, "https://rg4.example");
+  expect(screen.getByRole("button", { name: "Создать" })).toBeEnabled();
+});
+
+test("admin can reissue a lost token only through the unseen-node recovery action", async () => {
+  window.history.replaceState({}, "", "/");
+  const node = { id: 5, name: "rg3", bridge_url: "https://rg3.poshl9k.ru",
+    capacity: 20, enabled: true, state: "down", active_peers: 0, last_seen: null };
+  const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/master-admin/nodes" && !init?.method) return new Response(JSON.stringify([node]));
+    if (input === "/api/master-admin/nodes/5/reissue-token" && init?.method === "POST") {
+      return new Response(JSON.stringify({ token: "synthetic-reissued-token" }));
+    }
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Переиздать токен для rg3" }));
+  const confirmation = screen.getByRole("dialog", { name: "Переиздать токен?" });
+  expect(confirmation).toHaveTextContent("нода ещё не связывалась с мастером");
+  await user.click(within(confirmation).getByRole("button", { name: "Переиздать токен" }));
+  expect(await screen.findByText("synthetic-reissued-token")).toBeInTheDocument();
+  expect(fetcher).toHaveBeenCalledWith("/api/master-admin/nodes/5/reissue-token", expect.objectContaining({ method: "POST" }));
+});
+
+test("explains why a token cannot be reissued after node use or device assignment", async () => {
+  window.history.replaceState({}, "", "/");
+  const node = { id: 5, name: "rg3", bridge_url: "https://rg3.poshl9k.ru",
+    capacity: 20, enabled: true, state: "down", active_peers: 0, last_seen: null };
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/master-admin/nodes" && !init?.method) return new Response(JSON.stringify([node]));
+    if (input === "/api/master-admin/nodes/5/reissue-token") {
+      return new Response(JSON.stringify({ error: { code: "master.node_reissue_not_allowed" } }), { status: 409 });
+    }
+    throw new Error(`Unexpected request ${input}`);
+  }));
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Переиздать токен для rg3" }));
+  const confirmation = screen.getByRole("dialog", { name: "Переиздать токен?" });
+  await user.click(within(confirmation).getByRole("button", { name: "Переиздать токен" }));
+  expect(await screen.findByText(/Переиздание недоступно/)).toBeInTheDocument();
 });
 
 test("admin opens subscriber detail and its tariffs with flat API responses", async () => {
@@ -344,6 +411,66 @@ test("admin opens subscriber detail and its tariffs with flat API responses", as
   await userEvent.click(await screen.findByRole("button", { name: "Открыть" }));
   await userEvent.click(await screen.findByRole("button", { name: "Назначить подписку" }));
   expect(await screen.findByRole("option", { name: "Базовый (30 дн.)" })).toBeInTheDocument();
+});
+
+test("admin can create an unlinked subscriber by Telegram ID", async () => {
+  window.history.replaceState({}, "", "/");
+  const subscriber = { id: 8, display_name: "Тестовый абонент", telegram_chat_id: "987654321",
+    status: "active", subscription: null, device_count: 0 };
+  let subscribers: typeof subscriber[] = [];
+  const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/master-admin/nodes") return new Response(JSON.stringify([]));
+    if (input === "/api/master-admin/subscribers" && !init?.method) {
+      return new Response(JSON.stringify(subscribers));
+    }
+    if (input === "/api/master-admin/subscribers" && init?.method === "POST") {
+      expect(JSON.parse(String(init.body))).toEqual({
+        display_name: "Тестовый абонент", telegram_chat_id: "987654321",
+      });
+      subscribers = [subscriber];
+      return new Response(JSON.stringify(subscriber), { status: 201 });
+    }
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("tab", { name: "Абоненты" }));
+  expect(await screen.findByText("Абонентов пока нет.")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Добавить абонента" }));
+  const dialog = screen.getByRole("dialog", { name: "Новый абонент" });
+  await user.type(within(dialog).getByRole("textbox", { name: "Имя абонента" }), subscriber.display_name);
+  await user.type(within(dialog).getByRole("textbox", { name: "Telegram ID" }), subscriber.telegram_chat_id);
+  await user.click(within(dialog).getByRole("button", { name: "Создать" }));
+  expect(await screen.findByText("Тестовый абонент")).toBeInTheDocument();
+  expect(screen.getByText(/Подписка не назначена/)).toBeInTheDocument();
+  expect(fetcher).toHaveBeenCalledWith("/api/master-admin/subscribers", expect.objectContaining({ method: "POST" }));
+});
+
+test("subscriber duplicate error clears when the Telegram ID is corrected", async () => {
+  window.history.replaceState({}, "", "/");
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/master-admin/nodes") return new Response(JSON.stringify([]));
+    if (input === "/api/master-admin/subscribers" && !init?.method) return new Response(JSON.stringify([]));
+    if (input === "/api/master-admin/subscribers" && init?.method === "POST") {
+      return new Response(JSON.stringify({ error: { code: "master.subscriber_exists" } }), { status: 409 });
+    }
+    throw new Error(`Unexpected request ${input}`);
+  }));
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("tab", { name: "Абоненты" }));
+  await user.click(screen.getByRole("button", { name: "Добавить абонента" }));
+  const dialog = screen.getByRole("dialog", { name: "Новый абонент" });
+  await user.type(within(dialog).getByRole("textbox", { name: "Имя абонента" }), "Тестовый");
+  const telegramId = within(dialog).getByRole("textbox", { name: "Telegram ID" });
+  await user.type(telegramId, "987654321");
+  await user.click(within(dialog).getByRole("button", { name: "Создать" }));
+  expect(await within(dialog).findByText(/Абонент с таким Telegram ID уже существует/)).toBeInTheDocument();
+  expect(telegramId).toHaveFocus();
+  await user.clear(telegramId);
+  await user.type(telegramId, "987654322");
+  expect(within(dialog).queryByText(/Абонент с таким Telegram ID уже существует/)).not.toBeInTheDocument();
 });
 
 test("tariff create and update send the writable fields expected by the master API", async () => {

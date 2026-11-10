@@ -96,9 +96,10 @@ def _read_master_tokens(db):
             _stored(data.get('previous')) or '')
 
 
-def _write_master_tokens(db, current, previous):
+def _write_master_tokens(db, current, previous, *, setup_pending=False):
     value = {'current': _encrypt(current).model_dump(mode='json'),
-             'previous': _encrypt(previous).model_dump(mode='json') if previous else None}
+             'previous': _encrypt(previous).model_dump(mode='json') if previous else None,
+             'setup_pending': setup_pending}
     row = db.get(MasterBridgeSetting, MASTER_TOKEN_KEY)
     if row is None:
         db.add(MasterBridgeSetting(key=MASTER_TOKEN_KEY, value=value))
@@ -144,9 +145,28 @@ def _master_auth(request: Request):
         raise APIError(403, 'auth.forbidden')
     with Session(request.app.state.engine) as db:
         current, previous = _read_master_tokens(db)
-    if not any(candidate and secrets.compare_digest(candidate, supplied)
-               for candidate in (current, previous)):
-        raise APIError(403, 'auth.forbidden')
+        matched = any(candidate and secrets.compare_digest(candidate, supplied)
+                      for candidate in (current, previous))
+        if not matched:
+            raise APIError(403, 'auth.forbidden')
+        row = db.get(MasterBridgeSetting, MASTER_TOKEN_KEY)
+        if row is not None and isinstance(row.value, dict) and row.value.get('setup_pending') is True:
+            # Serialize verification with pending-token replacement. Recheck the
+            # bearer after acquiring the write lock so an old in-flight request
+            # cannot mark a newly pasted credential as verified.
+            db.rollback()
+            db.execute(text('BEGIN IMMEDIATE'))
+            current, previous = _read_master_tokens(db)
+            if not any(candidate and secrets.compare_digest(candidate, supplied)
+                       for candidate in (current, previous)):
+                db.rollback()
+                raise APIError(403, 'auth.forbidden')
+            row = db.get(MasterBridgeSetting, MASTER_TOKEN_KEY)
+            if row is not None and isinstance(row.value, dict) and row.value.get('setup_pending') is True:
+                row.value = {**row.value, 'setup_pending': False}
+                db.commit()
+            else:
+                db.rollback()
 
 
 def _db(request: Request):

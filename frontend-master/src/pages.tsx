@@ -1,6 +1,6 @@
 import { Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField, Typography } from "@mui/material";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { masterApi, type MasterNode, type MasterSubscriber, type MasterTariff } from "./api";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { masterApi, MasterApiError, type MasterNode, type MasterSubscriber, type MasterTariff } from "./api";
 
 export function ErrorNotice({ error }: { error: unknown }) {
   return error ? <Alert severity="error" sx={{ mb: 2 }}>{error instanceof Error ? error.message : "Ошибка"}</Alert> : null;
@@ -9,6 +9,33 @@ export function ErrorNotice({ error }: { error: unknown }) {
 function StateChip({ state }: { state: MasterNode["state"] }) {
   const label = state === "ok" ? "Доступна" : state === "stale" ? "Нет ответа" : "Недоступна";
   return <Chip size="small" label={label} color={state === "ok" ? "success" : state === "stale" ? "warning" : "error"} variant="outlined" />;
+}
+
+function isSecureBridgeUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" && !!parsed.hostname && parsed.pathname === "/"
+      && !parsed.username && !parsed.password && !parsed.search && !parsed.hash;
+  } catch { return false; }
+}
+
+function nodeActionError(error: unknown) {
+  if (error instanceof MasterApiError && error.code === "master.node_reissue_not_allowed") {
+    return new MasterApiError(error.status, error.code,
+      "Переиздание недоступно: нода уже связывалась с мастером или у неё есть устройства. Используйте обычную ротацию токена.");
+  }
+  return error;
+}
+
+function subscriberCreateError(error: unknown) {
+  if (error instanceof MasterApiError && error.code === "master.subscriber_exists") {
+    return new MasterApiError(error.status, error.code, "Абонент с таким Telegram ID уже существует.");
+  }
+  return error;
+}
+
+function isTelegramChatId(value: string) {
+  return /^[1-9][0-9]{0,63}$/.test(value);
 }
 
 function Row({ children }: { children: ReactNode }) {
@@ -24,7 +51,12 @@ export function NodesPage() {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [capacity, setCapacity] = useState("20");
-  const [issuedToken, setIssuedToken] = useState<{ name: string; token: string; bridgeUrl: string } | null>(null);
+  const [issuedToken, setIssuedToken] = useState<{ name: string; token: string; bridgeUrl: string; masterHostname: string } | null>(null);
+  const [reissueTarget, setReissueTarget] = useState<MasterNode | null>(null);
+
+  function showIssuedToken(name: string, token: string, bridgeUrl: string) {
+    setIssuedToken({ name, token, bridgeUrl, masterHostname: window.location.hostname });
+  }
 
   async function load() {
     setBusy(true); setError(null);
@@ -33,13 +65,24 @@ export function NodesPage() {
   useEffect(() => { void load(); }, []);
 
   async function add(event?: FormEvent) {
-    event?.preventDefault(); setWorking("create"); setError(null);
+    event?.preventDefault();
+    if (!name.trim() || !isSecureBridgeUrl(url)) return;
+    setWorking("create"); setError(null);
     try {
       const created = await masterApi.addNode({ name: name.trim(), bridge_url: url.trim(), capacity: Number(capacity) || 1 });
-      setIssuedToken({ name: created.name, token: created.token, bridgeUrl: created.bridge_url });
+      showIssuedToken(created.name, created.token, created.bridge_url);
       setAdding(false); setName(""); setUrl(""); setCapacity("20");
       await load();
     } catch (reason) { setError(reason); } finally { setWorking(null); }
+  }
+  async function reissueToken(node: MasterNode) {
+    setWorking(node.id); setError(null);
+    try {
+      const result = await masterApi.reissueNodeToken(node.id);
+      setReissueTarget(null);
+      showIssuedToken(node.name, result.token, node.bridge_url);
+      await load();
+    } catch (reason) { setError(nodeActionError(reason)); } finally { setWorking(null); }
   }
   async function rotate(node: MasterNode) {
     setWorking(node.id); setError(null);
@@ -81,6 +124,9 @@ export function NodesPage() {
             <Box className="device-actions">
               <Button variant="outlined" size="small" disabled={working !== null} onClick={() => void rotate(node)}>
                 {working === node.id ? <CircularProgress size={16} /> : "Сменить токен"}</Button>
+              {node.last_seen === null && <Button variant="outlined" size="small" disabled={working !== null}
+                aria-label={`Переиздать токен для ${node.name}`} onClick={() => setReissueTarget(node)}>
+                Переиздать токен</Button>}
               <Button variant="outlined" size="small" disabled={working !== null} onClick={() => void toggle(node)}>
                 {node.enabled ? "Отключить" : "Включить"}</Button>
               <Button variant="outlined" size="small" color="error" disabled={working !== null}
@@ -92,26 +138,37 @@ export function NodesPage() {
       <DialogTitle id="add-node-title">Добавить ноду</DialogTitle>
       <DialogContent>
         <Box component="form" onSubmit={add} className="form" sx={{ mt: 1 }}>
-          <TextField label="Имя ноды" value={name} onChange={e => setName(e.target.value)} required fullWidth autoFocus />
-          <TextField label="Bridge URL ноды" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://rg3.poshl9k.ru" required fullWidth />
-          <TextField label="Ёмкость (активных устройств)" type="number" value={capacity} onChange={e => setCapacity(e.target.value)} inputProps={{ min: 1 }} required fullWidth />
+          <TextField label="Имя ноды" name="node-name" autoComplete="off" value={name} onChange={e => setName(e.target.value)} required fullWidth />
+          <TextField label="Bridge URL ноды" name="node-bridge-url" autoComplete="off" value={url} onChange={e => setUrl(e.target.value)} type="url" inputProps={{ maxLength: 255, spellCheck: false }} required fullWidth
+            error={!!url && !isSecureBridgeUrl(url)} helperText="Например, https://rg3.poshl9k.ru. Только HTTPS; без логина, пароля, пути (кроме /), query-параметров и fragment" />
+          <TextField label="Ёмкость (активных устройств)" name="node-capacity" autoComplete="off" type="number" value={capacity} onChange={e => setCapacity(e.target.value)} inputProps={{ min: 1 }} required fullWidth />
         </Box>
       </DialogContent>
       <DialogActions><Button onClick={() => setAdding(false)}>Отмена</Button>
-        <Button variant="contained" disabled={!name.trim() || !url.trim() || working === "create"} onClick={() => void add()}>
+        <Button variant="contained" disabled={!name.trim() || !isSecureBridgeUrl(url) || working === "create"} onClick={() => void add()}>
           {working === "create" ? <CircularProgress size={16} /> : "Создать"}</Button></DialogActions>
+    </Dialog>
+    <Dialog open={reissueTarget !== null} onClose={() => setReissueTarget(null)} aria-labelledby="reissue-token-title" fullWidth maxWidth="sm">
+      <DialogTitle id="reissue-token-title">Переиздать токен?</DialogTitle>
+      <DialogContent>
+        <Alert severity="warning">Это заменит прежний токен. Действие доступно, пока нода ещё не связывалась с мастером; после подтверждения старый токен перестанет работать.</Alert>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setReissueTarget(null)}>Отмена</Button>
+        <Button variant="contained" disabled={working !== null} onClick={() => {
+          if (reissueTarget) void reissueToken(reissueTarget);
+        }}>{working === reissueTarget?.id ? <CircularProgress size={16} /> : "Переиздать токен"}</Button>
+      </DialogActions>
     </Dialog>
     <Dialog open={issuedToken !== null} onClose={() => setIssuedToken(null)} aria-labelledby="token-title" fullWidth maxWidth="sm">
       <DialogTitle id="token-title">Токен ноды {issuedToken?.name}</DialogTitle>
       <DialogContent>
-        <Alert severity="warning" sx={{ mb: 2 }}>Токен показывается один раз. Не отправляйте его в чат: сохраните и установите на указанной ноде.</Alert>
-        <Typography sx={{ wordBreak: "break-all", fontFamily: "monospace" }}>{issuedToken?.token}</Typography>
-        {issuedToken?.bridgeUrl === "https://rg3.poshl9k.ru" && <>
-          <Typography variant="body2" sx={{ mt: 2 }}>Для rg3 выполните в терминале мастер-ноды от root:</Typography>
-          <Typography component="pre" variant="body2" sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word", mt: 1, fontFamily: "monospace" }}>
-            {"read -r -s -p 'Токен ноды: ' token; echo\nprintf '%s\\n' \"$token\" | ssh -i /root/.ssh/vs-master-rg3 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes root@rg3.poshl9k.ru\nunset token"}
-          </Typography>
-        </>}
+        <Alert severity="warning" sx={{ mb: 2 }}>Токен показывается один раз. Не отправляйте его в чат; сразу установите его через админ-панель ноды.</Alert>
+        <Typography translate="no" sx={{ wordBreak: "break-all", fontFamily: "monospace" }}>{issuedToken?.token}</Typography>
+        <Typography variant="body2" sx={{ mt: 2 }}>Подключение без SSH: откройте админ-панель ноды по HTTPS, затем выберите «Обслуживание» → «Мастер». Вставьте токен и укажите домен мастера <strong>{issuedToken?.masterHostname}</strong> и его внешний IP-адрес для связи с нодой.</Typography>
+        {issuedToken?.bridgeUrl && isSecureBridgeUrl(issuedToken.bridgeUrl)
+          ? <Button component="a" href={issuedToken.bridgeUrl} target="_blank" rel="noopener noreferrer" sx={{ mt: 1 }}>Открыть панель ноды</Button>
+          : <Alert severity="error" sx={{ mt: 1 }}>Сохранённый адрес ноды не использует безопасный HTTPS. Не открывайте его и не вводите там токен; откройте ноду по проверенному HTTPS-адресу. Сохранённую ссылку нужно исправить отдельно.</Alert>}
       </DialogContent>
       <DialogActions><Button variant="contained" onClick={() => setIssuedToken(null)}>Записал</Button></DialogActions>
     </Dialog>
@@ -192,9 +249,17 @@ export function SubscribersPage() {
   const [assigning, setAssigning] = useState(false);
   const [tariffId, setTariffId] = useState("");
   const [working, setWorking] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [displayName, setDisplayName] = useState("");
+  const [telegramChatId, setTelegramChatId] = useState("");
+  const [createError, setCreateError] = useState<unknown>(null);
+  const telegramIdInput = useRef<HTMLInputElement>(null);
+  const telegramIdConflict = createError instanceof MasterApiError
+    && createError.code === "master.subscriber_exists";
 
   async function load() { setBusy(true); try { setSubscribers(await masterApi.subscribers()); } catch (reason) { setError(reason); } finally { setBusy(false); } }
   useEffect(() => { void load(); }, []);
+  useEffect(() => { if (telegramIdConflict) telegramIdInput.current?.focus(); }, [telegramIdConflict]);
 
   async function openSubscriber(subscriber: MasterSubscriber) {
     setOpen(subscriber); setError(null);
@@ -210,8 +275,25 @@ export function SubscribersPage() {
     catch (reason) { setError(reason); } finally { setWorking(null); }
   }
 
+  async function createSubscriber(event?: FormEvent) {
+    event?.preventDefault();
+    if (!displayName.trim() || !isTelegramChatId(telegramChatId)) return;
+    setWorking("create-subscriber"); setCreateError(null);
+    try {
+      await masterApi.createSubscriber({ display_name: displayName.trim(), telegram_chat_id: telegramChatId });
+      setAdding(false); setDisplayName(""); setTelegramChatId("");
+      await load();
+    } catch (reason) { setCreateError(subscriberCreateError(reason)); } finally { setWorking(null); }
+  }
+
+  function closeCreate() {
+    if (working === "create-subscriber") return;
+    setAdding(false); setDisplayName(""); setTelegramChatId(""); setCreateError(null);
+  }
+
   return <Box>
-    <Box className="section-head"><Typography variant="h2">Абоненты</Typography></Box>
+    <Box className="section-head"><Typography variant="h2">Абоненты</Typography>
+      <Button variant="contained" onClick={() => { setCreateError(null); setAdding(true); }}>Добавить абонента</Button></Box>
     <ErrorNotice error={error} />
     {busy && !subscribers.length ? <Box className="loading"><CircularProgress /></Box> :
       subscribers.length === 0 ? <Typography color="text.secondary">Абонентов пока нет.</Typography> :
@@ -231,6 +313,37 @@ export function SubscribersPage() {
             </Box>
           </Box>)}
         </Stack>}
+    <Dialog open={adding} onClose={closeCreate} aria-labelledby="new-subscriber-title" fullWidth maxWidth="sm">
+      <Box component="form" onSubmit={createSubscriber}>
+        <DialogTitle id="new-subscriber-title">Новый абонент</DialogTitle>
+        <DialogContent>
+          <ErrorNotice error={telegramIdConflict ? null : createError} />
+          <Box className="form" sx={{ mt: 1 }}>
+            <TextField label="Имя абонента" name="subscriber-display-name" autoComplete="off"
+              value={displayName} onChange={e => setDisplayName(e.target.value)} inputProps={{ maxLength: 64 }}
+              required fullWidth disabled={working === "create-subscriber"} />
+            <TextField label="Telegram ID" name="subscriber-telegram-id" autoComplete="off"
+              inputRef={telegramIdInput}
+              value={telegramChatId} onChange={e => { setTelegramChatId(e.target.value); setCreateError(null); }}
+              inputProps={{ inputMode: "numeric", maxLength: 64 }} required fullWidth
+              error={telegramIdConflict || (!!telegramChatId && !isTelegramChatId(telegramChatId))}
+              helperText={telegramIdConflict
+                ? "Абонент с таким Telegram ID уже существует. Укажите другой ID."
+                : telegramChatId && !isTelegramChatId(telegramChatId)
+                  ? "Введите положительный Telegram ID цифрами без пробелов."
+                  : "После /start в боте Telegram запись привяжется к чату. Подписку назначьте отдельно."}
+              slotProps={{ formHelperText: { "aria-live": "polite" } }}
+              disabled={working === "create-subscriber"} />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeCreate} disabled={working === "create-subscriber"}>Отмена</Button>
+          <Button type="submit" variant="contained"
+            disabled={!displayName.trim() || !isTelegramChatId(telegramChatId) || working === "create-subscriber"}>
+            {working === "create-subscriber" ? <CircularProgress size={16} /> : "Создать"}</Button>
+        </DialogActions>
+      </Box>
+    </Dialog>
     <Dialog open={open !== null} onClose={() => setOpen(null)} aria-labelledby="subscriber-title" fullWidth maxWidth="sm">
       <DialogTitle id="subscriber-title">Абонент {open?.display_name}</DialogTitle>
       <DialogContent>

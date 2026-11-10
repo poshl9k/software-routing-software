@@ -565,6 +565,13 @@ export interface HostManagement {
   dhcp?: boolean;
 }
 
+/** Node-side state for the master-only HTTPS bridge. */
+export interface MasterBridgeStatus {
+  credential_installed: boolean;
+  credential_state: "not_installed" | "pending_verification" | "verified" | "unknown";
+  publication_state: "absent" | "configured_on_disk" | "drift" | "invalid_marker" | "incompatible" | "unavailable";
+}
+
 export interface ReleaseInfo {
   commit: string | null;
   semver: string | null;

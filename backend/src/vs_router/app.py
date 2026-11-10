@@ -25,14 +25,16 @@ def create_app(engine=None, *, database_url=None, clock=None) -> FastAPI:
 
     @app.middleware("http")
     async def same_origin(request: Request, call_next):
+        no_store = request.url.path.startswith((
+            "/api/runtime/", "/api/proxy/subscriptions/", "/api/host/master-bridge"))
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
             expected = f"{request.url.scheme}://{request.url.netloc}"
             if (origin is not None and origin != expected) or request.headers.get("sec-fetch-site") == "cross-site":
                 return JSONResponse(issue("request.cross_origin"), status_code=403,
-                                    headers={'Cache-Control': 'no-store'} if request.url.path.startswith('/api/runtime/') else None)
+                                    headers={'Cache-Control': 'no-store'} if no_store else None)
         result = await call_next(request)
-        if request.url.path.startswith(('/api/runtime/', '/api/proxy/subscriptions/')):
+        if no_store:
             result.headers['Cache-Control'] = 'no-store'
         return result
 

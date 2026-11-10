@@ -1,6 +1,7 @@
 import type {
   HostInterface,
   HostManagement,
+  MasterBridgeStatus,
   HostProfile,
   ApplyRequest,
   ApplyResult,
@@ -77,6 +78,11 @@ const put = <T>(path: `/api/${string}`, body: unknown) =>
 export const api = {
   hostInterfaces: () => request<HostInterface[]>("/api/host/interfaces"),
   hostManagement: () => request<HostManagement | null>("/api/host/management"),
+  masterBridgeStatus: () => request<MasterBridgeStatus>("/api/host/master-bridge", { cache: "no-store" }),
+  setupMasterBridge: (body: { token: string; hostname: string; source_ip: string }) =>
+    request<MasterBridgeStatus>("/api/host/master-bridge", {
+      method: "POST", cache: "no-store", body: JSON.stringify(body),
+    }),
   hostProfile: () => request<HostProfile>("/api/host/profile"),
   /** Publish the panel under an operator-supplied domain (ADR-0025); null clears it. */
   setPanelDomain: (hostname: string | null) =>

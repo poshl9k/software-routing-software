@@ -13,7 +13,7 @@ import type { CatalogResponse, Configuration, RoutingRule } from "../types";
 import { join } from "node:path";
 
 /** Reads a file relative to the repository root (for palette/style audits). */
-const repoRoot = process.cwd().replace(/\/frontend$/, "");
+const repoRoot = process.cwd().replace(/[\\/]frontend$/, "");
 const repoSource = (path: string) => readFileSync(join(repoRoot, path), "utf-8");
 
 /**

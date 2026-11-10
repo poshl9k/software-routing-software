@@ -110,6 +110,8 @@ export const masterApi = {
   updateNode: (id: number, body: { bridge_url?: string; capacity?: number; enabled?: boolean }) =>
     masterRequest<MasterNode>(`/api/master-admin/nodes/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   removeNode: (id: number) => masterRequest<void>(`/api/master-admin/nodes/${id}`, { method: "DELETE" }),
+  reissueNodeToken: (id: number) =>
+    masterRequest<{ token: string }>(`/api/master-admin/nodes/${id}/reissue-token`, { method: "POST" }),
   rotateNodeToken: (id: number) =>
     masterRequest<{ rotated: boolean }>(`/api/master-admin/nodes/${id}/rotate-token`, { method: "POST" }),
   tariffs: () => masterRequest<MasterTariff[]>("/api/master-admin/tariffs"),
@@ -119,6 +121,9 @@ export const masterApi = {
         device_limit: body.device_limit, term_days: body.term_days, price_amount: body.price_amount ?? null }) }),
   removeTariff: (id: number) => masterRequest<void>(`/api/master-admin/tariffs/${id}`, { method: "DELETE" }),
   subscribers: () => masterRequest<MasterSubscriber[]>("/api/master-admin/subscribers"),
+  createSubscriber: (body: { display_name: string; telegram_chat_id: string }) =>
+    masterRequest<MasterSubscriber>("/api/master-admin/subscribers",
+      { method: "POST", body: JSON.stringify(body) }),
   subscriber: (id: number) => masterRequest<MasterSubscriber & { devices: MasterDevice[] }>(`/api/master-admin/subscribers/${id}`),
   assignSubscription: (id: number, body: { tariff_id: number; days?: number }) =>
     masterRequest<NonNullable<MasterSubscriber["subscription"]>>(`/api/master-admin/subscribers/${id}/subscription`,

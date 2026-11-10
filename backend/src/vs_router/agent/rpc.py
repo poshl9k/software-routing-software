@@ -16,7 +16,8 @@ Method = Literal["apply_version", "confirm_version", "rollback", "status",
                  "update_source", "source_status", "service_status",
                  "engine_status", "engine_control", "clash_connections", "clash_close",
                  "clash_logs", "clash_proxies", "clash_select", "clash_delay",
-                 "subscription_preview", "subscription_refresh", "set_panel_domain"]
+                 "subscription_preview", "subscription_refresh", "set_panel_domain",
+                 "set_master_bridge_publication", "master_bridge_publication_status"]
 
 
 class ApplyParams(Model):
@@ -62,6 +63,12 @@ class PanelDomainParams(Model):
     and only keeps the change once an ACME certificate answers over HTTPS.
     """
     hostname: Annotated[str, Field(strict=True, pattern=HOSTNAME_PATTERN)] | None = None
+
+
+class MasterBridgePublicationParams(Model):
+    """Exact panel TLS name and the master's egress IP for the bridge route."""
+    hostname: Annotated[str, Field(strict=True, pattern=HOSTNAME_PATTERN)]
+    source_ip: Annotated[str, Field(strict=True, min_length=3, max_length=45)]
 
 
 class PingParams(Model):
@@ -154,7 +161,9 @@ PARAMS = {"apply_version": ApplyParams, "confirm_version": ConfirmParams,
           "clash_select": ClashSelectParams, "clash_delay": ClashDelayParams,
           "subscription_preview": SubscriptionPreviewParams,
           "subscription_refresh": SubscriptionRefreshParams,
-          "set_panel_domain": PanelDomainParams}
+          "set_panel_domain": PanelDomainParams,
+          "set_master_bridge_publication": MasterBridgePublicationParams,
+          "master_bridge_publication_status": EmptyParams}
 
 
 class RPCRequest(Model):

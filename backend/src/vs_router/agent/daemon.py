@@ -540,12 +540,49 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
             raise ApplyError(guard_code(exc, 'management.domain_unverified')) from None
         return state.model_dump()
 
+    def set_master_bridge_publication(hostname, source_ip):
+        """Publish only the exact master bridge route through the host marker."""
+        from .master_bridge_publication import configure_publication
+        from .apply import APPLIED_DIR
+
+        reload = engine.reload_commands.get('caddy') if engine is not None else None
+        if engine is None or not callable(reload):
+            raise ApplyError('master_bridge.caddy_unavailable')
+        status = getattr(engine, 'status', None)
+        if not callable(status):
+            raise ApplyError('master_bridge.apply_state_unavailable')
+        try:
+            apply_state = status()
+        except Exception:
+            raise ApplyError('master_bridge.apply_state_unavailable') from None
+        if (apply_state is not None and
+                (not isinstance(apply_state, dict) or
+                 apply_state.get('status') not in {'confirmed', 'rolled_back'})):
+            raise ApplyError('agent.apply_pending')
+        try:
+            return configure_publication(
+                engine.fs, APPLIED_DIR / 'caddy.conf',
+                {'hostname': hostname, 'source_ip': source_ip}, reload)
+        except ValueError as exc:
+            raise ApplyError(str(exc)) from None
+
+    def master_bridge_publication_status():
+        """Read marker/config state; this does not prove bearer connectivity."""
+        from .master_bridge_publication import publication_status
+        from .apply import APPLIED_DIR
+
+        if engine is None or getattr(engine, 'fs', None) is None:
+            return {'publication_state': 'unavailable'}
+        return publication_status(engine.fs, APPLIED_DIR / 'caddy.conf')
+
     return {'apply_version': apply_version, 'confirm_version': confirm_version,
             'rollback': lambda: engine.rollback('requested'), 'status': status,
             'diag_ping': diag_ping, 'diag_traceroute': diag_traceroute,
             'nft_counters': nft_counters, 'list_interfaces': list_interfaces,
             'list_addresses': list_addresses, 'management': management, 'profile': profile,
             'set_panel_domain': set_panel_domain,
+            'set_master_bridge_publication': set_master_bridge_publication,
+            'master_bridge_publication_status': master_bridge_publication_status,
             'tunnel_activity': tunnel_activity,
             'tunnel_peers_sync': tunnel_peers_sync,
             'update_status': update_status,

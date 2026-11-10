@@ -66,6 +66,84 @@ it("exports aliases in the selected format",async()=>{
 it("renders and validates the ping host field",async()=>{
   setup(emptyConfiguration);mount(<Maintenance/>);await userEvent.click(screen.getByRole("tab",{name:"Диагностика"}));const host=screen.getAllByLabelText("Узел")[0];expect(host).toHaveAttribute("aria-invalid","true");expect(screen.getByRole("button",{name:"Ping"})).toBeDisabled();
 });
+it("connects the node to the master from the authenticated maintenance UI without retaining the token",async()=>{
+  const token="A".repeat(43);
+  let status={credential_installed:false,credential_state:"not_installed",publication_state:"absent"};
+  const fetch=setup(emptyConfiguration,(path,init)=>{
+    if(path==="/api/host/master-bridge"&&!init?.method)return new Response(JSON.stringify(status));
+    if(path==="/api/host/master-bridge"&&init?.method==="POST"){
+      expect(JSON.parse(String(init.body))).toEqual({token,hostname:"my.poshl9k.ru",source_ip:"85.209.159.130"});
+      status={credential_installed:true,credential_state:"pending_verification",publication_state:"configured_on_disk"};
+      return new Response(JSON.stringify(status));
+    }
+    return new Response("{}");
+  });
+  render(<MemoryRouter initialEntries={["/maintenance?tab=master"]}><App/></MemoryRouter>);
+  const user=userEvent.setup();
+  await screen.findByText("admin");
+  expect(await screen.findByText(/Токен ещё не установлен/)).toBeVisible();
+  expect(screen.getByRole("button",{name:"Сохранить и подключить"})).toBeEnabled();
+  await user.type(screen.getByLabelText(/Токен из мастер-портала/),token);
+  await user.type(screen.getByLabelText(/Домен мастера/),"my.poshl9k.ru");
+  await user.type(screen.getByLabelText(/Исходящий IP мастера/),"85.209.159.130");
+  await user.click(screen.getByRole("button",{name:"Сохранить и подключить"}));
+  expect(await screen.findByText(/Ожидается подтверждение мастера/)).toBeVisible();
+  expect(screen.getByLabelText(/Токен из мастер-портала/)).toHaveValue("");
+  expect(screen.queryByText(token)).toBeNull();
+  expect(fetch).toHaveBeenCalledWith("/api/host/master-bridge",expect.objectContaining({method:"POST",body:JSON.stringify({token,hostname:"my.poshl9k.ru",source_ip:"85.209.159.130"})}));
+});
+
+it("shows verified master connectivity and hides the onboarding token field",async()=>{
+  setup(emptyConfiguration,(path)=>path==="/api/host/master-bridge"
+    ?new Response(JSON.stringify({credential_installed:true,credential_state:"verified",publication_state:"configured_on_disk"}))
+    :new Response("{}"));
+  render(<MemoryRouter initialEntries={["/maintenance?tab=master"]}><App/></MemoryRouter>);
+  await screen.findByText("admin");
+  expect(await screen.findByText(/Мастер подтвердил токен/)).toBeVisible();
+  expect(screen.queryByLabelText(/Токен из мастер-портала/)).toBeNull();
+});
+it("explains a rejected master token and retains it only in the editable form for retry",async()=>{
+  const token="B".repeat(43);
+  setup(emptyConfiguration,(path,init)=>{
+    if(path==="/api/host/master-bridge"&&!init?.method)return new Response(JSON.stringify({credential_installed:false,credential_state:"not_installed",publication_state:"absent"}));
+    if(path==="/api/host/master-bridge"&&init?.method==="POST")return new Response(JSON.stringify({code:"request.invalid",message:"request.invalid",details:[{path:["body","token"],type:"value_error",message:""}]}),{status:422});
+    return new Response("{}");
+  });
+  render(<MemoryRouter initialEntries={["/maintenance?tab=master"]}><App/></MemoryRouter>);
+  const user=userEvent.setup();
+  await screen.findByText(/Токен ещё не установлен/);
+  await user.type(screen.getByLabelText(/Токен из мастер-портала/),token);
+  await user.type(screen.getByLabelText(/Домен мастера/),"my.poshl9k.ru");
+  await user.type(screen.getByLabelText(/Исходящий IP мастера/),"85.209.159.130");
+  await user.click(screen.getByRole("button",{name:"Сохранить и подключить"}));
+  expect(await screen.findByText(/Мастер не принял токен\. Проверьте поле ниже/)).toBeVisible();
+  const tokenField = screen.getByLabelText(/Токен из мастер-портала/);
+  expect(tokenField).toHaveValue(token);
+  expect(tokenField).toHaveAttribute("autocomplete", "off");
+  expect(tokenField).toHaveAttribute("aria-invalid", "true");
+  expect(screen.getByText(/Убедитесь, что он выдан для этой ноды/)).toBeVisible();
+  expect(document.activeElement).toBe(tokenField);
+});
+it("marks and focuses the master IP field when the node rejects its format",async()=>{
+  const token="C".repeat(43);
+  setup(emptyConfiguration,(path,init)=>{
+    if(path==="/api/host/master-bridge"&&!init?.method)return new Response(JSON.stringify({credential_installed:false,credential_state:"not_installed",publication_state:"absent"}));
+    if(path==="/api/host/master-bridge"&&init?.method==="POST")return new Response(JSON.stringify({code:"request.invalid",message:"request.invalid",details:[{path:["body","source_ip"],type:"value_error",message:""}]}),{status:422});
+    return new Response("{}");
+  });
+  render(<MemoryRouter initialEntries={["/maintenance?tab=master"]}><App/></MemoryRouter>);
+  const user=userEvent.setup();
+  await screen.findByText(/Токен ещё не установлен/);
+  await user.type(screen.getByLabelText(/Токен из мастер-портала/),token);
+  await user.type(screen.getByLabelText(/Домен мастера/),"my.poshl9k.ru");
+  await user.type(screen.getByLabelText(/Исходящий IP мастера/),"not-an-ip");
+  await user.click(screen.getByRole("button",{name:"Сохранить и подключить"}));
+  expect(await screen.findByText(/Адрес мастера не принят/)).toBeVisible();
+  const sourceIpField=screen.getByLabelText(/Исходящий IP мастера/);
+  expect(sourceIpField).toHaveAttribute("aria-invalid","true");
+  expect(screen.getByText(/без порта и маски сети/)).toBeVisible();
+  expect(document.activeElement).toBe(sourceIpField);
+});
 function Location() { const { pathname, search } = useLocation(); return <output data-testid="location">{pathname}{search}</output>; }
 it("keeps the bare backup URL and deep-links diagnostic and release tabs",async()=>{
   setup(emptyConfiguration);

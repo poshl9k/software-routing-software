@@ -96,8 +96,13 @@ systemctl enable --now vs-master-web.service
 systemctl restart vs-master-web.service
 systemctl enable --now vs-master-worker.service
 systemctl restart vs-master-worker.service
-systemctl enable --now vs-master-bot.service
-systemctl restart vs-master-bot.service
+systemctl enable vs-master-bot.service
+if [ "${VS_MASTER_SKIP_ACTIVE_BOT_RESTART:-0}" = 1 ] && \
+    systemctl is-active --quiet vs-master-bot.service; then
+    echo "vs-master-bot is already active; restart skipped by operator"
+else
+    systemctl restart vs-master-bot.service
+fi
 systemctl enable --now vs-master-backup.timer
 
 # This host may already serve the panel. Never replace or reload its Caddyfile.
