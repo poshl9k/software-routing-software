@@ -286,8 +286,9 @@ def _mihomo_yaml(device, tunnel, key, db=None):
              'allowed-ips': [_line(str(value)) for value in allowed], 'udp': True}
     if v6 is not None:
         proxy['ipv6'] = _line(v6)
-    if tunnel.get('mtu'):
-        proxy['mtu'] = int(tunnel['mtu'])
+    # AWG junk/padding consumes headroom; the 1408 default black-holes large TLS
+    # handshakes on common paths, so fall back to a safe value when the node is silent.
+    proxy['mtu'] = int(tunnel['mtu']) if tunnel.get('mtu') else 1280
     proxy['persistent-keepalive'] = int(tunnel.get('keepalive') or 25)
     if protocol == 'awg':
         proxy['amnezia-wg-option'] = _awg_option(tunnel)
@@ -297,16 +298,28 @@ def _mihomo_yaml(device, tunnel, key, db=None):
         except (InvalidToken, ValueError):
             raise APIError(503, 'portal.export_unavailable') from None
 
-    # RU resolvers answer Russian domains locally; the tunnel resolver only sees
-    # what actually goes through the tunnel.
+    # Two resolvers, two jobs. Russian names are resolved by the subscriber's own
+    # provider (``system``) and never leave the country; everything else is
+    # resolved by the tunnel's resolver, and ``respect-rules`` sends those queries
+    # through the proxy, so the provider sees no plaintext DNS for foreign names.
     local_dns = ['77.88.8.8', '223.5.5.5']
     dns = {'enable': True, 'enhanced-mode': 'fake-ip',
            'fake-ip-range': '198.18.0.1/16',
+           'ipv6': v6 is not None,
+           'respect-rules': True,
            'default-nameserver': local_dns,
            'nameserver': [_line(str(value)) for value in dns_servers],
            'proxy-server-nameserver': local_dns,
-           'nameserver-policy': {'+.ru': local_dns, '+.su': local_dns},
+           'nameserver-policy': {'+.ru': ['system'], '+.su': ['system']},
            'fake-ip-filter': ['*.lan', '*.local', '+.ru', '+.su']}
+
+    # Browsers with their own secure DNS connect to bare IPs; sniffing restores
+    # the host name so the RU split still matches by domain instead of by IP.
+    sniffer = {'enable': True, 'force-dns-mapping': True, 'parse-pure-ip': True,
+               'override-destination': True,
+               'sniff': {'HTTP': {'ports': [80, '8080-8880'], 'override-destination': True},
+                         'TLS': {'ports': [443, 8443], 'override-destination': True},
+                         'QUIC': {'ports': [443, 8443]}}}
     rules = ['GEOIP,RU,DIRECT']
     rules += [f'IP-CIDR,{value},DIRECT,no-resolve' for value in _MIHOMO_PRIVATE]
     rules.append('MATCH,PROXY')
@@ -324,6 +337,7 @@ def _mihomo_yaml(device, tunnel, key, db=None):
         'proxy-groups': [{'name': 'PROXY', 'type': 'select', 'proxies': ['vell']}],
         'rules': rules,
         'dns': dns,
+        'sniffer': sniffer,
     }
     if providers:
         document['rule-providers'] = providers
