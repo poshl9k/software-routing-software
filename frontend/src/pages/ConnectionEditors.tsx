@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button, Checkbox, FormControlLabel, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { useConfiguration } from "../state";
 import type {
+  Inbound,
   Tunnel,
   TunnelAvailability,
   Peer,
@@ -1054,6 +1055,7 @@ export function Tunnels() {
           { value: "servers", label: "Серверы" },
         ]}
       />
+      {roleTab === "servers" && <InboundEditor />}
       {roleTab === "clients" && <>
         <InfoNote>Handshake показывает обмен ключами с VPN-сервером, а не сквозную доступность интернета. Недавний — не старше 180 секунд. Это не URL-test и не указание выбранного участника группы.</InfoNote>
         <ErrorNotice error={availability.error} />
@@ -1526,5 +1528,100 @@ export function DDNS() {
         попытки обновления в панели не отображается.
       </p>
     </>
+  );
+}
+
+/**
+ * One inbound, one form (ADR-0034): the operator mints a VLESS+Reality entry
+ * for iOS clients and sees its public half read-only. Keys are generated on the
+ * host, never typed by hand, and the private half never leaves it.
+ */
+export function InboundEditor() {
+  const { configuration, version } = useConfiguration();
+  const editor = useDraftEditor<Inbound>();
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const inbound = editor.value ?? configuration.inbounds?.[0] ?? null;
+
+  async function create() {
+    setCreating(true);
+    setError(null);
+    try {
+      const minted = (await api.keygenInbound()) as unknown as Inbound;
+      editor.setValue(minted);
+      editor.setError(null);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Не удалось создать вход");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function save() {
+    if (!editor.value) return;
+    await editor.save((value) => ({ ...configuration, inbounds: [value] }));
+  }
+
+  return (
+    <Card title="Вход для iOS (VLESS + Reality)">
+      <InfoNote>
+        Клиенты App Store не понимают AmneziaWG 3.1, поэтому им нужен отдельный вход. Он занимает
+        порт панели: панель переезжает за него на loopback-адрес, а публичные имена продолжают
+        работать. Трафик РФ по-прежнему идёт напрямую — правила живут в клиентском профиле.
+      </InfoNote>
+      <ErrorNotice error={error ?? editor.error} />
+      {!inbound && (
+        <FormActions>
+          <Button disabled={creating} onClick={() => void create()}>
+            {creating ? "Создание…" : "Создать вход"}
+          </Button>
+        </FormActions>
+      )}
+      {inbound && (
+        <FormGrid>
+          <Field label="Тег" value={inbound.tag} readOnly />
+          <Field label="Порт" value={String(inbound.listen_port)} readOnly />
+          <Field label="SNI" value={inbound.server_name} readOnly />
+          <Field label="Short ID" value={inbound.short_ids.join(", ")} readOnly />
+          <Field label="Публичный ключ" value={inbound.public_key} readOnly />
+          <Field label="Адрес панели за входом" value={inbound.handshake_dest} readOnly />
+          <FormWide>
+            <InfoNote severity="warning">
+              Удаление входа разорвёт подключения iOS-клиентов; вернуть их можно только новым входом.
+            </InfoNote>
+          </FormWide>
+          <FormWide>
+            <FormActions>
+              <Button color="error" disabled={editor.saving} onClick={() => setConfirming(true)}>
+                Удалить вход
+              </Button>
+            </FormActions>
+          </FormWide>
+        </FormGrid>
+      )}
+      {editor.value && (
+        <EditorFooter
+          saving={editor.saving}
+          valid={!!version && editor.value.short_ids.length > 0}
+          cancel={editor.cancel}
+          save={() => void save()}
+          saveLabel="Сохранить вход"
+        />
+      )}
+      <ConfirmDialog
+        open={confirming}
+        title="Удалить вход?"
+        body="iOS-клиенты потеряют доступ, пока не будет создан новый вход."
+        confirmLabel="Удалить"
+        cancelLabel="Отмена"
+        danger
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          void editor.save(() => ({ ...configuration, inbounds: [] }));
+        }}
+      />
+    </Card>
   );
 }

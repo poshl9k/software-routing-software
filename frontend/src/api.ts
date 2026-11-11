@@ -99,6 +99,7 @@ export const api = {
     listen_port?: number; mtu?: number; subnet?: string;
   }>("/api/keygen/tunnel", { protocol }),
   keygenPeer: () => post<{ preshared_key: string }>("/api/keygen/peer", {}),
+  keygenInbound: () => post<Record<string, unknown>>("/api/keygen/inbound", {}),
   keygenPeerKeypair: () => post<{ private_key: string; public_key: string }>("/api/keygen/peer-keypair", {}),
   versions: (signal?: AbortSignal) =>
     request<ConfigurationVersion[]>("/api/versions", { signal }),

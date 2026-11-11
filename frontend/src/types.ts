@@ -450,9 +450,25 @@ export interface Configuration {
   tproxy: TProxy;
   proxies: ProxySettings;
   rule_sets: RuleSetSource[];
+  /** Optional in legacy snapshots; backend defaults to an empty tuple. */
+  inbounds?: Inbound[];
   anti_lockout: boolean;
   panel_port: number;
 }
+/** Panel-only subscriber inbound (ADR-0034): VLESS + Reality on this host. */
+export interface Inbound {
+  tag: string;
+  kind: "vless";
+  listen_port: number;
+  server_name: string;
+  handshake_dest: string;
+  private_key: Secret;
+  public_key: string;
+  short_ids: string[];
+  flow: string;
+  users: { name: string; uuid: Secret }[];
+}
+
 export interface ConfigurationVersion {
   id: number;
   status: "draft" | "confirmed";
