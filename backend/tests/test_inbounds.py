@@ -214,3 +214,27 @@ def test_panel_keeps_the_management_address_without_inbounds():
                                    _management())
     server = document["apps"]["http"]["servers"]["management"]
     assert server["listen"] == ["203.0.113.2:443"]
+
+
+def test_vless_share_link_carries_reality_parameters():
+    from vs_router.generators.vless_uri import vless_uri
+
+    link = vless_uri(inbound(), "11111111-2222-3333-4444-555555555555",
+                     "203.0.113.2", "phone")
+    assert link.startswith("vless://11111111-2222-3333-4444-555555555555@203.0.113.2:443?")
+    for fragment in ("security=reality", "sni=www.microsoft.com", "pbk=",
+                     "sid=0123abcd", "flow=xtls-rprx-vision", "fp=chrome",
+                     "type=tcp", "encryption=none"):
+        assert fragment in link, fragment
+    assert link.endswith("#phone")
+
+
+def test_vless_share_link_rejects_an_unusable_entry():
+    from vs_router.generators.vless_uri import vless_uri
+
+    with pytest.raises(ValueError, match="inbound.entry_host"):
+        vless_uri(inbound(), "uuid", "203.0.113.2/path")
+    with pytest.raises(ValueError, match="inbound.entry_host"):
+        vless_uri(inbound(), "uuid", "a:b")
+    # An IPv6 entry is bracketed, not ambiguous with the port separator.
+    assert "@[2001:db8::1]:443?" in vless_uri(inbound(), "uuid", "[2001:db8::1]")

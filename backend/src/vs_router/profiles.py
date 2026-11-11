@@ -125,6 +125,7 @@ MODULE_PROFILES: dict[str, ModuleProfile] = {
     'vs_router.generators.singbox': 'core',
     'vs_router.generators.tproxy_dns': 'core',
     'vs_router.generators.unbound': 'core',
+    'vs_router.generators.vless_uri': 'core',
     'vs_router.generators.wireguard': 'core',
     'vs_router.internal_app': 'panel',
 }
