@@ -1,15 +1,25 @@
-"""Revocable per-device subscription links delivering the mihomo profile."""
+"""Stable, revocable per-device subscription links delivering the mihomo profile.
+
+The token is stored encrypted as well as hashed, so the cabinet can show the
+same link (and its QR) on every visit. A link changes only when the user asks
+for a new one (``POST …/subscription/rotate``), when the device is removed, or
+when the account's subscription is no longer active.
+"""
 import base64
 import io
 import secrets
 from hashlib import sha256
 
 import qrcode
+from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from vs_portal.security import get_secret_key
 from vs_router.api.errors import APIError
+from vs_router.secrets import decrypt_secret, encrypt_secret
 
 from .accounts import current_account, get_db
 from .device_service import device_owned
@@ -26,49 +36,93 @@ def _link(request, token):
 
 
 def _qr_data_url(text):
-    """Inline PNG so mobile clients can scan the link instead of typing it.
-
-    The value is generated in the issue response only: the master stores just
-    the hash, so an existing link can never be redrawn from the database.
-    """
+    """Inline PNG so mobile clients can scan the link instead of typing it."""
     out = io.BytesIO()
     qrcode.make(text).save(out, 'PNG')
     return 'data:image/png;base64,' + base64.b64encode(out.getvalue()).decode('ascii')
+
+
+def _token_of(row):
+    """Decrypt the stored token; a missing or unreadable secret hides the link."""
+    if row is None or not row.token_secret:
+        return None
+    try:
+        return decrypt_secret(row.token_secret, get_secret_key())
+    except (InvalidToken, ValueError):
+        return None
+
+
+def _view(request, row):
+    token = _token_of(row)
+    if token is None:
+        return {'url': None, 'qr': None, 'clash_url': None}
+    url = _link(request, token)
+    return {'url': url, 'qr': _qr_data_url(url),
+            'clash_url': 'clash://install-config?url=' + url}
+
+
+def _stamp(row):
+    """ISO timestamp; JSONResponse does not serialise datetimes on its own."""
+    return row.created_at.isoformat() if row.created_at else None
 
 
 def _owned(db, account, identity):
     return device_owned(db, identity, account.id)
 
 
-@router.post('/devices/{identity}/subscription', status_code=201)
-def issue_subscription(identity: str, request: Request,
-                       account: Account = Depends(current_account), db: Session = Depends(get_db)):
-    """Issue (or replace) the device's link; the URL is returned exactly once."""
-    device = _owned(db, account, identity)
+def _store(db, row, device, now):
     token = secrets.token_urlsafe(32)
     digest = sha256(token.encode()).hexdigest()
-    now = utcnow()
-    row = db.get(DeviceSubscription, device.id)
+    secret = encrypt_secret(token, get_secret_key())
     if row is None:
-        db.add(DeviceSubscription(device_id=device.id, token_hash=digest, created_at=now))
+        row = DeviceSubscription(device_id=device.id, token_hash=digest,
+                                 token_secret=secret, created_at=now)
+        db.add(row)
     else:
         row.token_hash = digest
+        row.token_secret = secret
         row.created_at = now
         row.last_used_at = None
     db.commit()
-    url = _link(request, token)
-    return {'url': url, 'created_at': now, 'qr': _qr_data_url(url),
-            'clash_url': 'clash://install-config?url=' + url}
+    return row
+
+
+@router.post('/devices/{identity}/subscription')
+def issue_subscription(identity: str, request: Request,
+                       account: Account = Depends(current_account), db: Session = Depends(get_db)):
+    """Return the device's link, creating it once; repeat calls keep the same token."""
+    device = _owned(db, account, identity)
+    row = db.get(DeviceSubscription, device.id)
+    if row is None or _token_of(row) is None:
+        row = _store(db, row, device, utcnow())
+        return JSONResponse({'created': True, **_view(request, row),
+                             'created_at': _stamp(row)}, status_code=201)
+    return JSONResponse({'created': False, **_view(request, row),
+                         'created_at': _stamp(row)}, status_code=200)
+
+
+@router.post('/devices/{identity}/subscription/rotate')
+def rotate_subscription(identity: str, request: Request,
+                        account: Account = Depends(current_account),
+                        db: Session = Depends(get_db)):
+    """Replace the token at the user's request; the previous link stops working."""
+    device = _owned(db, account, identity)
+    now = utcnow()
+    row = _store(db, db.get(DeviceSubscription, device.id), device, now)
+    return {'created': True, **_view(request, row), 'created_at': _stamp(row)}
 
 
 @router.get('/devices/{identity}/subscription')
-def subscription_state(identity: str, account: Account = Depends(current_account),
+def subscription_state(identity: str, request: Request,
+                       account: Account = Depends(current_account),
                        db: Session = Depends(get_db)):
     device = _owned(db, account, identity)
     row = db.get(DeviceSubscription, device.id)
     if row is None:
-        return {'active': False, 'created_at': None, 'last_used_at': None}
-    return {'active': True, 'created_at': row.created_at, 'last_used_at': row.last_used_at}
+        return {'active': False, 'created_at': None, 'last_used_at': None,
+                'url': None, 'qr': None, 'clash_url': None}
+    return {'active': True, 'created_at': row.created_at, 'last_used_at': row.last_used_at,
+            **_view(request, row)}
 
 
 @router.delete('/devices/{identity}/subscription', status_code=204)

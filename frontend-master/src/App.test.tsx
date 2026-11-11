@@ -266,6 +266,44 @@ test("amnezia connection is added by button or by scanning its QR code", async (
   }
 });
 
+test("an existing subscription link is shown as-is and rotates only on request", async () => {
+  window.history.replaceState({}, "", "/portal");
+  const fetcher = vi.fn(async (input: string) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: { status: "active",
+        expires_at: "2099-12-08T00:00:00Z", tariff: { name: "Базовый", device_limit: 2, term_days: 30 } } }),
+      { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [
+      { id: 7, name: "master_7", label: "Телефон", status: "active", applied: true, last_handshake: null }] }),
+      { status: 200 });
+    if (input === "/api/portal/devices/7/subscription") return new Response(JSON.stringify({
+      active: true, created_at: "2026-11-10T00:00:00Z", last_used_at: null,
+      url: "https://master.test/api/portal/sub/stable-token",
+      qr: "data:image/png;base64,STABLE",
+      clash_url: "clash://install-config?url=https://master.test/api/portal/sub/stable-token" }),
+      { status: 200 });
+    if (input === "/api/portal/devices/7/subscription/rotate") return new Response(JSON.stringify({
+      created: true, created_at: "2026-11-11T00:00:00Z", last_used_at: null,
+      url: "https://master.test/api/portal/sub/rotated-token",
+      qr: "data:image/png;base64,ROTATED",
+      clash_url: "clash://install-config?url=https://master.test/api/portal/sub/rotated-token" }),
+      { status: 200 });
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "Ссылка-подписка" }));
+  const field = await screen.findByLabelText("Ссылка");
+  expect(field).toHaveValue("https://master.test/api/portal/sub/stable-token");
+  expect(screen.getByRole("img", { name: "QR-код ссылки-подписки" })).toHaveAttribute("src", "data:image/png;base64,STABLE");
+  // Opening the dialog must not rotate anything.
+  expect(fetcher).not.toHaveBeenCalledWith("/api/portal/devices/7/subscription/rotate", expect.anything());
+  await userEvent.click(screen.getByRole("button", { name: "Перевыпустить" }));
+  expect(screen.getByText(/Перевыпуск сделает текущую ссылку недействительной/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Подтвердить перевыпуск" }));
+  await waitFor(() => expect(field).toHaveValue("https://master.test/api/portal/sub/rotated-token"));
+});
+
 test("no subscription never claims access or enables new devices", async () => {
   window.history.replaceState({}, "", "/portal");
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {

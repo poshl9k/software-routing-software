@@ -80,7 +80,8 @@ export type PortalDevice = {
 };
 export type PortalDevices = { devices: PortalDevice[] };
 export type PortalOperation = { status: "applied" | "pending"; operation_id: number; device_id: number };
-export type PortalSubscription = { active: boolean; created_at: string | null; last_used_at: string | null };
+export type PortalSubscription = { active: boolean; created_at: string | null; last_used_at: string | null;
+  url: string | null; qr: string | null; clash_url: string | null };
 
 export type PortalExportFormat = "conf" | "qr" | "amnezia" | "amnezia-qr" | "mihomo";
 
@@ -122,9 +123,12 @@ export const portalApi = {
   amneziaUri: (id: number) => exportPortalText(id, "amnezia"),
   subscriptionState: (id: number) => masterRequest<PortalSubscription>(
     `/api/portal/devices/${id}/subscription`),
-  issueSubscription: (id: number) => masterRequest<{ url: string; created_at: string;
-    qr: string; clash_url: string }>(
+  issueSubscription: (id: number) => masterRequest<{ created: boolean; url: string | null;
+    created_at: string; qr: string | null; clash_url: string | null }>(
     `/api/portal/devices/${id}/subscription`, { method: "POST" }),
+  rotateSubscription: (id: number) => masterRequest<{ created: boolean; url: string | null;
+    created_at: string; qr: string | null; clash_url: string | null }>(
+    `/api/portal/devices/${id}/subscription/rotate`, { method: "POST" }),
   revokeSubscription: (id: number) => masterRequest<void>(
     `/api/portal/devices/${id}/subscription`, { method: "DELETE" }),
   logout: () => masterRequest<void>("/api/portal/logout", { method: "POST" }),

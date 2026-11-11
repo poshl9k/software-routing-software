@@ -281,14 +281,17 @@ class Setting(Base):
 
 
 class DeviceSubscription(Base):
-    """Revocable per-device subscription link; only the token hash is stored.
+    """Revocable per-device subscription link.
 
-    The raw token is shown once at issue time and travels only inside the URL a
-    client fetches, so deleting the device or reissuing makes the old link dead.
+    The token is stored twice: as a SHA-256 hash for lookup and encrypted so the
+    cabinet can re-display the same link and its QR on every visit instead of
+    forcing a rotation. A link therefore stays valid until the user rotates it,
+    removes the device, or the subscription expires.
     """
     __tablename__ = 'master_device_subscriptions'
     device_id: Mapped[int] = mapped_column(ForeignKey('master_devices.id'), primary_key=True)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    token_secret: Mapped[EncryptedSecret | None] = mapped_column(SecretJSON())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 

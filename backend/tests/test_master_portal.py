@@ -369,14 +369,23 @@ async def test_subscription_link_is_issued_once_serves_yaml_and_is_revocable(mas
     assert served.headers['Cache-Control'] == 'no-store'
     assert 'amnezia-wg-option:' in served.text and 'GEOIP,RU,DIRECT' in served.text
 
+    # The link is stable: asking again returns the same token, and the cabinet can
+    # redisplay it (and its QR) because the token is stored encrypted as well.
     state = (await client.get(f'/api/portal/devices/{device_id}/subscription')).json()
     assert state['active'] is True and state['last_used_at'] is not None
+    assert state['url'] == url and state['qr'].startswith('data:image/png;base64,')
 
-    reissued = await client.post(f'/api/portal/devices/{device_id}/subscription')
-    assert reissued.status_code == 201
+    again = await client.post(f'/api/portal/devices/{device_id}/subscription')
+    assert again.status_code == 200 and again.json()['created'] is False
+    assert again.json()['url'] == url
+    assert (await client.get(f'/api/portal/sub/{token}')).status_code == 200
+
+    rotated = await client.post(f'/api/portal/devices/{device_id}/subscription/rotate')
+    assert rotated.status_code == 200 and rotated.json()['created'] is True
+    assert rotated.json()['url'] != url
     assert (await client.get(f'/api/portal/sub/{token}')).status_code == 404
 
-    new_token = reissued.json()['url'].rsplit('/', 1)[-1]
+    new_token = rotated.json()['url'].rsplit('/', 1)[-1]
     assert (await client.delete(f'/api/portal/devices/{device_id}/subscription')).status_code == 204
     assert (await client.get(f'/api/portal/sub/{new_token}')).status_code == 404
 

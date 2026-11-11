@@ -78,6 +78,7 @@ export function PortalHome() {
   const [amnezia, setAmnezia] = useState<{ title: string; uri: string; qr: string | null } | null>(null);
   const [link, setLink] = useState<{ device: PortalDevice; url: string | null; qr: string | null;
     clashUrl: string | null; state: PortalSubscription } | null>(null);
+  const [rotateAsk, setRotateAsk] = useState(false);
 
   function showError(reason: unknown, fallback: string) {
     if (reason instanceof MasterApiError && reason.status === 401) {
@@ -180,7 +181,10 @@ export function PortalHome() {
     setError(null);
     try {
       const state = await portalApi.subscriptionState(device.id);
-      setLink({ device, url: null, qr: null, clashUrl: null, state });
+      // The link is stable: the cabinet shows the same one (and its QR) on every
+      // visit instead of rotating it.
+      setLink({ device, url: state.url, qr: state.qr, clashUrl: state.clash_url, state });
+      setRotateAsk(false);
     } catch (reason) { showError(reason, "Не удалось открыть подписку."); }
   }
 
@@ -190,8 +194,20 @@ export function PortalHome() {
     try {
       const issued = await portalApi.issueSubscription(link.device.id);
       setLink({ ...link, url: issued.url, qr: issued.qr, clashUrl: issued.clash_url,
-        state: { active: true, created_at: issued.created_at, last_used_at: null } });
+        state: { ...link.state, active: true, created_at: issued.created_at } });
     } catch (reason) { showError(reason, "Не удалось создать ссылку."); }
+  }
+
+  async function rotateSubscription() {
+    if (!link) return;
+    setError(null);
+    try {
+      const rotated = await portalApi.rotateSubscription(link.device.id);
+      setLink({ ...link, url: rotated.url, qr: rotated.qr, clashUrl: rotated.clash_url,
+        state: { ...link.state, active: true, created_at: rotated.created_at, last_used_at: null } });
+      setRotateAsk(false);
+      setNotice("Ссылка перевыпущена. Старая ссылка больше не работает — обновите её в клиенте.");
+    } catch (reason) { showError(reason, "Не удалось перевыпустить ссылку."); }
   }
 
   async function revokeSubscription() {
@@ -200,7 +216,7 @@ export function PortalHome() {
     try {
       await portalApi.revokeSubscription(link.device.id);
       setLink({ ...link, url: null, qr: null, clashUrl: null,
-        state: { active: false, created_at: null, last_used_at: null } });
+        state: { active: false, created_at: null, last_used_at: null, url: null, qr: null, clash_url: null } });
     } catch (reason) { showError(reason, "Не удалось отозвать ссылку."); }
   }
 
@@ -341,7 +357,7 @@ export function PortalHome() {
           inputProps={{ readOnly: true }} onFocus={event => event.currentTarget.select()} /> :
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             {link?.state.active
-              ? "Ссылка уже создана. Перевыпустите её, чтобы получить новую."
+              ? "Ссылка создана, но её значение недоступно. Перевыпустите её, чтобы получить новую."
               : "Ссылка ещё не создана."}
           </Typography>}
         {link?.qr && <Box sx={{ mt: 2, textAlign: "center", display: "grid", gap: 1 }}>
@@ -351,6 +367,9 @@ export function PortalHome() {
             Отсканируйте код в мобильном Clash — профиль добавится без ввода ссылки.
           </Typography>
         </Box>}
+        {rotateAsk && <Alert severity="warning" sx={{ mt: 2 }}>
+          Перевыпуск сделает текущую ссылку недействительной. Клиентам придётся добавить профиль заново.
+        </Alert>}
         <ErrorNotice error={error} />
       </DialogContent>
       <DialogActions>
@@ -360,8 +379,11 @@ export function PortalHome() {
           const url = link.url ?? "";
           void navigator.clipboard.writeText(url).catch(() => setError("Не удалось скопировать ссылку."));
         }}>Скопировать</Button>}
-        <Button variant="contained" onClick={() => void issueSubscription()}>
-          {link?.state.active ? "Перевыпустить" : "Создать ссылку"}</Button>
+        {!link?.url && <Button variant="contained" onClick={() => void issueSubscription()}>
+          Создать ссылку</Button>}
+        {link?.url && !rotateAsk && <Button onClick={() => setRotateAsk(true)}>Перевыпустить</Button>}
+        {link?.url && rotateAsk && <Button color="warning" onClick={() => void rotateSubscription()}>
+          Подтвердить перевыпуск</Button>}
         {link?.state.active && <Button color="error" onClick={() => void revokeSubscription()}>Отозвать</Button>}
       </DialogActions>
     </Dialog>
