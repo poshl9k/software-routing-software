@@ -55,10 +55,13 @@ def _token_of(row):
 def _view(request, row):
     token = _token_of(row)
     if token is None:
-        return {'url': None, 'qr': None, 'clash_url': None}
+        return {'url': None, 'qr': None, 'clash_url': None, 'singbox_url': None}
     url = _link(request, token)
+    # The same stable token serves the sing-box profile (ADR-0034 slice 4): the
+    # link is one URL, the format is chosen by the client through ``?format=``.
     return {'url': url, 'qr': _qr_data_url(url),
-            'clash_url': 'clash://install-config?url=' + url}
+            'clash_url': 'clash://install-config?url=' + url,
+            'singbox_url': url + '?format=singbox'}
 
 
 def _stamp(row):
@@ -120,7 +123,7 @@ def subscription_state(identity: str, request: Request,
     row = db.get(DeviceSubscription, device.id)
     if row is None:
         return {'active': False, 'created_at': None, 'last_used_at': None,
-                'url': None, 'qr': None, 'clash_url': None}
+                'url': None, 'qr': None, 'clash_url': None, 'singbox_url': None}
     return {'active': True, 'created_at': row.created_at, 'last_used_at': row.last_used_at,
             **_view(request, row)}
 
@@ -135,9 +138,19 @@ def revoke_subscription(identity: str, account: Account = Depends(current_accoun
         db.commit()
 
 
+SUB_FORMATS = {'mihomo': 'mihomo', 'singbox': 'singbox'}
+
+
 @router.get('/sub/{token}')
-def fetch_subscription(token: str, request: Request, db: Session = Depends(get_db)):
-    """Public profile delivery: the token is the credential, so never log it."""
+def fetch_subscription(token: str, request: Request, format: str = 'mihomo',
+                       db: Session = Depends(get_db)):
+    """Public profile delivery: the token is the credential, so never log it.
+
+    ``format`` selects the profile the client understands: ``mihomo`` (default,
+    unchanged) or ``singbox`` for subscribers on a VLESS+Reality inbound.
+    """
+    if format not in SUB_FORMATS:
+        raise APIError(422, 'portal.export_format')
     if not token or len(token) > 128:
         raise APIError(404, 'portal.subscription_link_invalid')
     row = db.scalar(select(DeviceSubscription).where(
@@ -152,7 +165,7 @@ def fetch_subscription(token: str, request: Request, db: Session = Depends(get_d
         raise APIError(404, 'portal.subscription_link_invalid')
     now = request.app.state.portal_auth.now()
     content, media_type, filename = device_export(
-        db, account, device.id, 'mihomo', now, _client_factory(request))
+        db, account, device.id, SUB_FORMATS[format], now, _client_factory(request))
     row.last_used_at = now
     db.commit()
     return Response(content, media_type=media_type,

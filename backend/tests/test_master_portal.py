@@ -1,4 +1,5 @@
 """Host-free acceptance tests for the ADR-0035 master subscriber portal."""
+import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -588,6 +589,66 @@ async def test_vless_export_uses_the_node_inbound_and_stable_device_uuid(master_
     assert 'security=reality' in link and 'sid=0123abcd' in link and 'flow=xtls-rprx-vision' in link
     # Nothing secret: no private key, no bridge token inside the link.
     assert 'gAAAA' not in link
+
+
+async def test_subscription_link_serves_a_singbox_profile(master_portal):
+    """ADR-0034 slice 4: the stable token also delivers a sing-box profile.
+
+    The same URL the cabinet already shows selects the profile with
+    ``?format=``; the default stays the mihomo YAML so existing clients are
+    untouched, and the body is the base64 blob subscriptions expect.
+    """
+    from vs_router.generators.vless_uri import device_uuid
+
+    client, engine, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    state = awg31_state()
+    state['inbound'] = {'tag': 'vless_in', 'listen_port': 443,
+                        'server_name': 'www.microsoft.com',
+                        'public_key': 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+                        'short_ids': ['0123abcd'], 'flow': 'xtls-rprx-vision',
+                        'users': ['s1_peer-one']}
+    states[('https://n1', f"s{ids['account']}")] = state
+    with Session(engine) as db:
+        node = db.scalar(select(Node).where(Node.name == 'n1'))
+        node.public_entry = '203.0.113.9:443'
+        db.commit()
+        public_key = db.get(Device, device_id).public_key
+    await login(master_portal)
+
+    issued = await client.post(f'/api/portal/devices/{device_id}/subscription')
+    assert issued.status_code == 201, issued.text
+    url = issued.json()['url']
+    assert issued.json()['singbox_url'] == url + '?format=singbox'
+    token = url.rsplit('/', 1)[-1]
+
+    served = await client.get(f'/api/portal/sub/{token}?format=singbox')
+    assert served.status_code == 200, served.text
+    assert served.headers['Cache-Control'] == 'no-store'
+    body = base64.b64decode(served.text).decode()
+    assert body.startswith(f'vless://{device_uuid(public_key)}@203.0.113.9:443?')
+    assert 'security=reality' in body and body.endswith('\n')
+    assert 'gAAAA' not in body
+
+    # Default profile and an unknown format keep their old behaviour.
+    default = await client.get(f'/api/portal/sub/{token}')
+    assert default.status_code == 200 and 'amnezia-wg-option:' in default.text
+    assert (await client.get(f'/api/portal/sub/{token}?format=bogus')).status_code == 422
+
+    # Rotation invalidates both profiles together: one token, one credential.
+    rotated = await client.post(f'/api/portal/devices/{device_id}/subscription/rotate')
+    assert rotated.status_code == 200
+    assert (await client.get(f'/api/portal/sub/{token}?format=singbox')).status_code == 404
+
+
+async def test_singbox_export_refuses_without_an_inbound(master_portal):
+    client, _, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    states[('https://n1', f"s{ids['account']}")] = awg31_state()   # no inbound
+    await login(master_portal)
+    response = await client.get(f'/api/portal/devices/{device_id}/export?format=singbox')
+    assert response.status_code == 409
+    assert response.json()['error']['code'] == 'portal.inbound_unavailable'
 
 
 async def test_vless_export_refuses_without_an_inbound(master_portal):

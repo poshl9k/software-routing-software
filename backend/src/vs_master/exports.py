@@ -1,4 +1,5 @@
 """Master subscriber exports from master-owned keys and exact node state."""
+import base64
 import io
 import json
 from ipaddress import ip_address, ip_network
@@ -432,7 +433,8 @@ def _vless_link(device, inbound, node):
 
 def device_export(db, account, identity, format, now, node_client_factory):
     """Guarded shared export: bytes, media type, and filename; never a message."""
-    if format not in ('conf', 'qr', 'amnezia', 'amnezia-qr', 'mihomo', 'vless', 'vless-qr'):
+    if format not in ('conf', 'qr', 'amnezia', 'amnezia-qr', 'mihomo', 'vless', 'vless-qr',
+                      'singbox'):
         raise APIError(422, 'portal.export_format')
     live_subscription(db, account.id, now)
     device = device_owned(db, identity, account.id)
@@ -451,6 +453,14 @@ def device_export(db, account, identity, format, now, node_client_factory):
         if format == 'vless-qr':
             return _qr_png(link), 'image/png', f'{filename}-vless.png'
         return link.encode(), 'text/plain; charset=utf-8', f'{filename}-vless.txt'
+    if format == 'singbox':
+        # Subscription body in the widely accepted form: the device's share
+        # link(s) as a base64 blob of newline-separated URIs. Clients that read
+        # subscriptions (sing-box based, Hiddify, Streisand) import it directly;
+        # the credential stays the derived UUID, so nothing extra is stored.
+        link = _vless_link(device, state.get('inbound'), node)
+        body = base64.b64encode((link + '\n').encode()).decode('ascii')
+        return body.encode(), 'text/plain; charset=utf-8', f'{filename}-singbox.txt'
     if format == 'qr':
         return _qr_png(_conf_text(device, tunnel, key)), 'image/png', f'{filename}.png'
     if format in ('amnezia', 'amnezia-qr'):
