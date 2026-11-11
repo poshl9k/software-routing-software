@@ -132,3 +132,43 @@ def test_rendered_document_passes_the_pinned_engine_check():
         import os
         os.unlink(path)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_inbound_opens_its_port_on_the_wan_zone():
+    from vs_router.generators.nftables import generate_nftables
+    from vs_router.schema import Interface
+
+    configuration = Configuration(
+        interfaces=(Interface(name="wan0", type="physical", zone="wan",
+                              addresses=("203.0.113.2/24",)),),
+        inbounds=(inbound(),),
+    )
+    rules = generate_nftables(ConfigurationVersion(profile="panel", configuration=configuration))
+    assert 'tcp dport 443 counter accept comment "inbound_vless_in"' in rules
+    # Default deny stays: the rule is an explicit accept, not a policy change.
+    assert "policy drop;" in rules
+
+
+def test_inbounds_alone_require_the_engine():
+    from vs_router.agent.tproxy_apply import required
+
+    assert required(version(inbound())) is True
+    assert required(ConfigurationVersion(profile="panel", configuration=Configuration())) is False
+
+
+def test_apply_injects_real_user_uuids(monkeypatch):
+    import base64
+
+    from vs_router.agent import tproxy_apply
+    from vs_router.secrets import encrypt_secret
+
+    key = base64.urlsafe_b64encode(b"0" * 32)
+    monkeypatch.setenv("VS_ROUTER_SECRET_KEY", key.decode())
+    uuid = "11111111-2222-3333-4444-555555555555"
+    secret = encrypt_secret(uuid, key)
+    inbound_obj = inbound(users=(InboundUser(name="alice_phone", uuid=secret),))
+    artifacts = tproxy_apply.build_artifacts(version(inbound_obj), key)
+    document = json.loads(artifacts["singbox"])
+    rendered = next(item for item in document["inbounds"] if item["tag"] == "vless_in")
+    assert rendered["users"][0]["uuid"] == uuid
+    assert "\"" + uuid + "\"" in artifacts["singbox"]

@@ -126,6 +126,13 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
                 lines.append(f'        iifname {names(sorted(c.ssh.interfaces))} tcp dport 22 ct state != invalid counter accept comment "ssh_selected"')
             lines.append('        tcp dport 22 counter drop comment "ssh_unselected"')
             lines.append('        iifname "lo" accept')
+            if "wan" in zones and c.inbounds:
+                # ADR-0034: the inbound owns exactly the port it declares. Emitted
+                # before the management block so a fronting listener on the panel
+                # port is reachable instead of being dropped as "not the panel".
+                for inbound in c.inbounds:
+                    lines.append(f'        iifname {names(zones["wan"])} tcp dport {inbound.listen_port} '
+                                 f'counter accept comment "inbound_{inbound.tag}"')
             if management is not None:
                 lines += [f'        iifname "{management.interface}" ip daddr {management.ip} tcp dport 443 counter accept comment "management"',
                           f'        ip daddr {management.ip} tcp dport 443 drop']

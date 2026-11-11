@@ -147,9 +147,14 @@ TEARDOWN_STEPS: tuple[str, ...] = (SINGBOX_PROCESS_STEP, UNBOUND_PROCESS_STEP,
 
 
 def required(version: ConfigurationVersion) -> bool:
-    """True only for an (offline) enabled configuration; False for everything
-    reachable through the public contract."""
-    return bool(version.configuration.tproxy.enabled)
+    """True when the host must run the engine at all.
+
+    Capture (TProxy) and subscriber inbounds (ADR-0034) are two reasons for the
+    same sing-box process; with neither, nothing is staged and the host keeps
+    its previous contour.
+    """
+    configuration = version.configuration
+    return bool(configuration.tproxy.enabled or configuration.inbounds)
 
 
 def owned_tables() -> tuple[str, ...]:
@@ -223,6 +228,18 @@ def _secret_provider(key: bytes):
     return resolve
 
 
+def _inbound_secret_provider(key: bytes):
+    """Agent-only UUID resolver for inbound users (ADR-0034)."""
+
+    def resolve(user):
+        try:
+            return decrypt_secret(user.uuid, key)
+        except Exception:
+            raise ValueError('secret.decryption_failed') from None
+
+    return resolve
+
+
 def build_artifacts(version: ConfigurationVersion, key: bytes | None = None) -> dict[str, str]:
     """Return ``{name: content}`` for the scaffold files, or ``{}`` when off.
 
@@ -238,7 +255,11 @@ def build_artifacts(version: ConfigurationVersion, key: bytes | None = None) -> 
         "tproxy_unbound_selected": composed.selected_unbound or "",
         "tproxy_unbound_ordinary": composed.ordinary_unbound or "",
         "subscriber_peers": json.dumps(generate_subscriber_peers_rule_set(version), indent=2) + "\n",
-        "singbox": json.dumps(generate_singbox(version, secret_provider=_secret_provider(key) if key is not None else None), indent=2) + "\n",
+        "singbox": json.dumps(generate_singbox(
+            version,
+            secret_provider=_secret_provider(key) if key is not None else None,
+            inbound_user_secret=_inbound_secret_provider(key) if key is not None else None,
+        ), indent=2) + "\n",
         "tproxy_interception": generate_tproxy_interception(version),
     }
 
