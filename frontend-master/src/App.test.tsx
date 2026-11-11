@@ -40,6 +40,23 @@ test("Telegram proof is cleared from the URL before magic login and opens subscr
   expect(fetcher).toHaveBeenCalledWith("/api/portal/login/magic", expect.anything());
 });
 
+test("a stable cabinet link signs in through the non-single-use endpoint", async () => {
+  window.history.replaceState({}, "", "/login#link=stable-token");
+  const fetcher = vi.fn(async (input: string) => {
+    if (input === "/api/portal/login/link") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" } }), { status: 200 });
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: null }), { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [] }), { status: 200 });
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+  expect(await screen.findByText("Здравствуйте, Анна")).toBeInTheDocument();
+  expect(fetcher).toHaveBeenCalledWith("/api/portal/login/link", expect.anything());
+  expect(fetcher).not.toHaveBeenCalledWith("/api/portal/login/magic", expect.anything());
+});
+
 test("invalid magic proof shows an error, not admin password form", async () => {
   window.history.replaceState({}, "", "/login#token=expired");
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({

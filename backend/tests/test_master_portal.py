@@ -12,9 +12,10 @@ from vs_master.accounts import COOKIE as PORTAL_COOKIE
 from vs_master.app import create_master_app
 from vs_master.auth import COOKIE as ADMIN_COOKIE
 from vs_master.bridge import BridgeError
-from vs_master.models import (Account, Base, Device, DeviceOp, DeviceSubscription, Node, RuleSet,
+from vs_master.models import (PortalLink, Account, Base, Device, DeviceOp, DeviceSubscription, Node, RuleSet,
                               Setting, Subscription, Tariff, make_engine)
-from vs_router.secrets import encrypt_secret
+from hashlib import sha256
+from vs_router.secrets import decrypt_secret, encrypt_secret
 
 pytestmark = pytest.mark.anyio
 NOW = datetime(2026, 10, 24, 12, tzinfo=timezone.utc)
@@ -342,6 +343,34 @@ async def test_mihomo_export_omits_providers_without_public_url(master_portal):
     response = await client.get(f'/api/portal/devices/{device_id}/export?format=mihomo')
     assert response.status_code == 200, response.text
     assert 'rule-providers' not in response.text
+
+
+async def test_stable_cabinet_link_signs_in_repeatedly_and_rotates(master_portal):
+    client, engine, _, secret_key, _, _, _, _, ids = master_portal
+    await login(master_portal)
+    assert (await client.post('/api/portal/link/rotate')).status_code == 204
+
+    with Session(engine) as db:
+        row = db.get(PortalLink, ids['account'])
+        assert row is not None
+        token = decrypt_secret(row.token_secret, secret_key)
+        assert row.token_hash == sha256(token.encode()).hexdigest()
+
+    # The stored link keeps working: no single-use proof, no expiry.
+    for _ in range(2):
+        assert (await client.post('/api/portal/login/link',
+                                  json={'token': token})).status_code == 200
+    me = await client.get('/api/portal/me')
+    assert me.status_code == 200 and me.json()['account']['id'] == ids['account']
+
+    assert (await client.post('/api/portal/link/rotate')).status_code == 204
+    with Session(engine) as db:
+        rotated = decrypt_secret(db.get(PortalLink, ids['account']).token_secret, secret_key)
+    assert rotated != token
+    assert (await client.post('/api/portal/login/link',
+                              json={'token': token})).status_code == 401
+    assert (await client.post('/api/portal/login/link',
+                              json={'token': rotated})).status_code == 200
 
 
 async def test_subscription_link_is_issued_once_serves_yaml_and_is_revocable(master_portal):

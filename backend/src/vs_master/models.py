@@ -280,6 +280,22 @@ class Setting(Base):
     value: Mapped[str] = mapped_column(String(256), nullable=False)
 
 
+class PortalLink(Base):
+    """Stable cabinet link for a Telegram-verified account (one per account).
+
+    Unlike ``MagicLogin`` this is not single-use and has no TTL: it is the
+    long-lived entry point sent by the bot, and it changes only when the user
+    rotates it or the account is deleted. The token is stored hashed for lookup
+    and encrypted so the bot can re-send the same link.
+    """
+    __tablename__ = 'master_portal_links'
+    account_id: Mapped[int] = mapped_column(ForeignKey('master_accounts.id'), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    token_secret: Mapped[EncryptedSecret] = mapped_column(SecretJSON(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
 class DeviceSubscription(Base):
     """Revocable per-device subscription link.
 

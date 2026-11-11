@@ -15,10 +15,12 @@ from sqlalchemy.orm import Session
 
 from vs_router.api.errors import APIError
 
-from .models import Account, Audit, MagicLogin, Subscription, Tariff
+from .models import Account, Audit, MagicLogin, PortalLink, Subscription, Tariff
 
 COOKIE = 'vs_master_portal_session'
-TTL = 8 * 60 * 60
+# A verified Telegram account keeps its session for a month; the cookie still
+# has to pass the origin and SameSite checks on every request.
+TTL = 30 * 24 * 60 * 60
 LOGIN_WINDOW = 15 * 60
 MAGIC_TTL = 10 * 60
 router = APIRouter()
@@ -34,6 +36,10 @@ class Credentials(Payload):
 
 
 class MagicProof(Payload):
+    token: SecretStr = Field(min_length=1, max_length=128)
+
+
+class LinkProof(Payload):
     token: SecretStr = Field(min_length=1, max_length=128)
 
 
@@ -94,6 +100,44 @@ def issue_magic_token(engine, account_id: int, now: datetime) -> str:
         db.execute(delete(MagicLogin).where(MagicLogin.account_id == account.id))
         db.add(MagicLogin(token_hash=sha256(token.encode()).hexdigest(),
                           account_id=account.id, expires_at=now + timedelta(seconds=MAGIC_TTL)))
+        db.commit()
+        return token
+
+
+def portal_link_token(engine, account_id: int, now: datetime, rotate: bool = False) -> str:
+    """Return the account's stable cabinet token, creating or replacing it on demand."""
+    from vs_portal.security import get_secret_key
+    from vs_router.secrets import decrypt_secret, encrypt_secret
+    from cryptography.fernet import InvalidToken
+
+    with Session(engine) as db:
+        if db.get_bind().dialect.name == 'sqlite':
+            db.execute(text('BEGIN IMMEDIATE'))
+        account = db.get(Account, account_id)
+        if account is None or account.status != 'active':
+            db.rollback()
+            raise APIError(403, 'auth.forbidden')
+        row = db.get(PortalLink, account.id)
+        if row is not None and not rotate:
+            try:
+                token = decrypt_secret(row.token_secret, get_secret_key())
+            except (InvalidToken, ValueError):
+                token = None
+            if token:
+                db.rollback()
+                return token
+        token = secrets.token_urlsafe(32)
+        secret = encrypt_secret(token, get_secret_key())
+        digest = sha256(token.encode()).hexdigest()
+        if row is None:
+            db.add(PortalLink(account_id=account.id, token_hash=digest,
+                              token_secret=secret, created_at=now))
+        else:
+            row.token_hash = digest
+            row.token_secret = secret
+            row.created_at = now
+            row.last_used_at = None
+        db.add(Audit(actor=str(account.id), action='portal.link.rotate', detail='1' if rotate else '0'))
         db.commit()
         return token
 
@@ -235,6 +279,44 @@ def login_magic(body: MagicProof, request: Request, response: Response,
     response.set_cookie(COOKIE, session, max_age=TTL, httponly=True, secure=True,
                         samesite='lax', path='/')
     return public_account(account)
+
+
+@router.post('/login/link')
+def login_link(body: LinkProof, request: Request, response: Response,
+               db: Session = Depends(get_db)):
+    """Sign in with the account's stable link; repeat visits reuse the same token."""
+    state = request.app.state.portal_auth
+    address = request.client.host if request.client else 'unknown'
+    rate_key = ('link', address)
+    with state.lock:
+        state.prune()
+        count, deadline = state.failures.get(rate_key, (0, state.tick() + LOGIN_WINDOW))
+        if count >= 5:
+            raise APIError(429, 'auth.rate_limited')
+        now = state.now()
+        digest = sha256(body.token.get_secret_value().encode()).hexdigest()
+        row = db.scalar(select(PortalLink).where(PortalLink.token_hash == digest))
+        account = db.get(Account, row.account_id) if row is not None else None
+        if account is None or account.status != 'active':
+            state.failures[rate_key] = (count + 1, deadline)
+            raise APIError(401, 'auth.invalid_credentials')
+        row.last_used_at = now
+        _audit(db, account.id, 'portal.login.link', None, state)
+        db.commit()
+        state.failures.pop(rate_key, None)
+        state.sessions.pop(request.cookies.get(COOKIE), None)
+        session = secrets.token_urlsafe(32)
+        state.sessions[session] = (account.id, state.tick() + TTL)
+    response.set_cookie(COOKIE, session, max_age=TTL, httponly=True, secure=True,
+                        samesite='lax', path='/')
+    return public_account(account)
+
+
+@router.post('/link/rotate', status_code=204)
+def rotate_link(request: Request, account: Account = Depends(current_account)):
+    """Replace the stable link; the previous URL stops working immediately."""
+    portal_link_token(request.app.state.engine, account.id,
+                      request.app.state.portal_auth.now(), rotate=True)
 
 
 @router.post('/logout', status_code=204)

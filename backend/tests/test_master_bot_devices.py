@@ -167,7 +167,7 @@ async def test_chat_keyboard_stays_available_and_labels_route_to_existing_action
     assert 'reply_markup' not in messages(calls)[0]
     calls = await send(rig, command('Личный кабинет', 3))
     assert messages(calls)[0]['reply_markup']['inline_keyboard'][0][0]['url'].startswith(
-        'https://master.example/login#token=')
+        'https://master.example/login#link=')
     calls = await send(rig, command('Устройства', 4))
     submenu = messages(calls)[0]['reply_markup']
     assert submenu == {'keyboard': [

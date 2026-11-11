@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import stars
-from .accounts import issue_magic_token, register_telegram
+from .accounts import portal_link_token, register_telegram
 from .models import Account, Setting, Subscription, Tariff, make_engine
 from .notifications import claim_notification, due_notifications, finish_notification
 from .device_bot import ACTIONS, DeviceController, error_reply
@@ -127,11 +127,13 @@ class Bot:
                     if created else '') + 'Выберите раздел.'
             return text, _menu()
         if view == 'login':
-            proof = issue_magic_token(self.engine, account_id, datetime.now(timezone.utc))
-            return ('Ссылка действует 10 минут. Не пересылайте её.',
+            # A stable link: it stays valid until the user rotates it in the
+            # cabinet, so the button can be pressed repeatedly.
+            token = portal_link_token(self.engine, account_id, datetime.now(timezone.utc))
+            return ('Постоянная ссылка на кабинет. Не пересылайте её: она заменяет пароль.',
                     {'inline_keyboard': [
                         [{'text': 'Открыть кабинет',
-                          'url': f'{self.public_url}/login#token={proof}'}],
+                          'url': f'{self.public_url}/login#link={token}'}],
                     ]})
         with Session(self.engine) as db:
             subscription = db.scalar(select(Subscription).where(

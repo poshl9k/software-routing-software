@@ -109,6 +109,10 @@ async function exportPortalText(id: number, format: PortalExportFormat): Promise
 }
 
 export const portalApi = {
+  loginLink: (token: string) => masterRequest<PortalAccount>("/api/portal/login/link", {
+    method: "POST", body: JSON.stringify({ token }),
+  }),
+  rotateLoginLink: () => masterRequest<void>("/api/portal/link/rotate", { method: "POST" }),
   magic: (token: string) => masterRequest<PortalAccount>("/api/portal/login/magic", {
     method: "POST", body: JSON.stringify({ token }),
   }),

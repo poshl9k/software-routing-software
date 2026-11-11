@@ -5,7 +5,7 @@ import { MasterApiError, masterApi } from "./api";
 import { NodesPage, RuleSetsPage, SubscribersPage, TariffsPage } from "./pages";
 import { TelegramPage } from "./TelegramPage";
 import { MagicSignIn, PortalHome, PortalLogin } from "./SubscriberPortal";
-import { takeMagicProof } from "./magic";
+import { takeMagicProof, takePortalLink } from "./magic";
 import { globalStyles, theme } from "../theme";
 import { ThemeProvider } from "@mui/material/styles";
 
@@ -74,9 +74,10 @@ function Dashboard() {
   </Box></Box>;
 }
 
-function AppRoutes({ magicProof }: { magicProof: string | null }) {
+function AppRoutes({ magicProof, portalLink }: { magicProof: string | null; portalLink: string | null }) {
   return <Routes>
-    <Route path="/login" element={magicProof !== null ? <MagicSignIn proof={magicProof} /> : <AuthForm />} />
+    <Route path="/login" element={magicProof !== null ? <MagicSignIn proof={magicProof} kind="magic" />
+      : portalLink !== null ? <MagicSignIn proof={portalLink} kind="link" /> : <AuthForm />} />
     <Route path="/portal/login" element={<PortalLogin />} />
     <Route path="/portal" element={<PortalHome />} />
     <Route path="/setup" element={<AuthForm setup />} />
@@ -85,7 +86,8 @@ function AppRoutes({ magicProof }: { magicProof: string | null }) {
   </Routes>;
 }
 
-export function App({ magicProof }: { magicProof?: string | null }) {
+export function App({ magicProof, portalLink }: { magicProof?: string | null; portalLink?: string | null }) {
   const proof = magicProof === undefined ? takeMagicProof() : magicProof;
-  return <ThemeProvider theme={theme}><GlobalStyles styles={globalStyles} /><BrowserRouter><AppRoutes magicProof={proof} /></BrowserRouter></ThemeProvider>;
+  const link = portalLink === undefined ? takePortalLink() : portalLink;
+  return <ThemeProvider theme={theme}><GlobalStyles styles={globalStyles} /><BrowserRouter><AppRoutes magicProof={proof} portalLink={link} /></BrowserRouter></ThemeProvider>;
 }

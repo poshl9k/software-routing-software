@@ -25,7 +25,7 @@ export function PortalLogin() {
   </Page>;
 }
 
-export function MagicSignIn({ proof }: { proof: string }) {
+export function MagicSignIn({ proof, kind = "magic" }: { proof: string; kind?: "magic" | "link" }) {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -33,7 +33,8 @@ export function MagicSignIn({ proof }: { proof: string }) {
     let cancelled = false;
     // Defer the one-shot POST until after StrictMode's development effect replay.
     const timer = window.setTimeout(() => {
-      void portalApi.magic(proof).then(() => {
+      const signIn = kind === "link" ? portalApi.loginLink(proof) : portalApi.magic(proof);
+      void signIn.then(() => {
         if (!cancelled) navigate("/portal", { replace: true });
       }).catch((reason: unknown) => {
         if (cancelled) return;
@@ -43,7 +44,7 @@ export function MagicSignIn({ proof }: { proof: string }) {
       });
     }, 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [navigate, proof]);
+  }, [kind, navigate, proof]);
   return <Page title="Вход в личный кабинет">
     {error ? <Alert severity="error">{error}</Alert> : <CircularProgress aria-label="Проверка ссылки" />}
   </Page>;
@@ -70,7 +71,7 @@ export function PortalHome() {
   const [devices, setDevices] = useState<PortalDevice[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
-  const [dialog, setDialog] = useState<"add" | "remove" | null>(null);
+  const [dialog, setDialog] = useState<"add" | "remove" | "rotate-link" | null>(null);
   const [target, setTarget] = useState<PortalDevice | null>(null);
   const [label, setLabel] = useState("");
   const [working, setWorking] = useState<number | "create" | null>(null);
@@ -118,6 +119,15 @@ export function PortalHome() {
   }, [devices]);
   useEffect(() => () => { if (qr) URL.revokeObjectURL(qr.url); }, [qr]);
   useEffect(() => () => { if (amnezia?.qr) URL.revokeObjectURL(amnezia.qr); }, [amnezia]);
+
+  async function rotateLogin() {
+    setError(null);
+    try {
+      await portalApi.rotateLoginLink();
+      setNotice("Ссылка входа обновлена. Откройте бота и нажмите «Личный кабинет», чтобы получить новую.");
+      setDialog(null);
+    } catch (reason) { showError(reason, "Не удалось обновить ссылку входа."); }
+  }
 
   async function logout() {
     try { await portalApi.logout(); navigate("/portal/login", { replace: true }); }
@@ -230,7 +240,10 @@ export function PortalHome() {
   return <Page title={me ? `Здравствуйте, ${me.account.display_name}` : "Личный кабинет"}>
     {me && <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
       <Typography color="text.secondary">Управляйте своими устройствами</Typography>
-      <Button onClick={() => void logout()} aria-label="Выйти из аккаунта">Выйти</Button>
+      <Stack direction="row" spacing={1}>
+        <Button onClick={() => setDialog("rotate-link")}>Обновить ссылку входа</Button>
+        <Button onClick={() => void logout()} aria-label="Выйти из аккаунта">Выйти</Button>
+      </Stack>
     </Stack>}
     {dialog === null && <ErrorNotice error={error} onRetry={() => void load()} />}
     {notice && <Alert severity="info" onClose={() => setNotice("")}>{notice}</Alert>}
@@ -318,6 +331,15 @@ export function PortalHome() {
       </MuiCard>
     </>}
 
+    <Dialog open={dialog === "rotate-link"} onClose={() => setDialog(null)} aria-labelledby="rotate-link-title" fullWidth maxWidth="sm">
+      <DialogTitle id="rotate-link-title">Обновить ссылку входа?</DialogTitle>
+      <DialogContent><Typography>
+        Старая ссылка перестанет работать. Новая придёт в боте по кнопке «Личный кабинет»;
+        на других устройствах сеанс сохранится до истечения срока.
+      </Typography><ErrorNotice error={error} /></DialogContent>
+      <DialogActions><Button onClick={() => setDialog(null)}>Отмена</Button>
+        <Button variant="contained" onClick={() => void rotateLogin()}>Обновить ссылку</Button></DialogActions>
+    </Dialog>
     <Dialog open={dialog === "add"} onClose={() => setDialog(null)} aria-labelledby="add-title" fullWidth maxWidth="sm">
       <DialogTitle id="add-title">Добавить устройство</DialogTitle>
       <DialogContent><TextField autoFocus margin="dense" label="Метка устройства" value={label}
