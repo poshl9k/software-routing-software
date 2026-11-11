@@ -12,6 +12,7 @@ from vs_master.accounts import COOKIE as PORTAL_COOKIE
 from vs_master.app import create_master_app
 from vs_master.auth import COOKIE as ADMIN_COOKIE
 from vs_master.bridge import BridgeError
+from vs_master.worker import _ensure_create_material
 from vs_master.models import (PortalLink, Account, Base, Device, DeviceOp, DeviceSubscription, Node, RuleSet,
                               Setting, Subscription, Tariff, make_engine)
 from hashlib import sha256
@@ -343,6 +344,27 @@ async def test_mihomo_export_omits_providers_without_public_url(master_portal):
     response = await client.get(f'/api/portal/devices/{device_id}/export?format=mihomo')
     assert response.status_code == 200, response.text
     assert 'rule-providers' not in response.text
+
+
+async def test_new_master_devices_get_no_preshared_key(master_portal):
+    """mihomo (Clash Meta) cannot handshake an amneziawg-go peer that has a PSK.
+
+    Reproduced against a local reference server: with PSK the client logs
+    "invalid response message" and no handshake; without PSK it connects. So the
+    master must not mint a PSK for devices it creates — otherwise the exported
+    mihomo profile is dead on arrival.
+    """
+    _, engine, _, secret_key, _, _, _, _, ids = master_portal
+    with Session(engine) as db:
+        device = Device(account_id=ids['account'], node_id=1, label='psk-check',
+                        node_subscriber=f"dev{ids['account']}",
+                        allowed_ips=['10.66.66.250/32'], status='active')
+        db.add(device)
+        db.commit()
+        _ensure_create_material(db, device, secret_key)
+        db.commit()
+        assert device.preshared_key is None
+        assert device.public_key and device.private_key and device.name
 
 
 async def test_stable_cabinet_link_signs_in_repeatedly_and_rotates(master_portal):

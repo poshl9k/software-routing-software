@@ -136,7 +136,12 @@ def _ensure_create_material(db, device, key):
         private = X25519PrivateKey.generate()
         device.private_key = encrypt_secret(base64.b64encode(private.private_bytes_raw()).decode(), key)
         device.public_key = base64.b64encode(private.public_key().public_bytes_raw()).decode()
-        device.preshared_key = encrypt_secret(base64.b64encode(secrets.token_bytes(32)).decode(), key)
+        # No preshared key: mihomo's AmneziaWG implementation fails the handshake
+        # against an amneziawg-go peer that has a PSK ("invalid response message",
+        # reproduced with identical parameters and both directions of the PSK).
+        # Peers without a PSK handshake fine, so Clash/Meta clients get a working
+        # profile; the field stays for imported devices.
+        device.preshared_key = None
     # Commit BEFORE the request: a timeout must not change identity or keys.
     db.commit()
 
