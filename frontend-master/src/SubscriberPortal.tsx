@@ -78,7 +78,7 @@ export function PortalHome() {
   const [qr, setQr] = useState<{ title: string; url: string } | null>(null);
   const [amnezia, setAmnezia] = useState<{ title: string; uri: string; qr: string | null } | null>(null);
   const [link, setLink] = useState<{ device: PortalDevice; url: string | null; qr: string | null;
-    clashUrl: string | null; state: PortalSubscription } | null>(null);
+    clashUrl: string | null; singboxUrl: string | null; state: PortalSubscription } | null>(null);
   const [rotateAsk, setRotateAsk] = useState(false);
 
   function showError(reason: unknown, fallback: string) {
@@ -196,7 +196,8 @@ export function PortalHome() {
       const state = await portalApi.subscriptionState(device.id);
       // The link is stable: the cabinet shows the same one (and its QR) on every
       // visit instead of rotating it.
-      setLink({ device, url: state.url, qr: state.qr, clashUrl: state.clash_url, state });
+      setLink({ device, url: state.url, qr: state.qr, clashUrl: state.clash_url,
+        singboxUrl: state.singbox_url, state });
       setRotateAsk(false);
     } catch (reason) { showError(reason, "Не удалось открыть подписку."); }
   }
@@ -207,6 +208,7 @@ export function PortalHome() {
     try {
       const issued = await portalApi.issueSubscription(link.device.id);
       setLink({ ...link, url: issued.url, qr: issued.qr, clashUrl: issued.clash_url,
+        singboxUrl: issued.singbox_url,
         state: { ...link.state, active: true, created_at: issued.created_at } });
     } catch (reason) { showError(reason, "Не удалось создать ссылку."); }
   }
@@ -217,6 +219,7 @@ export function PortalHome() {
     try {
       const rotated = await portalApi.rotateSubscription(link.device.id);
       setLink({ ...link, url: rotated.url, qr: rotated.qr, clashUrl: rotated.clash_url,
+        singboxUrl: rotated.singbox_url,
         state: { ...link.state, active: true, created_at: rotated.created_at, last_used_at: null } });
       setRotateAsk(false);
       setNotice("Ссылка перевыпущена. Старая ссылка больше не работает — обновите её в клиенте.");
@@ -228,8 +231,9 @@ export function PortalHome() {
     setError(null);
     try {
       await portalApi.revokeSubscription(link.device.id);
-      setLink({ ...link, url: null, qr: null, clashUrl: null,
-        state: { active: false, created_at: null, last_used_at: null, url: null, qr: null, clash_url: null } });
+      setLink({ ...link, url: null, qr: null, clashUrl: null, singboxUrl: null,
+        state: { active: false, created_at: null, last_used_at: null, url: null, qr: null,
+          clash_url: null, singbox_url: null } });
     } catch (reason) { showError(reason, "Не удалось отозвать ссылку."); }
   }
 
@@ -394,6 +398,15 @@ export function PortalHome() {
             Отсканируйте код в мобильном Clash — профиль добавится без ввода ссылки.
           </Typography>
         </Box>}
+        {link?.singboxUrl && <Box sx={{ mt: 2 }}>
+          <TextField margin="dense" value={link.singboxUrl} label="Ссылка для sing-box" fullWidth
+            multiline minRows={2} inputProps={{ readOnly: true }}
+            onFocus={event => event.currentTarget.select()} />
+          <Typography variant="body2" color="text.secondary">
+            Тот же профиль в формате sing-box: подходит, пока на вашем сервере включён вход
+            VLESS. Ссылка равнозначна паролю устройства и перевыпускается вместе с основной.
+          </Typography>
+        </Box>}
         {rotateAsk && <Alert severity="warning" sx={{ mt: 2 }}>
           Перевыпуск сделает текущую ссылку недействительной. Клиентам придётся добавить профиль заново.
         </Alert>}
@@ -406,6 +419,10 @@ export function PortalHome() {
           const url = link.url ?? "";
           void navigator.clipboard.writeText(url).catch(() => setError("Не удалось скопировать ссылку."));
         }}>Скопировать</Button>}
+        {link?.singboxUrl && <Button onClick={() => {
+          const url = link.singboxUrl ?? "";
+          void navigator.clipboard.writeText(url).catch(() => setError("Не удалось скопировать ссылку."));
+        }}>Скопировать sing-box</Button>}
         {!link?.url && <Button variant="contained" onClick={() => void issueSubscription()}>
           Создать ссылку</Button>}
         {link?.url && !rotateAsk && <Button onClick={() => setRotateAsk(true)}>Перевыпустить</Button>}

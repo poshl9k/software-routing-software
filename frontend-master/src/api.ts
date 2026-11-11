@@ -82,7 +82,7 @@ export type PortalDevice = {
 export type PortalDevices = { devices: PortalDevice[] };
 export type PortalOperation = { status: "applied" | "pending"; operation_id: number; device_id: number };
 export type PortalSubscription = { active: boolean; created_at: string | null; last_used_at: string | null;
-  url: string | null; qr: string | null; clash_url: string | null };
+  url: string | null; qr: string | null; clash_url: string | null; singbox_url: string | null };
 
 export type PortalExportFormat = "conf" | "qr" | "amnezia" | "amnezia-qr" | "mihomo" | "vless";
 
@@ -129,10 +129,10 @@ export const portalApi = {
   subscriptionState: (id: number) => masterRequest<PortalSubscription>(
     `/api/portal/devices/${id}/subscription`),
   issueSubscription: (id: number) => masterRequest<{ created: boolean; url: string | null;
-    created_at: string; qr: string | null; clash_url: string | null }>(
+    created_at: string; qr: string | null; clash_url: string | null; singbox_url: string | null }>(
     `/api/portal/devices/${id}/subscription`, { method: "POST" }),
   rotateSubscription: (id: number) => masterRequest<{ created: boolean; url: string | null;
-    created_at: string; qr: string | null; clash_url: string | null }>(
+    created_at: string; qr: string | null; clash_url: string | null; singbox_url: string | null }>(
     `/api/portal/devices/${id}/subscription/rotate`, { method: "POST" }),
   revokeSubscription: (id: number) => masterRequest<void>(
     `/api/portal/devices/${id}/subscription`, { method: "DELETE" }),

@@ -724,3 +724,43 @@ test("tariff create and update send the writable fields expected by the master A
       name: tariff.name, device_limit: 1, term_days: 30, price_amount: null } },
   ]);
 });
+
+test("cabinet offers the sing-box profile of the same subscription link", async () => {
+  window.history.replaceState({}, "", "/portal");
+  let issued: { url: string; singbox_url: string; qr: string | null; clash_url: string;
+    created_at: string } | null = null;
+  const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" },
+      subscription: { status: "active", expires_at: "2099-12-08T00:00:00Z",
+        tariff: { name: "Базовый", device_limit: 3, term_days: 30 } },
+    }), { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [
+      { id: 7, name: "master_7", label: "Телефон", status: "active", applied: true, last_handshake: null },
+    ] }), { status: 200 });
+    if (input === "/api/portal/devices/7/subscription" && !init?.method) {
+      return new Response(JSON.stringify(issued ?? { active: false, created_at: null,
+        last_used_at: null, url: null, qr: null, clash_url: null, singbox_url: null }),
+      { status: 200 });
+    }
+    if (input === "/api/portal/devices/7/subscription" && init?.method === "POST") {
+      issued = { url: "https://master.test/api/portal/sub/token", qr: null,
+        clash_url: "clash://install-config?url=https://master.test/api/portal/sub/token",
+        singbox_url: "https://master.test/api/portal/sub/token?format=singbox",
+        created_at: "2026-11-11T00:00:00Z" };
+      return new Response(JSON.stringify({ created: true, ...issued }), { status: 201 });
+    }
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+  await userEvent.click((await screen.findAllByRole("button", { name: "Ссылка-подписка" }))[0]);
+  await userEvent.click(await screen.findByRole("button", { name: "Создать ссылку" }));
+  // One credential, two profiles: the sing-box URL is the same token with
+  // ?format=singbox, so rotation and revocation cover both at once.
+  const singbox = await screen.findByRole("textbox", { name: "Ссылка для sing-box" });
+  expect(singbox).toHaveValue("https://master.test/api/portal/sub/token?format=singbox");
+  expect(screen.getByRole("button", { name: "Скопировать sing-box" })).toBeEnabled();
+  expect(screen.getByRole("textbox", { name: "Ссылка" })).toHaveValue(
+    "https://master.test/api/portal/sub/token");
+});
