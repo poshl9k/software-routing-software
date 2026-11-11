@@ -309,18 +309,25 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
 
 
 
-def _render_inbound(inbound, reveal_user=None) -> dict:
+def _render_inbound(inbound, reveal_user=None, reveal_key=None) -> dict:
     """Map a contract inbound to a sing-box server inbound (ADR-0034).
 
     Reality keeps the port for the panel: anything that is not a VLESS/Reality
     handshake is proxied to ``handshake_dest``, which the contract pins to a
     loopback listener when it shares the panel's port.
+
+    Both secret halves are resolved by the caller: ``reveal_user`` for a user's
+    UUID and ``reveal_key`` for the inbound's own Reality private key. Without
+    them the document stays a placeholder preview -- and an apply that forgot a
+    provider is then refused by ``sing-box check``, because the placeholder is
+    deliberately not valid key material.
     """
     users = []
     for user in inbound.users:
         uuid = reveal_user(user) if reveal_user is not None else PLACEHOLDER_UUID
         users.append({"name": user.name, "uuid": uuid, "flow": inbound.flow})
     host, _, port = inbound.handshake_dest.rpartition(":")
+    private_key = reveal_key(inbound) if reveal_key is not None else PLACEHOLDER_REALITY_KEY
     rendered = {
         "type": "vless",
         "tag": inbound.tag,
@@ -333,7 +340,7 @@ def _render_inbound(inbound, reveal_user=None) -> dict:
             "reality": {
                 "enabled": True,
                 "handshake": {"server": host.strip("[]"), "server_port": int(port)},
-                "private_key": PLACEHOLDER_REALITY_KEY,
+                "private_key": private_key,
                 "short_id": list(inbound.short_ids),
             },
         },
@@ -343,7 +350,8 @@ def _render_inbound(inbound, reveal_user=None) -> dict:
 
 def generate_singbox(version: ConfigurationVersion,
                      secret_provider: Callable[[ProxyOutbound], dict] | None = None,
-                     inbound_user_secret: Callable[[Any], str] | None = None) -> dict:
+                     inbound_user_secret: Callable[[Any], str] | None = None,
+                     inbound_secret: Callable[[Any], str] | None = None) -> dict:
     """Render sing-box policy. No provider means redacted preview; provider means apply only.
 
     A guarded-off TProxy configuration is still rendered for preview. Legacy
@@ -475,7 +483,7 @@ def generate_singbox(version: ConfigurationVersion,
         if version.profile != "panel":
             raise ValueError("inbound.panel_only")
         for inbound in configuration.inbounds:
-            inbounds.append(_render_inbound(inbound, inbound_user_secret))
+            inbounds.append(_render_inbound(inbound, inbound_user_secret, inbound_secret))
     if dns_policy.servers:
         # The subscriber resolver forwards its unmatched queries to this loopback
         # stub (marks.DNS_STUB_PORT) and the engine answers them from the dns policy

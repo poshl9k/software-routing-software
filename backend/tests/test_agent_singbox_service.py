@@ -5,6 +5,7 @@ executor / ``FakeFS``. The adapter must fail closed *before* activation when the
 pinned artifact or the staged config is not proven good, and readiness must be
 reached before the caller installs the capture table.
 """
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -94,6 +95,31 @@ def test_unit_is_pinned_minimal_and_secret_free():
     # No secret material is ever placed in the unit.
     lowered = text.lower()
     assert "password" not in lowered and "uuid" not in lowered
+
+
+def test_unit_adds_bind_service_only_for_a_privileged_inbound_port():
+    """443 fronting (ADR-0034) needs CAP_NET_BIND_SERVICE; a high port does not.
+
+    Regression: the unit carried CAP_NET_ADMIN only, so the engine died with
+    ``listen tcp 0.0.0.0:443: bind: permission denied`` and the apply rolled
+    back with ``panel.unavailable``.
+    """
+    assert "CAP_NET_BIND_SERVICE" not in singbox_service.unit_content()
+    text = singbox_service.unit_content(True)
+    assert "AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE" in text
+    assert "CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE" in text
+
+    fronting = FakeFS()
+    fronting.write(singbox_service.SINGBOX_CONFIG,
+                   json.dumps({"inbounds": [{"type": "vless", "listen_port": 443}]}))
+    singbox_service.SingboxService(PinExecutor(), fronting).start()
+    assert "CAP_NET_BIND_SERVICE" in fronting.read(singbox_service.UNIT_PATH)
+
+    high_port = FakeFS()
+    high_port.write(singbox_service.SINGBOX_CONFIG,
+                    json.dumps({"inbounds": [{"type": "vless", "listen_port": 8443}]}))
+    singbox_service.SingboxService(PinExecutor(), high_port).start()
+    assert "CAP_NET_BIND_SERVICE" not in high_port.read(singbox_service.UNIT_PATH)
 
 
 # --------------------------------------------------------------------------

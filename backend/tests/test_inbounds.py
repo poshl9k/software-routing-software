@@ -3,12 +3,13 @@ import base64
 import json
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
 from vs_router.generators.singbox import PLACEHOLDER_REALITY_KEY, PLACEHOLDER_UUID, generate_singbox
 from vs_router.schema import (
-    Configuration, ConfigurationVersion, EncryptedSecret, Inbound, InboundUser, Tunnel,
+    Configuration, ConfigurationVersion, EncryptedSecret, Inbound, InboundUser, TProxy, Tunnel,
 )
 
 SECRET = EncryptedSecret(ciphertext="gAAAAABm" + "x" * 20)
@@ -69,6 +70,89 @@ def test_apply_provider_replaces_placeholder_credentials():
     assert seen == ["alice_phone"]
     # A preview never leaks a real key even when a provider exists.
     assert rendered["tls"]["reality"]["private_key"] == PLACEHOLDER_REALITY_KEY
+
+
+def test_apply_provider_replaces_the_reality_private_key():
+    """A declared inbound needs its own key revealed on apply, not just UUIDs.
+
+    Regression: the render used to hardcode the placeholder, so every apply
+    with an inbound failed ``sing-box check`` on the placeholder key while the
+    unit tests (user provider only) stayed green.
+    """
+    inbound_obj = inbound(users=(user()[0],))
+    seen = []
+
+    def reveal_key(inbound_value):
+        seen.append(inbound_value.tag)
+        return "q" * 43 + "="
+
+    document = generate_singbox(version(inbound_obj), inbound_secret=reveal_key)
+    rendered = next(item for item in document["inbounds"] if item["tag"] == "vless_in")
+    assert rendered["tls"]["reality"]["private_key"] == "q" * 43 + "="
+    assert seen == ["vless_in"]
+    # Preview stays a placeholder without the provider.
+    preview = generate_singbox(version(inbound_obj))
+    preview_rendered = next(i for i in preview["inbounds"] if i["tag"] == "vless_in")
+    assert preview_rendered["tls"]["reality"]["private_key"] == PLACEHOLDER_REALITY_KEY
+
+
+def test_build_artifacts_decrypts_the_inbound_private_key(monkeypatch):
+    """The apply artifacts carry the real key, so the pinned engine can check them."""
+    import base64 as b64
+    import json
+
+    from vs_router.agent.tproxy_apply import build_artifacts
+    from vs_router.secrets import encrypt_secret
+
+    key = b64.urlsafe_b64encode(b"7" * 32)
+    monkeypatch.setenv("VS_ROUTER_SECRET_KEY", key.decode())
+    secret = encrypt_secret("k" * 43 + "=", key)
+    uuid = encrypt_secret("11111111-2222-3333-4444-555555555555", key)
+    inbound_obj = inbound(private_key=secret,
+                          users=(InboundUser(name="alice_phone", uuid=uuid),))
+    artifacts = build_artifacts(version(inbound_obj), key)
+    document = json.loads(artifacts["singbox"])
+    rendered = next(item for item in document["inbounds"] if item["tag"] == "vless_in")
+    assert rendered["tls"]["reality"]["private_key"] == "k" * 43 + "="
+    assert rendered["users"][0]["uuid"] == "11111111-2222-3333-4444-555555555555"
+    # Preview (no key) still never leaks key material.
+    assert PLACEHOLDER_REALITY_KEY not in artifacts["singbox"]
+
+
+def test_inbounds_without_capture_stage_only_the_engine():
+    """A panel inbound alone must not stage or verify the TProxy capture tract.
+
+    Regression: ``required()`` treated inbounds as a full TProxy branch, so a
+    host with ``tproxy.enabled == False`` staged destroy-only guard text and
+    then failed confirmation with ``agent.tproxy_tables_missing``.
+    """
+    from vs_router.agent import tproxy_apply
+
+    inbound_obj = inbound(users=(user()[0],))
+    engine_only = version(inbound_obj)
+    assert tproxy_apply.required(engine_only)
+    assert not tproxy_apply.capture_required(engine_only)
+    assert set(tproxy_apply.artifacts(engine_only)) == {"subscriber_peers", "singbox"}
+    rendered = tproxy_apply.build_artifacts(engine_only)
+    assert set(rendered) == {"subscriber_peers", "singbox"}
+    assert "tproxy_guards" not in rendered and "tproxy_interception" not in rendered
+
+
+def test_capture_configuration_still_stages_the_full_tract():
+    from vs_router.agent import tproxy_apply
+
+    inbound_obj = inbound(users=(user()[0],))
+    # Assignment (not validation): an enabled TProxy contract needs a full DNS
+    # contour, which is irrelevant to the file map under test.
+    configuration = Configuration(inbounds=(inbound_obj,)).model_copy(
+        update={"tproxy": TProxy(enabled=True)})
+    # ``artifacts``/``capture_required`` only read ``configuration``, so a
+    # version shell without the (unrelated) capture-contract validation is
+    # enough here; a full enabled TProxy contract is covered by test_tproxy*.
+    capture = SimpleNamespace(configuration=configuration)
+    assert tproxy_apply.capture_required(capture)
+    assert set(tproxy_apply.artifacts(capture)) == set(tproxy_apply.TPROXY_FILES)
+    assert set(tproxy_apply.artifact_validators(capture)) == set(tproxy_apply.TPROXY_FILES)
 
 
 def test_router_profile_rejects_inbounds():
@@ -166,7 +250,11 @@ def test_apply_injects_real_user_uuids(monkeypatch):
     monkeypatch.setenv("VS_ROUTER_SECRET_KEY", key.decode())
     uuid = "11111111-2222-3333-4444-555555555555"
     secret = encrypt_secret(uuid, key)
-    inbound_obj = inbound(users=(InboundUser(name="alice_phone", uuid=secret),))
+    # The inbound's own Reality key is revealed by the same apply path, so it
+    # must be real ciphertext rather than the fixture placeholder.
+    reality = encrypt_secret("k" * 43 + "=", key)
+    inbound_obj = inbound(private_key=reality,
+                          users=(InboundUser(name="alice_phone", uuid=secret),))
     artifacts = tproxy_apply.build_artifacts(version(inbound_obj), key)
     document = json.loads(artifacts["singbox"])
     rendered = next(item for item in document["inbounds"] if item["tag"] == "vless_in")

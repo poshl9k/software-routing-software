@@ -284,7 +284,7 @@ def recover_interrupted_apply():
     # TProxy artifacts, which the closed gate prevents.
     from . import tproxy_apply
     if tproxy_apply.required(version):
-        for name, filename in tproxy_apply.TPROXY_FILES.items():
+        for name, filename in tproxy_apply.artifacts(version).items():
             content = files.get(name)
             if content is not None:
                 engine.fs.write(Path(APPLIED) / filename, content)

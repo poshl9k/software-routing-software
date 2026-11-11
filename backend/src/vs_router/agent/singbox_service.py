@@ -34,6 +34,7 @@ Safety
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -75,22 +76,33 @@ SINGBOX_LIBCRONET_DIGEST_ARGV: tuple[str, ...] = ("sha256sum", SINGBOX_LIBCRONET
 BINARY_UNVERIFIED = "agent.singbox_binary_unverified"
 CONFIG_INVALID = "agent.singbox_config_invalid"
 
-#: The only capability the loopback TProxy listener needs (``IP_TRANSPARENT``).
+#: The capability the loopback TProxy listener needs (``IP_TRANSPARENT``).
 SINGBOX_CAPABILITIES = "CAP_NET_ADMIN"
+
+#: Additional capability an engine that owns a privileged port needs. A
+#: subscriber inbound fronts the panel on 443 (ADR-0034); binding a port below
+#: 1024 is refused even for root once ``CapabilityBoundingSet`` is restricted,
+#: so the unit must carry this capability -- and only then.
+SINGBOX_BIND_CAPABILITY = "CAP_NET_BIND_SERVICE"
 
 _VERSION_RE = re.compile(r"^sing-box version\s+(\S+)\s*$", re.MULTILINE)
 _PROVENANCE_RE = re.compile(r"^Revision:\s*(\S+)\s*$", re.MULTILINE)
 _DIGEST_RE = re.compile(r"^\s*([0-9a-fA-F]{64})\b")
 
 
-def unit_content() -> str:
+def unit_content(bind_service: bool = False) -> str:
     """Deterministic systemd unit text for the pinned engine binary.
 
-    Minimal privileges: one capability, no new privileges, read-only system,
-    private tmp, no home, restricted address families and namespaces. No secret
-    is placed in the unit (the engine reads its own config file). ``ExecStart``
-    uses the pinned absolute path, never a value from the RPC.
+    Minimal privileges: one capability -- plus ``CAP_NET_BIND_SERVICE`` only when
+    the engine document listens on a port below 1024 (``bind_service``), because
+    that bind is refused without it under a restricted bounding set. No new
+    privileges, read-only system, private tmp, no home, restricted address
+    families and namespaces. No secret is placed in the unit (the engine reads
+    its own config file). ``ExecStart`` uses the pinned absolute path, never a
+    value from the RPC.
     """
+    capabilities = (SINGBOX_CAPABILITIES + " " + SINGBOX_BIND_CAPABILITY
+                    if bind_service else SINGBOX_CAPABILITIES)
     return (
         "[Unit]\n"
         "Description=vs-router sing-box TProxy engine\n"
@@ -102,8 +114,8 @@ def unit_content() -> str:
         f"ExecStart={SINGBOX_BINARY} run -c {SINGBOX_CONFIG}\n"
         "Restart=on-failure\n"
         "NoNewPrivileges=true\n"
-        f"AmbientCapabilities={SINGBOX_CAPABILITIES}\n"
-        f"CapabilityBoundingSet={SINGBOX_CAPABILITIES}\n"
+        f"AmbientCapabilities={capabilities}\n"
+        f"CapabilityBoundingSet={capabilities}\n"
         "ProtectSystem=strict\n"
         "ProtectHome=true\n"
         "PrivateTmp=true\n"
@@ -159,9 +171,27 @@ class SingboxService:
         self.attempts = attempts
         self.sleep = sleep or time.sleep
 
+    def binds_privileged_port(self) -> bool:
+        """True when the staged engine document listens below port 1024.
+
+        Read from the applied document rather than passed in, so apply and boot
+        restore derive the same unit from the same bytes. An unreadable document
+        keeps the minimal set: the engine refuses to start on it anyway.
+        """
+        try:
+            document = json.loads(self.fs.read(SINGBOX_CONFIG))
+        except (OSError, ValueError, AttributeError):
+            return False
+        inbounds = document.get("inbounds") if isinstance(document, dict) else None
+        for inbound in inbounds or ():
+            port = inbound.get("listen_port") if isinstance(inbound, dict) else None
+            if isinstance(port, int) and 0 < port < 1024:
+                return True
+        return False
+
     def install_unit(self) -> None:
         # Idempotent: the unit is regenerated from the pinned constants each time.
-        self.fs.write(self.unit_path, unit_content())
+        self.fs.write(self.unit_path, unit_content(self.binds_privileged_port()))
 
     def verify_binary(self) -> None:
         """Fail closed unless the pinned binary is present, correct and authentic.

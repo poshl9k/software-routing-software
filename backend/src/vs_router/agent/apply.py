@@ -138,9 +138,10 @@ def _tproxy_branch(version):
     contract (``tproxy.enabled=False``), so the ordinary apply path is
     unchanged. See :mod:`vs_router.agent.tproxy_apply` for the order contract.
     """
-    if not tproxy_apply.required(version):
+    files = tproxy_apply.artifacts(version)
+    if not files:
         return {}, {}
-    return dict(tproxy_apply.TPROXY_FILES), dict(tproxy_apply.TPROXY_VALIDATORS)
+    return files, tproxy_apply.artifact_validators(version)
 
 
 def _tproxy_branch_from_snapshot(snapshot):
@@ -225,6 +226,9 @@ class ApplyEngine:
         self.validators = VALIDATORS if validators is None else validators
         self.reload_commands = reload_commands or {}
         self.panel_probe = panel_probe
+        self.probe_attempts = 10
+        self.probe_interval = 0.5
+        self.clock_sleep = time.sleep
         self.management_provider = management_provider
         self.ssh_controller = ssh_controller
         # Name of the service whose reload failed in the current apply, so the
@@ -393,6 +397,10 @@ class ApplyEngine:
                     if not any(table.endswith('_' + suffix) for suffix in capture)))
             marker['phases'][name] = 'applied'
             self.marker(marker)
+        if steps:
+            # No later artifact to anchor on (engine-only map): the readiness
+            # steps still run once, after every file of this version is live.
+            self._run_steps(steps, marker, skip_singbox=skip_singbox)
         if self.ssh_controller is not None:
             self.ssh_controller.activate(json.loads(contents['ssh']))
 
@@ -436,14 +444,19 @@ class ApplyEngine:
         """
         if not tproxy_apply.required(version):
             return []
-        from .policy_route import PolicyRouteLoader
         from .singbox_service import SingboxService
+        engine = (tproxy_apply.SINGBOX_PROCESS_STEP,
+                  SingboxService(self.executor, self.fs))
+        if not tproxy_apply.capture_required(version):
+            # Inbounds only (ADR-0034): no policy route and no split resolvers
+            # belong to this configuration, so the engine is the whole step set.
+            return [engine]
+        from .policy_route import PolicyRouteLoader
         from .unbound_service import UnboundService
         return [(tproxy_apply.POLICY_ROUTE_STEP, PolicyRouteLoader(self.executor)),
                 (tproxy_apply.UNBOUND_PROCESS_STEP,
                  UnboundService(self.executor, self.fs)),
-                (tproxy_apply.SINGBOX_PROCESS_STEP,
-                 SingboxService(self.executor, self.fs))]
+                engine]
 
     def _doh_readiness_steps(self):
         """Typed, gated readiness actions for the DoH client (dnscrypt-proxy).
@@ -506,6 +519,24 @@ class ApplyEngine:
         except (OSError, KeyError, TypeError, ValueError):
             return False
 
+    def _panel_probe_ready(self) -> bool:
+        """Probe the panel with a bounded retry.
+
+        The probe follows the live management path: after a caddy restart and an
+        engine start the first request can land in the gap before the fronting
+        listener accepts, which a single-shot probe reports as "panel
+        unavailable" and turns into a spurious rollback. A genuinely broken path
+        still fails after the bounded window.
+        """
+        if self.panel_probe is None:
+            return False
+        for attempt in range(self.probe_attempts):
+            if self.panel_probe():
+                return True
+            if attempt + 1 < self.probe_attempts:
+                self.clock_sleep(self.probe_interval)
+        return False
+
     def reveal_secret(self, secret):
         import os
         return _decrypt(secret, os.environ.get('VS_ROUTER_SECRET_KEY', '').encode())
@@ -565,7 +596,7 @@ class ApplyEngine:
         if management is not None and backup is None:
             # No rollback target exists: never mutate the host if the panel is
             # already unreachable over the provisioned management HTTPS path.
-            if self.panel_probe is None or not self.panel_probe():
+            if not self._panel_probe_ready():
                 raise ApplyError('panel.unavailable')
             safe_mode = False
         elif management is not None and backup is not None:
@@ -583,7 +614,12 @@ class ApplyEngine:
         # Only an enabled (offline) version records the scaffold plan; the
         # marker of every current configuration is unchanged.
         if tproxy_files:
-            marker['tproxy'] = tproxy_apply.describe(version)
+            if tproxy_apply.capture_required(version):
+                marker['tproxy'] = tproxy_apply.describe(version)
+            else:
+                # Engine-only: the confirm/rollback paths must know a sing-box
+                # artifact went live without expecting any capture table.
+                marker['engine'] = True
         if doh_files:
             marker['doh'] = True
         if pppoe_files:
@@ -672,11 +708,13 @@ class ApplyEngine:
                 self.marker(marker)
             if not pppoe_files and backup is not None and 'pppoe' in backup['files']:
                 self._teardown_pppoe(strict=True)
-            if tproxy_files:
+            if tproxy_apply.capture_required(version):
+                # Only a capture configuration owns the guard/capture tables;
+                # an engine-only apply (inbounds, ADR-0034) has none to verify.
                 self._verify_tproxy_tables()
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
-            if self.panel_probe is not None and not self.panel_probe():
+            if self.panel_probe is not None and not self._panel_probe_ready():
                 if backup is not None:
                     return self.rollback('panel.unavailable')
                 raise ApplyError('panel.unavailable')
@@ -770,7 +808,9 @@ class ApplyEngine:
         # engine / capture artifacts and make this confirmed state inconsistent.
         # Also include DoH files when present in the marker.
         doh_files_in_marker = marker.get('doh', False)
-        files = ({**self.files, **tproxy_apply.TPROXY_FILES} if 'tproxy' in marker else None)
+        files = ({**self.files, **(tproxy_apply.TPROXY_FILES if 'tproxy' in marker
+                                  else tproxy_apply.ENGINE_FILES)}
+                 if ('tproxy' in marker or marker.get('engine')) else None)
         if doh_files_in_marker:
             files = {**self.files, **DOH_FILES} if files is None else {**files, **DOH_FILES}
         if marker.get('pppoe'):
@@ -890,6 +930,15 @@ class ApplyEngine:
             contents['tproxy_cleanup'] = tproxy_apply.cleanup_content()
             rollback_files['tproxy_cleanup'] = tproxy_apply.TPROXY_CLEANUP_FILE
             rollback_validators['tproxy_cleanup'] = tproxy_apply.TPROXY_CLEANUP_VALIDATOR
+        if not tproxy_files and tproxy_applied:
+            # The confirmed target is not an engine/capture state, so the engine
+            # must stop *before* the confirmed caddy config is reloaded: while
+            # the engine still owns 443 the panel's public listener cannot bind
+            # it, and the reload fails with EADDRINUSE (rollback_failed).
+            # Destroy-only guard text, unlinked resolver configs and the stopped
+            # engine/policy route are all restored/overwritten by the install
+            # below, so nothing here survives the rollback.
+            self._teardown_tproxy_artifacts()
         marker = {'version_id': backup['version_id'], 'applied_at': self.clock(),
                   'deadline': self.clock(), 'status': 'rolling_back', 'reason': reason, 'phases': {}}
         try:
@@ -905,12 +954,6 @@ class ApplyEngine:
             marker.update(status='rollback_failed', deadline=None)
             self.marker(marker)
             raise ApplyError('agent.rollback_failed') from exc
-        if not tproxy_files and tproxy_applied:
-            # The confirmed target is not a TProxy state: drop the split resolver
-            # configs the interrupted apply staged, overwrite the boot-loaded
-            # guard with destroy-only text so a reboot cannot re-raise it, and
-            # stop the engine / remove the owned policy route.
-            self._teardown_tproxy_artifacts()
         if not doh_files and doh_applied:
             # The confirmed target is not a DoH state: stop the dnscrypt-proxy
             # unit so a reboot cannot re-raise its DoH client.

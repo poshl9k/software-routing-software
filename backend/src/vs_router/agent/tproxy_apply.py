@@ -107,6 +107,23 @@ TPROXY_VALIDATORS: dict[str, list[str]] = {
     "tproxy_interception": ["nft", "-c", "-f"],
 }
 
+#: Engine-only artifact set (ADR-0034): subscriber inbounds need the sing-box
+#: document and nothing else. The capture tract above is deliberately excluded -
+#: a configuration without ``tproxy.enabled`` has no guard, resolver or capture
+#: artifact to install or verify.
+ENGINE_FILES: dict[str, str] = {
+    # The engine document may reference the generator-owned subscriber peer set
+    # (``routing_rules`` present), so the local rule-set file is materialized in
+    # the same activation, exactly as on the capture path.
+    "subscriber_peers": "subscriber-peers.json",
+    "singbox": "singbox.json",
+}
+
+ENGINE_VALIDATORS: dict[str, list[str]] = {
+    "subscriber_peers": TPROXY_VALIDATORS["subscriber_peers"],
+    "singbox": TPROXY_VALIDATORS["singbox"],
+}
+
 #: Rollback-only teardown artifact: destroy every TProxy-owned table.
 TPROXY_CLEANUP_FILE = "tproxy-cleanup.nft"
 TPROXY_CLEANUP_VALIDATOR: list[str] = ["nft", "-c", "-f"]
@@ -155,6 +172,34 @@ def required(version: ConfigurationVersion) -> bool:
     """
     configuration = version.configuration
     return bool(configuration.tproxy.enabled or configuration.inbounds)
+
+
+def capture_required(version: ConfigurationVersion) -> bool:
+    """True when the TProxy *capture tract* is needed (guards, DNS, policy route).
+
+    Inbounds alone start the engine without capturing anything: no guard tables,
+    no split resolvers, no policy route and no capture listener are generated or
+    verified, because none of them would exist for such a configuration.
+    """
+    return bool(version.configuration.tproxy.enabled)
+
+
+def artifacts(version: ConfigurationVersion) -> dict[str, str]:
+    """File map this version needs: the full tract, the engine only, or nothing."""
+    if capture_required(version):
+        return dict(TPROXY_FILES)
+    if required(version):
+        return dict(ENGINE_FILES)
+    return {}
+
+
+def artifact_validators(version: ConfigurationVersion) -> dict[str, list[str]]:
+    """Validators matching :func:`artifacts` — never one for a file not staged."""
+    if capture_required(version):
+        return dict(TPROXY_VALIDATORS)
+    if required(version):
+        return dict(ENGINE_VALIDATORS)
+    return {}
 
 
 def owned_tables() -> tuple[str, ...]:
@@ -240,6 +285,20 @@ def _inbound_secret_provider(key: bytes):
     return resolve
 
 
+def _inbound_key_provider(key: bytes):
+    """Agent-only Reality private-key resolver for declared inbounds (ADR-0034)."""
+
+    def resolve(inbound):
+        if inbound.private_key is None:
+            raise ValueError('inbound.key_required')
+        try:
+            return decrypt_secret(inbound.private_key, key)
+        except Exception:
+            raise ValueError('secret.decryption_failed') from None
+
+    return resolve
+
+
 def build_artifacts(version: ConfigurationVersion, key: bytes | None = None) -> dict[str, str]:
     """Return ``{name: content}`` for the scaffold files, or ``{}`` when off.
 
@@ -249,19 +308,23 @@ def build_artifacts(version: ConfigurationVersion, key: bytes | None = None) -> 
     """
     if not required(version):
         return {}
-    composed = plan(version)
-    return {
-        "tproxy_guards": guard_content(version),
-        "tproxy_unbound_selected": composed.selected_unbound or "",
-        "tproxy_unbound_ordinary": composed.ordinary_unbound or "",
-        "subscriber_peers": json.dumps(generate_subscriber_peers_rule_set(version), indent=2) + "\n",
-        "singbox": json.dumps(generate_singbox(
-            version,
-            secret_provider=_secret_provider(key) if key is not None else None,
-            inbound_user_secret=_inbound_secret_provider(key) if key is not None else None,
-        ), indent=2) + "\n",
-        "tproxy_interception": generate_tproxy_interception(version),
-    }
+    artifacts_map: dict[str, str] = {}
+    if capture_required(version):
+        composed = plan(version)
+        artifacts_map["tproxy_guards"] = guard_content(version)
+        artifacts_map["tproxy_unbound_selected"] = composed.selected_unbound or ""
+        artifacts_map["tproxy_unbound_ordinary"] = composed.ordinary_unbound or ""
+    artifacts_map["subscriber_peers"] = json.dumps(
+        generate_subscriber_peers_rule_set(version), indent=2) + "\n"
+    artifacts_map["singbox"] = json.dumps(generate_singbox(
+        version,
+        secret_provider=_secret_provider(key) if key is not None else None,
+        inbound_user_secret=_inbound_secret_provider(key) if key is not None else None,
+        inbound_secret=_inbound_key_provider(key) if key is not None else None,
+    ), indent=2) + "\n"
+    if capture_required(version):
+        artifacts_map["tproxy_interception"] = generate_tproxy_interception(version)
+    return artifacts_map
 
 
 def cleanup_files() -> tuple[str, ...]:
