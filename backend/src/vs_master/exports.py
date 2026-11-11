@@ -1,6 +1,7 @@
 """Master subscriber exports from master-owned keys and exact node state."""
 import io
 import json
+from ipaddress import ip_address, ip_network
 from types import SimpleNamespace
 
 import qrcode
@@ -314,12 +315,27 @@ def _mihomo_yaml(device, tunnel, key, db=None):
     # resolved by the tunnel's resolver, and ``respect-rules`` sends those queries
     # through the proxy, so the provider sees no plaintext DNS for foreign names.
     local_dns = ['77.88.8.8', '223.5.5.5']
+    # The tunnel's own gateway is not a usable resolver on this node (queries to
+    # it time out and add a multi-second stall to the first lookup), so it is
+    # dropped when the node also publishes a public resolver.
+    subnet = tunnel.get('subnet')
+    resolvers = [str(value) for value in dns_servers]
+    if subnet:
+        try:
+            inside = ip_network(subnet, strict=False)
+        except ValueError:
+            inside = None
+        if inside is not None:
+            kept = [value for value in resolvers
+                    if not _in_network(value, inside)]
+            if kept:
+                resolvers = kept
     dns = {'enable': True, 'enhanced-mode': 'fake-ip',
            'fake-ip-range': '198.18.0.1/16',
            'ipv6': v6 is not None,
            'respect-rules': True,
            'default-nameserver': local_dns,
-           'nameserver': [_line(str(value)) for value in dns_servers],
+           'nameserver': [_line(str(value)) for value in resolvers],
            'proxy-server-nameserver': local_dns,
            'nameserver-policy': {'+.ru': ['system'], '+.su': ['system']},
            'fake-ip-filter': ['*.lan', '*.local', '+.ru', '+.su']}
@@ -353,6 +369,15 @@ def _mihomo_yaml(device, tunnel, key, db=None):
     if providers:
         document['rule-providers'] = providers
     return '\n'.join(_yaml_lines(document)) + '\n'
+
+
+
+def _in_network(value, network):
+    """True when the (possible) resolver address belongs to ``network``."""
+    try:
+        return ip_address(str(value)) in network
+    except ValueError:
+        return False
 
 
 def _qr_png(text):

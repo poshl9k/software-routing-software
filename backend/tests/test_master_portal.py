@@ -545,3 +545,19 @@ async def test_criterion_9_json_gets_never_expose_secret_material(master_portal)
         assert response.status_code == 200
         assert PRIVATE not in response.text and PRESHARED not in response.text
         assert 'ciphertext' not in response.text
+
+
+async def test_mihomo_export_drops_the_tunnel_gateway_as_resolver(master_portal):
+    """The node's tunnel gateway does not answer DNS; keeping it stalls lookups."""
+    client, engine, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    state = awg31_state()
+    state['tunnel']['subnet'] = '10.66.66.1/24'
+    state['tunnel']['dns_servers'] = ['10.66.66.1', '1.1.1.1']
+    states[('https://n1', f"s{ids['account']}")] = state
+    await login(master_portal)
+    response = await client.get(f'/api/portal/devices/{device_id}/export?format=mihomo')
+    assert response.status_code == 200, response.text
+    text = response.text
+    nameserver = text[text.index('  nameserver:'):text.index('  proxy-server-nameserver:')]
+    assert '1.1.1.1' in nameserver and '10.66.66.1' not in nameserver
