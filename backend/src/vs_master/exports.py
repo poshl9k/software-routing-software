@@ -349,6 +349,10 @@ def _mihomo_yaml(device, tunnel, key, db=None):
                          'QUIC': {'ports': [443, 8443]}}}
     rules = ['GEOIP,RU,DIRECT']
     rules += [f'IP-CIDR,{value},DIRECT,no-resolve' for value in _MIHOMO_PRIVATE]
+    # The tunnel is IPv4-only. Telegram's app connects to IPv6 data centres by
+    # hard-coded address, so an unrouted :: would simply hang; rejecting it makes
+    # the client fall back to IPv4 immediately instead of waiting.
+    rules.append('IP-CIDR6,::/0,REJECT')
     rules.append('MATCH,PROXY')
     providers = {}
     origin = rulesets.public_url(db) if db is not None else None
@@ -359,7 +363,9 @@ def _mihomo_yaml(device, tunnel, key, db=None):
     document = {
         'mode': 'rule',
         'log-level': 'info',
-        'ipv6': v6 is not None,
+        # Keep IPv6 destinations inside the rule engine so the ::/0 reject below
+        # can fail them fast; DNS still answers A records only.
+        'ipv6': True,
         'proxies': [proxy],
         'proxy-groups': [{'name': 'PROXY', 'type': 'select', 'proxies': ['vell']}],
         'rules': rules,
