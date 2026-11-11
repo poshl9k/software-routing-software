@@ -69,7 +69,11 @@ def encrypt_inputs(value):
     for collection, fields in (("interfaces", ("pppoe_password",)),
                                ("tunnels", ("private_key", "preshared_key", "header_protection_key")),
                                ("sites", ("certificate", "private_key", "dns_api_token")),
-                               ("ddns", ("api_token",))):
+                               ("ddns", ("api_token",)),
+                               # ADR-0034: an inbound's Reality key and its
+                               # per-device UUIDs are secrets; plaintext is
+                               # accepted here once and never persisted.
+                               ("inbounds", ("private_key",))):
         if isinstance(value.get(collection), list):
             value[collection] = [convert(row, fields) for row in value[collection]]
     if isinstance(value.get("tunnels"), list):
@@ -77,6 +81,10 @@ def encrypt_inputs(value):
             if isinstance(tunnel, dict) and isinstance(tunnel.get("peers"), list):
                 tunnel["peers"] = [convert(peer, ("preshared_key", "private_key"))
                                    for peer in tunnel["peers"]]
+    if isinstance(value.get("inbounds"), list):
+        for inbound in value["inbounds"]:
+            if isinstance(inbound, dict) and isinstance(inbound.get("users"), list):
+                inbound["users"] = [convert(user, ("uuid",)) for user in inbound["users"]]
     if isinstance(value.get("proxies"), dict):
         proxies = {**value["proxies"]}
         if isinstance(proxies.get("outbounds"), list):

@@ -1,5 +1,6 @@
 """Generate WireGuard and preshared keys for authenticated users."""
 import base64
+import re
 import secrets
 from typing import Literal
 
@@ -7,12 +8,15 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 
+from vs_router.api.errors import APIError
+
 from .auth import current_user
 
 router = APIRouter(dependencies=[Depends(current_user)])
 
 # A server tunnel on the default AWG ports is a fingerprint of its own; the
 # Amnezia app flags 51820/51821 and tells the operator to move the server.
+VALID_SERVER_NAME = re.compile(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$")
 DEFAULT_AWG_PORT = 51820
 RESERVED_PORTS = (DEFAULT_AWG_PORT, 51821)
 PORT_RANGE = (20000, 60000)
@@ -23,8 +27,9 @@ class TunnelKeyRequest(BaseModel):
     protocol: Literal["wg", "awg"]
 
 
-def _b64(value: bytes) -> str:
-    return base64.b64encode(value).decode("ascii")
+def _b64(value: bytes, urlsafe: bool = False) -> str:
+    encode = base64.urlsafe_b64encode if urlsafe else base64.b64encode
+    return encode(value).decode("ascii")
 
 
 def _span(rng, low: int, high: int, width: tuple[int, int]) -> str:
@@ -131,3 +136,48 @@ def generate_peer_keypair():
     private = X25519PrivateKey.generate()
     return {"private_key": _b64(private.private_bytes_raw()),
             "public_key": _b64(private.public_key().public_bytes_raw())}
+
+
+class InboundRequest(BaseModel):
+    """Ask for a ready subscriber inbound (ADR-0034)."""
+
+    model_config = ConfigDict(extra="forbid")
+    #: Panel port the inbound fronts; more than one inbound is not supported yet.
+    listen_port: int = 443
+    #: Loopback listener the panel moves to when the inbound owns its port.
+    handshake_port: int = 8444
+    server_name: str = "www.microsoft.com"
+
+
+@router.post("/keygen/inbound")
+def generate_inbound(body: InboundRequest):
+    """Mint a VLESS+Reality inbound: keypair, short id and fronting target.
+
+    Returns plaintext key material exactly like the tunnel keygen does: the
+    panel posts the whole document back and the save path encrypts the private
+    half. The public half is what the client link carries.
+    """
+    if not 1 <= body.listen_port <= 65535 or not 1 <= body.handshake_port <= 65535:
+        raise APIError(422, "inbound.port")
+    if body.listen_port == body.handshake_port:
+        raise APIError(422, "inbound.port_conflict")
+    if not VALID_SERVER_NAME.fullmatch(body.server_name):
+        raise APIError(422, "inbound.server_name")
+    private = X25519PrivateKey.generate()
+    return {
+        "tag": "vless_in",
+        "kind": "vless",
+        "listen_port": body.listen_port,
+        "server_name": body.server_name,
+        "handshake_dest": f"127.0.0.1:{body.handshake_port}",
+        # Reality keys travel as base64url without padding; the client link
+        # carries the public half verbatim, and the save path encrypts the
+        # private half because it is handed over in the ``plaintext`` shape.
+        "private_key": {"plaintext": _b64(private.private_bytes_raw(), urlsafe=True)},
+        "public_key": _b64(private.public_key().public_bytes_raw(), urlsafe=True).rstrip("="),
+        # 8 random bytes: long enough to be unguessable, short enough for the
+        # Clients that cap short_id length.
+        "short_ids": [secrets.token_hex(8)],
+        "flow": "xtls-rprx-vision",
+        "users": [],
+    }

@@ -238,3 +238,55 @@ def test_vless_share_link_rejects_an_unusable_entry():
         vless_uri(inbound(), "uuid", "a:b")
     # An IPv6 entry is bracketed, not ambiguous with the port separator.
     assert "@[2001:db8::1]:443?" in vless_uri(inbound(), "uuid", "[2001:db8::1]")
+
+
+def test_keygen_returns_an_inbound_the_contract_accepts():
+    from vs_router.api.keygen import InboundRequest, generate_inbound
+
+    payload = generate_inbound(InboundRequest())
+    built = Inbound.model_validate({**payload,
+                                    "private_key": {"encrypted": True,
+                                                    "ciphertext": "gAAAAABm"}})
+    assert built.listen_port == 443
+    assert built.handshake_dest == "127.0.0.1:8444"
+    assert len(built.short_ids) == 1 and len(built.short_ids[0]) == 16
+    # The public half is a real 32-byte key, so a client link is usable at once.
+    # base64url without padding: 43 characters for a 32-byte key.
+    assert len(base64.urlsafe_b64decode(built.public_key + "=")) == 32
+
+
+def test_keygen_rejects_conflicting_or_invalid_ports():
+    from vs_router.api.keygen import InboundRequest, generate_inbound
+    from vs_router.api.errors import APIError
+
+    with pytest.raises(APIError) as error:
+        generate_inbound(InboundRequest(listen_port=8444, handshake_port=8444))
+    assert error.value.code == "inbound.port_conflict"
+    with pytest.raises(APIError) as names:
+        generate_inbound(InboundRequest(server_name="not a host"))
+    assert names.value.code == "inbound.server_name"
+
+
+def test_saving_an_inbound_encrypts_the_key_and_user_uuids(monkeypatch):
+    import base64 as b64
+
+    from vs_router.api.configuration import parse_configuration
+
+    monkeypatch.setenv("VS_ROUTER_SECRET_KEY",
+                       b64.urlsafe_b64encode(b"1" * 32).decode())
+    document = {
+        "inbounds": [{
+            "tag": "vless_in", "listen_port": 443, "server_name": "www.microsoft.com",
+            "handshake_dest": "127.0.0.1:8444",
+            "private_key": {"plaintext": "PRIVATE-KEY-MATERIAL"},
+            "public_key": base64.urlsafe_b64encode(bytes(range(32))).decode(),
+            "short_ids": ["0123abcd"],
+            "users": [{"name": "alice_phone", "uuid": {"plaintext":
+                       "11111111-2222-3333-4444-555555555555"}}],
+        }],
+    }
+    configuration = parse_configuration(document)
+    inbound = configuration.inbounds[0]
+    assert inbound.private_key.ciphertext.startswith("gAAAA")
+    assert inbound.users[0].uuid.ciphertext.startswith("gAAAA")
+    assert "PRIVATE-KEY-MATERIAL" not in configuration.model_dump_json()
