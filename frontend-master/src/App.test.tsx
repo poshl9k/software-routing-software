@@ -215,6 +215,37 @@ test("clash export downloads a mihomo yaml profile from the master API", async (
   }
 });
 
+test("vless export downloads the iOS link from the master API", async () => {
+  window.history.replaceState({}, "", "/portal");
+  const objectUrl = vi.fn(() => "blob:synthetic-link");
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: objectUrl });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+  const fetcher = vi.fn(async (input: string) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: { status: "active",
+        expires_at: "2099-12-08T00:00:00Z", tariff: { name: "Базовый", device_limit: 2, term_days: 30 } } }),
+      { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [
+      { id: 7, name: "master_7", label: "Телефон", status: "active", applied: true, last_handshake: null }] }),
+      { status: 200 });
+    if (input === "/api/portal/devices/7/export?format=vless") return new Response(
+      "vless://uuid@203.0.113.9:443?security=reality", { status: 200,
+        headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "VLESS / iOS" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
+      "/api/portal/devices/7/export?format=vless", expect.anything()));
+    expect(objectUrl).toHaveBeenCalled();
+  } finally {
+    Reflect.deleteProperty(URL, "createObjectURL");
+    Reflect.deleteProperty(URL, "revokeObjectURL");
+  }
+});
+
 test("subscriber issues a revocable subscription link and can open it in Clash", async () => {
   window.history.replaceState({}, "", "/portal");
   const fetcher = vi.fn(async (input: string, init?: RequestInit) => {

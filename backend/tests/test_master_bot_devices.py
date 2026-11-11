@@ -65,7 +65,11 @@ async def rig(tmp_path, monkeypatch):
         'tunnel': {'name': 'wg0', 'protocol': 'wg', 'public_key': 'server-public',
                    'endpoint': 'vpn.example:51820', 'listen_port': 51820,
                    'subnet': '10.66.0.0/24', 'dns_servers': ['10.0.0.1'],
-                   'allowed_ips': ['0.0.0.0/0']}}
+                   'allowed_ips': ['0.0.0.0/0']},
+        'inbound': {'tag': 'vless_in', 'listen_port': 443, 'server_name': 'www.microsoft.com',
+                    'public_key': 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+                    'short_ids': ['0123abcd'], 'flow': 'xtls-rprx-vision',
+                    'users': ['s1_phone']}}
 
     class Bridge:
         pending = False
@@ -98,6 +102,7 @@ async def rig(tmp_path, monkeypatch):
                     password_hash='unused', status='active'),
             Tariff(id=1, name='Base', device_limit=3, term_days=30),
             Node(id=1, name='hidden-node', bridge_url='https://node.invalid',
+                 public_entry='203.0.113.9:443',
                  bridge_token=encrypt_secret('synthetic-bridge-token', key),
                  capacity=10, state='ok', enabled=True)])
         db.flush()
@@ -395,7 +400,8 @@ async def test_delete_confirmation_revalidates_and_cancel_or_restart_invalidates
 
 @pytest.mark.parametrize('fmt,method,field,suffix', [('conf', 'sendDocument', 'document', '.conf'),
     ('qr', 'sendPhoto', 'photo', '.png'), ('amnezia', 'sendDocument', 'document', '-amnezia.txt'),
-    ('mihomo', 'sendDocument', 'document', '.yaml')])
+    ('mihomo', 'sendDocument', 'document', '.yaml'),
+    ('vless', 'sendDocument', 'document', '-vless.txt')])
 async def test_exports_only_as_protected_private_multipart_attachments(rig, fmt, method, field, suffix):
     if fmt in ('amnezia', 'mihomo'):
         rig[4]['tunnel'].update(protocol='awg', mtu=1380, header_protection_key='hpk-secret',
@@ -413,6 +419,9 @@ async def test_exports_only_as_protected_private_multipart_attachments(rig, fmt,
         assert ('PrivateKey = ' + PRIVATE).encode() in content
     elif fmt == 'qr':
         assert content.startswith(b'\x89PNG\r\n\x1a\n')
+    elif fmt == 'vless':
+        assert content.startswith(b'vless://') and b'security=reality' in content
+        assert PRIVATE.encode() not in content
     elif fmt == 'mihomo':
         assert b'amnezia-wg-option:' in content and b'version: 3' in content
         assert b'GEOIP,RU,DIRECT' in content and b'MATCH,PROXY' in content

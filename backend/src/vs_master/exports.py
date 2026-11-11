@@ -393,9 +393,46 @@ def _qr_png(text):
     return out.getvalue()
 
 
+
+def _vless_link(device, inbound, node):
+    """Client link for the node's subscriber inbound (ADR-0034).
+
+    The device's UUID is derived from the public key both sides already hold, so
+    no extra credential is stored or transferred; the dial address is the node's
+    declared public entry, never the bridge address.
+    """
+    if not isinstance(inbound, dict) or not inbound.get('public_key'):
+        raise APIError(409, 'portal.inbound_unavailable')
+    entry = (node.public_entry or '').strip()
+    if not entry:
+        raise APIError(409, 'portal.entry_unavailable')
+    host = entry.rsplit(':', 1)[0] if entry.count(':') == 1 else entry
+    if host.startswith('[') and host.endswith(']'):
+        host = host[1:-1]
+    try:
+        from vs_router.generators.vless_uri import device_uuid, vless_uri
+        from vs_router.schema import EncryptedSecret, Inbound
+
+        uuid = device_uuid(device.public_key)
+        shim = Inbound.model_construct(
+            tag=inbound.get('tag') or 'vless',
+            listen_port=int(inbound.get('listen_port') or 443),
+            server_name=inbound['server_name'],
+            handshake_dest='127.0.0.1:1',
+            private_key=EncryptedSecret(ciphertext='gAAAAABm'),
+            public_key=inbound['public_key'],
+            short_ids=tuple(inbound.get('short_ids') or ()),
+            flow=inbound.get('flow') or 'xtls-rprx-vision',
+            users=(),
+        )
+        return vless_uri(shim, uuid, host, device.label or device.name)
+    except (KeyError, TypeError, ValueError):
+        raise APIError(409, 'portal.inbound_unavailable') from None
+
+
 def device_export(db, account, identity, format, now, node_client_factory):
     """Guarded shared export: bytes, media type, and filename; never a message."""
-    if format not in ('conf', 'qr', 'amnezia', 'amnezia-qr', 'mihomo'):
+    if format not in ('conf', 'qr', 'amnezia', 'amnezia-qr', 'mihomo', 'vless', 'vless-qr'):
         raise APIError(422, 'portal.export_format')
     live_subscription(db, account.id, now)
     device = device_owned(db, identity, account.id)
@@ -409,6 +446,11 @@ def device_export(db, account, identity, format, now, node_client_factory):
     tunnel = state.get('tunnel')
     key = get_secret_key()
     filename = device.name or f'device-{device.id}'
+    if format in ('vless', 'vless-qr'):
+        link = _vless_link(device, state.get('inbound'), node)
+        if format == 'vless-qr':
+            return _qr_png(link), 'image/png', f'{filename}-vless.png'
+        return link.encode(), 'text/plain; charset=utf-8', f'{filename}-vless.txt'
     if format == 'qr':
         return _qr_png(_conf_text(device, tunnel, key)), 'image/png', f'{filename}.png'
     if format in ('amnezia', 'amnezia-qr'):

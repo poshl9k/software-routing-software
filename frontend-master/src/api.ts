@@ -84,7 +84,7 @@ export type PortalOperation = { status: "applied" | "pending"; operation_id: num
 export type PortalSubscription = { active: boolean; created_at: string | null; last_used_at: string | null;
   url: string | null; qr: string | null; clash_url: string | null };
 
-export type PortalExportFormat = "conf" | "qr" | "amnezia" | "amnezia-qr" | "mihomo";
+export type PortalExportFormat = "conf" | "qr" | "amnezia" | "amnezia-qr" | "mihomo" | "vless";
 
 async function exportPortal(id: number, format: PortalExportFormat): Promise<Response> {
   const response = await fetch(`/api/portal/devices/${id}/export?format=${format}`, {

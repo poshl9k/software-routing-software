@@ -561,3 +561,40 @@ async def test_mihomo_export_drops_the_tunnel_gateway_as_resolver(master_portal)
     text = response.text
     nameserver = text[text.index('  nameserver:'):text.index('  proxy-server-nameserver:')]
     assert '1.1.1.1' in nameserver and '10.66.66.1' not in nameserver
+
+
+async def test_vless_export_uses_the_node_inbound_and_stable_device_uuid(master_portal):
+    from vs_router.generators.vless_uri import device_uuid
+
+    client, engine, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    state = awg31_state()
+    state['inbound'] = {'tag': 'vless_in', 'listen_port': 443,
+                        'server_name': 'www.microsoft.com',
+                        'public_key': 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+                        'short_ids': ['0123abcd'], 'flow': 'xtls-rprx-vision',
+                        'users': ['s1_peer-one']}
+    states[('https://n1', f"s{ids['account']}")] = state
+    with Session(engine) as db:
+        node = db.scalar(select(Node).where(Node.name == 'n1'))
+        node.public_entry = '203.0.113.9:443'
+        db.commit()
+        public_key = db.get(Device, device_id).public_key
+    await login(master_portal)
+    response = await client.get(f'/api/portal/devices/{device_id}/export?format=vless')
+    assert response.status_code == 200, response.text
+    link = response.text
+    assert link.startswith(f'vless://{device_uuid(public_key)}@203.0.113.9:443?')
+    assert 'security=reality' in link and 'sid=0123abcd' in link and 'flow=xtls-rprx-vision' in link
+    # Nothing secret: no private key, no bridge token inside the link.
+    assert 'gAAAA' not in link
+
+
+async def test_vless_export_refuses_without_an_inbound(master_portal):
+    client, _, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    states[('https://n1', f"s{ids['account']}")] = awg31_state()   # no 'inbound'
+    await login(master_portal)
+    response = await client.get(f'/api/portal/devices/{device_id}/export?format=vless')
+    assert response.status_code == 409
+    assert response.json()['error']['code'] == 'portal.inbound_unavailable'

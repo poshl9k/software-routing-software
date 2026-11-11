@@ -610,7 +610,7 @@ def _master_mutate(name, action, body, db):
             restored, rules = _restore_policy(db, current, peers, previous)
             current = _build(current, next(t for t in current.tunnels if t.name == tunnel.name), restored, {})
             data = current.model_dump(mode='json') | {'routing_rules': [r.model_dump(mode='json') for r in rules]}
-        updated = Configuration.model_validate(data)
+        updated = _mirror_inbound_users(Configuration.model_validate(data), devices, op, grant)
         # The execution cache carries encrypted key material and reserved addresses
         # across crashes / agent failures; it is not proof that apply succeeded.
         expected = (name, grant.version,
@@ -634,6 +634,30 @@ def _master_mutate(name, action, body, db):
     except Exception:
         db.rollback()
         raise
+
+
+def _mirror_inbound_users(config, devices, op, grant):
+    """Rebuild inbound users from the bridge's device table (ADR-0034).
+
+    The node never stores a second credential: a device's VLESS UUID is derived
+    from the public key the bridge already owns, so creating a device grants
+    access and deleting it (which drops the peer) revokes access in the same
+    apply. Without a declared inbound the configuration is returned untouched.
+    """
+    if not config.inbounds:
+        return config
+    from .generators.vless_uri import device_uuid
+
+    active = sorted((d for d in devices if d.status == 'active'), key=lambda d: d.name)
+    users = []
+    if op != 'expire' and _active(grant):
+        for item in active:
+            users.append({'name': f'{item.subscriber_name}_{item.name}',
+                          'uuid': _encrypt(device_uuid(item.public_key)).model_dump(mode='json')})
+    data = config.model_dump(mode='json')
+    for inbound in data['inbounds']:
+        inbound['users'] = users
+    return Configuration.model_validate(data)
 
 
 def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
@@ -739,15 +763,29 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
                            'subnet': str(tunnel_addresses(tunnel_row, config)[0])}
         else:
             tunnel_view = None
+        # ADR-0034: the master builds the client link, so it needs the inbound's
+        # public half. No secret crosses the bridge — the per-device UUID is
+        # derived from the device's public key on both sides.
+        inbound_view = None
+        if config.inbounds:
+            item = config.inbounds[0]
+            members = {user.name for user in item.users}
+            inbound_view = {'tag': item.tag, 'listen_port': item.listen_port,
+                            'server_name': item.server_name, 'public_key': item.public_key,
+                            'short_ids': list(item.short_ids), 'flow': item.flow,
+                            'users': sorted(members)}
         return {'subscription': ({'status': subscription.status, 'expires_at': subscription.expires_at,
                                   'tariff_id': getattr(subscription, 'tariff_id', None)} if subscription else None),
                 'devices': [{'id': d.id, 'name': d.name, 'label': d.label, 'status': d.status,
                              'allowed_ips': d.allowed_ips or [],
                              'applied': d.name in peers_by_name,
                              'last_handshake': (handshakes.get(peers_by_name[d.name].public_key)
-                                                if d.name in peers_by_name else None)}
+                                                if d.name in peers_by_name else None),
+                             'inbound_user': (f'{d.subscriber_name}_{d.name}'
+                                              if inbound_view and d.status == 'active' else None)}
                             for d in live_devices],
-                'tunnel': tunnel_view}
+                'tunnel': tunnel_view,
+                'inbound': inbound_view}
 
     @app.post('/internal/portal/subscribers/{name}/device-op', dependencies=[Depends(_auth)])
     def device_op(name: str, body: DeviceOperation, db: Session = Depends(_db),

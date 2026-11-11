@@ -657,3 +657,43 @@ def test_real_worker_lost_create_expire_and_renew_responses(master_node, tmp_pat
         engine.dispose()
         master_node[0].app.state.portal_engine = master_node[2]
         unavailable.dispose()
+
+
+def test_inbound_users_mirror_active_bridge_devices():
+    """ADR-0034: creating a device grants a VLESS user, deleting it revokes it."""
+    from types import SimpleNamespace
+
+    from vs_router.generators.vless_uri import device_uuid
+    from vs_router.internal_app import _mirror_inbound_users
+    from vs_router.schema import Configuration, EncryptedSecret, Inbound
+
+    secret = EncryptedSecret(ciphertext="gAAAAABm" + "x" * 20)
+    inbound = Inbound(tag="vless_in", server_name="www.microsoft.com",
+                      handshake_dest="127.0.0.1:8444", private_key=secret,
+                      public_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+                      short_ids=("0123abcd",))
+    config = Configuration(inbounds=(inbound,))
+    grant = SimpleNamespace(active=True)
+
+    def device(name, public_key, status):
+        return SimpleNamespace(name=name, subscriber_name="s1", public_key=public_key, status=status)
+
+    active = device("phone", "KEY-ONE", "active")
+    removed = device("old", "KEY-TWO", "removed")
+    users = _mirror_inbound_users(config, [active, removed], "device", grant).inbounds[0].users
+    assert [user.name for user in users] == ["s1_phone"]
+    # No plaintext UUID leaks into the contract: the field stays encrypted.
+    assert users[0].uuid.encrypted is True
+
+    revoked = _mirror_inbound_users(config, [active], "delete", grant)
+    assert revoked.inbounds[0].users == ()
+
+
+def test_inbound_mirroring_is_a_noop_without_inbounds():
+    from types import SimpleNamespace
+
+    from vs_router.internal_app import _mirror_inbound_users
+    from vs_router.schema import Configuration
+
+    configuration = Configuration()
+    assert _mirror_inbound_users(configuration, [], "device", SimpleNamespace(active=True)) is configuration

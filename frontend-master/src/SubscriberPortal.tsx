@@ -182,7 +182,10 @@ export function PortalHome() {
       }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url; a.download = `${title}${format === "mihomo" ? ".yaml" : ".conf"}`; a.click();
+      a.href = url;
+      const suffix: Record<string, string> = { mihomo: ".yaml", vless: "-vless.txt" };
+      a.download = `${title}${suffix[format] ?? ".conf"}`;
+      a.click();
       URL.revokeObjectURL(url);
     } catch (reason) { showError(reason, "Не удалось скачать конфигурацию."); }
   }
@@ -317,6 +320,8 @@ export function PortalHome() {
                   onClick={() => void exportConfig(device, "amnezia")}>Amnezia</Button>
                 <Button variant="outlined" size="small" disabled={!exportReady || working !== null}
                   onClick={() => void exportConfig(device, "mihomo")}>Clash / mihomo</Button>
+                <Button variant="outlined" size="small" disabled={!exportReady || working !== null}
+                  onClick={() => void exportConfig(device, "vless")}>VLESS / iOS</Button>
                 <Button variant="outlined" size="small" disabled={!exportReady || working !== null}
                   onClick={() => void openSubscription(device)}>Ссылка-подписка</Button>
                 <Button variant="outlined" size="small" disabled={!active || !!device.pending_op || working !== null}
