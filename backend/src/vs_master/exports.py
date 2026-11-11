@@ -330,9 +330,16 @@ def _mihomo_yaml(device, tunnel, key, db=None):
     return '\n'.join(_yaml_lines(document)) + '\n'
 
 
+def _qr_png(text):
+    image = qrcode.make(text)
+    out = io.BytesIO()
+    image.save(out, 'PNG')
+    return out.getvalue()
+
+
 def device_export(db, account, identity, format, now, node_client_factory):
     """Guarded shared export: bytes, media type, and filename; never a message."""
-    if format not in ('conf', 'qr', 'amnezia', 'mihomo'):
+    if format not in ('conf', 'qr', 'amnezia', 'amnezia-qr', 'mihomo'):
         raise APIError(422, 'portal.export_format')
     live_subscription(db, account.id, now)
     device = device_owned(db, identity, account.id)
@@ -347,14 +354,14 @@ def device_export(db, account, identity, format, now, node_client_factory):
     key = get_secret_key()
     filename = device.name or f'device-{device.id}'
     if format == 'qr':
-        image = qrcode.make(_conf_text(device, tunnel, key))
-        out = io.BytesIO()
-        image.save(out, 'PNG')
-        return out.getvalue(), 'image/png', f'{filename}.png'
-    if format == 'amnezia':
+        return _qr_png(_conf_text(device, tunnel, key)), 'image/png', f'{filename}.png'
+    if format in ('amnezia', 'amnezia-qr'):
         if not isinstance(tunnel, dict):
             raise APIError(503, 'portal.export_unavailable')
         uri = _amnezia_uri(device, tunnel, key, device.node_subscriber)
+        if format == 'amnezia-qr':
+            # Amnezia adds a connection by scanning the vpn:// container.
+            return _qr_png(uri), 'image/png', f'{filename}-amnezia.png'
         return uri.encode(), 'text/plain; charset=utf-8', f'{filename}-amnezia.txt'
     if format == 'mihomo':
         return (_mihomo_yaml(device, tunnel, key, db).encode(), 'application/yaml; charset=utf-8',
@@ -369,6 +376,6 @@ def export_device(identity: str, request: Request, format: str = Query('conf'),
     content, media_type, filename = device_export(
         db, account, identity, format, request.app.state.portal_auth.now(), _client_factory(request))
     headers = {'Cache-Control': 'no-store'}
-    if format != 'qr':
+    if format not in ('qr', 'amnezia-qr'):
         headers['Content-Disposition'] = f'attachment; filename="{filename}"'
     return Response(content, media_type=media_type, headers=headers)

@@ -244,6 +244,12 @@ async def test_criterion_7_conf_qr_amnezia_and_export_errors(master_portal):
     assert qr.status_code == 200 and qr.headers['content-type'] == 'image/png'
     amnezia = await client.get(f'/api/portal/devices/{device_id}/export?format=amnezia')
     assert amnezia.status_code == 200 and amnezia.text.startswith('vpn://')
+    amnezia_qr = await client.get(f'/api/portal/devices/{device_id}/export?format=amnezia-qr')
+    assert amnezia_qr.status_code == 200, amnezia_qr.text
+    assert amnezia_qr.headers['content-type'] == 'image/png'
+    assert 'Content-Disposition' not in amnezia_qr.headers
+    assert amnezia_qr.content[:4] == bytes([0x89]) + b'PNG'
+
     invalid = await client.get(f'/api/portal/devices/{device_id}/export?format=txt')
     assert invalid.status_code == 422
     assert invalid.json()['error']['code'] == 'portal.export_format'
@@ -349,6 +355,10 @@ async def test_subscription_link_is_issued_once_serves_yaml_and_is_revocable(mas
     assert issued.status_code == 201, issued.text
     url = issued.json()['url']
     assert url.startswith('https://master.test/api/portal/sub/')
+    # The link is drawn as a QR for phone clients; only the issue response can
+    # carry it because the master stores the token hash alone.
+    assert issued.json()['qr'].startswith('data:image/png;base64,')
+    assert issued.json()['clash_url'] == 'clash://install-config?url=' + url
     token = url.rsplit('/', 1)[-1]
     with Session(engine) as db:
         row = db.get(DeviceSubscription, device_id)

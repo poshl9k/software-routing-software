@@ -82,9 +82,9 @@ export type PortalDevices = { devices: PortalDevice[] };
 export type PortalOperation = { status: "applied" | "pending"; operation_id: number; device_id: number };
 export type PortalSubscription = { active: boolean; created_at: string | null; last_used_at: string | null };
 
-export type PortalExportFormat = "conf" | "qr" | "amnezia" | "mihomo";
+export type PortalExportFormat = "conf" | "qr" | "amnezia" | "amnezia-qr" | "mihomo";
 
-async function exportPortalDevice(id: number, format: PortalExportFormat): Promise<Blob> {
+async function exportPortal(id: number, format: PortalExportFormat): Promise<Response> {
   const response = await fetch(`/api/portal/devices/${id}/export?format=${format}`, {
     credentials: "include", cache: "no-store",
   });
@@ -94,7 +94,17 @@ async function exportPortalDevice(id: number, format: PortalExportFormat): Promi
     throw new MasterApiError(response.status, code,
       body?.error?.message ?? body?.message ?? "Не удалось экспортировать конфигурацию");
   }
-  return response.blob();
+  return response;
+}
+
+async function exportPortalDevice(id: number, format: PortalExportFormat): Promise<Blob> {
+  return (await exportPortal(id, format)).blob();
+}
+
+// The Amnezia container is a text URI, so it is read as text rather than a blob:
+// jsdom's Blob has no .text() and the client only needs the string.
+async function exportPortalText(id: number, format: PortalExportFormat): Promise<string> {
+  return (await exportPortal(id, format)).text();
 }
 
 export const portalApi = {
@@ -109,9 +119,11 @@ export const portalApi = {
   setDeviceActive: (id: number, active: boolean) => masterRequest<PortalOperation>(
     `/api/portal/devices/${id}/${active ? "activate" : "deactivate"}`, { method: "POST" }),
   exportDevice: exportPortalDevice,
+  amneziaUri: (id: number) => exportPortalText(id, "amnezia"),
   subscriptionState: (id: number) => masterRequest<PortalSubscription>(
     `/api/portal/devices/${id}/subscription`),
-  issueSubscription: (id: number) => masterRequest<{ url: string; created_at: string }>(
+  issueSubscription: (id: number) => masterRequest<{ url: string; created_at: string;
+    qr: string; clash_url: string }>(
     `/api/portal/devices/${id}/subscription`, { method: "POST" }),
   revokeSubscription: (id: number) => masterRequest<void>(
     `/api/portal/devices/${id}/subscription`, { method: "DELETE" }),

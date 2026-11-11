@@ -211,7 +211,9 @@ test("subscriber issues a revocable subscription link and can open it in Clash",
     if (input === "/api/portal/devices/7/subscription" && !init?.method) return new Response(
       JSON.stringify({ active: false, created_at: null, last_used_at: null }), { status: 200 });
     if (input === "/api/portal/devices/7/subscription" && init?.method === "POST") return new Response(
-      JSON.stringify({ url: "https://master.test/api/portal/sub/token-abc", created_at: "2026-11-10T00:00:00Z" }),
+      JSON.stringify({ url: "https://master.test/api/portal/sub/token-abc", created_at: "2026-11-10T00:00:00Z",
+        qr: "data:image/png;base64,AAA",
+        clash_url: "clash://install-config?url=https://master.test/api/portal/sub/token-abc" }),
       { status: 201 });
     throw new Error(`Unexpected request ${input}`);
   });
@@ -222,8 +224,46 @@ test("subscriber issues a revocable subscription link and can open it in Clash",
   await userEvent.click(screen.getByRole("button", { name: "Создать ссылку" }));
   const field = await screen.findByLabelText("Ссылка");
   expect(field).toHaveValue("https://master.test/api/portal/sub/token-abc");
-  expect(screen.getByRole("link", { name: "Открыть в Clash" })).toHaveAttribute(
-    "href", "clash://install-config?url=https%3A%2F%2Fmaster.test%2Fapi%2Fportal%2Fsub%2Ftoken-abc");
+  expect(screen.getByRole("img", { name: "QR-код ссылки-подписки" }))
+    .toHaveAttribute("src", "data:image/png;base64,AAA");
+  expect(screen.getByRole("link", { name: "Добавить в Clash" })).toHaveAttribute(
+    "href", "clash://install-config?url=https://master.test/api/portal/sub/token-abc");
+});
+
+test("amnezia connection is added by button or by scanning its QR code", async () => {
+  window.history.replaceState({}, "", "/portal");
+  const objectUrl = vi.fn((blob: Blob) => `blob:${blob.type}`);
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: objectUrl });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+  const fetcher = vi.fn(async (input: string) => {
+    if (input === "/api/portal/me") return new Response(JSON.stringify({
+      account: { id: 1, display_name: "Анна" }, subscription: { status: "active",
+        expires_at: "2099-12-08T00:00:00Z", tariff: { name: "Базовый", device_limit: 2, term_days: 30 } } }),
+      { status: 200 });
+    if (input === "/api/portal/devices") return new Response(JSON.stringify({ devices: [
+      { id: 7, name: "master_7", label: "Телефон", status: "active", applied: true, last_handshake: null }] }),
+      { status: 200 });
+    if (input === "/api/portal/devices/7/export?format=amnezia") return new Response(
+      "vpn://container", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    if (input === "/api/portal/devices/7/export?format=amnezia-qr") return new Response(
+      new Uint8Array([137, 80, 78, 71]), { status: 200, headers: { "Content-Type": "image/png" } });
+    throw new Error(`Unexpected request ${input}`);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Amnezia" }));
+    expect(await screen.findByRole("dialog", { name: /Подключение в Amnezia: Телефон/ })).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: /QR-код подключения Amnezia/ }))
+      .toHaveAttribute("src", "blob:image/png");
+    expect(screen.getByRole("link", { name: "Открыть в Amnezia" })).toHaveAttribute("href", "vpn://container");
+    // Close while the URL stubs still exist: the dialog revokes its blob on unmount.
+    await userEvent.click(screen.getByRole("button", { name: "Закрыть" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  } finally {
+    Reflect.deleteProperty(URL, "createObjectURL");
+    Reflect.deleteProperty(URL, "revokeObjectURL");
+  }
 });
 
 test("no subscription never claims access or enables new devices", async () => {

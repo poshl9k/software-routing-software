@@ -75,9 +75,9 @@ export function PortalHome() {
   const [label, setLabel] = useState("");
   const [working, setWorking] = useState<number | "create" | null>(null);
   const [qr, setQr] = useState<{ title: string; url: string } | null>(null);
-  const [amnezia, setAmnezia] = useState<{ title: string; uri: string } | null>(null);
-  const [link, setLink] = useState<{ device: PortalDevice; url: string | null;
-    state: PortalSubscription } | null>(null);
+  const [amnezia, setAmnezia] = useState<{ title: string; uri: string; qr: string | null } | null>(null);
+  const [link, setLink] = useState<{ device: PortalDevice; url: string | null; qr: string | null;
+    clashUrl: string | null; state: PortalSubscription } | null>(null);
 
   function showError(reason: unknown, fallback: string) {
     if (reason instanceof MasterApiError && reason.status === 401) {
@@ -116,6 +116,7 @@ export function PortalHome() {
     return () => window.clearTimeout(timer);
   }, [devices]);
   useEffect(() => () => { if (qr) URL.revokeObjectURL(qr.url); }, [qr]);
+  useEffect(() => () => { if (amnezia?.qr) URL.revokeObjectURL(amnezia.qr); }, [amnezia]);
 
   async function logout() {
     try { await portalApi.logout(); navigate("/portal/login", { replace: true }); }
@@ -150,21 +151,28 @@ export function PortalHome() {
 
   async function exportConfig(device: PortalDevice, format: PortalExportFormat) {
     setError(null);
+    const title = device.label || device.name || `Устройство ${device.id}`;
     try {
+      if (format === "amnezia") {
+        const uri = await portalApi.amneziaUri(device.id);
+        if (!uri.startsWith("vpn://")) throw new MasterApiError(400, "amnezia.role_unsupported", "Неверный формат");
+        // Amnezia adds a connection by scanning the same vpn:// container, so the
+        // dialog offers both the deep link and a QR of it.
+        let qrUrl: string | null = null;
+        try { qrUrl = URL.createObjectURL(await portalApi.exportDevice(device.id, "amnezia-qr")); }
+        catch { qrUrl = null; }
+        setAmnezia({ title, uri, qr: qrUrl });
+        return;
+      }
       const blob = await portalApi.exportDevice(device.id, format);
-      const title = device.label || device.name || `Устройство ${device.id}`;
       if (format === "qr") {
         setQr({ title, url: URL.createObjectURL(blob) });
-      } else if (format === "amnezia") {
-        const uri = await blob.text();
-        if (!uri.startsWith("vpn://")) throw new MasterApiError(400, "amnezia.role_unsupported", "Неверный формат");
-        setAmnezia({ title, uri });
-      } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url; a.download = `${title}${format === "mihomo" ? ".yaml" : ".conf"}`; a.click();
-        URL.revokeObjectURL(url);
+        return;
       }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${title}${format === "mihomo" ? ".yaml" : ".conf"}`; a.click();
+      URL.revokeObjectURL(url);
     } catch (reason) { showError(reason, "Не удалось скачать конфигурацию."); }
   }
 
@@ -172,7 +180,7 @@ export function PortalHome() {
     setError(null);
     try {
       const state = await portalApi.subscriptionState(device.id);
-      setLink({ device, url: null, state });
+      setLink({ device, url: null, qr: null, clashUrl: null, state });
     } catch (reason) { showError(reason, "Не удалось открыть подписку."); }
   }
 
@@ -181,7 +189,7 @@ export function PortalHome() {
     setError(null);
     try {
       const issued = await portalApi.issueSubscription(link.device.id);
-      setLink({ ...link, url: issued.url,
+      setLink({ ...link, url: issued.url, qr: issued.qr, clashUrl: issued.clash_url,
         state: { active: true, created_at: issued.created_at, last_used_at: null } });
     } catch (reason) { showError(reason, "Не удалось создать ссылку."); }
   }
@@ -191,7 +199,8 @@ export function PortalHome() {
     setError(null);
     try {
       await portalApi.revokeSubscription(link.device.id);
-      setLink({ ...link, url: null, state: { active: false, created_at: null, last_used_at: null } });
+      setLink({ ...link, url: null, qr: null, clashUrl: null,
+        state: { active: false, created_at: null, last_used_at: null } });
     } catch (reason) { showError(reason, "Не удалось отозвать ссылку."); }
   }
 
@@ -335,12 +344,18 @@ export function PortalHome() {
               ? "Ссылка уже создана. Перевыпустите её, чтобы получить новую."
               : "Ссылка ещё не создана."}
           </Typography>}
+        {link?.qr && <Box sx={{ mt: 2, textAlign: "center", display: "grid", gap: 1 }}>
+          <img src={link.qr} alt="QR-код ссылки-подписки"
+            style={{ width: "min(240px, 100%)", height: "auto", margin: "0 auto" }} />
+          <Typography variant="body2" color="text.secondary">
+            Отсканируйте код в мобильном Clash — профиль добавится без ввода ссылки.
+          </Typography>
+        </Box>}
         <ErrorNotice error={error} />
       </DialogContent>
       <DialogActions>
         <Button onClick={() => setLink(null)}>Закрыть</Button>
-        {link?.url && <Button component="a"
-          href={`clash://install-config?url=${encodeURIComponent(link.url)}`}>Открыть в Clash</Button>}
+        {link?.url && <Button component="a" href={link.clashUrl ?? undefined}>Добавить в Clash</Button>}
         {link?.url && <Button onClick={() => {
           const url = link.url ?? "";
           void navigator.clipboard.writeText(url).catch(() => setError("Не удалось скопировать ссылку."));
@@ -352,8 +367,10 @@ export function PortalHome() {
     </Dialog>
     <Dialog open={amnezia !== null} onClose={() => setAmnezia(null)} aria-labelledby="amnezia-title" fullWidth maxWidth="sm">
       <DialogTitle id="amnezia-title">Подключение в Amnezia: {amnezia?.title}</DialogTitle>
-      <DialogContent><Typography variant="body2">На телефоне откройте ссылку в Amnezia. На компьютере скопируйте её и вставьте в приложении.</Typography>
+      <DialogContent><Typography variant="body2">На телефоне отсканируйте код или откройте ссылку в Amnezia. На компьютере скопируйте ссылку и вставьте её в приложении.</Typography>
         {amnezia && <Box sx={{ mt: 2, textAlign: "center", display: "grid", gap: 1.5 }}>
+          {amnezia.qr && <img src={amnezia.qr} alt={`QR-код подключения Amnezia для устройства ${amnezia.title}`}
+            style={{ width: "min(240px, 100%)", height: "auto", margin: "0 auto" }} />}
           <Button variant="contained" component="a" href={amnezia.uri}>Открыть в Amnezia</Button>
           <Button onClick={() => {
             const blob = new Blob([amnezia.uri], { type: "text/plain" });

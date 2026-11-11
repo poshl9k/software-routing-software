@@ -1,7 +1,10 @@
 """Revocable per-device subscription links delivering the mihomo profile."""
+import base64
+import io
 import secrets
 from hashlib import sha256
 
+import qrcode
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,6 +23,17 @@ router = APIRouter(prefix='/api/portal')
 def _link(request, token):
     base = str(request.base_url).rstrip('/')
     return f'{base}/api/portal/sub/{token}'
+
+
+def _qr_data_url(text):
+    """Inline PNG so mobile clients can scan the link instead of typing it.
+
+    The value is generated in the issue response only: the master stores just
+    the hash, so an existing link can never be redrawn from the database.
+    """
+    out = io.BytesIO()
+    qrcode.make(text).save(out, 'PNG')
+    return 'data:image/png;base64,' + base64.b64encode(out.getvalue()).decode('ascii')
 
 
 def _owned(db, account, identity):
@@ -42,7 +56,9 @@ def issue_subscription(identity: str, request: Request,
         row.created_at = now
         row.last_used_at = None
     db.commit()
-    return {'url': _link(request, token), 'created_at': now}
+    url = _link(request, token)
+    return {'url': url, 'created_at': now, 'qr': _qr_data_url(url),
+            'clash_url': 'clash://install-config?url=' + url}
 
 
 @router.get('/devices/{identity}/subscription')
