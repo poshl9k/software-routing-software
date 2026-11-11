@@ -13,6 +13,9 @@ def fail(code):
     raise ValueError(code)
 
 
+_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
 def port_range(value):
     if not re.fullmatch(r"[0-9]+(?:-[0-9]+)?", value):
         fail("port.invalid")
@@ -326,6 +329,7 @@ def validate_configuration(c):
     validate_proxies(c)
     validate_routing(c)
     derive_dns_detours(c)
+    validate_inbounds(c)
 
 
 def routing_exit_tag(target):
@@ -440,6 +444,37 @@ def derive_dns_detours(c):
         if tags:
             derived[server.tag] = next(iter(tags))
     return derived
+
+
+
+def validate_inbounds(c):
+    """Reject inbounds that could not be rendered as one coherent public face.
+
+    ADR-0034: a subscriber inbound is the host's public listener, so a duplicate
+    tag, a second owner of the same port, or credentials nobody can revoke are
+    contract errors rather than a warning the panel hides.
+    """
+    if len({inbound.tag for inbound in c.inbounds}) != len(c.inbounds):
+        fail("inbound.duplicate_tag")
+    ports = [inbound.listen_port for inbound in c.inbounds]
+    if len(set(ports)) != len(ports):
+        fail("inbound.port_conflict")
+    for inbound in c.inbounds:
+        if inbound.listen_port == c.panel_port:
+            host = inbound.handshake_dest.rpartition(":")[0].strip("[]")
+            if host in ("", "::", "0.0.0.0") or not _is_loopback(host):
+                # The panel already owns this port; fronting works only when
+                # non-Reality TLS is handed back to it on loopback.
+                fail("inbound.panel_port_conflict")
+        # UUIDs live encrypted in the contract, so their shape is checked when
+        # the credential is minted (API/agent), not by re-reading the blob here.
+
+
+def _is_loopback(host):
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def validate_routing_exit(target, tunnels, interfaces, outbound_tags):

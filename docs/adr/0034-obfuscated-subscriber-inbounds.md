@@ -1,6 +1,6 @@
 # ADR-0034: Обфусцированные входящие абонентов (sing-box inbound-серверы)
 
-**Status:** предложен
+**Status:** принят (слайс 1 реализован)
 
 **Date:** 2026-10-24
 
@@ -138,7 +138,26 @@ Trojan, TUIC, Shadowsocks и остальные — не отвергнуты, �
 
 ## Реализация
 
-Статус «предложен»; слайсы:
+Статус: **слайс 1 реализован** в рабочем дереве (`Контракт + генератор`), слайсы 2-3
+не начаты.
+
+Слайс 1 — что уже есть в коде:
+
+- контракт `InboundUser` / `Inbound` (`schema.py`): `kind: vless`, `listen_port`,
+  `server_name`, `handshake_dest`, `private_key` (шифрованный), `public_key`,
+  `short_ids`, `flow` (`xtls-rprx-vision`), `users`; поле
+  `Configuration.inbounds`;
+- валидаторы (`validators.validate_inbounds`): уникальность тегов и портов,
+  совпадение с `panel_port` только через loopback-цель, форма Reality-ключей и
+  шорт-идов, имена пользователей вида `<subscriber>_<device>`;
+- генератор (`generators/singbox._render_inbound`): инбаунд `vless` + `tls.reality`
+  с `handshake.server/server_port`, шорт-идами и провайдером UUID; профиль
+  `router` с инбаундами отвергается (`inbound.panel_only`), а превью всегда
+  содержит плейсхолдеры ключа и UUID;
+- тесты `backend/tests/test_inbounds.py` (7 passed, проверка закреплённым
+  `sing-box check` включается на хосте с бинарником).
+
+Осталось (следующие слайсы, в этом ADR без изменений): слайсы:
 
 1. Контракт + валидаторы + генератор + golden + `sing-box check` закреплённым
    бинарником (VLESS+Reality, Hy2).

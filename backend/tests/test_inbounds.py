@@ -1,0 +1,134 @@
+"""ADR-0034 slice 1: VLESS + Reality subscriber inbounds (contract + render)."""
+import base64
+import json
+import shutil
+import subprocess
+
+import pytest
+
+from vs_router.generators.singbox import PLACEHOLDER_REALITY_KEY, PLACEHOLDER_UUID, generate_singbox
+from vs_router.schema import (
+    Configuration, ConfigurationVersion, EncryptedSecret, Inbound, InboundUser, Tunnel,
+)
+
+SECRET = EncryptedSecret(ciphertext="gAAAAABm" + "x" * 20)
+PUBLIC_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode()
+
+
+def user(name="alice_phone", uuid="11111111-2222-3333-4444-555555555555"):
+    return InboundUser(name=name, uuid=SECRET), uuid
+
+
+def inbound(**overrides):
+    data = dict(
+        tag="vless_in",
+        listen_port=443,
+        server_name="www.microsoft.com",
+        handshake_dest="127.0.0.1:8444",
+        private_key=SECRET,
+        public_key=PUBLIC_KEY,
+        short_ids=("0123abcd",),
+    )
+    data.update(overrides)
+    return Inbound(**data)
+
+
+def version(inbound_obj, profile="panel"):
+    return ConfigurationVersion(profile=profile,
+                                configuration=Configuration(inbounds=(inbound_obj,)))
+
+
+def test_panel_inbound_renders_vless_reality_with_fronting():
+    inbound_obj = inbound(users=(user()[0],))
+    document = generate_singbox(version(inbound_obj))
+    listeners = {item["tag"]: item for item in document["inbounds"]}
+    rendered = listeners["vless_in"]
+    assert rendered["type"] == "vless"
+    assert rendered["listen_port"] == 443
+    assert rendered["users"] == [{"name": "alice_phone", "uuid": PLACEHOLDER_UUID,
+                                  "flow": "xtls-rprx-vision"}]
+    reality = rendered["tls"]["reality"]
+    assert reality["handshake"] == {"server": "127.0.0.1", "server_port": 8444}
+    assert reality["short_id"] == ["0123abcd"]
+    assert reality["private_key"] == PLACEHOLDER_REALITY_KEY
+    # The pre-existing loopback listeners stay, so interception is unchanged.
+    assert {"tproxy-tcp", "tproxy-udp"} <= set(listeners)
+
+
+def test_apply_provider_replaces_placeholder_credentials():
+    inbound_obj = inbound(users=(user()[0],))
+    seen = []
+
+    def reveal(user_obj):
+        seen.append(user_obj.name)
+        return "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    document = generate_singbox(version(inbound_obj), inbound_user_secret=reveal)
+    rendered = next(item for item in document["inbounds"] if item["tag"] == "vless_in")
+    assert rendered["users"][0]["uuid"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    assert seen == ["alice_phone"]
+    # A preview never leaks a real key even when a provider exists.
+    assert rendered["tls"]["reality"]["private_key"] == PLACEHOLDER_REALITY_KEY
+
+
+def test_router_profile_rejects_inbounds():
+    with pytest.raises(ValueError, match="inbound.panel_only"):
+        generate_singbox(version(inbound(), profile="router"))
+
+
+def test_inbound_tag_and_port_must_be_unique():
+    with pytest.raises(ValueError, match="inbound.duplicate_tag"):
+        Configuration(inbounds=(inbound(), inbound(short_ids=("beef",))))
+    with pytest.raises(ValueError, match="inbound.port_conflict"):
+        Configuration(inbounds=(inbound(), inbound(tag="vless_alt")))
+
+
+def test_fronting_on_the_panel_port_needs_a_loopback_target():
+    with pytest.raises(ValueError, match="inbound.handshake_loopback"):
+        inbound(handshake_dest="www.microsoft.com:443")
+    # A dedicated high port may front anything the operator names.
+    assert inbound(listen_port=8443, handshake_dest="www.microsoft.com:443").listen_port == 8443
+    # A port the panel already owns cannot be fronted from a non-loopback target.
+    with pytest.raises(ValueError, match="inbound.panel_port_conflict"):
+        Configuration(panel_port=8443,
+                      inbounds=(inbound(listen_port=8443,
+                                        handshake_dest="www.microsoft.com:443"),))
+
+
+def test_reality_material_is_validated():
+    with pytest.raises(ValueError, match="inbound.reality_public_key"):
+        inbound(public_key="not-a-key")
+    with pytest.raises(ValueError, match="inbound.short_id"):
+        inbound(short_ids=("zz11",))
+    with pytest.raises(ValueError, match="inbound.short_id_count"):
+        inbound(short_ids=tuple(f"{index:02x}" for index in range(9)))
+    with pytest.raises(ValueError, match="inbound.handshake_dest"):
+        inbound(handshake_dest="127.0.0.1")
+
+
+def test_user_names_must_tie_to_a_device():
+    with pytest.raises(ValueError, match="inbound.user_duplicate"):
+        inbound(users=(user()[0], user()[0]))
+    with pytest.raises(ValueError, match="inbound.user_name"):
+        InboundUser(name="phone", uuid=SECRET)
+
+
+def test_rendered_document_passes_the_pinned_engine_check():
+    binary = shutil.which("sing-box")
+    if binary is None:
+        pytest.skip("sing-box binary is not installed on this host")
+    inbound_obj = inbound(users=(user()[0],))
+    document = generate_singbox(version(inbound_obj))
+    # The always-rendered loopback stubs need their rule-set declared; keep the
+    # check honest by removing only the unrelated subscriber capacity guard.
+    payload = {"inbounds": document["inbounds"], "outbounds": document["outbounds"],
+               "route": {"rules": [], "final": "direct"}}
+    path = "inbounds-check.json"
+    with open(path, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream)
+    try:
+        result = subprocess.run([binary, "check", "-c", path], capture_output=True, text=True)
+    finally:
+        import os
+        os.unlink(path)
+    assert result.returncode == 0, result.stdout + result.stderr

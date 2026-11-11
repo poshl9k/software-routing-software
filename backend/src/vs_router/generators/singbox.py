@@ -12,7 +12,7 @@ secret-bearing fields carry fixed placeholders (safe for previews). The agent
 injects decrypted credentials only when staging the apply artifact.
 """
 from ipaddress import ip_address
-from typing import Callable
+from typing import Any, Callable
 
 from vs_router.schema import Configuration, ConfigurationVersion, ProxyOutbound
 from vs_router.validators import (
@@ -29,6 +29,8 @@ PLACEHOLDER_UUID = "00000000-0000-0000-0000-000000000000"
 PLACEHOLDER_PASSWORD = "redacted"
 # Shadowsocks needs a cipher name; the contract does not model it yet.
 PLACEHOLDER_SHADOWSOCKS_METHOD = "chacha20-ietf-poly1305"
+# 32 zero bytes, base64: structurally valid key for ``check`` in a preview.
+PLACEHOLDER_REALITY_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 # Tags owned by the generator itself; a contract object may not shadow them.
 IMPLICIT_DIRECT_TAG = "direct"
@@ -306,13 +308,52 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
     return rules, list(bound_outbounds.values())
 
 
+
+def _render_inbound(inbound, reveal_user=None) -> dict:
+    """Map a contract inbound to a sing-box server inbound (ADR-0034).
+
+    Reality keeps the port for the panel: anything that is not a VLESS/Reality
+    handshake is proxied to ``handshake_dest``, which the contract pins to a
+    loopback listener when it shares the panel's port.
+    """
+    users = []
+    for user in inbound.users:
+        uuid = reveal_user(user) if reveal_user is not None else PLACEHOLDER_UUID
+        users.append({"name": user.name, "uuid": uuid, "flow": inbound.flow})
+    host, _, port = inbound.handshake_dest.rpartition(":")
+    rendered = {
+        "type": "vless",
+        "tag": inbound.tag,
+        "listen": "::",
+        "listen_port": inbound.listen_port,
+        "users": users,
+        "tls": {
+            "enabled": True,
+            "server_name": inbound.server_name,
+            "reality": {
+                "enabled": True,
+                "handshake": {"server": host.strip("[]"), "server_port": int(port)},
+                "private_key": PLACEHOLDER_REALITY_KEY,
+                "short_id": list(inbound.short_ids),
+            },
+        },
+    }
+    return rendered
+
+
 def generate_singbox(version: ConfigurationVersion,
-                     secret_provider: Callable[[ProxyOutbound], dict] | None = None) -> dict:
+                     secret_provider: Callable[[ProxyOutbound], dict] | None = None,
+                     inbound_user_secret: Callable[[Any], str] | None = None) -> dict:
     """Render sing-box policy. No provider means redacted preview; provider means apply only.
 
     A guarded-off TProxy configuration is still rendered for preview. Legacy
     proxy groups/defaults require ``proxies.enabled``; product rules explicitly
     select their own exits. No nftables, policy routing or service changes.
+
+    Subscriber inbounds (ADR-0034) are a panel-only public face: a router
+    profile that somehow carries them is a contract error, never a silently
+    dropped listener. UUIDs come from ``inbound_user_secret`` on apply and stay
+    placeholders in every preview.
     """
     configuration = version.configuration
     # Recheck even for model_copy/model_construct callers that bypass validation.
@@ -430,6 +471,11 @@ def generate_singbox(version: ConfigurationVersion,
         {"type": "tproxy", "tag": "tproxy-tcp", "listen": "127.0.0.1", "listen_port": 51272,
          "network": "tcp"},
     ]
+    if configuration.inbounds:
+        if version.profile != "panel":
+            raise ValueError("inbound.panel_only")
+        for inbound in configuration.inbounds:
+            inbounds.append(_render_inbound(inbound, inbound_user_secret))
     if dns_policy.servers:
         # The subscriber resolver forwards its unmatched queries to this loopback
         # stub (marks.DNS_STUB_PORT) and the engine answers them from the dns policy

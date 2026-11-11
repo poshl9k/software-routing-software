@@ -214,6 +214,10 @@ AWG_RANGE = re.compile(r"^[0-9]{1,10}(-[0-9]{1,10})?$")
 # AWG 3+ keys that belong to the interface's obfuscation set: the mandatory core
 # keys every client emits plus the optional AWG 3 additions.
 AWG_CORE = frozenset({"Jc", "S1", "S2", "H1", "H2", "H3", "H4"})
+# Reality key material is base64url of a 32-byte x25519 key; short ids are
+# 1-8 bytes of hex, which is what sing-box accepts as ``short_id``.
+REALITY_KEY = re.compile(r"^[A-Za-z0-9_-]{43}=?$")
+REALITY_SHORT_ID = re.compile(r"^[0-9a-f]{2,16}$")
 
 
 def awg_parameter(key: str, value):
@@ -321,6 +325,84 @@ class Tunnel(Model):
             raise ValueError("tunnel.client_fields")
         if self.protocol == "awg" and not AWG_CORE <= self.obfuscation.keys():
             raise ValueError("tunnel.awg_parameters")
+        return self
+
+
+class InboundUser(Model):
+    """One subscriber device's credentials on a panel inbound (ADR-0034)."""
+
+    #: Deterministic ``<subscriber>-<device>`` form; routing subjects match it.
+    name: Name
+    uuid: EncryptedSecret
+
+    @field_validator("name")
+    @classmethod
+    def check_name(cls, value):
+        # Generation builds this from contract names; anything else means the
+        # credential is not tied to a device and could never be revoked.
+        if "_" not in value:
+            raise ValueError("inbound.user_name")
+        return value
+
+
+class Inbound(Model):
+    """Panel-only subscriber inbound; slice 1 is VLESS + Reality (ADR-0034).
+
+    ``listen_port`` 443 with ``handshake_dest`` pointing at the panel's loopback
+    listener is the fronting mode: non-Reality TLS is proxied to the panel, so
+    the port keeps serving the management UI (and any censors' probes).
+    """
+
+    tag: Name
+    kind: Literal["vless"] = "vless"
+    listen_port: Port = 443
+    #: SNI the client presents; Reality borrows it from a real site.
+    server_name: str = Field(pattern=r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$")
+    #: host:port that receives every TLS connection Reality does not claim.
+    handshake_dest: str
+    #: x25519 keypair. The private half is a secret and never leaves the host.
+    private_key: EncryptedSecret
+    public_key: str = Field(repr=False)
+    short_ids: tuple[str, ...]
+    flow: Literal["xtls-rprx-vision"] = "xtls-rprx-vision"
+    users: tuple[InboundUser, ...] = ()
+
+    @field_validator("public_key")
+    @classmethod
+    def check_public_key(cls, value):
+        if not REALITY_KEY.fullmatch(value):
+            raise ValueError("inbound.reality_public_key")
+        return value
+
+    @field_validator("short_ids")
+    @classmethod
+    def check_short_ids(cls, value):
+        if not 1 <= len(value) <= 8:
+            raise ValueError("inbound.short_id_count")
+        if len(set(value)) != len(value) or any(
+                not REALITY_SHORT_ID.fullmatch(item) for item in value):
+            raise ValueError("inbound.short_id")
+        return value
+
+    @model_validator(mode="after")
+    def check_handshake(self):
+        host, separator, port = self.handshake_dest.rpartition(":")
+        if not separator or not host or not port.isdigit() or not 1 <= int(port) <= 65535:
+            raise ValueError("inbound.handshake_dest")
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+        try:
+            loopback = ip_address(host).is_loopback
+        except ValueError:
+            if not re.fullmatch(r"(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}", host):
+                raise ValueError("inbound.handshake_dest") from None
+            loopback = False
+        if not loopback and self.listen_port == 443:
+            # Fronting on 443 must hand non-Reality TLS to something local:
+            # otherwise a probe for the panel's name reaches a stranger.
+            raise ValueError("inbound.handshake_loopback")
+        if len({user.name for user in self.users}) != len(self.users):
+            raise ValueError("inbound.user_duplicate")
         return self
 
 
@@ -836,6 +918,9 @@ class Configuration(Model):
     panel_port: Port = 443
     subscribers: tuple[Subscriber, ...] = ()
     routing_rules: tuple[RoutingRule, ...] = ()
+    # Panel-only subscriber inbounds (ADR-0034). A router host rejects a
+    # configuration that carries them: the engine there is not a public face.
+    inbounds: tuple[Inbound, ...] = ()
 
     @model_validator(mode="after")
     def validate_domain(self):
