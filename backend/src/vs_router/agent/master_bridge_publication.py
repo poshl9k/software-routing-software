@@ -2,6 +2,13 @@
 
 The marker is root-owned. The adapter overlays its routes on every Caddy
 installation (including boot restore and rollback), never on versioned data.
+
+The allowlist is the master's egress address -- except on a *fronted* panel
+(ADR-0034): when sing-box owns the public port and forwards everything that is
+not a Reality handshake to Caddy on loopback, every request reaches Caddy from
+127.0.0.1 and the master's address never appears. There the overlay allows the
+loopback ranges only, and the bearer token remains the gate. Without that the
+bridge answers 403 to the master on every fronted node.
 """
 from copy import deepcopy
 import json
@@ -23,9 +30,13 @@ def publish_bridge(config: dict, setting: dict) -> dict:
             raise ValueError('hostname required')
         if hostname not in config['apps']['tls']['certificates']['automate']:
             raise ValueError('hostname has no panel certificate')
-        routes = config['apps']['http']['servers']['management']['routes']
+        server = config['apps']['http']['servers']['management']
+        routes = server['routes']
         if not isinstance(routes, list):
             raise ValueError('management routes missing')
+        # A fronted panel (ADR-0034) hides the caller: the engine forwards to a
+        # loopback listener, so the master's address can never match here.
+        fronted = _fronted_listener(server)
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError('master bridge publication: invalid marker or hostname') from exc
 
@@ -41,12 +52,37 @@ def publish_bridge(config: dict, setting: dict) -> dict:
     )]
     matcher = {'host': [hostname], 'path': [PATH]}
     mask = 32 if source.version == 4 else 128
+    ranges = (['127.0.0.1/32', '::1/128'] if fronted
+              else [f'{source}/{mask}'])
     routes[:0] = [
-        {'match': [{**matcher, 'remote_ip': {'ranges': [f'{source}/{mask}']}}],
+        {'match': [{**matcher, 'remote_ip': {'ranges': ranges}}],
          'handle': [{'handler': 'reverse_proxy', 'upstreams': [{'dial': SOCKET}]}]},
         {'match': [matcher], 'handle': [{'handler': 'static_response', 'status_code': 403}]},
     ]
     return result
+
+
+def _fronted_listener(server: dict) -> bool:
+    """True when every public listener of the panel is a loopback address.
+
+    That is the ADR-0034 fronting shape: the engine owns the public port and
+    proxies non-Reality TLS to Caddy on loopback, so ``remote_ip`` is always the
+    engine's own address and an address allowlist for the master cannot match.
+    """
+    listen = server.get('listen')
+    if not isinstance(listen, list) or not listen:
+        return False
+    for entry in listen:
+        if not isinstance(entry, str):
+            return False
+        host = entry[1:entry.index(']')] if entry.startswith('[') else entry.rsplit(':', 1)[0]
+        try:
+            if not ip_address(host).is_loopback:
+                return False
+        except ValueError:
+            if host not in ('localhost', ''):
+                return False
+    return True
 
 
 def publication_status(filesystem, snapshot):

@@ -44,6 +44,28 @@ def test_publication_only_allows_master_source_and_shadows_panel(caddy_config):
                                      'source_ip': '85.209.159.130'}) == updated
 
 
+def test_publication_allows_loopback_when_the_panel_is_fronted(caddy_config):
+    """ADR-0034 fronting hides the caller: Caddy sees the engine, not the master.
+
+    Regression: the master's address can never match behind an engine that
+    forwards non-Reality TLS to a loopback listener, so the bridge answered 403
+    to every device operation on a fronted node.
+    """
+    fronted = json.loads(json.dumps(caddy_config))
+    fronted['apps']['http']['servers']['management']['listen'] = ['127.0.0.1:8444']
+    updated = publish_bridge(fronted, {'hostname': 'rg3.poshl9k.ru',
+                                       'source_ip': '85.209.159.130'})
+    routes = updated['apps']['http']['servers']['management']['routes']
+    assert routes[0]['match'][0]['remote_ip'] == {'ranges': ['127.0.0.1/32', '::1/128']}
+    # Everything else still fails closed with the static 403.
+    assert routes[1]['handle'] == [{'handler': 'static_response', 'status_code': 403}]
+    # A public listener keeps the master-address allowlist.
+    public = publish_bridge(caddy_config, {'hostname': 'rg3.poshl9k.ru',
+                                          'source_ip': '85.209.159.130'})
+    assert public['apps']['http']['servers']['management']['routes'][0]['match'][0][
+        'remote_ip'] == {'ranges': ['85.209.159.130/32']}
+
+
 @pytest.mark.parametrize('setting', [
     {'hostname': 'evil.example', 'source_ip': '85.209.159.130'},
     {'hostname': 'rg3.poshl9k.ru', 'source_ip': 'not-an-ip'},
