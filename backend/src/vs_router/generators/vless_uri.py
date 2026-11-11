@@ -5,6 +5,7 @@ built from the same fields the generator puts into the engine config — one
 source of truth, no hand-assembled strings in the panel.
 """
 import re
+import uuid as uuid_module
 from ipaddress import ip_address
 from urllib.parse import quote
 
@@ -62,3 +63,18 @@ def vless_uri(inbound: Inbound, uuid: str, host: str, name: str | None = None) -
     pairs = "&".join(f"{key}={quote(str(value), safe='-_=')}" for key, value in query.items())
     return (f"vless://{quote(uuid, safe='')}@{_hostport(host, inbound.listen_port)}"
             f"?{pairs}#{label}")
+
+
+#: Fixed namespace for device credentials. Deriving the UUID from the device's
+#: public key means the node and the master agree without either of them
+#: transferring or storing an extra secret, and deleting the device (and its
+#: peer) removes the credential at the same moment. Rotating it is a new keypair.
+DEVICE_NAMESPACE = uuid_module.UUID('6d1b8b1a-4f7e-5e0d-9f2a-3b6c1d7e8a90')
+
+
+def device_uuid(public_key: str) -> str:
+    """Deterministic VLESS UUID for a subscriber device's public key."""
+    value = (public_key or "").strip()
+    if not value:
+        raise ValueError("inbound.device_key_required")
+    return str(uuid_module.uuid5(DEVICE_NAMESPACE, value))
