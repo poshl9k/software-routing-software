@@ -1,6 +1,6 @@
 """Native Caddy JSON; DNS-01 uses Cloudflare in the schema's provider-less MVP."""
 import json
-from ipaddress import ip_interface
+from ipaddress import ip_address, ip_interface
 from urllib.parse import urlsplit
 from .bundle import serialize as serialize_caddy, deserialize as deserialize_caddy
 from .wireguard import reveal
@@ -10,6 +10,17 @@ CERT_DIR = '/etc/caddy/vs-router'
 
 def bind(address, port):
     return f'[{address}]:{port}' if ':' in address else f'{address}:{port}'
+
+
+def _loopback_target(value: str) -> bool:
+    """True when ``host:port`` points at this host's loopback interface."""
+    host, _, port = value.rpartition(':')
+    if not port.isdigit():
+        return False
+    try:
+        return ip_address(host.strip('[]')).is_loopback
+    except ValueError:
+        return False
 
 
 def upstream(value, layer4=False):
@@ -60,7 +71,14 @@ def generate_caddy_json(version, management=None) -> dict:
                             matcher['host'] = names
                     else:
                         entry['match'] = [{'host': names}]
-        section = {'listen': [bind(management.ip, 443)], 'routes': routes,
+        # ADR-0034 fronting: when an inbound owns the panel's port, Caddy moves
+        # behind it on the declared loopback target. Reality forwards every TLS
+        # connection it does not claim; the panel keeps its names and routes.
+        fronting = next((item for item in version.configuration.inbounds
+                         if item.listen_port == version.configuration.panel_port
+                         and _loopback_target(item.handshake_dest)), None)
+        section = {'listen': [fronting.handshake_dest if fronting
+                              else bind(management.ip, 443)], 'routes': routes,
                    'automatic_https': {'disable': True}}
         if names:
             # Public names: an ACME HTTP-01 challenge rides the plaintext :80

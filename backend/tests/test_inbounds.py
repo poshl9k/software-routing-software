@@ -172,3 +172,45 @@ def test_apply_injects_real_user_uuids(monkeypatch):
     rendered = next(item for item in document["inbounds"] if item["tag"] == "vless_in")
     assert rendered["users"][0]["uuid"] == uuid
     assert "\"" + uuid + "\"" in artifacts["singbox"]
+
+
+def _management(address="203.0.113.2/24"):
+    from vs_router.management import Management
+    return Management(interface="wan0", mac="02:00:00:00:00:01",
+                      address=address, mode="single-uplink",
+                      hostname="203.0.113.2.nip.io")
+
+
+def _fronting_configuration():
+    from vs_router.schema import Interface
+    return Configuration(
+        interfaces=(Interface(name="wan0", type="physical", zone="wan",
+                              addresses=("203.0.113.2/24",)),),
+        inbounds=(inbound(),),
+    )
+
+
+def test_panel_moves_behind_the_inbound_when_it_owns_the_port():
+    from vs_router.generators.caddy import generate_caddy_json
+    document = generate_caddy_json(ConfigurationVersion(profile="panel",
+                                                        configuration=_fronting_configuration()),
+                                   _management())
+    server = document["apps"]["http"]["servers"]["management"]
+    # Reality terminates 443 and hands everything else to the panel on loopback.
+    assert server["listen"] == ["127.0.0.1:8444"]
+    # The public panel names keep their routes, so the UI is not lost.
+    assert any("host" in matcher for route in server["routes"] for matcher in route.get("match", []))
+
+
+def test_panel_keeps_the_management_address_without_inbounds():
+    from vs_router.generators.caddy import generate_caddy_json
+    from vs_router.schema import Interface
+    configuration = Configuration(
+        interfaces=(Interface(name="wan0", type="physical", zone="wan",
+                              addresses=("203.0.113.2/24",)),),
+    )
+    document = generate_caddy_json(ConfigurationVersion(profile="panel",
+                                                        configuration=configuration),
+                                   _management())
+    server = document["apps"]["http"]["servers"]["management"]
+    assert server["listen"] == ["203.0.113.2:443"]
