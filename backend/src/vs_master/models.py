@@ -349,6 +349,10 @@ class RuleSet(Base):
                       CheckConstraint('entries > 0', name='ck_master_ruleset_entries'))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    # Which declared source produced this version ("ru-ips", "tg-domains", …);
+    # the exporter resolves providers by source name, so several sets of one kind
+    # can coexist (Russian traffic direct, Telegram forced through the tunnel).
+    source: Mapped[str | None] = mapped_column(String(64))
     version: Mapped[str] = mapped_column(String(32), nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     entries: Mapped[int] = mapped_column(Integer, nullable=False)

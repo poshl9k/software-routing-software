@@ -192,12 +192,13 @@ def parse_entries(kind, text):
                 entries.append(value)
             continue
         # A single-label entry is a TLD (e.g. "ru"), which must become a suffix
-        # rule: a bare "ru" in a mihomo domain payload is ambiguous.
-        entries.append(line if '.' in line else f'+.{line}')
+        # rule: a bare "ru" in a mihomo domain payload is ambiguous. Only for
+        # domain sets — an IPv6 CIDR has no dot but is not a TLD.
+        entries.append(line if kind != 'domain' or '.' in line else f'+.{line}')
     return '\n'.join(entries) + ('\n' if entries else '')
 
 
-def import_source(db, kind, version, url, now):
+def import_source(db, kind, version, url, now, source=None):
     """Publish the fetched source as a new immutable version."""
     if not rulesets.valid_version(version):
         raise APIError(422, 'master.ruleset_version')
@@ -206,7 +207,7 @@ def import_source(db, kind, version, url, now):
     normal, entries, digest = rulesets.normalize(kind, text)
     from .models import RuleSet
     row = RuleSet(kind=kind, version=version, sha256=digest, entries=entries,
-                  content=normal, created_at=now)
+                  content=normal, created_at=now, source=source)
     db.add(row)
     return row
 
@@ -237,7 +238,7 @@ def refresh_source(db, source, now):
             RuleSet.kind == source.kind, RuleSet.version == label)) is not None:
         label = f'{label}-{int(now.timestamp()) % 1000}'
     row = RuleSet(kind=source.kind, version=label, sha256=digest, entries=entries,
-                  content=normal, created_at=now)
+                  content=normal, created_at=now, source=source.name)
     db.add(row)
     source.version = label
     return row

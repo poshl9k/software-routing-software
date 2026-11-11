@@ -65,13 +65,16 @@ def normalize(kind, content):
 
 
 def view(row):
-    return {'id': row.id, 'kind': row.kind, 'version': row.version, 'entries': row.entries,
-            'sha256': row.sha256, 'created_at': row.created_at}
+    return {'id': row.id, 'kind': row.kind, 'source': row.source, 'version': row.version,
+            'entries': row.entries, 'sha256': row.sha256, 'created_at': row.created_at}
 
 
-def current(db: Session, kind):
-    """The newest published version of one kind, or None."""
-    return db.scalar(select(RuleSet).where(RuleSet.kind == kind).order_by(RuleSet.id.desc()))
+def current(db: Session, kind, source=None):
+    """The newest published version of one kind (optionally of one source), or None."""
+    query = select(RuleSet).where(RuleSet.kind == kind)
+    if source is not None:
+        query = query.where(RuleSet.source == source)
+    return db.scalar(query.order_by(RuleSet.id.desc()))
 
 
 def public_url(db: Session):

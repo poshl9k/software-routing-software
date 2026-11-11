@@ -41,12 +41,13 @@ export type MasterNode = {
   role: "entry" | "egress" | "both"; public_entry: string | null;
 };
 export type MasterRuleSet = {
-  id: number; kind: "domain" | "ipcidr"; version: string; entries: number;
-  sha256: string; created_at: string;
+  id: number; kind: "domain" | "ipcidr"; source: string | null; version: string;
+  entries: number; sha256: string; created_at: string;
 };
 export type MasterRuleSets = {
   rulesets: MasterRuleSet[];
   current: Record<string, { kind: string; version: string; entries: number; sha256: string } | null>;
+  slots: Record<string, { kind: string; target: string; version: string | null }>;
 };
 export type MasterRuleSetSource = {
   id: number; name: string; kind: "domain" | "ipcidr"; url: string; interval_seconds: number;
@@ -140,7 +141,8 @@ export const portalApi = {
 
 export const masterApi = {
   rulesets: () => masterRequest<MasterRuleSets>("/api/master-admin/rulesets"),
-  publishRuleSet: (body: { kind: "domain" | "ipcidr"; version: string; content: string }) =>
+  publishRuleSet: (body: { kind: "domain" | "ipcidr"; version: string; content: string;
+    source?: string | null }) =>
     masterRequest<MasterRuleSet>("/api/master-admin/rulesets",
       { method: "POST", body: JSON.stringify(body) }),
   importRuleSet: (body: { kind: "domain" | "ipcidr"; version: string; url: string }) =>

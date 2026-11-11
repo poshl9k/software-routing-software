@@ -237,18 +237,29 @@ def _awg_option(tunnel):
     return option
 
 
+#: Order matters: the forced-tunnel lists must precede the Russian direct rules,
+#: so a destination that appears in both (Telegram IPs published by RIPE as RU,
+#: for example) still leaves abroad.
+PROVIDER_SPECS = (
+    ('domain', 'tg-domains', 'PROXY'),
+    ('ipcidr', 'tg-ips', 'PROXY'),
+    ('domain', 'ru-domains', 'DIRECT'),
+    ('ipcidr', 'ru-ips', 'DIRECT'),
+)
+
+
 def _rule_providers(db, origin):
     """Published rule-sets as mihomo providers pinned to an exact version."""
     providers, rules = {}, []
-    for kind, name in (('domain', 'ru-domains'), ('ipcidr', 'ru-ips')):
-        row = rulesets.current(db, kind)
+    for kind, name, target in PROVIDER_SPECS:
+        row = rulesets.current(db, kind, source=name)
         if row is None:
             continue
         providers[name] = {
             'type': 'http', 'behavior': kind,
             'url': f'{origin}/api/rulesets/{kind}/{row.version}.yaml',
-            'path': f'./ruleset-{kind}.yaml', 'interval': 86400}
-        rules.append(f'RULE-SET,{name},DIRECT')
+            'path': f'./ruleset-{name}.yaml', 'interval': 86400}
+        rules.append(f'RULE-SET,{name},{target}')
     return providers, rules
 
 

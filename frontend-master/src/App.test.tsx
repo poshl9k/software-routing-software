@@ -364,7 +364,8 @@ test("admin lists and publishes rule-set versions", async () => {
   await userEvent.type(screen.getByRole("textbox", { name: "Содержимое" }), "5.5.5.0/24");
   await userEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
   await waitFor(() => expect(published).toHaveLength(1));
-  expect(published[0]).toEqual({ kind: "domain", version: "ru-ips-1", content: "5.5.5.0/24" });
+  expect(published[0]).toEqual({ kind: "domain", version: "ru-ips-1",
+    content: "5.5.5.0/24", source: "ru-domains" });
 });
 
 test("inactive devices still use a tariff slot; expired entitlement blocks exports", async () => {

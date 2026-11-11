@@ -417,6 +417,7 @@ export function RuleSetsPage() {
   const [srcName, setSrcName] = useState("");
   const [srcUrl, setSrcUrl] = useState("");
   const [srcKind, setSrcKind] = useState<"domain" | "ipcidr">("domain");
+  const [slot, setSlot] = useState<"ru-domains" | "ru-ips" | "tg-domains" | "tg-ips" | "">("ru-domains");
 
   async function loadSources() {
     setSources(await masterApi.ruleSetSources().catch(() => []));
@@ -466,7 +467,8 @@ export function RuleSetsPage() {
     event.preventDefault();
     setBusy(true); setError(null);
     try {
-      await masterApi.publishRuleSet({ kind, version: version.trim(), content });
+      await masterApi.publishRuleSet({ kind, version: version.trim(), content,
+        source: slot === "" ? null : slot });
       setData(await masterApi.rulesets());
       setVersion(""); setContent("");
     } catch (reason) { setError(reason); } finally { setBusy(false); }
@@ -502,6 +504,16 @@ export function RuleSetsPage() {
           <option value="domain">Домены</option>
           <option value="ipcidr">IP-сети</option>
         </TextField>
+        <TextField select label="Слот профиля" value={slot} margin="dense" fullWidth
+          onChange={event => setSlot(event.target.value as typeof slot)}
+          helperText="Слот задаёт, куда пойдёт трафик: ru-* напрямую, tg-* в туннель"
+          SelectProps={{ native: true }}>
+          <option value="">не привязан</option>
+          <option value="tg-domains">tg-domains → в туннель</option>
+          <option value="tg-ips">tg-ips → в туннель</option>
+          <option value="ru-domains">ru-domains → напрямую</option>
+          <option value="ru-ips">ru-ips → напрямую</option>
+        </TextField>
         <TextField label="Версия" value={version} margin="dense" fullWidth
           onChange={event => setVersion(event.target.value)} placeholder="ru-2026-11-01"
           inputProps={{ maxLength: 32 }} />
@@ -529,6 +541,8 @@ export function RuleSetsPage() {
           p: 1, borderBottom: "1px solid", borderColor: "divider" }}>
           <Chip size="small" variant="outlined" label={row.kind === "domain" ? "домены" : "IP"} />
           <Typography sx={{ minWidth: 180 }}>{row.version}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ minWidth: 110 }}>
+            {row.source ?? "без слота"}</Typography>
           <Typography variant="body2" color="text.secondary">{row.entries} записей</Typography>
           <Typography variant="caption" color="text.secondary">{row.sha256.slice(0, 12)}…</Typography>
         </Box>)}

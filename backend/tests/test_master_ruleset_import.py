@@ -304,3 +304,18 @@ async def test_import_ripe_delegated_ru_prefixes(master, monkeypatch):
     assert '10.0.0.0/24' in payload and '10.0.1.0/25' in payload
     assert not any(entry.startswith('9.9.9.') for entry in payload)
     assert '2001:640::/32' in payload
+
+
+async def test_ipcidr_source_keeps_ipv6_prefixes(master, monkeypatch):
+    client, _, _ = master
+    # Telegram publishes IPv6 CIDRs next to IPv4 ones; a bare "2001:67c:..." has
+    # no dot and must not be mistaken for a TLD by the domain heuristic.
+    fake_source(monkeypatch, b'91.108.56.0/22\n2001:67c:4e8::/48\n')
+    await initialize(client)
+    response = await client.post('/api/master-admin/rulesets/import', json={
+        'kind': 'ipcidr', 'version': 'tg-ips-1',
+        'url': 'https://core.telegram.org/resources/cidr.txt'})
+    assert response.status_code == 201, response.text
+    assert response.json()['entries'] == 2
+    served = await client.get('/api/rulesets/ipcidr/tg-ips-1.yaml')
+    assert '2001:67c:4e8::/48' in served.text

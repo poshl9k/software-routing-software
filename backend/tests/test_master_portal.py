@@ -314,10 +314,17 @@ async def test_mihomo_export_pins_published_rule_providers(master_portal):
     states[('https://n1', f"s{ids['account']}")] = tunnel_state()
     with Session(engine) as db:
         db.add(Setting(key='master_public_url', value='https://my.example'))
-        db.add(RuleSet(kind='domain', version='ru-2026-11-01', sha256='a' * 64, entries=2,
+        db.add(RuleSet(kind='domain', source='ru-domains', version='ru-2026-11-01',
+                       sha256='a' * 64, entries=2,
                        content='example.com\n+.example.net\n', created_at=NOW))
-        db.add(RuleSet(kind='ipcidr', version='ru-ips-1', sha256='b' * 64, entries=1,
-                       content='5.5.5.0/24\n', created_at=NOW))
+        db.add(RuleSet(kind='ipcidr', source='ru-ips', version='ru-ips-1', sha256='b' * 64,
+                       entries=1, content='5.5.5.0/24\n', created_at=NOW))
+        # Telegram lists are published into their own slots and must be routed
+        # through the tunnel, ahead of the Russian direct rules.
+        db.add(RuleSet(kind='domain', source='tg-domains', version='tg-domains-1',
+                       sha256='c' * 64, entries=1, content='t.me\n', created_at=NOW))
+        db.add(RuleSet(kind='ipcidr', source='tg-ips', version='tg-ips-1',
+                       sha256='d' * 64, entries=1, content='91.108.56.0/22\n', created_at=NOW))
         db.commit()
     await login(master_portal)
     response = await client.get(f'/api/portal/devices/{device_id}/export?format=mihomo')
@@ -326,8 +333,13 @@ async def test_mihomo_export_pins_published_rule_providers(master_portal):
     assert 'rule-providers:' in text
     assert 'url: "https://my.example/api/rulesets/domain/ru-2026-11-01.yaml"' in text
     assert 'url: "https://my.example/api/rulesets/ipcidr/ru-ips-1.yaml"' in text
+    assert 'url: "https://my.example/api/rulesets/domain/tg-domains-1.yaml"' in text
+    assert 'url: "https://my.example/api/rulesets/ipcidr/tg-ips-1.yaml"' in text
     assert 'behavior: "domain"' in text and 'behavior: "ipcidr"' in text
     rules = text[text.index('rules:'):text.index('dns:')]
+    # Telegram is forced into the tunnel before anything may send it direct.
+    assert rules.index('RULE-SET,tg-domains,PROXY') < rules.index('RULE-SET,ru-domains,DIRECT')
+    assert rules.index('RULE-SET,tg-ips,PROXY') < rules.index('RULE-SET,ru-ips,DIRECT')
     assert rules.index('RULE-SET,ru-domains,DIRECT') < rules.index('GEOIP,RU,DIRECT')
     assert rules.index('RULE-SET,ru-ips,DIRECT') < rules.index('MATCH,PROXY')
 

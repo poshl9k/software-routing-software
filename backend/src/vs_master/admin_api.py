@@ -16,7 +16,7 @@ from vs_router.api.errors import APIError
 from vs_router.schema import Model
 from vs_router.secrets import decrypt_secret, encrypt_secret
 
-from . import ruleset_import, rulesets
+from . import exports, ruleset_import, rulesets
 from .auth import current_admin
 from .bridge import BridgeClient, BridgeError
 from .models import (Account, Audit, Device, Node, RuleSet, RuleSetSource, Setting, Subscription,
@@ -557,10 +557,16 @@ def put_subscription(account_id: int, body: SubscriptionBody, request: Request,
 
 
 class RuleSetBody(Model):
-    """One immutable rule-set version; a correction is a new version."""
+    """One immutable rule-set version; a correction is a new version.
+
+    ``source`` names the provider slot the version serves ("ru-ips",
+    "tg-domains", …). Without it the version is published but not referenced by
+    generated profiles.
+    """
     kind: StrictStr
     version: StrictStr = Field(min_length=1, max_length=32)
     content: StrictStr = Field(min_length=1, max_length=rulesets.MAX_BYTES)
+    source: StrictStr | None = Field(default=None, max_length=64)
 
 
 @router.get('/rulesets')
@@ -571,7 +577,13 @@ def list_rulesets(db: Session = Depends(get_db)):
         row = rulesets.current(db, kind)
         current[kind] = {k: v for k, v in rulesets.view(row).items()
                          if k in ('kind', 'version', 'entries', 'sha256')} if row else None
-    return {'rulesets': [rulesets.view(row) for row in rows], 'current': current}
+    # One entry per provider slot the exporter actually references.
+    slots = {}
+    for kind, name, target in exports.PROVIDER_SPECS:
+        row = rulesets.current(db, kind, source=name)
+        slots[name] = {'kind': kind, 'target': target, **rulesets.view(row)} if row else             {'kind': kind, 'target': target, 'version': None}
+    return {'rulesets': [rulesets.view(row) for row in rows], 'current': current,
+            'slots': slots}
 
 
 @router.post('/rulesets', status_code=201)
@@ -581,7 +593,7 @@ def publish_ruleset(body: RuleSetBody, request: Request, db: Session = Depends(g
     text, entries, digest = rulesets.normalize(body.kind, body.content)
     begin_write(db)
     row = RuleSet(kind=body.kind, version=body.version, sha256=digest, entries=entries,
-                  content=text, created_at=now(request))
+                  content=text, created_at=now(request), source=body.source)
     db.add(row)
     audit(db, 'master.ruleset.publish', f'{body.kind}:{body.version}', now(request))
     try:
