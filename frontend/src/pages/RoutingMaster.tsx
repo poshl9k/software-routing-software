@@ -557,6 +557,39 @@ function withDeclaredSources(rules: RoutingRule[], configuration: Configuration,
   return { ...configuration, routing_rules: rules, rule_sets: [...declared.values()] };
 }
 
+/** IPv4 network membership, used to check the resolver's access list. */
+function ipv4Number(value: string): number | null {
+  const parts = value.split(".");
+  if (parts.length !== 4) return null;
+  const numbers = parts.map((part) => Number(part));
+  if (numbers.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+  return numbers.reduce((total, n) => total * 256 + n, 0);
+}
+
+export function withinCidr(address: string, cidr: string): boolean {
+  const [network, bits] = cidr.split("/");
+  const ip = ipv4Number(address);
+  const base = ipv4Number(network);
+  const prefix = Number(bits);
+  if (ip === null || base === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) return false;
+  const block = 2 ** (32 - prefix);
+  return Math.floor(ip / block) === Math.floor(base / block);
+}
+
+/** Captured segments the resolver's access list does not allow (it would refuse). */
+export function dnsDeniedSegments(configuration: Configuration): ReadonlySet<string> {
+  const denied = new Set<string>();
+  for (const name of configuration.tproxy.ingress_interfaces) {
+    const item = (configuration.interfaces ?? []).find((candidate) => candidate.name === name);
+    const addresses = (item?.addresses ?? []).filter((address) => !address.includes(":"));
+    if (!addresses.length) continue;
+    const covered = addresses.some((address) =>
+      configuration.dns.access_control.some((cidr) => withinCidr(address.split("/")[0], cidr)));
+    if (!covered) denied.add(name);
+  }
+  return denied;
+}
+
 /* ------------------------------------------------------------------ */
 /* Segments: the same ordered rules, grouped by their source.          */
 /* ------------------------------------------------------------------ */
@@ -639,7 +672,7 @@ export function segmentGroups(configuration: Configuration, rules: RoutingRule[]
   return [...groups.values()];
 }
 
-function SegmentsView({ groups, disabled, onAdd, onCapture, captureBusy, captureError, dnsPolicyMissing }: {
+function SegmentsView({ groups, disabled, onAdd, onCapture, captureBusy, captureError, dnsPolicyMissing, dnsDenied }: {
   groups: SegmentGroup[];
   disabled: boolean;
   onAdd: (subject: RoutingSubject) => void;
@@ -647,6 +680,8 @@ function SegmentsView({ groups, disabled, onAdd, onCapture, captureBusy, capture
   captureBusy: boolean;
   captureError: unknown;
   dnsPolicyMissing: boolean;
+  /** Captured segments whose subnet the resolver's access list does not allow. */
+  dnsDenied: ReadonlySet<string>;
 }) {
   if (!groups.length) {
     return <Card title="Сегменты сети">
@@ -679,6 +714,10 @@ function SegmentsView({ groups, disabled, onAdd, onCapture, captureBusy, capture
             disabled={disabled || captureBusy}
             onChange={(on: boolean) => onCapture(captureName, on)} />}
         <ErrorNotice error={routingErrorText(captureError)} />
+        {captureName && group.captured && dnsDenied.has(captureName) && <InfoNote severity="warning">
+          Сеть сегмента не разрешена резолверу (dns.access_control): клиенты получат отказ DNS.
+          Список разрешённых сетей задаётся на странице DNS.
+        </InfoNote>}
         {captureName && group.captured && dnsPolicyMissing && <InfoNote severity="warning">
           У контура захвата не задана DNS-политика TProxy: применение завершится ошибкой
           генератора. Политика задаётся не на этой странице — редактор появится в срезе S4.
@@ -917,6 +956,11 @@ export default function RoutingMasterPage() {
     try {
       const saved = await saveDraft({ ...configuration,
         routing_rules: editor.value ?? configuration.routing_rules,
+        // The contour also needs a resolver listener on every captured segment;
+        // without it the generator refuses with `tproxy.dns_split_missing_listener`.
+        dns: on && !configuration.dns.interfaces.includes(name)
+          ? { ...configuration.dns, interfaces: [...configuration.dns.interfaces, name] }
+          : configuration.dns,
         tproxy: { ...configuration.tproxy, enabled: ingress.length > 0, ingress_interfaces: ingress } });
       setNotice(`Черновик v${saved.id} сохранён`);
     } catch (error) {
@@ -958,6 +1002,7 @@ export default function RoutingMasterPage() {
     {mode === "segments" && <SegmentsView groups={segmentGroups(configuration, rules)}
       captureBusy={captureBusy} captureError={captureError} onCapture={(name, on) => void setCapture(name, on)}
       dnsPolicyMissing={(configuration.tproxy.dns.servers ?? []).length === 0}
+      dnsDenied={dnsDeniedSegments(configuration)}
       disabled={disabled} onAdd={(next) => {
         // A segment card knows its source, so the wizard opens on the
         // destination step instead of asking "кому" again.

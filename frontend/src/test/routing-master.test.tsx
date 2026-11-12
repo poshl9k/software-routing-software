@@ -471,6 +471,8 @@ it("criterion_S2_capture_toggle_persists_the_enabled_contour_and_ingress", async
   const saved = savedDraft(fetch);
   expect(saved.tproxy.enabled).toBe(true);
   expect(saved.tproxy.ingress_interfaces).toEqual(["lan0"]);
+  // A captured segment also needs a resolver listener on that interface.
+  expect(saved.dns.interfaces).toContain("lan0");
 });
 
 it("criterion_S2_capture_on_is_shown_as_on_and_drops_the_warning", async () => {
@@ -486,6 +488,8 @@ it("criterion_S2_capture_on_is_shown_as_on_and_drops_the_warning", async () => {
   // Capture without a DNS policy cannot be generated: the card says so instead
   // of letting the operator find out at apply time.
   expect(screen.getByText(/не задана DNS-политика TProxy/)).toBeVisible();
+  // The resolver would refuse this subnet: the card names the consequence.
+  expect(screen.getByText(/не разрешена резолверу/)).toBeVisible();
 });
 
 it("criterion_S1_order_tab_numbers_rules_across_groups", async () => {
