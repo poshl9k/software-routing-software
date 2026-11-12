@@ -30,6 +30,9 @@
 - Master-portal plan: `docs/master-portal-plan.md` + ADR-0035 decide the `vs_master`
   master/node architecture (single subscriber DB on the master, node-only bridge access).
   Phase: not started — read the plan's status table before any portal work.
+- Router split-routing plan (SSID → VLAN → РФ/AWG exits):
+  `docs/router-split-routing-plan.md`. Phase: plan accepted, no slice started — read
+  its status table before any routing/UI work.
 - Operational references: `docs/deploy-ssh.md` (fleet SSH key, host fingerprints),
   `docs/install.md`, `installer/README.md`,
   `docs/admin.md`, `docs/tunnel-proxy-apply.md`. `docs/lab-01` through `lab-04`

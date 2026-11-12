@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Маршрутизация по сегментам — прототип</title>
+<style>
+  :root{
+    --bg:#08090a; --panel:#0f1011; --surface:#191a1b; --hover:#28282c;
+    --text:#f7f8f8; --text2:#d0d6e0; --text3:#8a8f98; --text4:#62666d;
+    --brand:#5e6ad2; --accent:#7170ff; --accent-soft:rgba(113,112,255,.10);
+    --green:#4ade80; --green-soft:rgba(16,185,129,.14);
+    --amber:#f2c94c; --amber-soft:rgba(242,201,76,.12); --amber-border:rgba(242,201,76,.25);
+    --red:#f87171; --red-soft:rgba(242,86,86,.14);
+    --purple:#a78bfa; --purple-soft:rgba(167,139,250,.14);
+    --blue:#9b9bff; --blue-soft:rgba(113,112,255,.14);
+    --border:rgba(255,255,255,.08); --border-sub:rgba(255,255,255,.05); --border-strong:rgba(255,255,255,.12);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{width:1000px;max-width:100%;padding:22px 24px 40px;text-align:left}
+  h1{font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0 0 4px}
+  .lede{color:var(--text3);margin:0 0 14px;font-size:13px}
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:18px}
+  .tab{appearance:none;background:none;border:0;color:var(--text3);font:inherit;font-size:13px;
+    padding:9px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab:hover{color:var(--text2)}
+  .tab[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;margin-bottom:14px}
+  .card-head{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border-sub)}
+  .card-body{padding:14px 16px}
+  .grow{flex:1;min-width:0}
+  .title{font-size:15px;font-weight:600;letter-spacing:-.005em}
+  .sub{color:var(--text3);font-size:12.5px;margin-top:2px}
+  .badges{display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:flex-end}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;line-height:1;
+    padding:5px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+  .b-green{color:var(--green);background:var(--green-soft);border-color:rgba(74,222,128,.18)}
+  .b-amber{color:var(--amber);background:var(--amber-soft);border-color:var(--amber-border)}
+  .b-red{color:var(--red);background:var(--red-soft);border-color:rgba(248,113,113,.18)}
+  .b-blue{color:var(--blue);background:var(--blue-soft);border-color:rgba(155,155,255,.18)}
+  .b-purple{color:var(--purple);background:var(--purple-soft);border-color:rgba(167,139,250,.18)}
+  .b-grey{color:var(--text3);background:rgba(138,143,152,.10);border-color:var(--border)}
+  .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+  .btn{font:inherit;font-size:13px;padding:7px 14px;border-radius:6px;border:1px solid var(--border-strong);
+    background:transparent;color:var(--text2);cursor:pointer}
+  .btn:hover{background:var(--hover);color:var(--text)}
+  .btn-primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  .btn-primary:hover{background:#6b76d9;color:#fff}
+  .btn-ghost{border-color:transparent;color:var(--text3);padding:7px 9px}
+  .btn-ghost:hover{color:var(--text)}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:8px}
+  .chip{font-size:12px;padding:5px 9px;border-radius:6px;border:1px solid var(--border);
+    background:rgba(255,255,255,.04);color:var(--text2);white-space:nowrap}
+  .chip.g{color:var(--green);border-color:rgba(74,222,128,.25);background:var(--green-soft)}
+  .chip.a{color:var(--amber);border-color:var(--amber-border);background:var(--amber-soft)}
+  .chip.r{color:var(--red);border-color:rgba(248,113,113,.25);background:var(--red-soft)}
+  .chip.p{color:var(--purple);border-color:rgba(167,139,250,.25);background:var(--purple-soft)}
+  .chip.b{color:var(--blue);border-color:rgba(155,155,255,.25);background:var(--blue-soft)}
+  .arrow{color:var(--text4);font-size:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12.5px}
+  .kv dt{color:var(--text3)}
+  .kv dd{margin:0;color:var(--text2)}
+  .seg{cursor:pointer;transition:border-color .12s,background .12s}
+  .seg:hover{border-color:var(--border-strong);background:#111213}
+  .exits{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  .exit-line{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text3);
+    background:rgba(255,255,255,.03);border:1px solid var(--border-sub);border-radius:6px;padding:6px 10px}
+  .exit-line b{color:var(--text2);font-weight:500}
+  .exit-line .chip{font-size:11.5px;padding:4px 8px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-weight:500;color:var(--text3);font-size:12px;padding:8px 10px;
+    background:#141516;border-bottom:1px solid var(--border)}
+  td{padding:9px 10px;border-bottom:1px solid var(--border-sub);vertical-align:middle}
+  tr:last-child td{border-bottom:0}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--text2)}
+  .num{color:var(--text4);font-variant-numeric:tabular-nums;width:28px}
+  .row-actions{display:flex;gap:2px;justify-content:flex-end}
+  .info{display:flex;gap:9px;padding:10px 12px;border-radius:6px;font-size:12.5px;line-height:1.45;
+    background:var(--accent-soft);border:1px solid rgba(113,112,255,.25);color:var(--text2);margin-top:12px}
+  .warn{background:var(--amber-soft);border-color:var(--amber-border)}
+  .warn .ic{color:var(--amber)}
+  .info .ic{color:var(--accent);flex:none;font-weight:600}
+  .muted{color:var(--text3)}
+  .summary{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 16px;padding:10px 14px;
+    border:1px solid var(--border);border-radius:8px;background:var(--panel)}
+  .summary div{font-size:12.5px;color:var(--text3)}
+  .summary b{color:var(--text);font-weight:600;margin-right:5px;font-variant-numeric:tabular-nums}
+  .presets{display:flex;gap:8px;flex-wrap:wrap}
+  .preset{text-align:left;font:inherit;font-size:12.5px;color:var(--text2);cursor:pointer;
+    background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 12px;max-width:240px}
+  .preset:hover{border-color:rgba(113,112,255,.4);background:#1d1e22}
+  .preset b{display:block;font-weight:600;color:var(--text);font-size:12.5px;margin-bottom:2px}
+  .preset span{color:var(--text3)}
+  .switch{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text2);cursor:pointer}
+  .track{width:32px;height:18px;border-radius:999px;background:#33353a;position:relative;flex:none;transition:background .15s}
+  .track i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .15s}
+  .switch.on .track{background:var(--brand)}
+  .switch.on .track i{left:16px}
+  .section-label{font-size:12px;color:var(--text3);margin:18px 0 8px;display:flex;align-items:center;gap:8px}
+  .section-label::after{content:"";flex:1;height:1px;background:var(--border-sub)}
+  .footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+  .hidden{display:none}
+  .flat-group td{background:#101113;color:var(--text3);font-size:11.5px;letter-spacing:.02em;padding:6px 10px}
+  .fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .field-label{font-size:12px;color:var(--text3);margin-bottom:5px}
+  .select{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    background:rgba(255,255,255,.04);border:1px solid var(--border-strong);border-radius:6px;
+    padding:8px 10px;font-size:13px;color:var(--text);cursor:pointer}
+  .select:hover{border-color:rgba(113,112,255,.45)}
+  .select .caret{color:var(--text4);font-size:10px}
+  .field-hint{font-size:11.5px;color:var(--text4);margin-top:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Маршрутизация</h1>
+  <p class="lede">Политика выхода по сегментам. У каждого сегмента свои выходы: один для РФ, один для туннеля.</p>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-view="segments">Сегменты</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="order">Порядок и применение</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="devices">Устройства абонентов</button>
+  </div>
+
+  <!-- ===================== SEGMENTS ===================== -->
+  <section id="view-segments">
+    <div class="summary">
+      <div><b>5</b>сегментов</div>
+      <div><b>4</b>с перехватом</div>
+      <div><b>3</b>РФ-выхода</div>
+      <div><b>3</b>туннеля</div>
+      <div><b>7</b>правил</div>
+    </div>
+
+    <div class="info">
+      <span class="ic">i</span>
+      <div>Сегменты независимы: порядок правил внутри сегмента важен, между сегментами — нет. SSID и привязка SSID→VLAN живут в Omada; панель видит только VLAN-интерфейс.</div>
+    </div>
+
+    <div class="section-label">Сегменты сети</div>
+
+    <div class="card seg" data-seg="home">
+      <div class="card-head">
+        <div class="grow">
+          <div class="title">Домашняя сеть <span class="badge b-grey">vlan10</span></div>
+          <div class="sub">метка оператора · 10.10.10.0/24 · шлюз 10.10.10.1 · 12 аренд</div>
+        </div>
+        <div class="badges">
+          <span class="badge b-green"><span class="dot"></span>перехват включён</span>
+          <span class="badge b-blue">3 правила</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="exits">
+          <div class="exit-line">РФ-выход <span class="chip g">wan1 · Ростелеком</span></div>
+          <div class="exit-line">Туннель <span class="chip a">awg-de</span></div>
+        </div>
+        <div class="flow">
+          <span class="chip">РФ-адреса</span><span class="arrow">→</span><span class="chip g">wan1</span>
+          <span class="arrow">·</span>
+          <span class="chip">Telegram</span><span class="arrow">→</span><span class="chip a">awg-de</span>
+          <span class="arrow">·</span>
+          <span class="chip">остальное</span><span class="arrow">→</span><span class="chip a">awg-de</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card seg" data-seg="guest">
+      <div class="card-head">
+        <div class="grow">
+          <div class="title">Гости <span class="badge b-grey">vlan20</span></div>
+          <div class="sub">метка оператора · 10.10.20.0/24 · шлюз 10.10.20.1 · 3 аренды</div>
+        </div>
+        <div class="badges">
+          <span class="badge b-amber"><span class="dot"></span>перехват выключен</span>
+          <span class="badge b-blue">1 правило</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="exits">
+          <div class="exit-line">РФ-выход <span class="chip g">wan0 · МГТС</span></div>
+          <div class="exit-line">Туннель <span class="chip a">awg-nl</span></div>
+        </div>
+        <div class="flow">
+          <span class="chip">всё</span><span class="arrow">→</span><span class="chip a">awg-nl</span>
+        </div>
+        <div class="info warn"><span class="ic">!</span><div>Правило сохранено, но не действует: у сегмента выключен перехват трафика. Трафик идёт по обычной маршрутизации.</div></div>
+      </div>
+    </div>
+
+    <div class="card seg" data-seg="iot">
+      <div class="card-head">
+        <div class="grow">
+          <div class="title">IoT <span class="badge b-grey">vlan30</span></div>
+          <div class="sub">метка оператора · 10.10.30.0/24 · шлюз 10.10.30.1 · 8 аренд</div>
+        </div>
+        <div class="badges">
+          <span class="badge b-green"><span class="dot"></span>перехват включён</span>
+          <span class="badge b-blue">1 правило</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="exits">
+          <div class="exit-line">РФ-выход <span class="chip g">wan2 · резерв</span></div>
+          <div class="exit-line">Туннель <span class="chip">не нужен</span></div>
+        </div>
+        <div class="flow">
+          <span class="chip">всё</span><span class="arrow">→</span><span class="chip g">wan2</span>
+          <span class="arrow">·</span><span class="chip r">изоляция от других VLAN</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card seg" data-seg="work">
+      <div class="card-head">
+        <div class="grow">
+          <div class="title">Работа <span class="badge b-grey">vlan40</span></div>
+          <div class="sub">метка оператора · 10.10.40.0/24 · шлюз 10.10.40.1 · 4 аренды</div>
+        </div>
+        <div class="badges">
+          <span class="badge b-green"><span class="dot"></span>перехват включён</span>
+          <span class="badge b-blue">2 правила</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="exits">
+          <div class="exit-line">РФ-выход <span class="chip g">wan1 · Ростелеком</span></div>
+          <div class="exit-line">Туннель <span class="chip a">awg-nl</span></div>
+        </div>
+        <div class="flow">
+          <span class="chip">РФ-адреса</span><span class="arrow">→</span><span class="chip g">wan1</span>
+          <span class="arrow">·</span>
+          <span class="chip">остальное</span><span class="arrow">→</span><span class="chip a">awg-nl</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card seg" data-seg="kids">
+      <div class="card-head">
+        <div class="grow">
+          <div class="title">Детская <span class="badge b-grey">vlan50</span></div>
+          <div class="sub">метка оператора · 10.10.50.0/24 · шлюз 10.10.50.1 · 2 аренды</div>
+        </div>
+        <div class="badges">
+          <span class="badge b-amber"><span class="dot"></span>нет IPv4-адреса</span>
+          <span class="badge b-grey">политика недоступна</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="muted" style="font-size:12.5px">У интерфейса нет IPv4-адреса — выбрать его источником трафика нельзя. Задайте адрес на странице «Подключения и адреса».</div>
+      </div>
+    </div>
+
+    <div class="footer"><button class="btn">Обновить из конфигурации</button></div>
+  </section>
+
+  <!-- ===================== SEGMENT EDITOR ===================== -->
+  <section id="view-editor" class="hidden">
+    <button class="btn btn-ghost" data-view="segments" style="margin-bottom:10px">← Все сегменты</button>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="grow">
+          <div class="title">Домашняя сеть <span class="badge b-grey">vlan10</span></div>
+          <div class="sub">метка оператора · 10.10.10.0/24 · зона lan · шлюз 10.10.10.1</div>
+        </div>
+        <label class="switch on"><span class="track"><i></i></span>Перехватывать трафик сегмента</label>
+      </div>
+      <div class="card-body">
+        <div class="grid">
+          <div class="kv"><dt>Источник</dt><dd class="mono">10.10.10.0/24</dd></div>
+          <div class="kv"><dt>DNS для клиентов</dt><dd class="mono">10.10.0.1</dd></div>
+          <div class="kv"><dt>Правил</dt><dd>3</dd></div>
+        </div>
+        <div class="info"><span class="ic">i</span><div>Перехват отправляет трафик сегмента в движок маршрутизации. Если движок недоступен, трафик сегмента блокируется, а не выходит напрямую.</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div class="grow"><div class="title">Выходы сегмента</div>
+        <div class="sub">Подставляются в быстрые настройки и в правило «всё остальное»</div></div></div>
+      <div class="card-body">
+        <div class="fields">
+          <div>
+            <div class="field-label">Выход для РФ</div>
+            <div class="select"><span class="mono">wan1 · Ростелеком</span><span class="caret">▼</span></div>
+            <div class="field-hint">Интерфейс хоста, с которого трафик уходит напрямую.</div>
+          </div>
+          <div>
+            <div class="field-label">Выход для туннеля</div>
+            <div class="select"><span class="mono">awg-de · клиентский</span><span class="caret">▼</span></div>
+            <div class="field-hint">AWG-туннель или прокси-выход; «не нужен» — если сегмент прямой.</div>
+          </div>
+        </div>
+        <div class="info warn"><span class="ic">!</span><div>Выход может быть своим у каждого сегмента. Проверка перед сохранением покажет, если у интерфейса нет адреса или туннель серверный.</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div class="grow"><div class="title">Куда направлять</div>
+        <div class="sub">Сверху вниз, срабатывает первое совпадение</div></div>
+        <button class="btn">Добавить правило</button>
+      </div>
+      <div class="card-body" style="padding:0">
+        <table>
+          <thead><tr><th class="num">#</th><th>Что</th><th>Куда</th><th style="width:110px"></th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="num">1</td>
+              <td><span class="badge b-blue">РФ-адреса</span> <span class="muted">ru-ips · 78 402 записи</span></td>
+              <td><span class="chip g">wan1</span></td>
+              <td><div class="row-actions"><button class="btn btn-ghost" aria-label="Выше">↑</button><button class="btn btn-ghost" aria-label="Ниже">↓</button><button class="btn btn-ghost" aria-label="Изменить">Изменить</button></div></td>
+            </tr>
+            <tr>
+              <td class="num">2</td>
+              <td><span class="badge b-purple">Telegram</span> <span class="muted">tg-ips + tg-domains</span></td>
+              <td><span class="chip a">awg-de</span></td>
+              <td><div class="row-actions"><button class="btn btn-ghost" aria-label="Выше">↑</button><button class="btn btn-ghost" aria-label="Ниже">↓</button><button class="btn btn-ghost" aria-label="Изменить">Изменить</button></div></td>
+            </tr>
+            <tr>
+              <td class="num">3</td>
+              <td><span class="badge b-grey">Всё остальное</span> <span class="muted">последнее правило сегмента, обязательно</span></td>
+              <td><span class="chip a">awg-de</span></td>
+              <td><div class="row-actions"><button class="btn btn-ghost" aria-label="Изменить">Изменить</button></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div class="grow"><div class="title">Быстрые настройки</div>
+        <div class="sub">Заменяют список правил сегмента целиком, используют выбранные выходы</div></div></div>
+      <div class="card-body presets">
+        <button class="preset"><b>РФ напрямую, остальное в туннель</b><span>ru-ips → wan1, всё остальное → awg-de</span></button>
+        <button class="preset"><b>Только заблокированное в туннель</b><span>блок-набор → awg-de, остальное → wan1</span></button>
+        <button class="preset"><b>Весь сегмент в туннель</b><span>всё → awg-de</span></button>
+        <button class="preset"><b>Весь сегмент напрямую</b><span>всё → wan1, перехват не нужен</span></button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div class="grow"><div class="title">Как это применится</div>
+        <div class="sub">Проверка до сохранения</div></div></div>
+      <div class="card-body">
+        <div class="flow">
+          <span class="chip">10.10.10.0/24</span><span class="arrow">→</span><span class="chip p">перехват</span>
+          <span class="arrow">→</span><span class="chip">ru-ips</span><span class="arrow">→</span><span class="chip g">wan1</span>
+        </div>
+        <div class="flow">
+          <span class="chip">10.10.10.0/24</span><span class="arrow">→</span><span class="chip p">перехват</span>
+          <span class="arrow">→</span><span class="chip">tg-ips, tg-domains</span><span class="arrow">→</span><span class="chip a">awg-de</span>
+        </div>
+        <div class="flow">
+          <span class="chip">10.10.10.0/24</span><span class="arrow">→</span><span class="chip p">перехват</span>
+          <span class="arrow">→</span><span class="chip">всё остальное</span><span class="arrow">→</span><span class="chip a">awg-de</span>
+        </div>
+        <div class="info warn"><span class="ic">!</span><div>Набор <b>ru-domains</b> не выбран: доменные правила не сработают для клиентов с собственным DoH. Основное совпадение — по адресам.</div></div>
+      </div>
+    </div>
+
+    <div class="footer"><button class="btn">Отмена</button><button class="btn btn-primary">Сохранить в черновик</button></div>
+  </section>
+
+  <!-- ===================== ORDER ===================== -->
+  <section id="view-order" class="hidden">
+    <div class="info"><span class="ic">i</span><div>Итоговый порядок, в котором движок проверяет правила. Группы сегментов идут в порядке интерфейсов; «Сам роутер» — всегда последним.</div></div>
+
+    <div class="card">
+      <div class="card-head"><div class="grow"><div class="title">Правила в порядке применения</div>
+        <div class="sub">Только чтение · 7 правил · 4 сегмента · 5 выходов</div></div>
+        <span class="badge b-amber">черновик не применён</span>
+      </div>
+      <div class="card-body" style="padding:0">
+        <table>
+          <tbody>
+            <tr class="flat-group"><td colspan="4">Сегмент vlan10 · 10.10.10.0/24 · РФ wan1 · туннель awg-de</td></tr>
+            <tr><td class="num">1</td><td>РФ-адреса</td><td><span class="chip g">wan1</span></td><td class="muted">ru-ips</td></tr>
+            <tr><td class="num">2</td><td>Telegram</td><td><span class="chip a">awg-de</span></td><td class="muted">tg-ips, tg-domains</td></tr>
+            <tr><td class="num">3</td><td>Всё остальное</td><td><span class="chip a">awg-de</span></td><td class="muted">0.0.0.0/0</td></tr>
+
+            <tr class="flat-group"><td colspan="4">Сегмент vlan20 · 10.10.20.0/24 · перехват выключен</td></tr>
+            <tr><td class="num">4</td><td>Всё</td><td><span class="chip a">awg-nl</span></td><td class="muted">0.0.0.0/0 · не действует</td></tr>
+
+            <tr class="flat-group"><td colspan="4">Сегмент vlan30 · 10.10.30.0/24 · РФ wan2</td></tr>
+            <tr><td class="num">5</td><td>Всё</td><td><span class="chip g">wan2</span></td><td class="muted">0.0.0.0/0</td></tr>
+
+            <tr class="flat-group"><td colspan="4">Сегмент vlan40 · 10.10.40.0/24 · РФ wan1 · туннель awg-nl</td></tr>
+            <tr><td class="num">6</td><td>РФ-адреса</td><td><span class="chip g">wan1</span></td><td class="muted">ru-ips</td></tr>
+            <tr><td class="num">7</td><td>Всё остальное</td><td><span class="chip a">awg-nl</span></td><td class="muted">0.0.0.0/0</td></tr>
+
+            <tr class="flat-group"><td colspan="4">Сам роутер · после всех сегментов</td></tr>
+            <tr><td class="num">—</td><td class="muted">правил нет</td><td class="muted">—</td><td class="muted">трафик роутера не перехватывается</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div class="grow"><div class="title">Проверки</div><div class="sub">Блокируют применение до исправления</div></div></div>
+      <div class="card-body">
+        <div class="flow">
+          <span class="badge b-green"><span class="dot"></span>выходы объявлены</span>
+          <span class="badge b-green"><span class="dot"></span>имена уникальны</span>
+          <span class="badge b-amber"><span class="dot"></span>перехват выключен у vlan20</span>
+          <span class="badge b-red"><span class="dot"></span>vlan50: нет IPv4</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer"><button class="btn">Отмена</button><button class="btn btn-primary">Перейти к применению</button></div>
+  </section>
+
+  <!-- ===================== DEVICES ===================== -->
+  <section id="view-devices" class="hidden">
+    <div class="info"><span class="ic">i</span><div>Правила для устройств абонентов. Работают только на профиле панели: субъект — адрес устройства в туннеле, а не адрес из DHCP.</div></div>
+    <div class="card">
+      <div class="card-head"><div class="grow"><div class="title">Устройства абонентов</div><div class="sub">2 устройства · совпадение по адресу в туннеле</div></div>
+      <button class="btn">Добавить правило</button></div>
+      <div class="card-body" style="padding:0">
+        <table>
+          <thead><tr><th>Устройство</th><th>Адрес</th><th>Правило</th><th></th></tr></thead>
+          <tbody>
+            <tr><td>owner / mike_test</td><td class="mono">10.66.66.2</td><td><span class="chip a">awg-nl</span></td><td><div class="row-actions"><button class="btn btn-ghost">Изменить</button></div></td></tr>
+            <tr><td>owner / router_home</td><td class="mono">10.66.66.3</td><td><span class="chip g">напрямую</span></td><td><div class="row-actions"><button class="btn btn-ghost">Изменить</button></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const views = ["segments","editor","order","devices"];
+  function show(name){
+    views.forEach(v=>document.getElementById("view-"+v).classList.toggle("hidden", v!==name));
+    const tabName = name==="editor" ? "segments" : name;
+    document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected", String(t.dataset.view===tabName)));
+    window.scrollTo({top:0});
+  }
+  document.querySelectorAll("[data-view]").forEach(el=>{
+    el.addEventListener("click",()=>show(el.dataset.view));
+  });
+  document.querySelectorAll(".seg").forEach(el=>{
+    el.addEventListener("click",()=>show("editor"));
+  });
+</script>
+</body>
+</html>
