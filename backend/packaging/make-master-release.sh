@@ -73,6 +73,11 @@ cp "$SOURCE/backend/packaging/vs-master-web.service" \
    "$SOURCE/backend/packaging/install-master.sh" \
    "$SOURCE/backend/packaging/caddy-master.conf" "$BUNDLE/"
 
+# Self-describing bundle: the installer prints this and an operator can prove
+# which commit a deployed directory came from without any git history. Same
+# convention as the node release archive (make-release.sh).
+printf '%s\n' "$COMMIT" > "$BUNDLE/REVISION"
+
 echo "[master-release] packing"
 mkdir -p "$OUT"
 (cd "$WORK" && tar czf "$OUT/vs-master-$COMMIT.tar.gz" "vs-master-$COMMIT")

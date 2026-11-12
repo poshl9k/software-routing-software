@@ -12,6 +12,11 @@ ETC=/etc/vs-router
 VENV=/opt/vs-master/venv
 
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
+# The bundle ships the exact commit it was built from; print it so an operator
+# (and the deploy log) can tell which code is on the host.
+if [ -f "$SCRIPT_DIR/REVISION" ]; then
+    echo "vs-master bundle commit: $(cat "$SCRIPT_DIR/REVISION")"
+fi
 if [ -e "$BASE/vs-master.db" ] && \
     { [ ! -f "$ETC/master.env" ] || ! grep -q '^VS_ROUTER_SECRET_KEY=' "$ETC/master.env"; }; then
     echo "existing master DB requires its original key in $ETC/master.env; refusing to replace it" >&2

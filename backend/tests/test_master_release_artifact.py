@@ -79,6 +79,12 @@ def test_master_release_artifact_inventory(tmp_path):
 
     # dist is ignored/generated; the release script builds UI into its bundle.
     assert 'VS_MASTER_STATIC_DIR="$BUNDLE/ui" npm run build' in release_script
+    # A deployed directory must be able to say which commit it came from: the
+    # bundle carries REVISION and the installer prints it (regression: a deploy
+    # script that did `cat REVISION` under `set -e` aborted on a bundle without it).
+    assert '> "$BUNDLE/REVISION"' in release_script
+    installer_text = (BACKEND / "packaging" / "install-master.sh").read_text(encoding="utf-8")
+    assert '"$SCRIPT_DIR/REVISION"' in installer_text
     installer = (BACKEND / "packaging" / "install-master.sh").read_text(encoding="utf-8")
     assert 'cp -a "$SCRIPT_DIR/ui"' in installer
 
