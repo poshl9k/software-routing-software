@@ -80,6 +80,41 @@ def expand_aliases(aliases):
     return expanded
 
 
+def routing_group_key(rule):
+    """The group a rule belongs to: one segment, one device, or the server."""
+    if rule.subject.kind == "interface":
+        return ("interface", rule.subject.interface or "")
+    if rule.subject.kind == "device":
+        return ("device", rule.subject.subscriber or "", rule.subject.peer or "")
+    return ("server",)
+
+
+def ordered_routing_rules(configuration):
+    """Keep each group's rules contiguous, in the order the operator sees.
+
+    Segments follow ``interfaces[]``; device groups keep their own order; the
+    catch-all "server" group goes last because its rules carry no source
+    matcher and would shadow every group after them. Within a group the
+    operator's order is untouched — first match wins.
+    """
+    buckets, order = {}, []
+    for rule in configuration.routing_rules:
+        key = routing_group_key(rule)
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(rule)
+    names = [item.name for item in configuration.interfaces]
+
+    def rank(key):
+        if key[0] == "interface":
+            position = names.index(key[1]) if key[1] in names else len(names)
+            return (0, position, key[1])
+        return (1 if key[0] == "device" else 2, 0, "")
+
+    return tuple(rule for key in sorted(order, key=rank) for rule in buckets[key])
+
+
 def validate_configuration(c):
     expand_aliases(c.aliases)
     aliases = {a.name: a for a in c.aliases}
@@ -150,6 +185,11 @@ def validate_configuration(c):
                 fail('routing.ruleset_unavailable')
             if engine_formats[name] not in ('srs', 'json'):
                 fail('routing.ruleset_format')
+    # A segment whose capture is off keeps its rules as staged policy: the
+    # engine never receives that ingress, so nothing routes, and the segments
+    # page says so. Refusing it here would make multi-segment staging
+    # impossible (turning capture on for one segment while another still
+    # waits) and would reject a document the operator can explain.
     zones = {i.zone for i in c.interfaces if i.zone}
     members = {m for i in c.interfaces for m in i.members}
     # A parent link that carries an assigned VLAN is a trunk: it must not also run

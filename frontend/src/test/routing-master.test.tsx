@@ -456,6 +456,38 @@ it("criterion_S1_add_rule_from_a_segment_opens_the_wizard_past_the_subject_step"
   expect(saved[1].subject).toEqual({ kind: "interface", interface: "lan0" });
 });
 
+it("criterion_S2_capture_toggle_persists_the_enabled_contour_and_ingress", async () => {
+  const configuration = baseConfiguration();
+  configuration.routing_rules = [{ name: "ru_direct", subject: { kind: "interface", interface: "lan0" },
+    domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], rule_sets: [],
+    exit: { kind: "direct" } }];
+  const fetch = setup(configuration);
+  const user = userEvent.setup();
+  const toggle = await screen.findByLabelText("Перехватывать трафик сегмента");
+  expect(toggle).not.toBeChecked();
+  await user.click(toggle);
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const saved = savedDraft(fetch);
+  expect(saved.tproxy.enabled).toBe(true);
+  expect(saved.tproxy.ingress_interfaces).toEqual(["lan0"]);
+});
+
+it("criterion_S2_capture_on_is_shown_as_on_and_drops_the_warning", async () => {
+  const configuration = baseConfiguration();
+  configuration.tproxy = { ...configuration.tproxy, enabled: true, ingress_interfaces: ["lan0"] };
+  configuration.routing_rules = [{ name: "ru_direct", subject: { kind: "interface", interface: "lan0" },
+    domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], rule_sets: [],
+    exit: { kind: "direct" } }];
+  setup(configuration);
+  const toggle = await screen.findByLabelText("Перехватывать трафик сегмента");
+  expect(toggle).toBeChecked();
+  expect(screen.queryByText(/Перехват этого сегмента выключен/)).not.toBeInTheDocument();
+  // Capture without a DNS policy cannot be generated: the card says so instead
+  // of letting the operator find out at apply time.
+  expect(screen.getByText(/не задана DNS-политика TProxy/)).toBeVisible();
+});
+
 it("criterion_S1_order_tab_numbers_rules_across_groups", async () => {
   const configuration = baseConfiguration();
   configuration.routing_rules = [

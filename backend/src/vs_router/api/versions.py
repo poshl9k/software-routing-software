@@ -17,6 +17,7 @@ from .auth import admin, current_user, get_db
 from .configuration import check_roles, parse_configuration, redact, structural_diff, validate
 from .errors import APIError
 from .tunnel_peers import live_peers
+from ..validators import ordered_routing_rules
 
 router = APIRouter(dependencies=[Depends(current_user)])
 logger = logging.getLogger(__name__)
@@ -141,6 +142,10 @@ def create_draft(body: dict | None = Body(default=None), db: Session = Depends(g
     # it explicitly (`{"interfaces": []}`), which still clears it.
     configuration = (parse_configuration(body, old.model_dump(mode="json"))
                      if body else old)
+    # Keep each routing group contiguous and in display order, so the segments
+    # page and the evaluated list cannot disagree (see validators).
+    configuration = configuration.model_copy(
+        update={"routing_rules": ordered_routing_rules(configuration)})
     check_roles(configuration, old)
     # Store the deterministic tunnel/peer addresses so every client (any
     # browser build) sees them; explicit values are preserved.
@@ -171,6 +176,10 @@ def update_draft(body: dict = Body(), db: Session = Depends(get_db)):
     # writing a configuration with every collection empty.
     configuration = (parse_configuration(body, old.model_dump(mode="json"))
                      if body else old)
+    # Keep each routing group contiguous and in display order, so the segments
+    # page and the evaluated list cannot disagree (see validators).
+    configuration = configuration.model_copy(
+        update={"routing_rules": ordered_routing_rules(configuration)})
     check_roles(configuration, old)
     configuration = materialize_addresses(configuration)
     row.configuration = configuration

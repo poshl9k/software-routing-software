@@ -29,6 +29,7 @@ import { InfoNote } from "../components/InfoNote";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
+import { Toggle } from "../components/Toggle";
 import { Card } from "../components/Card";
 import { ValueTabs } from "../components/Tabs";
 import { useConfiguration, useApplyCommands } from "../state";
@@ -638,10 +639,14 @@ export function segmentGroups(configuration: Configuration, rules: RoutingRule[]
   return [...groups.values()];
 }
 
-function SegmentsView({ groups, disabled, onAdd }: {
+function SegmentsView({ groups, disabled, onAdd, onCapture, captureBusy, captureError, dnsPolicyMissing }: {
   groups: SegmentGroup[];
   disabled: boolean;
   onAdd: (subject: RoutingSubject) => void;
+  onCapture: (name: string, on: boolean) => void;
+  captureBusy: boolean;
+  captureError: unknown;
+  dnsPolicyMissing: boolean;
 }) {
   if (!groups.length) {
     return <Card title="Сегменты сети">
@@ -659,24 +664,39 @@ function SegmentsView({ groups, disabled, onAdd }: {
         «Порядок и применение», перестановка правил — в «Расширенных настройках».
       </Typography>
     </Card>
-    {groups.map((group) => <Card key={group.key} title={group.title}
-      action={!disabled && <Button onClick={() => onAdd(group.subject)}>Добавить правило</Button>}>
-      <Typography variant="body2" color="text.secondary" className="routing-subtitle">
-        {group.meta} · {group.rules.length} {plural(group.rules.length, "правило", "правила", "правил")}
-      </Typography>
-      {group.rules.length > 0
-        ? <div className="routing-table-wide"><DataTable heads={["Что", "Куда"]}
-          rows={group.rules.map(({ rule }) => [destinationLabel(rule), exitLabel(rule.exit)])} /></div>
-        : <EmptyState>Правил у этого источника нет.</EmptyState>}
-      {group.subject.kind === "interface" && group.rules.length > 0 && !group.captured &&
-        <InfoNote severity="warning">
-          Перехват этого сегмента выключен — правила сохранены, но не действуют.
+    {groups.map((group) => {
+      // The capture switch belongs to a segment: only an interface subject can
+      // carry ingress traffic, and only a segment with rules needs it.
+      const captureName = group.subject.kind === "interface" ? group.subject.interface : undefined;
+      return <Card key={group.key} title={group.title}
+        action={!disabled && <Button onClick={() => onAdd(group.subject)}>Добавить правило</Button>}>
+        <Typography variant="body2" color="text.secondary" className="routing-subtitle">
+          {group.meta} · {group.rules.length} {plural(group.rules.length, "правило", "правила", "правил")}
+        </Typography>
+        {captureName && group.rules.length > 0 &&
+          <Toggle label="Перехватывать трафик сегмента"
+            value={!!group.captured}
+            disabled={disabled || captureBusy}
+            onChange={(on: boolean) => onCapture(captureName, on)} />}
+        <ErrorNotice error={routingErrorText(captureError)} />
+        {captureName && group.captured && dnsPolicyMissing && <InfoNote severity="warning">
+          У контура захвата не задана DNS-политика TProxy: применение завершится ошибкой
+          генератора. Политика задаётся не на этой странице — редактор появится в срезе S4.
         </InfoNote>}
-      {group.unbounded && <InfoNote severity="warning">
-        У правила нет привязки к источнику: оно может совпасть и с трафиком сегментов.
-        Порядок в общем списке решает, что сработает раньше.
-      </InfoNote>}
-    </Card>)}
+        {group.rules.length > 0
+          ? <div className="routing-table-wide"><DataTable heads={["Что", "Куда"]}
+            rows={group.rules.map(({ rule }) => [destinationLabel(rule), exitLabel(rule.exit)])} /></div>
+          : <EmptyState>Правил у этого источника нет.</EmptyState>}
+        {group.subject.kind === "interface" && group.rules.length > 0 && !group.captured &&
+          <InfoNote severity="warning">
+            Перехват этого сегмента выключен — правила сохранены, но не действуют.
+          </InfoNote>}
+        {group.unbounded && <InfoNote severity="warning">
+          У правила нет привязки к источнику: оно может совпасть и с трафиком сегментов.
+          Порядок в общем списке решает, что сработает раньше.
+        </InfoNote>}
+      </Card>;
+    })}
   </>;
 }
 
@@ -800,7 +820,7 @@ function OrderView({ configuration, rules, final, disabled, onEdit }: {
 }
 
 export default function RoutingMasterPage() {
-  const { configuration, error: apiError, user, versions, busy } = useConfiguration();
+  const { configuration, error: apiError, user, versions, busy, saveDraft, setNotice } = useConfiguration();
   const catalog = useQuery({ queryKey: queryKeys.presetCatalog(), queryFn: api.presetCatalog });
   const apply = useApplyCommands();
   const navigate = useNavigate();
@@ -810,6 +830,8 @@ export default function RoutingMasterPage() {
   const [rule, setRule] = useState<RoutingRule>(() => emptyRule());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<{ index: number; name: string } | null>(null);
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [captureError, setCaptureError] = useState<unknown>(null);
   const [saveIntent, setSaveIntent] = useState<"draft" | "apply" | null>(null);
   const saveLock = useRef(false);
   // The operator may type a name of their own; then the automatic one stops
@@ -882,6 +904,27 @@ export default function RoutingMasterPage() {
     void editor.save((items) =>
       withDeclaredSources([...items, rule], configuration, catalogServices));
   };
+  // Capture is per segment and has to be persisted with the rules it applies
+  // to: an enabled contour without the segment in `ingress_interfaces` routes
+  // nothing, and a validator refuses that combination.
+  const setCapture = async (name: string, on: boolean) => {
+    if (readOnly || captureBusy) return;
+    const ingress = on
+      ? [...new Set([...configuration.tproxy.ingress_interfaces, name])]
+      : configuration.tproxy.ingress_interfaces.filter((item) => item !== name);
+    setCaptureBusy(true);
+    setCaptureError(null);
+    try {
+      const saved = await saveDraft({ ...configuration,
+        routing_rules: editor.value ?? configuration.routing_rules,
+        tproxy: { ...configuration.tproxy, enabled: ingress.length > 0, ingress_interfaces: ingress } });
+      setNotice(`Черновик v${saved.id} сохранён`);
+    } catch (error) {
+      setCaptureError(error);
+    } finally {
+      setCaptureBusy(false);
+    }
+  };
   const move = (index: number, direction: -1 | 1) => {
     if (readOnly || editor.saving) return;
     const target = index + direction;
@@ -913,6 +956,8 @@ export default function RoutingMasterPage() {
         { value: "wizard", label: "Мастер" },
         { value: "advanced", label: "Расширенные настройки" }]} />
     {mode === "segments" && <SegmentsView groups={segmentGroups(configuration, rules)}
+      captureBusy={captureBusy} captureError={captureError} onCapture={(name, on) => void setCapture(name, on)}
+      dnsPolicyMissing={(configuration.tproxy.dns.servers ?? []).length === 0}
       disabled={disabled} onAdd={(next) => {
         // A segment card knows its source, so the wizard opens on the
         // destination step instead of asking "кому" again.
