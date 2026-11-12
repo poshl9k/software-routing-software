@@ -95,7 +95,9 @@ function savedDraft(fetch: ReturnType<typeof vi.fn>) {
 async function openMaster(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("tab", { name: "Мастер маршрутизации" });
   await user.click(screen.getByRole("tab", { name: "Мастер маршрутизации" }));
+  // Segments are the default view; the wizard is one click away.
   await screen.findByRole("tab", { name: "Мастер" });
+  await user.click(screen.getByRole("tab", { name: "Мастер" }));
 }
 
 async function openAdvanced(user: ReturnType<typeof userEvent.setup>) {
@@ -395,4 +397,61 @@ it("criterion_S3_20_empty_catalog_and_empty_rules_never_invent_entries", async (
   await waitFor(() => expect(screen.queryByRole("status", { name: "Загрузка" })).not.toBeInTheDocument());
   expect(screen.queryByRole("group", { name: "Готовые сервисы" })).not.toBeInTheDocument();
   expect(screen.getByLabelText("Свои домены (по одному в строке)")).toHaveValue("");
+});
+
+/* ------------------------------------------------------------------ */
+/* S1: the segments view — the same ordered rules, grouped by source.  */
+/* ------------------------------------------------------------------ */
+
+it("criterion_S1_segments_is_the_default_view_and_groups_rules_by_source", async () => {
+  const configuration = baseConfiguration();
+  configuration.routing_rules = [
+    { name: "ru_direct", subject: { kind: "interface", interface: "lan0" },
+      domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], rule_sets: [],
+      exit: { kind: "interface", interface: "eth0" } },
+    { name: "server_block", subject: { kind: "server" }, domain_suffix: ["ads.test"],
+      domain_exact: [], ip_cidr: [], rule_sets: [], exit: { kind: "block" } },
+  ];
+  setup(configuration);
+  expect(await screen.findByRole("tab", { name: "Сегменты" }))
+    .toHaveAttribute("aria-selected", "true");
+  // The card names the interface by its operator label and keeps the model's
+  // own words for destination and exit.
+  expect(await screen.findByRole("heading", { name: "lan0 — домашняя сеть" })).toBeVisible();
+  expect(screen.getByText(/192\.168\.10\.1\/24 · зона lan/)).toBeVisible();
+  expect(screen.getByRole("cell", { name: "домены example.org" })).toBeVisible();
+  expect(screen.getByRole("cell", { name: "через интерфейс eth0" })).toBeVisible();
+  // A source without a matcher is called out instead of looking harmless.
+  expect(screen.getByRole("heading", { name: "Сам сервер" })).toBeVisible();
+  expect(screen.getByText(/нет привязки к источнику/)).toBeVisible();
+});
+
+it("criterion_S1_segment_warns_when_capture_is_off_and_stays_quiet_when_on", async () => {
+  const off = baseConfiguration();
+  off.routing_rules = [{ name: "ru_direct", subject: { kind: "interface", interface: "lan0" },
+    domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], rule_sets: [],
+    exit: { kind: "direct" } }];
+  setup(off);
+  expect(await screen.findByText(/Перехват этого сегмента выключен/)).toBeVisible();
+});
+
+it("criterion_S1_add_rule_from_a_segment_opens_the_wizard_past_the_subject_step", async () => {
+  const configuration = baseConfiguration();
+  configuration.routing_rules = [{ name: "existing", subject: { kind: "interface", interface: "lan0" },
+    domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], rule_sets: [],
+    exit: { kind: "direct" } }];
+  const fetch = setup(configuration);
+  const user = userEvent.setup();
+  const add = await screen.findAllByRole("button", { name: "Добавить правило" });
+  await user.click(add[0]);
+  // The source is known from the card: the wizard starts at "Что".
+  expect(screen.getByText("Сейчас: Что")).toBeVisible();
+  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "example.net");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const saved = savedDraft(fetch).routing_rules as RoutingRule[];
+  expect(saved[1].subject).toEqual({ kind: "interface", interface: "lan0" });
 });

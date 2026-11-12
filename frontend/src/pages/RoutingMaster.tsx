@@ -41,7 +41,7 @@ import type {
 } from "../types";
 
 type WizardStep = 0 | 1 | 2 | 3;
-type MasterMode = "wizard" | "advanced";
+type MasterMode = "segments" | "wizard" | "advanced";
 
 /** Backend guard codes of the routing model, in the operator's language. */
 const routingErrorTexts: Record<string, string> = {
@@ -556,13 +556,137 @@ function withDeclaredSources(rules: RoutingRule[], configuration: Configuration,
   return { ...configuration, routing_rules: rules, rule_sets: [...declared.values()] };
 }
 
+/* ------------------------------------------------------------------ */
+/* Segments: the same ordered rules, grouped by their source.          */
+/* ------------------------------------------------------------------ */
+
+export interface SegmentGroup {
+  key: string;
+  title: string;
+  meta: string;
+  subject: RoutingSubject;
+  rules: { rule: RoutingRule; index: number }[];
+  /** Interface groups only: the capture contour currently covers this segment. */
+  captured?: boolean;
+  /** A rule without a source matcher can match any traffic (ADR-0019). */
+  unbounded?: boolean;
+}
+
+function segmentGroup(
+  key: string, subject: RoutingSubject, configuration: Configuration,
+  interfaces: Map<string, Interface>, peers: DevicePeer[],
+): SegmentGroup {
+  if (subject.kind === "interface") {
+    const name = subject.interface ?? "";
+    const item = interfaces.get(name);
+    const addresses = (item?.addresses ?? []).filter((address) => !address.includes(":"));
+    return {
+      key,
+      title: item
+        ? item.description ? `${name} — ${item.description}` : name
+        : `Сегмент ${name}`,
+      meta: item
+        ? `${addresses.join(", ") || "адресов нет"} · зона ${item.zone ?? "не назначена"}`
+        : "интерфейса нет в конфигурации — правило всё равно применяется",
+      subject,
+      rules: [],
+      captured: !!item && configuration.tproxy.enabled &&
+        configuration.tproxy.ingress_interfaces.includes(name),
+    };
+  }
+  if (subject.kind === "device") {
+    const peer = peers.find((item) =>
+      item.subscriber === subject.subscriber && item.peer === subject.peer);
+    return {
+      key,
+      title: `Устройство ${subject.peer} · абонент ${subject.subscriber}`,
+      meta: peer
+        ? `${peer.addresses.join(", ") || "адресов нет"}${peer.ownDns ? " · собственный DNS" : ""}`
+        : "устройства нет в конфигурации — правило всё равно применяется",
+      subject,
+      rules: [],
+    };
+  }
+  return {
+    key, title: "Сам сервер", meta: "правила без привязки к источнику",
+    subject, rules: [], unbounded: true,
+  };
+}
+
+/**
+ * Group the ordered rule list by its subject, keeping the order in which each
+ * source first appears: the display never claims a priority the generator does
+ * not have. Reordering is done on the flat list (the advanced tab), not here.
+ */
+export function segmentGroups(configuration: Configuration, rules: RoutingRule[]): SegmentGroup[] {
+  const interfaces = new Map((configuration.interfaces ?? []).map((item) => [item.name, item]));
+  const peers = devicePeers(configuration);
+  const groups = new Map<string, SegmentGroup>();
+  rules.forEach((rule, index) => {
+    const key = rule.subject.kind === "interface"
+      ? `interface:${rule.subject.interface}`
+      : rule.subject.kind === "device"
+        ? `device:${rule.subject.subscriber}/${rule.subject.peer}`
+        : "server";
+    let group = groups.get(key);
+    if (!group) {
+      group = segmentGroup(key, rule.subject, configuration, interfaces, peers);
+      groups.set(key, group);
+    }
+    group.rules.push({ rule, index });
+  });
+  return [...groups.values()];
+}
+
+function SegmentsView({ groups, disabled, onAdd }: {
+  groups: SegmentGroup[];
+  disabled: boolean;
+  onAdd: (subject: RoutingSubject) => void;
+}) {
+  if (!groups.length) {
+    return <Card title="Сегменты сети">
+      <EmptyState>Правил маршрутизации пока нет. Создайте первое правило — оно появится в группе своего источника.</EmptyState>
+    </Card>;
+  }
+  const segments = groups.filter((group) => group.subject.kind === "interface");
+  const captured = segments.filter((group) => group.captured).length;
+  const ruleCount = groups.reduce((total, group) => total + group.rules.length, 0);
+  return <>
+    <Card title="Обзор">
+      <Typography variant="body2" color="text.secondary" className="routing-subtitle">
+        {segments.length} {plural(segments.length, "сегмент", "сегмента", "сегментов")} ·{" "}
+        с перехватом: {captured} · правил: {ruleCount}. Группы показаны в порядке конфигурации;
+        порядок правил меняется на вкладке «Расширенные настройки».
+      </Typography>
+    </Card>
+    {groups.map((group) => <Card key={group.key} title={group.title}
+      action={!disabled && <Button onClick={() => onAdd(group.subject)}>Добавить правило</Button>}>
+      <Typography variant="body2" color="text.secondary" className="routing-subtitle">
+        {group.meta} · {group.rules.length} {plural(group.rules.length, "правило", "правила", "правил")}
+      </Typography>
+      {group.rules.length > 0
+        ? <div className="routing-table-wide"><DataTable heads={["Что", "Куда"]}
+          rows={group.rules.map(({ rule }) => [destinationLabel(rule), exitLabel(rule.exit)])} /></div>
+        : <EmptyState>Правил у этого источника нет.</EmptyState>}
+      {group.subject.kind === "interface" && group.rules.length > 0 && !group.captured &&
+        <InfoNote severity="warning">
+          Перехват этого сегмента выключен — правила сохранены, но не действуют.
+        </InfoNote>}
+      {group.unbounded && <InfoNote severity="warning">
+        У правила нет привязки к источнику: оно может совпасть и с трафиком сегментов.
+        Порядок в общем списке решает, что сработает раньше.
+      </InfoNote>}
+    </Card>)}
+  </>;
+}
+
 export default function RoutingMasterPage() {
   const { configuration, error: apiError, user, versions, busy } = useConfiguration();
   const catalog = useQuery({ queryKey: queryKeys.presetCatalog(), queryFn: api.presetCatalog });
   const apply = useApplyCommands();
   const navigate = useNavigate();
   const editor = useDraftEditor<RoutingRule[]>();
-  const [mode, setMode] = useState<MasterMode>("wizard");
+  const [mode, setMode] = useState<MasterMode>("segments");
   const [step, setStep] = useState<WizardStep>(0);
   const [rule, setRule] = useState<RoutingRule>(() => emptyRule());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -665,8 +789,18 @@ export default function RoutingMasterPage() {
   return <RoutingSurface>
     <ErrorNotice error={routingErrorText(apiError)} />
     <ErrorNotice error={routingErrorText(editor.error)} />
-    <ValueTabs value={mode} change={(value) => { if (!disabled) setMode(value); }}
-      tabs={[{ value: "wizard", label: "Мастер" }, { value: "advanced", label: "Расширенные настройки" }]} />
+    <ValueTabs value={mode} change={(value) => setMode(value)}
+      tabs={[{ value: "segments", label: "Сегменты" }, { value: "wizard", label: "Мастер" },
+        { value: "advanced", label: "Расширенные настройки" }]} />
+    {mode === "segments" && <SegmentsView groups={segmentGroups(configuration, rules)}
+      disabled={disabled} onAdd={(next) => {
+        // A segment card knows its source, so the wizard opens on the
+        // destination step instead of asking "кому" again.
+        setRule({ ...emptyRule(), subject: next });
+        setNameEdited(false);
+        setStep(1);
+        setMode("wizard");
+      }} />}
     {mode === "wizard" && <>
       <WizardProgress steps={["Кому", "Что", "Куда", "Проверка"]} current={step} />
       <Card title={stepTitles[step]}>
