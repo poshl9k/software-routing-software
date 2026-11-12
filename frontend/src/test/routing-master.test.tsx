@@ -455,3 +455,45 @@ it("criterion_S1_add_rule_from_a_segment_opens_the_wizard_past_the_subject_step"
   const saved = savedDraft(fetch).routing_rules as RoutingRule[];
   expect(saved[1].subject).toEqual({ kind: "interface", interface: "lan0" });
 });
+
+it("criterion_S1_order_tab_numbers_rules_across_groups", async () => {
+  const configuration = baseConfiguration();
+  configuration.routing_rules = [
+    { name: "server_block", subject: { kind: "server" }, domain_suffix: ["ads.test"],
+      domain_exact: [], ip_cidr: [], rule_sets: [], exit: { kind: "block" } },
+    { name: "ru_direct", subject: { kind: "interface", interface: "lan0" },
+      domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], rule_sets: [],
+      exit: { kind: "interface", interface: "eth0" } },
+    { name: "rest_tunnel", subject: { kind: "interface", interface: "lan0" },
+      domain_suffix: [], domain_exact: [], ip_cidr: ["0.0.0.0/0"], rule_sets: [],
+      exit: { kind: "direct" } },
+  ];
+  setup(configuration);
+  const user = userEvent.setup();
+  await screen.findByRole("tab", { name: "Порядок и применение" });
+  await user.click(screen.getByRole("tab", { name: "Порядок и применение" }));
+  // Real numbers, not per-group renumbering: the flat order stays visible.
+  expect(screen.getByRole("heading", { name: "Сам сервер · правило 1" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "lan0 — домашняя сеть · правила 2–3" })).toBeVisible();
+  expect(screen.getByRole("cell", { name: "2" })).toBeVisible();
+  expect(screen.getByRole("cell", { name: "3" })).toBeVisible();
+  expect(screen.getByRole("cell", { name: "Конечный выход" })).toBeVisible();
+});
+
+it("criterion_S1_order_tab_warns_about_interleaved_server_rule_and_unusable_exit", async () => {
+  const configuration = baseConfiguration();
+  configuration.routing_rules = [
+    { name: "server_first", subject: { kind: "server" }, domain_suffix: ["ads.test"],
+      domain_exact: [], ip_cidr: [], rule_sets: [], exit: { kind: "block" } },
+    { name: "ghost_exit", subject: { kind: "interface", interface: "lan0" },
+      domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], rule_sets: [],
+      exit: { kind: "interface", interface: "ghost0" } },
+  ];
+  setup(configuration);
+  const user = userEvent.setup();
+  await screen.findByRole("tab", { name: "Порядок и применение" });
+  await user.click(screen.getByRole("tab", { name: "Порядок и применение" }));
+  expect(screen.getByText(/без источника стоит не последним/)).toBeVisible();
+  expect(screen.getByText(/интерфейса выхода ghost0 нет в конфигурации/)).toBeVisible();
+  expect(screen.getByText(/Перехват выключен у сегментов: lan0/)).toBeVisible();
+});

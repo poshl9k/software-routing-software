@@ -574,6 +574,8 @@ pre {
 .flow-chain .MuiChip-root { max-width: 100%; }
 .routing-summary { padding: 14px 16px; }
 .routing-subtitle { margin-bottom: 16px !important; }
+.routing-warnings { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.routing-warnings li { display: flex; align-items: flex-start; gap: 8px; }
 .routing-subject-summary { margin-bottom: 12px !important; }
 .routing-surface { max-width: 1120px; }
 .routing-surface nav ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; overflow: hidden; }

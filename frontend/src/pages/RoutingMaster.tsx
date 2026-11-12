@@ -41,7 +41,7 @@ import type {
 } from "../types";
 
 type WizardStep = 0 | 1 | 2 | 3;
-type MasterMode = "segments" | "wizard" | "advanced";
+type MasterMode = "segments" | "order" | "wizard" | "advanced";
 
 /** Backend guard codes of the routing model, in the operator's language. */
 const routingErrorTexts: Record<string, string> = {
@@ -655,8 +655,8 @@ function SegmentsView({ groups, disabled, onAdd }: {
     <Card title="Обзор">
       <Typography variant="body2" color="text.secondary" className="routing-subtitle">
         {segments.length} {plural(segments.length, "сегмент", "сегмента", "сегментов")} ·{" "}
-        с перехватом: {captured} · правил: {ruleCount}. Группы показаны в порядке конфигурации;
-        порядок правил меняется на вкладке «Расширенные настройки».
+        с перехватом: {captured} · правил: {ruleCount}. Порядок и проверки — на вкладке
+        «Порядок и применение», перестановка правил — в «Расширенных настройках».
       </Typography>
     </Card>
     {groups.map((group) => <Card key={group.key} title={group.title}
@@ -677,6 +677,125 @@ function SegmentsView({ groups, disabled, onAdd }: {
         Порядок в общем списке решает, что сработает раньше.
       </InfoNote>}
     </Card>)}
+  </>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Order: the flat list the engine actually evaluates, with checks.    */
+/* ------------------------------------------------------------------ */
+
+export interface OrderWarning { tone: "red" | "amber"; text: string }
+
+/** Contradictions the operator can see without opening every rule. */
+export function orderWarnings(configuration: Configuration, rules: RoutingRule[]): OrderWarning[] {
+  const warnings: OrderWarning[] = [];
+  const interfaces = new Map((configuration.interfaces ?? []).map((item) => [item.name, item]));
+  const peers = devicePeers(configuration);
+  const clients = new Set((configuration.tunnels ?? [])
+    .filter((tunnel) => tunnel.role === "client").map((tunnel) => tunnel.name));
+  const outbounds = new Set((configuration.proxies?.outbounds ?? []).map((outbound) => outbound.tag));
+  const groups = new Set((configuration.proxies?.groups ?? []).map((group) => group.tag));
+  const captureOff = new Set<string>();
+  rules.forEach((rule, index) => {
+    const subject = rule.subject;
+    if (subject.kind === "server" && index < rules.length - 1) {
+      warnings.push({ tone: "red", text:
+        `Правило «${rule.name}» без источника стоит не последним: оно может перехватить правила ниже.` });
+    }
+    if (subject.kind === "interface" && subject.interface) {
+      const item = interfaces.get(subject.interface);
+      if (!item) {
+        warnings.push({ tone: "red", text:
+          `Правило «${rule.name}»: интерфейса ${subject.interface} нет в конфигурации.` });
+      } else if (!(configuration.tproxy.enabled &&
+        configuration.tproxy.ingress_interfaces.includes(subject.interface))) {
+        captureOff.add(subject.interface);
+      }
+    }
+    if (subject.kind === "device" && !peers.some((peer) =>
+      peer.subscriber === subject.subscriber && peer.peer === subject.peer)) {
+      warnings.push({ tone: "amber", text:
+        `Правило «${rule.name}»: устройства ${subject.peer} нет в конфигурации.` });
+    }
+    if (!rule.ip_cidr.length && !rule.domain_suffix.length &&
+      !rule.domain_exact.length && !rule.rule_sets.length) {
+      warnings.push({ tone: "amber", text: `Правило «${rule.name}» без назначения — оно не сработает.` });
+    }
+    const exit = rule.exit;
+    if (exit.kind === "interface" && !interfaces.has(exit.interface ?? "")) {
+      warnings.push({ tone: "red", text:
+        `Правило «${rule.name}»: интерфейса выхода ${exit.interface} нет в конфигурации.` });
+    }
+    if (exit.kind === "tunnel" && !clients.has(exit.name ?? "")) {
+      warnings.push({ tone: "red", text:
+        `Правило «${rule.name}»: клиентского туннеля ${exit.name} нет в конфигурации.` });
+    }
+    if (exit.kind === "outbound" && !outbounds.has(exit.tag ?? "")) {
+      warnings.push({ tone: "amber", text: `Правило «${rule.name}»: прокси-выход ${exit.tag} не объявлен.` });
+    }
+    if (exit.kind === "group" && !groups.has(exit.tag ?? "")) {
+      warnings.push({ tone: "amber", text: `Правило «${rule.name}»: группа ${exit.tag} не объявлена.` });
+    }
+  });
+  if (captureOff.size > 0) {
+    warnings.push({ tone: "amber", text:
+      `Перехват выключен у сегментов: ${[...captureOff].join(", ")} — их правила не действуют.` });
+  }
+  return warnings;
+}
+
+function OrderView({ configuration, rules, final, disabled, onEdit }: {
+  configuration: Configuration;
+  rules: RoutingRule[];
+  final: string;
+  disabled: boolean;
+  onEdit: () => void;
+}) {
+  const groups = segmentGroups(configuration, rules);
+  const warnings = orderWarnings(configuration, rules);
+  if (!rules.length) {
+    return <Card title="Порядок и применение">
+      <EmptyState>Правил маршрутизации пока нет. Порядок появится вместе с первым правилом.</EmptyState>
+    </Card>;
+  }
+  return <>
+    <Card title="Правила в порядке применения"
+      action={!disabled && <Button onClick={onEdit}>Изменить порядок</Button>}>
+      <Typography variant="body2" color="text.secondary" className="routing-subtitle">
+        Сверху вниз, срабатывает первое совпадение. {rules.length}{" "}
+        {plural(rules.length, "правило", "правила", "правил")} · {groups.length}{" "}
+        {plural(groups.length, "группа", "группы", "групп")}. Только чтение.
+      </Typography>
+      <div className="routing-table-wide">
+        {groups.map((group) => {
+          const first = Math.min(...group.rules.map((item) => item.index)) + 1;
+          const last = Math.max(...group.rules.map((item) => item.index)) + 1;
+          const range = first === last ? `правило ${first}` : `правила ${first}–${last}`;
+          return <PageSection key={group.key} title={`${group.title} · ${range}`} subtitle={group.meta}>
+            <DataTable heads={["#", "Что", "Куда"]}
+              rows={group.rules.map(({ rule, index }) =>
+                [String(index + 1), destinationLabel(rule), exitLabel(rule.exit)])} />
+          </PageSection>;
+        })}
+      </div>
+    </Card>
+    <Card title="После всех правил">
+      <DataTable heads={["#", "Что", "Куда"]} rows={[
+        ["—", "Защита устройств абонентов", "заблокировать"],
+        ["—", "Конечный выход", final],
+      ]} />
+      <Typography variant="body2" color="text.secondary" className="routing-subtitle">
+        Системные строки: выполняются только для трафика, не совпавшего ни с одним правилом.
+      </Typography>
+    </Card>
+    <Card title="Проверки">
+      {warnings.length
+        ? <ul className="routing-warnings">{warnings.map((warning) => <li key={warning.text}>
+          <Badge tone={warning.tone}>{warning.tone === "red" ? "ошибка" : "внимание"}</Badge>
+          <span>{warning.text}</span>
+        </li>)}</ul>
+        : <InfoNote>Противоречий не найдено.</InfoNote>}
+    </Card>
   </>;
 }
 
@@ -790,7 +909,8 @@ export default function RoutingMasterPage() {
     <ErrorNotice error={routingErrorText(apiError)} />
     <ErrorNotice error={routingErrorText(editor.error)} />
     <ValueTabs value={mode} change={(value) => setMode(value)}
-      tabs={[{ value: "segments", label: "Сегменты" }, { value: "wizard", label: "Мастер" },
+      tabs={[{ value: "segments", label: "Сегменты" }, { value: "order", label: "Порядок и применение" },
+        { value: "wizard", label: "Мастер" },
         { value: "advanced", label: "Расширенные настройки" }]} />
     {mode === "segments" && <SegmentsView groups={segmentGroups(configuration, rules)}
       disabled={disabled} onAdd={(next) => {
@@ -801,6 +921,8 @@ export default function RoutingMasterPage() {
         setStep(1);
         setMode("wizard");
       }} />}
+    {mode === "order" && <OrderView configuration={configuration} rules={rules} final={final}
+      disabled={disabled} onEdit={() => setMode("advanced")} />}
     {mode === "wizard" && <>
       <WizardProgress steps={["Кому", "Что", "Куда", "Проверка"]} current={step} />
       <Card title={stepTitles[step]}>
