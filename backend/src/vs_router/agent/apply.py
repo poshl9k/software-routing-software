@@ -27,8 +27,15 @@ MARKER_PATH = Path('/run/vs-router/marker.json')
 # /run is volatile: retain the same journal across host reboots.
 JOURNAL_PATH = Path('/etc/vs-router/marker.json')
 logger = logging.getLogger(__name__)
-FILES = {'nftables': 'nftables.conf', 'unbound': 'unbound.conf', 'kea': 'kea.json',
-         'networkd': 'networkd.conf', 'wireguard': 'wireguard.conf', 'caddy': 'caddy.conf',
+#: Phase (and reload) order. Interfaces come first: the addresses a service
+#: binds to may be created by this very version (a trunk with VLAN
+#: subinterfaces on a fresh router), so networkd must run before unbound/kea
+#: bind those addresses and before caddy binds a tunnel or site address.
+#: nftables stays first: the fail-closed firewall must be live before any
+#: traffic path changes.
+FILES = {'nftables': 'nftables.conf', 'networkd': 'networkd.conf',
+         'wireguard': 'wireguard.conf', 'unbound': 'unbound.conf',
+         'kea': 'kea.json', 'caddy': 'caddy.conf',
          'ddns': 'ddns.conf', 'ssh': 'ssh.json'}
 #: Additive only: written/validated solely for a version with an https upstream.
 DOH_FILES = {'dnscrypt': 'dnscrypt.toml'}
