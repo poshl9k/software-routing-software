@@ -91,7 +91,7 @@ AP (Omada): SSID Home/Guest/Work… → VLAN 10/20/30
 | S1 | Сегменты и порядок (только чтение + группировка) | готов |
 | S2 | Захват по сегментам | готов (сквозной клиент проверен на veth; VLAN — нужен второй порт на портгруппе) |
 | S3 | Выход с адресом-источником и policy routing | в работе (источник выхода — готов) |
-| S4 | Источники РФ-наборов и `access_control` | не начат |
+| S4 | Источники РФ-наборов и `access_control` | готов (JSON-набор; `.srs` не активируется) |
 | S5 | Редактор сегмента, пресеты, проверки | не начат |
 | S6 | LAN-only установка и приёмка на ВМ | не начат |
 
@@ -296,3 +296,7 @@ G2 (проверка по `conntrack`/счётчикам на клиентско
 | 2026-11-13 | S3 (дефект) | fail-closed наборы интерфейсов в `nftables` не включали туннель: SYN-ACK доходил до `awg0` и отбрасывался в `input`/`forward` | `tcpdump -i awg0`, счётчики цепочки `input` до/после фикса; `1.1.1.1` → 301 |
 | 2026-11-13 | S3 (часть) | `Exit.source`: схема, валидатор `routing.exit_source_not_on_interface`, `inet4_bind_address` в sing-box, поле «Адрес-источник» в редакторе выхода и предупреждение для туннеля без источника | живой стенд: сегмент `veth10` → `https://1.1.1.1/cdn-cgi/trace` даёт `ip=92.51.36.131 loc=DE`, прочий трафик — `213.247.207.235`; `backend` 229 passed (Linux, `unshare -m`), `frontend` typecheck 0, `vitest` `routing-master` 27/27 |
 | 2026-11-13 | S3 | выход = интерфейс + адрес-источник + шлюз: `Exit.gateway`, генерация `[RoutingPolicyRule] From=<source> Table=<1000+>` и `[Route] Gateway=… Table=… PreferredSource=…`, таблицы из реестра `marks.POLICY_TABLE_BASE`; `snat ip to <source>` только для подсетей сегментов, выбравших этот выход; тег выхода включает адрес-источник | живой стенд: `ip rule`/`ip route show table 1000-1001`; сегмент `vlan1010` → `213.247.217.52` («диалог», gw `192.168.116.254`), сегмент `vlan1020` → `213.247.207.235` («простор», gw `192.168.107.1`), `1.1.1.1` в обоих → `92.51.36.131` (DE, AWG); `backend` 236 passed, `frontend` typecheck 0, `vitest` 28 в файле |
+| 2026-11-13 | S4 | редактор объявленных источников в UI (`configuration.rule_sets`), каталог источников с provenance и пометкой «лицензия не подтверждена» (`GET /api/presets/sources`), редактор `dns.access_control` с кнопкой «Добавить сети LAN» | `frontend` `routing-proxy` 24/24, `service-editors` 18/18, typecheck 0 |
+| 2026-11-13 | S4 | загрузчик активирует только текстовые форматы: `.srs` даёт `download.format_unsupported`, а `format=auto` на бинарнике — `download.decode_failed`. Рабочий источник — JSON (`meta-rules-dat/geo/geoip/ru.json`, 727 КБ, sha256 в статусе) | агент: `POST /api/rulesets/update` → `status=ok`, файл сохранён; `sing-box` подхватил набор (`router: updated rule-set ru-ips`) |
+| 2026-11-13 | S4 | RPC `update_source` отвергал имена с дефисом, хотя контракт `RuleSetSource.name` их разрешает — объявленный `ru-ips` нельзя было обновить; шаблон выровнен | живой прогон: до фикса `request.invalid`, после — `status=ok`; тест `test_hyphenated_source_names_reach_the_agent_rpc` |
+| 2026-11-13 | S4 | правило `ru-ips → РФ-выход` сработало на реальном трафике: сегмент `vlan1010` открыл `vk.com`/`ya.ru` через «диалог», а `1.1.1.1` ушёл в AWG | `journalctl -u vs-router-singbox`: `match[5] source_ip_cidr=10.10.10.0/24 rule_set=ru-ips => route(exit_ens224_192_168_180_10)`; клиент получил страницы |

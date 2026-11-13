@@ -30,6 +30,18 @@ const ipNumber = (v: string) =>
 const poolValid = (p: { start: string; end: string }) =>
   ipv4(p.start) && ipv4(p.end) && ipNumber(p.start) <= ipNumber(p.end);
 const normalize = (v: string[]) => lines(v.join("\n"));
+
+/** "10.10.10.1/24" → "10.10.10.0/24" (IPv4 only; anything else returns null). */
+const networkOf = (cidr: string): string | null => {
+  const [address, prefix] = cidr.split("/");
+  if (!ipv4(address)) return null;
+  const bits = prefix === undefined ? 32 : Number(prefix);
+  if (!Number.isInteger(bits) || bits < 0 || bits > 32) return null;
+  const value = ipNumber(address);
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  const network = value & mask;
+  return `${[24, 16, 8, 0].map((shift) => (network >>> shift) & 0xff).join(".")}/${bits}`;
+};
 const upstreamModes = [
   { value: "udp", label: "UDP" },
   { value: "tls", label: "DoT" },
@@ -262,6 +274,12 @@ export function DNSEditor({ children }: { children: (actions: { addRecord: () =>
   const isEditMode = editor.isEdit;
   const update = (v: Partial<DNSConfig>) => editor.setValue({ ...dns, ...v });
   const interfaces = c.interfaces.map((i) => i.name);
+  // Segment subnets the operator may grant the resolver in one click; the
+  // resolver answers REFUSED to anything outside `access_control`.
+  const lanSubnets = c.interfaces
+    .filter((i) => i.zone && i.zone !== "wan")
+    .flatMap((i) => i.addresses.filter((a) => !a.includes(":")).map(networkOf))
+    .filter((value): value is string => !!value);
   const recordValid = (r: DNSConfig["records"][number]) =>
     r.type === "A"
       ? ipv4(r.value)
@@ -365,7 +383,20 @@ export function DNSEditor({ children }: { children: (actions: { addRecord: () =>
             <DeleteButton label={`Удалить привязку ${index + 1}`} onClick={() => update({ interfaces: dns.interfaces.filter((_, i) => i !== index) })} />
           </div>)}</FormGrid>
           <Button disabled={interfaces.every((i) => dns.interfaces.includes(i))} onClick={() => update({ interfaces: [...dns.interfaces, interfaces.find((i) => !dns.interfaces.includes(i))!] })}>Добавить привязку</Button>
-          <InfoNote>Каким сетям разрешён доступ: {dns.access_control.join(", ") || "не задано"}. Выбор интерфейса сам по себе не меняет этот список.</InfoNote>
+          <InfoNote>Выбор интерфейса сам по себе не меняет список разрешённых сетей — он задаётся ниже.</InfoNote>
+        </PageSection>
+        <PageSection title="Кому отвечает резолвер">
+          <Field label="Разрешённые сети (CIDR)" multiline
+            value={dns.access_control.join("\n")}
+            valid={dns.access_control.every(addressValid)}
+            hint="По одной сети в строке, например 10.10.10.0/24. Пусто — резолвер не отвечает никому"
+            onChange={(text) => update({ access_control: lines(text) })} />
+          {lanSubnets.length > 0 && (
+            <Button onClick={() => update({ access_control: [...new Set([...dns.access_control, ...lanSubnets])] })}>
+              Добавить сети LAN
+            </Button>
+          )}
+          <InfoNote>Клиенты сегмента получают отказ (REFUSED), если их подсеть здесь не указана.</InfoNote>
           <InfoNote>Просмотр DNS-запросов здесь пока недоступен.</InfoNote>
         </PageSection>{footer}
       </DialogContent>

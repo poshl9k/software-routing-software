@@ -12,6 +12,7 @@ import type {
   ProxySubscription,
   SubscriptionMember, SubscriptionPreview, SubscriptionRefresh,
   RuleSetStatus,
+  RuleSetSource,
 } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
@@ -30,7 +31,7 @@ import { PageSection } from "../components/PageSection";
 import { ValueTabs } from "../components/Tabs";
 import { Select, SelectField } from "../components/Select";
 import { Toggle } from "../components/Toggle";
-import { hostValid, nameValid, portValid } from "../components/validators";
+import { hostValid, nameValid, portValid, engineTagValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { parseShareLinks } from "../shareLinks";
 import { SecretField } from "./ConnectionEditors";
@@ -1191,6 +1192,8 @@ export function RuleSets() {
   };
 
   return (
+    <>
+      <RuleSetDeclarations />
     <Card title="Rule-set (источники списков)">
       <ErrorNotice error={error ?? sources.error} />
       <InfoNote>
@@ -1230,5 +1233,135 @@ export function RuleSets() {
         }
       />
     </Card>
+    </>
   );
 }
+
+/**
+ * Declared rule-set sources live in the draft (`configuration.rule_sets`) and are
+ * what the agent is allowed to download. The catalog above only *suggests* URLs:
+ * every entry carries provenance and an unverified-licence warning, so nothing
+ * third-party is presented as a trusted built-in.
+ */
+function RuleSetDeclarations() {
+  const { user, configuration } = useConfiguration();
+  const canEdit = user?.role === "admin";
+  const editor = useDraftEditor<RuleSetSource[]>();
+  const presets = useQuery({ queryKey: queryKeys.presetSources(), queryFn: api.presetSources });
+  const [selected, setSelected] = useState<number | null>(null);
+  const declared = editor.value ?? configuration.rule_sets ?? [];
+  const current = selected === null ? null : declared[selected];
+
+  const update = (patch: Partial<RuleSetSource>) =>
+    editor.setValue(declared.map((row, index) => (index === selected ? { ...row, ...patch } : row)));
+
+  const nameTaken = (name: string, index: number) =>
+    declared.some((row, i) => i !== index && row.name === name);
+  const rowValid = (row: RuleSetSource, index: number) =>
+    engineTagValid(row.name) && !nameTaken(row.name, index) &&
+    (row.format === "srs" || row.format === "json") &&
+    row.url.toLowerCase().startsWith("https://") && row.url.length > 8;
+
+  return (
+    <>
+      <Card title="Объявленные источники">
+        <ErrorNotice error={editor.error} />
+        <InfoNote>
+          Здесь объявляется, какие списки агент вправе скачивать. Объявление само по себе ничего
+          не загружает: обновление запускается вручную в таблице статусов ниже.
+        </InfoNote>
+        <DataTable
+          heads={["Имя", "Формат", "Адрес", "Действия"]}
+          rows={declared.map((row, index) => [
+            row.name || "—",
+            row.format,
+            row.url || "—",
+            <div className="row-actions" key={`${row.name}-${index}`}>
+              <Button disabled={!canEdit} onClick={() => { editor.begin(declared); setSelected(index); }}>
+                Изменить
+              </Button>
+              <DeleteButton
+                label={`Удалить источник ${row.name || index + 1}`}
+                onClick={() => void editor.save((list) => ({
+                  ...configuration,
+                  rule_sets: (list as RuleSetSource[]).filter((_, i) => i !== index),
+                }))}
+              />
+            </div>,
+          ])}
+          empty={<EmptyState title="Источники не объявлены">
+            Без объявления правила не смогут ссылаться на списки — добавьте источник.
+          </EmptyState>}
+        />
+        <FormActions>
+          <Button
+            disabled={!canEdit}
+            onClick={() => {
+              editor.begin([...declared, { name: "", format: "srs", url: "", max_records: 200000, max_bytes: 5000000 }]);
+              setSelected(declared.length);
+            }}
+          >
+            Добавить источник
+          </Button>
+        </FormActions>
+      </Card>
+      <Dialog open={isPresent(current)} onClose={editor.saving ? undefined : () => { editor.cancel(); setSelected(null); }} fullWidth maxWidth="md">
+        <DialogTitle>Источник списка: {current?.name || "новый"}</DialogTitle>
+        <DialogContent>
+          <ErrorNotice error={editor.error} />
+          {current && selected !== null && (
+            <>
+              <PageSection title="Описание">
+                <FormGrid>
+                  <Field label="Имя источника" value={current.name}
+                    valid={engineTagValid(current.name) && !nameTaken(current.name, selected)}
+                    hint="Латиница, цифры, подчёркивание и дефис: так на него ссылаются правила"
+                    onChange={(name) => update({ name })} />
+                  <SelectField label="Формат" value={current.format}
+                    options={["srs", "json"] as const}
+                    onChange={(format) => update({ format })} />
+                  <FormWide>
+                    <Field label="Адрес (https)" value={current.url}
+                      valid={current.url.toLowerCase().startsWith("https://") && current.url.length > 8}
+                      hint="Прямая ссылка на правило sing-box: .srs или .json"
+                      onChange={(url) => update({ url })} />
+                  </FormWide>
+                </FormGrid>
+              </PageSection>
+              <PageSection title="Из каталога">
+                {(presets.data?.sources ?? []).length === 0
+                  ? <InfoNote>Каталог недоступен.</InfoNote>
+                  : (presets.data?.sources ?? []).map((source) => (
+                    <div key={source.key} className="preset-source">
+                      <Button onClick={() => update({ url: source.url,
+                        format: source.format === "json" ? "json" : "srs" })}>
+                        {source.name}
+                      </Button>
+                      <Typography variant="body2" color="text.secondary">
+                        {source.provenance}
+                        {source.warning ? " — лицензия не подтверждена, решение за оператором." : ""}
+                      </Typography>
+                    </div>
+                  ))}
+                <InfoNote>
+                  Подставляется только адрес: имя источника выбирает оператор. Проверьте, что
+                  распространение списка допустимо в вашей юрисдикции.
+                </InfoNote>
+              </PageSection>
+              {!rowValid(current, selected) && (
+                <InfoNote severity="warning">
+                  Пока источник не заполнен корректно, черновик не сохранится.
+                </InfoNote>
+              )}
+              <EditorFooter saving={editor.saving} valid={declared.every(rowValid)}
+                cancel={() => { editor.cancel(); setSelected(null); }}
+                save={() => void editor.save((list) => ({ ...configuration, rule_sets: list as RuleSetSource[] }))} />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+const isPresent = (value: unknown): boolean => value !== null && value !== undefined;

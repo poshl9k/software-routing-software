@@ -384,6 +384,22 @@ export interface RuleSetSource {
   max_records: number;
   max_bytes: number;
 }
+/** Candidate rule-set source from the bundled catalog (never trusted blindly). */
+export interface PresetSource {
+  key: string;
+  name: string;
+  format: string;
+  url: string;
+  kind: string;
+  license: string | null;
+  license_verified: boolean;
+  provenance: string;
+  notes: string | null;
+  warning: string | null;
+}
+export interface PresetSourcesResponse {
+  sources: PresetSource[];
+}
 /** A rule-set source joined with its agent-owned update status (read-only). */
 export interface RuleSetStatus {
   name: string;

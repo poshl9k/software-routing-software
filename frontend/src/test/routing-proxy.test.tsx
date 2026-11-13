@@ -40,6 +40,13 @@ function setup(options?: {
       return Promise.resolve(
         new Response(JSON.stringify(options?.rulesets ?? [])),
       );
+    if (path === "/api/presets/sources")
+      return Promise.resolve(new Response(JSON.stringify({ sources: [{
+        key: "sing_geoip_ru", name: "SagerNet sing-geoip (geoip-ru, CIDR)", format: "srs",
+        url: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs",
+        kind: "rule_set", license: "GPL-3.0 (не подтверждена)", license_verified: false,
+        provenance: "SagerNet/sing-geoip, ветка rule-set", notes: null,
+        warning: "preset.license_unverified" }] })));
     if (path === "/api/rulesets/update") {
       if (options?.updateFails)
         return Promise.resolve(
@@ -440,7 +447,9 @@ it("shows empty-state prompts for every proxy collection and the rule-set list",
   expect(screen.getByText("Нет подписок")).toBeVisible();
   await openTab(user, "Источники списков");
   expect(screen.getByText("Rule-set не подключены")).toBeVisible();
-  expect(screen.getByRole("table")).toBeVisible();
+  // Two tables now: declared sources and the agent's status history.
+  expect(screen.getByText("Источники не объявлены")).toBeVisible();
+  expect(screen.getAllByRole("table")).toHaveLength(2);
 });
 
 it("surfaces a rejected draft and retains the local outbound for retry", async () => {
@@ -602,4 +611,25 @@ it("keeps the rule-set list read-only for an operator", async () => {
   await openTab(user, "Источники списков");
   expect(await screen.findByText("geo")).toBeVisible();
   expect(screen.queryByRole("button", { name: "Обновить geo" })).not.toBeInTheDocument();
+});
+
+it("declares a rule-set source in the draft and never fetches it from the panel", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByRole("tab", { name: "Источники списков" });
+  await openTab(user, "Источники списков");
+  await user.click(screen.getByRole("button", { name: "Добавить источник" }));
+  await user.type(screen.getByLabelText("Имя источника"), "ru-ips");
+  await user.type(screen.getByLabelText("Адрес (https)"), "https://example.com/geoip-ru.json");
+  await user.selectOptions(screen.getByLabelText("Формат"), "json");
+  await user.click(saveButton());
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && (init as RequestInit)?.method === "PUT")).toBe(true));
+  const call = fetch.mock.calls.find(([path, init]) =>
+    path === "/api/draft" && (init as RequestInit)?.method === "PUT");
+  const body = JSON.parse(String((call![1] as RequestInit).body));
+  expect(body.rule_sets).toEqual([{ name: "ru-ips", format: "json",
+    url: "https://example.com/geoip-ru.json", max_records: 200000, max_bytes: 5000000 }]);
+  // The panel declares; it never downloads.
+  expect(fetch.mock.calls.some(([path]) => String(path).includes("/api/rulesets/update"))).toBe(false);
 });

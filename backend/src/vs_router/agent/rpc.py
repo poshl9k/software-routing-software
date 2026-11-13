@@ -94,7 +94,9 @@ class UpdateSourceParams(Model):
     the explicit user-source authorization flag plus limits. The agent decides
     allowlisting and SSRF policy; the URL is never passed to a shell.
     """
-    name: Annotated[str, Field(strict=True, pattern=r'^[a-zA-Z][a-zA-Z0-9_]{0,30}$')]
+    # Same shape as the contract's EngineTag (RuleSetSource.name): a source an
+    # operator declares as `ru-ips` must be updatable, or the declaration is dead.
+    name: Annotated[str, Field(strict=True, pattern=r'^[a-zA-Z][a-zA-Z0-9_-]{0,30}$')]
     url: StrictStr
     kind: Literal["subscription", "rule_set"] = "rule_set"
     format: Literal["auto", "sing-box", "clash", "v2ray", "base64",

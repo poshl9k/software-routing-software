@@ -50,6 +50,26 @@ def list_rulesets(response: Response, db: Session = Depends(get_db)) -> list[dic
     return sources_view(_declared(db), _history(), now=time.time())
 
 
+@router.get("/presets/sources")
+def list_preset_sources(response: Response) -> dict:
+    """Candidate rule-set sources the operator may declare, with provenance.
+
+    Nothing here is fetched or trusted: the panel only shows what the bundled
+    catalog describes, so an entry with an unverified licence stays visibly
+    unverified instead of being presented as a safe built-in.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    from ..agent.presets import CATALOG
+    return {"sources": [
+        {"key": source.key, "name": source.name, "format": source.format,
+         "url": source.url, "kind": source.kind, "license": source.license,
+         "license_verified": source.license_verified,
+         "provenance": source.provenance, "notes": source.notes,
+         "warning": source.warning() if not source.license_verified else None}
+        for source in CATALOG.values()
+    ]}
+
+
 @router.get("/presets/catalog")
 def list_preset_catalog(response: Response, db: Session = Depends(get_db)) -> dict:
     """Read-only catalog; category counts exclude the six composite entries.

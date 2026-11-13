@@ -14,7 +14,7 @@ import type {
   User,
   TProxyPreview,
   Alias, DHCPLease, ImportPreview, PingResult,
-  RuleSetStatus, RuleSetUpdate, CatalogResponse,
+  RuleSetStatus, RuleSetUpdate, CatalogResponse, PresetSourcesResponse,
   UpdateStatus, UpdateStart, ServiceStatusResponse,
   ProxySubscription, SubscriptionPreview, SubscriptionRefresh, SubscriptionMember,
   RuntimeEngine, RuntimeConnections, RuntimeLogEntry, RuntimeProxies, RuntimeProxyDelay,
@@ -160,6 +160,7 @@ export const api = {
   // Service catalog is panel metadata only; rule-set URLs are never fetched here.
   presetCatalog: () => request<CatalogResponse>("/api/presets/catalog"),
   rulesets: () => request<RuleSetStatus[]>("/api/rulesets"),
+  presetSources: () => request<PresetSourcesResponse>("/api/presets/sources"),
   updateRuleset: (body: RuleSetUpdate) =>
     post<Record<string, unknown>>("/api/rulesets/update", {
       kind: "rule_set", format: "auto", authorized: true,

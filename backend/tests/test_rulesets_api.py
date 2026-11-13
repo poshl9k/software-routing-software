@@ -216,3 +216,31 @@ async def test_ruleset_update_is_admin_only(api, monkeypatch):
     response = await client.post("/api/rulesets/update", json={
         "name": "geo", "url": DECLARED["url"], "authorized": True})
     assert response.status_code == 403
+
+
+async def test_preset_sources_are_listed_with_provenance_and_licence_state(api):
+    """The editor may suggest catalog URLs, but never as a silent trusted built-in."""
+    client, _, _ = api
+    await sign_in(client)
+    response = await client.get("/api/presets/sources")
+    assert response.status_code == 200, response.text
+    sources = response.json()["sources"]
+    assert sources, "the catalog shipped with the panel must not be empty"
+    by_key = {source["key"]: source for source in sources}
+    ru = by_key["sing_geoip_ru"]
+    assert ru["url"].endswith(".srs")
+    assert ru["provenance"].startswith("SagerNet/sing-geoip")
+    # Unverified licensing must stay visible to the operator.
+    assert ru["license_verified"] is False
+    assert ru["warning"] == "preset.license_unverified"
+    assert all(source["url"].startswith("https://") for source in sources)
+
+
+
+def test_hyphenated_source_names_reach_the_agent_rpc():
+    """`RuleSetSource.name` allows hyphens, so the update RPC must accept them."""
+    from vs_router.agent.rpc import UpdateSourceParams
+    params = UpdateSourceParams(name="ru-ips",
+                                url="https://raw.githubusercontent.com/x/geoip-ru.srs",
+                                authorized=True)
+    assert params.name == "ru-ips"
