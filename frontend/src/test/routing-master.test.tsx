@@ -593,3 +593,68 @@ it("criterion_S3_interface_exit_saves_source_and_gateway", async () => {
   expect(rules[0].exit).toEqual({ kind: "interface", interface: "eth0",
     source: "203.0.113.10", gateway: "203.0.113.1" });
 });
+
+// --- S5: segment editor ---------------------------------------------------
+
+const segmentConfiguration = (): Configuration => {
+  const configuration = baseConfiguration();
+  configuration.routing_rules = [
+    { name: "lan_ru", subject: { kind: "interface", interface: "lan0" },
+      ip_cidr: ["77.88.8.8/32"], domain_suffix: [], domain_exact: [], rule_sets: [],
+      exit: { kind: "direct" } } as RoutingRule,
+    { name: "lan_rest", subject: { kind: "interface", interface: "lan0" },
+      ip_cidr: ["0.0.0.0/0"], domain_suffix: [], domain_exact: [], rule_sets: [],
+      exit: { kind: "direct" } } as RoutingRule,
+  ];
+  return configuration;
+};
+
+const openSegmentEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+  await screen.findByRole("tab", { name: "Мастер маршрутизации" });
+  await user.click(screen.getByRole("tab", { name: "Мастер маршрутизации" }));
+  await user.click(await screen.findByRole("button", { name: "Изменить политику" }));
+  await user.click(await screen.findByRole("button", { name: "Изменить политику сегмента" }));
+};
+
+const savedRules = (fetch: ReturnType<typeof setup>): RoutingRule[] => {
+  const call = fetch.mock.calls.find(([path, init]) =>
+    path === "/api/draft" && (init as RequestInit)?.method === "PUT");
+  return JSON.parse(String((call![1] as RequestInit).body)).routing_rules;
+};
+
+it("criterion_S5_segment_editor_reorders_rules_inside_the_segment_only", async () => {
+  const fetch = setup(segmentConfiguration());
+  const user = userEvent.setup();
+  await openSegmentEditor(user);
+  expect(screen.getAllByText(/77\.88\.8\.8\/32/).length).toBeGreaterThan(0);
+  const firstRow = () => screen.getAllByRole("row")[1].textContent ?? "";
+  expect(firstRow()).toContain("77.88.8.8/32");
+  await user.click(screen.getByRole("button", { name: "Ниже 1" }));
+  expect(firstRow()).toContain("0.0.0.0/0");
+  await user.click(screen.getByRole("button", { name: "Выше 2" }));
+  expect(firstRow()).toContain("77.88.8.8/32");
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(savedRules(fetch).length).toBe(2));
+  expect(savedRules(fetch).map((rule) => rule.name)).toEqual(["lan_ru", "lan_rest"]);
+});
+
+it("criterion_S5_saving_requires_the_catch_all_rule_last", async () => {
+  setup(segmentConfiguration());
+  const user = userEvent.setup();
+  await openSegmentEditor(user);
+  await user.click(screen.getByRole("button", { name: "Удалить правило 2" }));
+  expect(screen.getByText(/Последним должно идти правило «Всё остальное»/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+});
+
+it("criterion_S5_preset_rebuilds_the_segment_with_its_catch_all", async () => {
+  const fetch = setup(segmentConfiguration());
+  const user = userEvent.setup();
+  await openSegmentEditor(user);
+  await user.click(screen.getByRole("button", { name: "Весь сегмент в туннель" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(savedRules(fetch).length).toBe(1));
+  const [rule] = savedRules(fetch);
+  expect(rule.ip_cidr).toEqual(["0.0.0.0/0"]);
+  expect(rule.exit).toEqual({ kind: "direct" });
+});

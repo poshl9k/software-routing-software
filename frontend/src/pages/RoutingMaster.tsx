@@ -33,6 +33,7 @@ import { Toggle } from "../components/Toggle";
 import { Card } from "../components/Card";
 import { ValueTabs } from "../components/Tabs";
 import { useConfiguration, useApplyCommands } from "../state";
+import { SegmentEditor } from "./SegmentEditor";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { nameValid, addressValid, domainValid } from "../components/validators";
 import { api, ApiError } from "../api";
@@ -709,7 +710,8 @@ export function segmentGroups(configuration: Configuration, rules: RoutingRule[]
   return [...groups.values()];
 }
 
-function SegmentsView({ groups, disabled, onAdd, onCapture, captureBusy, captureError, dnsPolicyMissing, dnsDenied }: {
+function SegmentsView({ configuration, groups, disabled, onAdd, onCapture, captureBusy, captureError, dnsPolicyMissing, dnsDenied }: {
+  configuration: Configuration;
   groups: SegmentGroup[];
   disabled: boolean;
   onAdd: (subject: RoutingSubject) => void;
@@ -720,6 +722,7 @@ function SegmentsView({ groups, disabled, onAdd, onCapture, captureBusy, capture
   /** Captured segments whose subnet the resolver's access list does not allow. */
   dnsDenied: ReadonlySet<string>;
 }) {
+  const [editing, setEditing] = useState<SegmentGroup | null>(null);
   if (!groups.length) {
     return <Card title="Сегменты сети">
       <EmptyState>Правил маршрутизации пока нет. Создайте первое правило — оно появится в группе своего источника.</EmptyState>
@@ -741,7 +744,10 @@ function SegmentsView({ groups, disabled, onAdd, onCapture, captureBusy, capture
       // carry ingress traffic, and only a segment with rules needs it.
       const captureName = group.subject.kind === "interface" ? group.subject.interface : undefined;
       return <Card key={group.key} title={group.title}
-        action={!disabled && <Button onClick={() => onAdd(group.subject)}>Добавить правило</Button>}>
+        action={!disabled && <div className="row-actions">
+          <Button onClick={() => setEditing(group)}>Изменить политику</Button>
+          <Button onClick={() => onAdd(group.subject)}>Добавить правило</Button>
+        </div>}>
         <Typography variant="body2" color="text.secondary" className="routing-subtitle">
           {group.meta} · {group.rules.length} {plural(group.rules.length, "правило", "правила", "правил")}
         </Typography>
@@ -773,6 +779,8 @@ function SegmentsView({ groups, disabled, onAdd, onCapture, captureBusy, capture
         </InfoNote>}
       </Card>;
     })}
+    <SegmentEditor configuration={configuration} group={editing} disabled={disabled}
+      onClose={() => setEditing(null)} />
   </>;
 }
 
@@ -839,6 +847,26 @@ export function orderWarnings(configuration: Configuration, rules: RoutingRule[]
     if (exit.kind === "interface" && exit.source && !exit.gateway) {
       warnings.push({ tone: "amber", text:
         `Правило «${rule.name}»: у выхода через интерфейс не указан шлюз — если вышестоящих роутеров несколько, трафик уйдёт в шлюз по умолчанию.` });
+    }
+    if (exit.kind === "interface" && exit.gateway) {
+      const link = interfaces.get(exit.interface ?? "");
+      const inSubnet = (link?.addresses ?? [])
+        .filter((address) => !address.includes(":"))
+        .some((address) => withinCidr(exit.gateway as string, address));
+      if (link && !inSubnet) {
+        warnings.push({ tone: "red", text:
+          `Правило «${rule.name}»: шлюз ${exit.gateway} не принадлежит подсетям интерфейса ${link.name} — шлюз недостижим.` });
+      }
+    }
+    const declaredSets = new Set((configuration.rule_sets ?? []).map((source) => source.name));
+    const missingSets = rule.rule_sets.filter((tag) => !declaredSets.has(tag));
+    if (missingSets.length) {
+      warnings.push({ tone: "red", text:
+        `Правило «${rule.name}»: набор ${missingSets.join(", ")} не объявлен на вкладке «Источники списков».` });
+    }
+    if (rule.ip_cidr.length && rule.ip_cidr.every((cidr) => cidr.includes(":"))) {
+      warnings.push({ tone: "amber", text:
+        `Правило «${rule.name}»: только IPv6-адреса — захват и выходы работают по IPv4, правило не сработает.` });
     }
   });
   if (captureOff.size > 0) {
@@ -1044,7 +1072,7 @@ export default function RoutingMasterPage() {
       tabs={[{ value: "segments", label: "Сегменты" }, { value: "order", label: "Порядок и применение" },
         { value: "wizard", label: "Мастер" },
         { value: "advanced", label: "Расширенные настройки" }]} />
-    {mode === "segments" && <SegmentsView groups={segmentGroups(configuration, rules)}
+    {mode === "segments" && <SegmentsView configuration={configuration} groups={segmentGroups(configuration, rules)}
       captureBusy={captureBusy} captureError={captureError} onCapture={(name, on) => void setCapture(name, on)}
       dnsPolicyMissing={(configuration.tproxy.dns.servers ?? []).length === 0}
       dnsDenied={dnsDeniedSegments(configuration)}
