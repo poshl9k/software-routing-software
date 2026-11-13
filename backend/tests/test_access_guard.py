@@ -115,6 +115,10 @@ def test_the_installer_lets_kea_read_the_staged_configuration():
     Without the local override every DHCP apply dies in validation — the failure
     the router stand hit, on a configuration `kea-dhcp4 -t` accepts by hand.
     """
+    # The override lives with the rest of the Kea provisioning, so a host where
+    # Kea appears after the panel gets it too.
+    setup = (PACKAGING / 'kea-setup.sh').read_text(encoding='utf-8')
+    assert 'local/usr.sbin.kea-dhcp4' in setup
+    assert '/run/vs-router/pending/* r,' in setup
     install = (PACKAGING / 'install.sh').read_text(encoding='utf-8')
-    assert '/etc/apparmor.d/local/usr.sbin.kea-dhcp4' in install
-    assert '/run/vs-router/pending/* r,' in install
+    assert 'kea-setup.sh' in install

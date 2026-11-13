@@ -127,6 +127,14 @@ install -m 0644 "$packaging_dir/vs-router-access-guard.service" /etc/systemd/sys
 install -m 0644 "$packaging_dir/vs-router-access-guard.timer" /etc/systemd/system/vs-router-access-guard.timer
 systemctl enable vs-router-access-guard.timer >/dev/null 2>&1 || true
 systemctl start vs-router-access-guard.timer >/dev/null 2>&1 || true
+# Fail-closed is right and silent is not: when the engine dies a captured segment
+# simply goes dark while the panel keeps answering 200. The checker compares the
+# applied snapshot with what is live, repairs once, and reports to the journal
+# (and to VS_ROUTER_ALERT_WEBHOOK when one is configured).
+install -m 0644 "$packaging_dir/vs-router-health.service" /etc/systemd/system/vs-router-health.service
+install -m 0644 "$packaging_dir/vs-router-health.timer" /etc/systemd/system/vs-router-health.timer
+systemctl enable vs-router-health.timer >/dev/null 2>&1 || true
+systemctl start vs-router-health.timer >/dev/null 2>&1 || true
 cat > /etc/systemd/system/caddy.service.d/vs-router.conf <<EOF
 [Unit]
 After=
@@ -335,60 +343,20 @@ chmod 0644 /etc/vs-router/version.json
 if ! python3 -m vs_router.profile write "$PROFILE"; then
     echo "WARNING: could not record the product profile ('$PROFILE'); this host will decide by capability only" >&2
 fi
-# Kea control channel: the agent reloads DHCP through localhost HTTP, so the
-# credential file and a running control agent are prerequisites of the first
-# apply. Missing either used to surface as a bare agent.apply_failed.
+# The router product owns DHCP for its segments, so Kea is part of that product,
+# not something the operator has to remember to install *before* the panel.
+# Installing it later used to leave the host without the control channel, and the
+# first DHCP apply failed with `kea.api_password_missing`.
+if [ "$PROFILE" = router ] && ! command -v kea-dhcp4 >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        kea-dhcp4-server kea-ctrl-agent >/dev/null 2>&1 || \
+        echo 'WARNING: could not install kea-dhcp4-server; DHCP for segments will not work' >&2
+fi
 install -d -m 0755 /etc/systemd/system/vs-router-web.service.d
 if command -v kea-dhcp4 >/dev/null 2>&1; then
-    if [ ! -s /etc/kea/kea-api-password ]; then
-        install -m 0600 /dev/null /etc/kea/kea-api-password
-        python3 -c 'import secrets; from pathlib import Path; Path("/etc/kea/kea-api-password").write_text(secrets.token_urlsafe(32) + "\n")'
-    fi
-    chmod 0640 /etc/kea/kea-api-password
-    chown root:_kea /etc/kea/kea-api-password
-    # The base units must not name /etc/kea: a ReadWritePaths target that does
-    # not exist fails the unit with 226/NAMESPACE at start. Add it per host,
-    # only where the directory is really there.
-    for unit in vs-router-agent vs-router-bootrestore; do
-        install -d -m 0755 "/etc/systemd/system/$unit.service.d"
-        cat > "/etc/systemd/system/$unit.service.d/kea.conf" <<'EOF'
-[Service]
-ReadWritePaths=/etc/kea
-EOF
-    done
-    # PID 1 reads the restricted source; the web service gets a private copy so
-    # the leases view never needs the password in unit text or argv.
-    cat > /etc/systemd/system/vs-router-web.service.d/kea-api.conf <<'EOF'
-[Service]
-LoadCredential=kea-api-password:/etc/kea/kea-api-password
-ExecStartPre=/usr/bin/test -s %d/kea-api-password
-Environment=VS_ROUTER_KEA_API_USER=kea-api
-Environment=VS_ROUTER_KEA_API_PASSWORD_FILE=%d/kea-api-password
-EOF
-    # Debian's AppArmor profile for kea-dhcp4 reads only /etc/kea, so the syntax
-    # check the agent runs against its staged file (/run/vs-router/pending) is
-    # denied and every apply dies with agent.validation_failed on a configuration
-    # that is perfectly valid. The local override grants exactly that path.
-    if [ -d /etc/apparmor.d ] && [ -f /etc/apparmor.d/usr.sbin.kea-dhcp4 ]; then
-        install -d -m 0755 /etc/apparmor.d/local
-        cat > /etc/apparmor.d/local/usr.sbin.kea-dhcp4 <<'EOF'
-# The panel stages its generated configuration and validates it with
-# ``kea-dhcp4 -t`` before installing it. The stock profile reads only /etc/kea.
-/run/vs-router/pending/* r,
-EOF
-        apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4 >/dev/null 2>&1 ||             echo 'WARNING: could not reload the kea AppArmor profile; the first DHCP apply may fail validation' >&2
-    fi
-    # The distro default config binds every interface and would hand out leases
-    # on this host's uplink, so seed a serve-nothing config until the panel
-    # writes its own at the first apply. Never overwrite one the panel owns.
-    if [ ! -f /etc/vs-router/applied/kea.json ]; then
-        printf '%s\n' '{"Dhcp4": {"interfaces-config": {"interfaces": []},' \
-            ' "lease-database": {"type": "memfile", "persist": true,' \
-            ' "name": "/var/lib/kea/kea-leases4.csv"}, "valid-lifetime": 3600,' \
-            ' "subnet4": []}}' > /etc/kea/kea-dhcp4.conf
-        chmod 0640 /etc/kea/kea-dhcp4.conf
-        chown root:_kea /etc/kea/kea-dhcp4.conf
-    fi
+    # One script, because a host reaches this state twice: at install time, and
+    # later when Kea appears on a machine that already runs the panel.
+    sh "$packaging_dir/kea-setup.sh"
 else
     # No DHCP server on this host (the panel profile installs none, ADR-0021).
     # Leftovers are not harmless: the web drop-in demands the Kea credential

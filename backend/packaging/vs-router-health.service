@@ -1,0 +1,17 @@
+[Unit]
+Description=vs-router health check: is the applied contour actually being served
+After=vs-router-agent.service
+# A checker that notices a dead engine must not itself be dead.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -m vs_router.agent.health
+# Reads the applied snapshot, probes nft/ip/systemctl and may run one repair pass.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/vs-router
+PrivateTmp=yes
