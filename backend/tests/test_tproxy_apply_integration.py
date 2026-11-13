@@ -254,3 +254,34 @@ def test_boot_does_not_confirm_pending_and_tears_down_interrupted_tproxy(monkeyp
     # boot cannot restore a half-open guard.
     guard = fs.read(Path("/run/does-not-matter") / tproxy_apply.TPROXY_FILES["tproxy_guards"])
     assert guard == tproxy_apply.cleanup_content()
+
+
+def test_teardown_never_leaves_capture_without_its_route():
+    """The teardown must remove the capture table, not only the policy route.
+
+    Live defect: a safe-mode apply rolled back, the teardown stopped the engine
+    and removed `ip rule fwmark 0x100 lookup 100`, but left the interception table
+    loaded. Captured segments then handed packets to a loopback port whose route
+    no longer existed: traffic vanished with no log line and no closed-contour
+    symptom. Tables go first, so no window exists where capture is live without
+    the route that delivers it.
+    """
+    assert "vs_router_tproxy_interception" in tproxy_apply.cleanup_content()
+    engine, fs, executor = engine_with()
+    engine._teardown_tproxy_steps()
+    calls = [argv for argv, _ in executor.calls]
+    nft = next(index for index, argv in enumerate(calls) if argv[:1] == ["/usr/sbin/nft"])
+    systemctl = next(index for index, argv in enumerate(calls) if argv[:1] == ["systemctl"])
+    assert nft < systemctl
+    assert tproxy_apply.TPROXY_CLEANUP_FILE in " ".join(calls[nft])
+    assert fs.read(APPLIED_DIR / tproxy_apply.TPROXY_CLEANUP_FILE) == tproxy_apply.cleanup_content()
+
+
+def test_teardown_destroys_capture_tables_before_stopping_the_engine():
+    engine, fs, executor = engine_with()
+    engine._teardown_tproxy_steps()
+    calls = [argv for argv, _ in executor.calls]
+    nft = next(index for index, argv in enumerate(calls) if argv[:1] == ["/usr/sbin/nft"])
+    systemctl = next(index for index, argv in enumerate(calls) if argv[:1] == ["systemctl"])
+    assert nft < systemctl
+    assert tproxy_apply.TPROXY_CLEANUP_FILE in " ".join(calls[nft])

@@ -490,15 +490,27 @@ class ApplyEngine:
         return steps
 
     def _teardown_tproxy_steps(self):
-        """Stop the engine and the two resolvers, remove the owned policy route.
+        """Remove the capture tables, stop the engine/resolvers, drop the route.
 
         Compensation for an interrupted or rolled-back TProxy apply: generated
-        ``destroy table`` text cannot stop a process or remove an ``ip rule``.
-        A failure here never masks the primary result.
+        ``destroy table`` text cannot stop a process or remove an ``ip rule``, and
+        the reverse is equally true — stopping the services and removing the
+        policy route while the capture tables stay loaded turns every captured
+        segment into a silent black hole: TPROXY hands packets to a loopback port
+        whose routing rule no longer exists, so they vanish without a log line.
+        Observed live after a safe-mode rollback. Tables go first (they were
+        activated last), so no window exists where capture is live without the
+        route that delivers it.
         """
         from .policy_route import PolicyRouteLoader
         from .singbox_service import SingboxService
         from .unbound_service import UnboundService
+        cleanup = APPLIED_DIR / tproxy_apply.TPROXY_CLEANUP_FILE
+        try:
+            self.fs.write(cleanup, tproxy_apply.cleanup_content())
+            self.executor.run(['/usr/sbin/nft', '-f', str(cleanup)], 15)
+        except (OSError, subprocess.SubprocessError, ApplyError):
+            pass
         for action in (SingboxService(self.executor, self.fs).stop,
                        UnboundService(self.executor, self.fs).stop,
                        PolicyRouteLoader(self.executor).remove):
@@ -954,8 +966,24 @@ class ApplyEngine:
             self._teardown_tproxy_artifacts()
         marker = {'version_id': backup['version_id'], 'applied_at': self.clock(),
                   'deadline': self.clock(), 'status': 'rolling_back', 'reason': reason, 'phases': {}}
+        # A confirmed TProxy target needs its readiness steps again: rolling back
+        # from a failed capture apply tears the tract down (tables, engine,
+        # resolvers, policy route), so restoring the files alone would leave the
+        # capture table live without the `ip rule` that delivers its packets —
+        # every captured segment silently black-holed. Restoring the route and the
+        # two resolvers before the capture table mirrors the forward order.
+        rollback_steps = []
+        if 'tproxy_interception' in tproxy_files:
+            try:
+                confirmed = ConfigurationVersion.model_validate(backup['version_snapshot'])
+            except ValueError:
+                confirmed = None
+            if confirmed is not None:
+                rollback_steps = self._tproxy_readiness_steps(confirmed)
         try:
-            self._install(contents, marker, rollback_validators, files=rollback_files)
+            self._install(contents, marker, rollback_validators, files=rollback_files,
+                          steps=rollback_steps,
+                          steps_before='tproxy_interception' if rollback_steps else None)
         except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError) as exc:
             if self.ssh_controller is not None:
                 try:

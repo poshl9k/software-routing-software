@@ -182,6 +182,18 @@ def restore_tproxy_engine() -> int:
     return 0
 
 
+def _destroy_owned_tables() -> None:
+    """Remove every TProxy-owned nftables table, tolerating an empty host."""
+    from pathlib import Path
+    from . import tproxy_apply
+    path = Path(APPLIED) / tproxy_apply.TPROXY_CLEANUP_FILE
+    try:
+        path.write_text(tproxy_apply.cleanup_content(), encoding="utf-8")
+        subprocess.run(["/usr/sbin/nft", "-f", str(path)], check=False, capture_output=True)
+    except OSError:
+        pass
+
+
 def restore_tproxy_interception() -> int:
     """Open the capture tract *last*, only after readiness has been proven.
 
@@ -197,6 +209,11 @@ def restore_tproxy_interception() -> int:
     from . import tproxy_apply
     capture = Path(APPLIED) / tproxy_apply.TPROXY_FILES["tproxy_interception"]
     if not capture.exists():
+        # No capture artifact means this host must not capture at all. Remove any
+        # tables an interrupted apply may have left behind: a live interception
+        # table without a policy route silently black-holes every captured
+        # segment, which looks like a broken network instead of a closed contour.
+        _destroy_owned_tables()
         return 0
     from .apply import ApplyError
     try:
