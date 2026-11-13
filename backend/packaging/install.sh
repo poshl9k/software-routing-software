@@ -115,12 +115,17 @@ install -d -m 0755 /etc/systemd/system/caddy.service.d
 if command -v kea-dhcp4 >/dev/null 2>&1; then
     /usr/bin/python3 "$(dirname "$0")/kea-network-order.py"
 fi
+install -d -m 0755 /usr/local/lib/vs-router
+install -m 0644 "$packaging_dir/wait-for-addresses.py" /usr/local/lib/vs-router/wait-for-addresses.py
 cat > /etc/systemd/system/caddy.service.d/vs-router.conf <<EOF
 [Unit]
 After=
 After=network.target
 Wants=
 [Service]
+ExecStartPre=
+ExecStartPre=/bin/sh -c 'i=0; until ip -4 route show default >/dev/null 2>&1 || [ \$i -ge 30 ]; do sleep 2; i=\$((i+1)); done; ip -4 route show default >/dev/null'
+ExecStartPre=/usr/bin/python3 /usr/local/lib/vs-router/wait-for-addresses.py /etc/caddy/caddy.json 60
 ExecStart=
 ExecStart=${CADDY_BIN} run --config /etc/caddy/caddy.json
 ExecReload=

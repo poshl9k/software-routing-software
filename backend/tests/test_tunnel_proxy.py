@@ -729,15 +729,19 @@ def test_tunnel_start_readiness_and_failure(config, tmp_path):
     for name, content in files.items():
         (tmp_path / name).write_text(content)
     executor = FakeExecutor()
-    # No link yet: the userspace daemon has to come up before `wg show` answers.
+    # Boot race: for the first two probes the daemon has not created the link yet.
+    attempts = {'link': 0}
     def run(argv, timeout):
         executor.calls.append((argv, timeout))
-        return SimpleNamespace(returncode=1 if argv[:3] == ['ip', 'link', 'show'] else 0)
+        if argv[:3] == ['ip', 'link', 'show']:
+            attempts['link'] += 1
+            return SimpleNamespace(returncode=0 if attempts['link'] > 2 else 1)
+        return SimpleNamespace(returncode=0)
     executor.run = run
     configure('wg0', executor, tmp_path, lambda _: None)
-    assert executor.calls[0][0] == ['ip', 'link', 'show', 'dev', 'wg0']
-    assert executor.calls[1][0] == ['wg', 'show', 'wg0']
-    assert executor.calls[2][0] == ['wg', 'setconf', 'wg0', str(tmp_path / 'vpn.conf')]
+    assert attempts['link'] == 3, "the link wait must retry, not give up on the first miss"
+    assert ['wg', 'show', 'wg0'] in [argv for argv, _ in executor.calls]
+    assert ['wg', 'setconf', 'wg0', str(tmp_path / 'vpn.conf')] in [argv for argv, _ in executor.calls]
     # A daemon that never becomes ready must fail the phase, not pass silently.
     broken = FakeExecutor()
     broken.fail = True
@@ -745,8 +749,8 @@ def test_tunnel_start_readiness_and_failure(config, tmp_path):
         configure('wg0', broken, tmp_path, lambda _: None)
 
 
-def test_tunnel_start_skips_wait_for_existing_link(config, tmp_path):
-    """An in-kernel device already exists; `wg show` answers immediately."""
+def test_tunnel_start_checks_the_uapi_even_when_the_link_exists(config, tmp_path):
+    """An existing TUN link is not proof that the daemon answers."""
     from vs_router.agent.tunnel_start import configure
     files = generate_wg_bundle(ConfigurationVersion.model_validate(config), {})
     for name, content in files.items():
@@ -754,9 +758,9 @@ def test_tunnel_start_skips_wait_for_existing_link(config, tmp_path):
     executor = FakeExecutor()
     configure('wg0', executor, tmp_path, lambda _: None)
     calls = [argv for argv, _ in executor.calls]
-    assert ['wg', 'show', 'wg0'] not in calls
     assert calls[0] == ['ip', 'link', 'show', 'dev', 'wg0']
-    assert calls[1] == ['wg', 'setconf', 'wg0', str(tmp_path / 'vpn.conf')]
+    assert calls[1] == ['wg', 'show', 'wg0']
+    assert calls[2] == ['wg', 'setconf', 'wg0', str(tmp_path / 'vpn.conf')]
 
 
 def test_tunnel_reload_setconf_failure(config):

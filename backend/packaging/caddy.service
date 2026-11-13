@@ -9,6 +9,10 @@ After=network.target
 User=caddy
 Group=caddy
 ExecStartPre=/bin/sh -c 'i=0; until ip -4 route show default >/dev/null 2>&1 || [ $i -ge 30 ]; do sleep 2; i=$((i+1)); done; ip -4 route show default >/dev/null'
+# Binding needs the *assigned* address, not just a default route: an address
+# networkd has not applied yet fails the bind, and the restart limit then leaves
+# caddy permanently failed after a reboot (observed live).
+ExecStartPre=/usr/bin/python3 /usr/local/lib/vs-router/wait-for-addresses.py /etc/caddy/caddy.json 60
 ExecStart=/usr/local/bin/caddy run --config /etc/caddy/caddy.json
 ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/caddy.json
 Restart=on-failure
