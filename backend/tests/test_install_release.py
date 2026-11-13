@@ -430,7 +430,9 @@ def test_criterion_7_exact_composition_and_child_failure(rig):
     assert [x for x in events() if x.startswith(('PACKAGING=', 'ARG='))] == [f'PACKAGING={source / "backend/packaging"}',
                             'ARG=--wheel', f'ARG={wheel}', 'ARG=--ui',
                             f'ARG={source / "frontend/dist"}',
-                            *[f'ARG={x}' for x in flags]]
+                            'ARG=--hostname', 'ARG=reserve.example',
+                            'ARG=--profile', 'ARG=panel',
+                            *[f'ARG={x}' for x in flags[2:]]]
     assert 'https://reserve.example/secret' in result.stderr + result.stdout
     before = len(events())
     result = run('--source', source, '--skip-build', '--hostname', 'reserve.example', CHILD_FAIL='1')
@@ -697,3 +699,31 @@ def test_criterion_6_lan_only_never_probes_a_public_address(rig):
     assert 'cannot find the default route' in result.stderr
     assert 'cannot detect public IPv4' not in result.stderr
     assert not any('api.ipify.org' in line or line.startswith('CURL ') for line in events())
+
+
+def test_criterion_6_profile_follows_the_product(rig):
+    """`--lan-only` is the hardware router; the online path stays the panel."""
+    source, tmp, env, run, events, _ = rig
+    built(source)
+    lan = run('--source', source, '--skip-build', '--dry-run', '--lan-only',
+              '--hostname', '10.10.0.1')
+    assert lan.returncode == 0, lan.stderr
+    assert 'ARG=--profile' in events()
+    assert 'ARG=router' in events()
+    events_list = events()
+    # The profile is passed next to the other installer arguments, not to a shell.
+    assert events_list[events_list.index('ARG=--profile') + 1] == 'ARG=router'
+
+    (tmp / 'calls').write_text('')
+    panel = run('--source', source, '--skip-build', '--dry-run', '--hostname',
+                'panel.example')
+    assert panel.returncode == 0, panel.stderr
+    calls = events()
+    assert calls[calls.index('ARG=--profile') + 1] == 'ARG=panel'
+
+    (tmp / 'calls').write_text('')
+    forced = run('--source', source, '--skip-build', '--dry-run', '--lan-only',
+                 '--hostname', '10.10.0.1', '--profile', 'panel')
+    assert forced.returncode == 0, forced.stderr
+    calls = events()
+    assert calls[calls.index('ARG=--profile') + 1] == 'ARG=panel'

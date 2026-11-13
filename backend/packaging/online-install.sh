@@ -32,6 +32,8 @@ Usage: online-install.sh [options]
                     awg-quick, wg-go); replaces the host Go builds entirely.
                     The release updater verifies it against the manifest
                     before passing it here; direct callers must verify it.
+  --profile P       product this host is (ADR-0026): panel (default, one-NIC
+                    VPS panel) or router (hardware router with LAN segments)
   --dry-run         print actions without changing the system
 EOF
 }
@@ -46,6 +48,12 @@ while [ $# -gt 0 ]; do
         --wheel) WHEEL=${2:?}; shift 2 ;;
         --ui) UI=${2:?}; shift 2 ;;
         --toolchain) TOOLCHAIN=${2:?}; shift 2 ;;
+        --profile)
+            case ${2:?} in
+                router|panel) PROFILE=${2} ;;
+                *) echo "--profile expects router or panel" >&2; exit 2 ;;
+            esac
+            shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -200,10 +208,10 @@ fi
 
 # --- 5. Privileged install (never touches sshd) ------------------------------
 # VS_ROUTER_KEEP_SSH=1 makes install.sh skip the SSH mask and the sshd drop-in.
-# VS_ROUTER_PROFILE=panel records the product this host is (ADR-0026): the
-# online path installs the one-NIC panel, not the router.
+# VS_ROUTER_PROFILE records the product this host is (ADR-0026). The online path
+# defaults to the one-NIC panel; the hardware router passes --profile router.
 if [ -d "${PACKAGING:-}" ]; then
-    run env VS_ROUTER_KEEP_SSH=1 VS_ROUTER_PROFILE=panel sh "$PACKAGING/install.sh"
+    run env VS_ROUTER_KEEP_SSH=1 VS_ROUTER_PROFILE="${PROFILE:-panel}" sh "$PACKAGING/install.sh"
     # Keep the entry point and the installed wheel for the release updater and
     # its rollback. VS_ROUTER_REPO_ROOT overrides /opt/vs-router for staging
     # tests/custom installations (the agent uses the same override).

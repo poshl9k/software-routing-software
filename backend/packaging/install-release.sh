@@ -2,7 +2,7 @@
 # Source/build wrapper for the one-NIC panel installer. The installer, not this
 # wrapper, owns the host's product profile, SSH policy and system services.
 # Usage: install-release.sh [--release SHA | --manifest URL | --source DIR]
-#        [--hostname H] [--custom-hostname H] [--path-prefix P] [--address A/P] [--lan-only]
+#        [--hostname H] [--custom-hostname H] [--path-prefix P] [--address A/P] [--lan-only] [--profile P]
 #        [--ssh-port N] [--work DIR] [--fresh] [--skip-build] [--dry-run] [--help]
 # Overrides: VS_ROUTER_INSTALL_WORK, VS_ROUTER_INSTALL_MANIFEST_URL,
 # VS_ROUTER_INSTALL_OS_RELEASE, VS_ROUTER_UPDATE_CONFIG,
@@ -32,6 +32,9 @@ VS_ROUTER_INSTALL_OS_RELEASE overrides /etc/os-release for platform checks.
 --fresh removes the contents of the selected --work directory.
 --skip-build requires exactly one existing wheel and both frontend bundles.
 --dry-run verifies source and prints build/install plan without building or apt.
+--profile P selects the recorded product (ADR-0026): router (default with
+--lan-only) or panel. The host marker decides capability checks, so it must
+match the machine you are installing.
 --lan-only publishes the panel on a private address with a locally generated
 certificate: no public IPv4 probe, no nip.io reserve, no ACME on :80. Use it for
 a router that lives only in the LAN; import the CA on clients (docs/install.md).
@@ -39,18 +42,23 @@ Python 3 is required beforehand; release downloads additionally require curl.
 EOF
 }
 
-release= manifest= source= hostname= custom_hostname= path_prefix= address= ssh_port=
+release= manifest= source= hostname= custom_hostname= path_prefix= address= ssh_port= profile=
 work=${VS_ROUTER_INSTALL_WORK:-/root/vs-router-install}
 fresh=0 skip_build=0 dry_run=0 lan_only=0
 while (($#)); do
     case $1 in
-        --release|--manifest|--source|--hostname|--custom-hostname|--path-prefix|--address|--ssh-port|--work)
+        --release|--manifest|--source|--hostname|--custom-hostname|--path-prefix|--address|--ssh-port|--work|--profile)
             (($# >= 2)) && [[ -n $2 ]] || fail "$1 needs a value"
             case $1 in
                 --release) release=$2 ;; --manifest) manifest=$2 ;; --source) source=$2 ;;
                 --hostname) hostname=$2 ;; --custom-hostname) custom_hostname=$2 ;;
                 --path-prefix) path_prefix=$2 ;; --address) address=$2 ;;
                 --ssh-port) ssh_port=$2 ;; --work) work=$2 ;;
+                --profile)
+                    case $2 in
+                        router|panel) profile=$2 ;;
+                        *) fail '--profile expects router or panel' ;;
+                    esac ;;
             esac
             shift 2 ;;
         --lan-only) lan_only=1; shift ;;
@@ -573,7 +581,10 @@ if [[ ! -f $portal_ui/index.html || -L $portal_ui/index.html || ! -d $portal_ui/
     (( dry_run && ! skip_build )) || fail "subscriber portal bundle missing: $portal_ui/index.html"
 fi
 
-args=(--wheel "$wheel" --ui "$ui" --hostname "$hostname")
+# The LAN-only path is the hardware router; anything else stays the panel that
+# the online installer has always produced.
+profile=${profile:-$([[ $lan_only -eq 1 ]] && echo router || echo panel)}
+args=(--wheel "$wheel" --ui "$ui" --hostname "$hostname" --profile "$profile")
 (( ${#tc_bundle_args[@]} == 0 )) || args+=("${tc_bundle_args[@]}")
 [[ -z $custom_hostname ]] || args+=(--custom-hostname "$custom_hostname")
 [[ -z $path_prefix ]] || args+=(--path-prefix "$path_prefix")
