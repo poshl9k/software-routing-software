@@ -32,6 +32,8 @@ sudo apt install -y python3 python3-pip python3-venv git \
   wireguard-tools socat curl
 ```
 
+**Порядок важен:** `kea-dhcp4-server` и `kea-ctrl-agent` должны быть установлены **до** установки панели. Установщик создаёт `/etc/kea/kea-api-password`, drop-in'ы `ReadWritePaths=/etc/kea` и AppArmor-override для проверки конфигурации; если Kea появилась позже, apply в профиле `router` падает с `kea.api_password_missing`.
+
 `kea-ctrl-agent` нужен для live-аренд и статистики; при чистой установке Debian спросит про backend Kea — memfile подходит.
 
 ## 2. Туннели: WireGuard и AmneziaWG (userspace)
