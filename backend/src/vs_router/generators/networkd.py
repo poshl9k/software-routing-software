@@ -3,9 +3,36 @@ from ipaddress import ip_interface
 from typing import Iterable
 import re
 
-from ..schema import ConfigurationVersion
+from ..schema import Configuration, ConfigurationVersion
+from . import marks
 
 _FILE = re.compile(r"10-vs-router-[a-zA-Z][a-zA-Z0-9_.-]{0,14}\.(?:network|netdev)")
+
+
+def exit_policy_routes(configuration: Configuration) -> dict[str, list[tuple[str, str, int]]]:
+    """Policy routes for exits that name their own gateway.
+
+    Several upstream routers sit on one link, so the main table can only express
+    one default per interface; anything else needs a route table selected by the
+    packet's source address. Returns ``{interface: [(source, gateway, table)]}``
+    in a stable order, with table ids handed out from the marks registry.
+    """
+    exits = [rule.exit for rule in configuration.routing_rules]
+    exits += [member for group in configuration.proxies.groups for member in group.exits]
+    wanted = sorted({(exit_value.interface, exit_value.source, exit_value.gateway)
+                     for exit_value in exits
+                     if exit_value.kind == "interface" and exit_value.interface and exit_value.gateway})
+    if len(wanted) > marks.POLICY_TABLE_LIMIT:
+        raise ValueError("networkd.policy_table_exhausted")
+    routes: dict[str, list[tuple[str, str, int]]] = {}
+    for index, (interface, source, gateway) in enumerate(wanted):
+        table = marks.POLICY_TABLE_BASE + index
+        if not source:
+            # A gateway without a source has no selector: the main table already
+            # offers one default per interface, so this cannot be expressed.
+            raise ValueError("networkd.policy_route_source_required")
+        routes.setdefault(interface, []).append((source, gateway, table))
+    return routes
 
 
 def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] = ()) -> dict[str, str]:
@@ -36,6 +63,7 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
     skip |= {tunnel.interface for tunnel in version.configuration.tunnels if tunnel.interface}
     interfaces = sorted((i for i in version.configuration.interfaces if i.name not in skip),
                         key=lambda i: i.name)
+    policy = exit_policy_routes(version.configuration)
     assigned = {i.name for i in interfaces if i.zone}
     bridges = {}
     for i in interfaces:
@@ -88,6 +116,16 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
                     lines.append(f"Gateway={route.gateway}")
                 if route.metric > 0:
                     lines.append(f"Metric={route.metric}")
+            for source, gateway, table in policy.get(i.name, ()):
+                # One table per (source, gateway): the selector is the source
+                # address, so several upstream routers on the same link stay
+                # independent instead of competing for the single main default.
+                family = "ipv6" if ":" in source else "ipv4"
+                lines += ["", "[RoutingPolicyRule]", f"Family={family}",
+                          f"From={source}", f"Table={table}",
+                          "", "[Route]",
+                          f"Destination={'::/0' if family == 'ipv6' else '0.0.0.0/0'}",
+                          f"Gateway={gateway}", f"Table={table}", f"PreferredSource={source}"]
             if dhcp:
                 lines += ["", "[DHCPv4]", "UseDNS=no", "UseNTP=no", "UseHostname=no",
                           "UseRoutes=yes", "UseGateway=yes"]

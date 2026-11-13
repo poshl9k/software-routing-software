@@ -480,7 +480,8 @@ function ExitFields({
             placeholder={{ label: "Выберите интерфейс" }}
             options={choices.interfaces}
             onChange={(value) => change({ exit: { kind: "interface", interface: value,
-              ...(exit.source ? { source: exit.source } : {}) } })}
+              ...(exit.source ? { source: exit.source } : {}),
+              ...(exit.gateway ? { gateway: exit.gateway } : {}) } })}
           />
         )}
         {exit.kind === "outbound" && (
@@ -525,7 +526,23 @@ function ExitFields({
               // that belongs to no kind, and `null` would travel as a value.
               change({ exit: exit.kind === "tunnel"
                 ? { kind: "tunnel", name: exit.name, ...(text ? { source: text } : {}) }
-                : { kind: "interface", interface: exit.interface, ...(text ? { source: text } : {}) } });
+                : { kind: "interface", interface: exit.interface,
+                    ...(text ? { source: text } : {}),
+                    ...(exit.gateway ? { gateway: exit.gateway } : {}) } });
+            }}
+          />
+        )}
+        {exit.kind === "interface" && (
+          <Field
+            label="Шлюз"
+            value={exit.gateway ?? ""}
+            valid={!exit.gateway || addressValid(exit.gateway)}
+            hint="Обязателен, когда на интерфейсе несколько вышестоящих роутеров: без него трафик уйдёт в шлюз по умолчанию"
+            onChange={(value) => {
+              const text = value.trim();
+              change({ exit: { kind: "interface", interface: exit.interface,
+                ...(exit.source ? { source: exit.source } : {}),
+                ...(text ? { gateway: text } : {}) } });
             }}
           />
         )}
@@ -818,6 +835,10 @@ export function orderWarnings(configuration: Configuration, rules: RoutingRule[]
     if (exit.kind === "tunnel" && !exit.source) {
       warnings.push({ tone: "amber", text:
         `Правило «${rule.name}»: у выхода через туннель не задан адрес-источник — пакеты уйдут с адресом другого маршрута, и пир их отбросит.` });
+    }
+    if (exit.kind === "interface" && exit.source && !exit.gateway) {
+      warnings.push({ tone: "amber", text:
+        `Правило «${rule.name}»: у выхода через интерфейс не указан шлюз — если вышестоящих роутеров несколько, трафик уйдёт в шлюз по умолчанию.` });
     }
   });
   if (captureOff.size > 0) {

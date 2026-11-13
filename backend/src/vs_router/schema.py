@@ -831,6 +831,10 @@ class Exit(Model):
     #: Without it the kernel picks the source by route, which on a tunnel is the
     #: wrong address and the remote peer drops the packet (observed live).
     source: str | None = None
+    #: Next hop for this exit, required when several gateways share one link.
+    #: Emitted as a policy route keyed by `source`, because the main table can
+    #: only prefer one default gateway per interface.
+    gateway: str | None = None
 
     @model_validator(mode="after")
     def check_fields(self):
@@ -845,6 +849,13 @@ class Exit(Model):
                 ip_address(self.source)
             except ValueError:
                 raise ValueError('routing.exit_source_invalid') from None
+        if self.gateway is not None:
+            if self.kind != 'interface':
+                raise ValueError('routing.exit_fields_unexpected')
+            try:
+                ip_address(self.gateway)
+            except ValueError:
+                raise ValueError('routing.exit_gateway_invalid') from None
         if self.kind == 'outbound' and self.tag is None:
             raise ValueError('routing.outbound_tag_required')
         if self.kind == 'tunnel' and self.name is None:

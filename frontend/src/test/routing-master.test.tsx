@@ -568,3 +568,28 @@ it("criterion_S3_tunnel_exit_saves_the_source_address_it_binds", async () => {
   const rules: RoutingRule[] = savedDraft(fetch).routing_rules;
   expect(rules[0].exit).toEqual({ kind: "tunnel", name: "rg3_in", source: "10.66.66.5" });
 });
+
+it("criterion_S3_interface_exit_saves_source_and_gateway", async () => {
+  // Two upstream routers share one link: the gateway is only reachable through
+  // the source address the exit pins, so both fields must survive the save.
+  const fetch = setup();
+  const user = userEvent.setup();
+  await openAdvanced(user);
+  await user.click(screen.getByRole("button", { name: "+ Правило" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "example.net");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Через интерфейс" }));
+  await user.selectOptions(screen.getByLabelText("Интерфейс выхода"), "eth0");
+  await user.type(screen.getByLabelText("Адрес-источник"), "203.0.113.10");
+  await user.type(screen.getByLabelText("Шлюз"), "203.0.113.1");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.clear(screen.getByLabelText("Имя правила"));
+  await user.type(screen.getByLabelText("Имя правила"), "via_gateway");
+  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const rules: RoutingRule[] = savedDraft(fetch).routing_rules;
+  expect(rules[0].exit).toEqual({ kind: "interface", interface: "eth0",
+    source: "203.0.113.10", gateway: "203.0.113.1" });
+});

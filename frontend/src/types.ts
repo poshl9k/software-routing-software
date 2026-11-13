@@ -169,7 +169,7 @@ export interface DDNSUpdate {
 }
 export type RoutingExit =
   | { kind: "direct" }
-  | { kind: "interface"; interface: string; source?: string | null }
+  | { kind: "interface"; interface: string; source?: string | null; gateway?: string | null }
   | { kind: "outbound"; tag: string }
   | { kind: "group"; tag: string }
   | { kind: "tunnel"; name: string; source?: string | null }

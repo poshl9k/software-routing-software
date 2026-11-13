@@ -382,7 +382,14 @@ def routing_exit_tag(target):
         return target.tag
     if target.kind == "interface":
         assert target.interface is not None  # Guaranteed by Exit validation.
-        return "exit_" + re.sub(r"[^a-zA-Z0-9_]", "_", target.interface)
+        tag = "exit_" + re.sub(r"[^a-zA-Z0-9_]", "_", target.interface)
+        # Two exits may share a link and differ only by source address (two
+        # upstream routers, one LAN). Keying them by interface alone would give
+        # both segments the first exit's outbound, silently sending every segment
+        # through one provider.
+        if target.source:
+            tag += "_" + re.sub(r"[^a-zA-Z0-9_]", "_", target.source)
+        return tag
     return None
 
 
@@ -557,6 +564,9 @@ def validate_routing(c):
             exits.append(member)
     addresses = {interface.name: {ip_interface(a).ip for a in interface.addresses}
                  for interface in c.interfaces}
+    subnets = {interface.name: [ip_interface(a).network for a in interface.addresses]
+               for interface in c.interfaces}
+    pinned: dict = {}
     for target in exits:
         validate_routing_exit(target, tunnels, interfaces, outbound_tags)
         if target.source is not None:
@@ -567,10 +577,24 @@ def validate_routing(c):
                     else target.interface)
             if ip_address(target.source) not in addresses.get(link, set()):
                 fail('routing.exit_source_not_on_interface')
+        if target.gateway is not None:
+            # Two gateways on one link can only be chosen by source, so a gateway
+            # without a source has no selector; and a hop outside every subnet of
+            # the link is unreachable, which would blackhole the segment silently.
+            if target.source is None:
+                fail('routing.exit_gateway_without_source')
+            gateway = ip_address(target.gateway)
+            if not any(gateway in subnet for subnet in subnets.get(target.interface, [])):
+                fail('routing.exit_gateway_unreachable')
+            key = (target.interface, target.source)
+            if pinned.setdefault(key, target.gateway) != target.gateway:
+                fail('routing.exit_source_conflict')
         if target.kind in ('interface', 'tunnel'):
             tag = routing_exit_tag(target)
             # Distinct interfaces can sanitize to the same generated tag.
-            source = (target.kind, target.interface if target.kind == 'interface' else target.name)
+            source = (target.kind,
+                      target.interface if target.kind == 'interface' else target.name,
+                      target.source)
             if tag in outbound_tags | group_tags or (
                     tag in generated_tags and generated_tags[tag] != source):
                 fail('proxy.tag_collision')

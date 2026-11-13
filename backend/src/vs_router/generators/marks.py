@@ -314,6 +314,12 @@ class PolicyRoute:
     wired: bool
 
 
+#: First table id handed to generated ``Exit`` policy routes. The product owns
+#: 1000..1099 (100 exits per host is far beyond any real segment layout); the
+#: lab probes use 100, and the kernel keeps 0/253/254/255.
+POLICY_TABLE_BASE = 1000
+POLICY_TABLE_LIMIT = 100
+
 POLICY_ROUTES: tuple[PolicyRoute, ...] = (
     PolicyRoute(
         table_id=100,

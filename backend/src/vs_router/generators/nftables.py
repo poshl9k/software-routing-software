@@ -1,7 +1,7 @@
 """Deterministic ruleset for a router-owned nftables table; no host I/O."""
 from ipaddress import ip_address, ip_interface
 from ..schema import ConfigurationVersion
-from ..validators import address, expand_aliases
+from ..validators import address, expand_aliases, routing_subject_interface_cidrs
 from . import marks
 from .unbound import tproxy_unbound_listener_addresses
 
@@ -229,6 +229,39 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
     if c.outbound_nat_mode in ("hybrid", "automatic") and "wan" in zones:
         networks = sorted({str(ip_interface(a).network) for i in c.interfaces if i.zone and i.zone != "wan"
                            for a in i.addresses if ip_interface(a).version == 4})
+        # A segment may leave through a secondary address of the same link (two
+        # upstream routers, one of them reachable only from that address).
+        # Masquerade would rewrite the source to the interface's primary address
+        # and send the packet to the wrong gateway, so the exit pins the exact
+        # source it declared — but only for the segments that chose this exit:
+        # a rule matching the whole interface would also steal every other
+        # segment's traffic. Emitted before the automatic rule, which is a
+        # first-match chain.
+        pinned: dict[tuple, set] = {}
+        for rule in c.routing_rules:
+            item = rule.exit
+            if item.kind != "interface" or not item.source or ":" in item.source:
+                continue
+            if rule.subject.kind == "interface" and rule.subject.interface:
+                if rule.subject.interface not in {i.name for i in c.interfaces
+                                                  if i.zone and i.zone != "wan"}:
+                    # an interface outside the LAN zone is not segment traffic
+                    continue
+                subnets = routing_subject_interface_cidrs(c, rule.subject.interface)
+            elif rule.subject.kind == "device":
+                peer = next((p for tunnel in c.tunnels for p in tunnel.peers
+                             if p.subscriber == rule.subject.subscriber
+                             and p.name == rule.subject.peer), None)
+                subnets = list(peer.allowed_ips) if peer else []
+            else:
+                continue
+            if subnets:
+                pinned.setdefault((item.interface, item.source), set()).update(subnets)
+        for (interface, source), subnets in sorted(pinned.items()):
+            if interface not in {name for group in zones.values() for name in group}:
+                continue
+            lines.append(f'        oifname "{interface}" ip saddr {_nft_set(sorted(subnets))} '
+                         f'counter snat ip to {source} comment "exit_snat"')
         if networks:
             lines.append(f'        oifname {names(zones["wan"])} ip saddr {{ ' + ", ".join(networks) + " } counter masquerade")
     lines += ["    }", "}"]
