@@ -677,3 +677,23 @@ def test_criterion_11_dry_run_does_not_touch_the_update_channel(rig):
     assert result.returncode == 0, result.stderr
     assert not config.exists()
 
+
+
+def test_criterion_6_help_documents_the_lan_only_mode(rig):
+    _, _, _, run, _, _ = rig
+    result = run('--help', FAKE_UID='1000')
+    assert '--lan-only' in result.stdout
+    assert 'locally generated' in result.stdout
+
+
+def test_criterion_6_lan_only_never_probes_a_public_address(rig):
+    """A router that lives only in the LAN must not ask the internet who it is."""
+    source, _, _, run, events, _ = rig
+    built(source)
+    result = run('--source', source, '--skip-build', '--dry-run', '--lan-only')
+    assert result.returncode != 0
+    # The LAN branch fails on the missing default route and never reaches the
+    # public-IPv4 probe (its message is the observable difference).
+    assert 'cannot find the default route' in result.stderr
+    assert 'cannot detect public IPv4' not in result.stderr
+    assert not any('api.ipify.org' in line or line.startswith('CURL ') for line in events())

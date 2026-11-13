@@ -2,7 +2,7 @@
 # Source/build wrapper for the one-NIC panel installer. The installer, not this
 # wrapper, owns the host's product profile, SSH policy and system services.
 # Usage: install-release.sh [--release SHA | --manifest URL | --source DIR]
-#        [--hostname H] [--custom-hostname H] [--path-prefix P] [--address A/P]
+#        [--hostname H] [--custom-hostname H] [--path-prefix P] [--address A/P] [--lan-only]
 #        [--ssh-port N] [--work DIR] [--fresh] [--skip-build] [--dry-run] [--help]
 # Overrides: VS_ROUTER_INSTALL_WORK, VS_ROUTER_INSTALL_MANIFEST_URL,
 # VS_ROUTER_INSTALL_OS_RELEASE, VS_ROUTER_UPDATE_CONFIG,
@@ -32,13 +32,16 @@ VS_ROUTER_INSTALL_OS_RELEASE overrides /etc/os-release for platform checks.
 --fresh removes the contents of the selected --work directory.
 --skip-build requires exactly one existing wheel and both frontend bundles.
 --dry-run verifies source and prints build/install plan without building or apt.
+--lan-only publishes the panel on a private address with a locally generated
+certificate: no public IPv4 probe, no nip.io reserve, no ACME on :80. Use it for
+a router that lives only in the LAN; import the CA on clients (docs/install.md).
 Python 3 is required beforehand; release downloads additionally require curl.
 EOF
 }
 
 release= manifest= source= hostname= custom_hostname= path_prefix= address= ssh_port=
 work=${VS_ROUTER_INSTALL_WORK:-/root/vs-router-install}
-fresh=0 skip_build=0 dry_run=0
+fresh=0 skip_build=0 dry_run=0 lan_only=0
 while (($#)); do
     case $1 in
         --release|--manifest|--source|--hostname|--custom-hostname|--path-prefix|--address|--ssh-port|--work)
@@ -50,6 +53,7 @@ while (($#)); do
                 --ssh-port) ssh_port=$2 ;; --work) work=$2 ;;
             esac
             shift 2 ;;
+        --lan-only) lan_only=1; shift ;;
         --fresh) fresh=1; shift ;; --skip-build) skip_build=1; shift ;;
         --dry-run) dry_run=1; shift ;;
         --help|-h) usage; exit 0 ;;
@@ -423,6 +427,21 @@ except ValueError:
     pass
 PY
 }
+if (( lan_only )) && [[ -z $hostname ]]; then
+    # LAN-only hosts have no public address by design: probe nothing, reserve
+    # nothing, and publish on the private address the default route leaves from.
+    iface=
+    default_route=$(ip -4 route show default 2>/dev/null || true)
+    [[ $default_route =~ (^|[[:space:]])dev[[:space:]]+([a-zA-Z0-9_.:-]+) ]] && iface=${BASH_REMATCH[2]}
+    [[ -n ${iface:-} ]] || fail 'cannot find the default route; pass --hostname <lan-ip>'
+    while read -r addr; do
+        [[ $addr =~ (^|[[:space:]])inet[[:space:]]+([0-9.]+)/[0-9]+ ]] || continue
+        hostname=${BASH_REMATCH[2]}
+        break
+    done < <(ip -4 -o addr show dev "$iface" scope global 2>/dev/null || true)
+    [[ -n $hostname ]] || fail "no IPv4 address on $iface; pass --hostname <lan-ip>"
+    log "LAN-only panel: https://$hostname${path_prefix:-/} (locally generated certificate, no ACME)"
+fi
 if [[ -z $hostname ]]; then
     route=$(ip -4 route get 1.1.1.1 2>/dev/null || true)
     candidate=
