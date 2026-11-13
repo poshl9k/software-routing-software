@@ -14,6 +14,8 @@ Environment=WG_PROCESS_FOREGROUND=1
 ExecStartPre=/bin/sh -c 'i=0; until ip -4 route show default >/dev/null 2>&1 || [ $i -ge 30 ]; do sleep 2; i=$((i+1)); done; ip -4 route show default >/dev/null'
 ExecStart=/usr/bin/python3 -m vs_router.agent.tunnel_daemon %i
 ExecStartPost=/usr/bin/python3 -m vs_router.agent.tunnel_start %i
+# A tunnel used as an exit needs its table and selector back after every boot.
+ExecStartPost=-/usr/bin/python3 -m vs_router.agent.tunnel_policy
 Restart=on-failure
 TimeoutStartSec=90
 CapabilityBoundingSet=CAP_NET_ADMIN

@@ -236,6 +236,16 @@ def _endpoint_resolvers(configuration):
     return servers
 
 
+def tunnel_policy_state_exists(filesystem):
+    """True when a previous apply left tunnel tables behind."""
+    from . import tunnel_policy
+    try:
+        filesystem.read(tunnel_policy.STATE_PATH)
+    except OSError:
+        return False
+    return True
+
+
 class ApplyEngine:
     def __init__(self, *, executor=None, filesystem=None, clock: Clock = time.time,
                  validators=None, reload_commands=None, panel_probe: Callable | None = None,
@@ -800,6 +810,15 @@ class ApplyEngine:
                 if PolicyRouteLoader(self.executor).present() is False:
                     self._failed_service = tproxy_apply.POLICY_ROUTE_STEP
                     raise ApplyError('agent.tproxy_policy_route_missing')
+            from . import tunnel_policy
+            # A tunnel used as an exit needs its own table and selector: the main
+            # table cannot carry a second default, and without the route the
+            # engine's bound dial leaves through the WAN and times out.
+            entries = tunnel_policy.plan(version.configuration)
+            if entries:
+                tunnel_policy.sync(self.executor, self.fs, entries)
+            elif tunnel_policy_state_exists(self.fs):
+                tunnel_policy.teardown(self.executor, self.fs)
             if management is not None:
                 self._verify_management_access(management)
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
@@ -1064,6 +1083,20 @@ class ApplyEngine:
             # The confirmed target is not a DoH state: stop the dnscrypt-proxy
             # unit so a reboot cannot re-raise its DoH client.
             self._teardown_doh_steps()
+        # The confirmed target's tunnel exits need their tables back: rolling back
+        # from a configuration that had none leaves the tunnel address unrouted,
+        # and a segment configured for the tunnel then silently uses the WAN.
+        from . import tunnel_policy
+        try:
+            confirmed_configuration = ConfigurationVersion.model_validate(
+                backup['version_snapshot']).configuration
+            entries = tunnel_policy.plan(confirmed_configuration)
+        except ValueError:
+            entries = []
+        if entries:
+            tunnel_policy.sync(self.executor, self.fs, entries)
+        elif tunnel_policy_state_exists(self.fs):
+            tunnel_policy.teardown(self.executor, self.fs)
         if not pppoe_files and pppoe_applied:
             try:
                 self._teardown_pppoe(strict=True)

@@ -319,6 +319,10 @@ class PolicyRoute:
 #: lab probes use 100, and the kernel keeps 0/253/254/255.
 POLICY_TABLE_BASE = 1000
 POLICY_TABLE_LIMIT = 100
+#: Tables for tunnel exits. An interface exit selects its table by the WAN source
+#: address; a tunnel exit selects by the tunnel's own address, and the two ranges
+#: must not collide because both are live on the same host.
+TUNNEL_POLICY_TABLE_BASE = 1100
 
 POLICY_ROUTES: tuple[PolicyRoute, ...] = (
     PolicyRoute(
