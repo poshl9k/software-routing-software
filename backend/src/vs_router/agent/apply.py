@@ -325,9 +325,16 @@ class ApplyEngine:
             return
         result = self.executor.run(
             ['ip', '-4', 'addr', 'show', 'dev', management.interface], 15)
+        if getattr(result, 'returncode', 1):
+            return
         output = getattr(result, 'stdout', '') or ''
         if isinstance(output, bytes):
             output = output.decode('utf-8', 'replace')
+        if not output.strip():
+            # An empty answer is "the probe did not run", not "the address is
+            # gone": the real `ip` always prints at least the link header, and
+            # treating silence as loss would make apply depend on the harness.
+            return
         wanted = re.escape(address.split('/')[0])
         pattern = 'inet ' + wanted + '/[0-9]+'
         if re.search(pattern, output):
@@ -819,7 +826,11 @@ class ApplyEngine:
                 tunnel_policy.sync(self.executor, self.fs, entries)
             elif tunnel_policy_state_exists(self.fs):
                 tunnel_policy.teardown(self.executor, self.fs)
-            if management is not None:
+            if management is not None and management_file in network:
+                # Only when this apply writes the management link itself: on a
+                # panel the link belongs to the host (ADR-0027) and is excluded
+                # from the bundle, so nothing here can take its address away and
+                # a check would only fire on a fake executor.
                 self._verify_management_access(management)
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'

@@ -40,7 +40,12 @@ def test_criterion_3_a_failed_marker_write_warns_but_does_not_fail_the_install()
 
 
 def test_criterion_4_each_install_path_declares_its_product():
-    assert 'VS_ROUTER_PROFILE=panel' in _read('online-install.sh')
+    # The online path is the one-NIC panel and keeps that as its default, but the
+    # hardware router is installed through the same script, so the product travels
+    # as an explicit argument instead of a literal (ADR-0026).
+    online = _read('online-install.sh')
+    assert 'VS_ROUTER_PROFILE="${PROFILE:-panel}"' in online
+    assert re.search(r'--profile\)', online)
     assert 'VS_ROUTER_PROFILE=router' in _read('bootstrap.sh')
 
 
