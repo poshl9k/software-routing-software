@@ -579,6 +579,12 @@ class ApplyEngine:
             # the document's legacy default; unmarked hosts keep their policy.
             if profile == 'router' and version.configuration.subscribers:
                 raise ApplyError('profile.subscribers_not_supported')
+        # Before the wireguard phase picks a backend: the userspace AWG daemon
+        # refuses to start while the kernel wireguard module is loaded, and that
+        # module is loaded on demand by unrelated tools and probes.
+        from . import kernel_module
+        self.wireguard_module = kernel_module.sync(
+            profile, version.configuration, self.fs, self.executor)
         tproxy_files, tproxy_validators = _tproxy_branch(version)
         doh_files, doh_validators = _doh_branch(version)
         from . import pppoe_apply

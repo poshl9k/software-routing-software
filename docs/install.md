@@ -57,6 +57,30 @@ cd src && make && sudo cp awg awg-quick /usr/local/bin/
 
 Подробности и проверенный паттерн запуска (`awg-go <iface>` + `awg setconf`) — `docs/lab-02-amneziawg.md`.
 
+### Модуль ядра `wireguard` и профиль «пограничный роутер»
+
+AmneziaWG на хостах без нативного типа `amneziawg` в ядре работает как
+userspace-демон (`awg-go`). Этот демон отказывается стартовать, если загружен
+обычный модуль ядра `wireguard` — а его подгружает любой инструмент, который
+трогает WireGuard-линк, включая пробы самого продукта.
+
+Поэтому для профиля **`router`** (пограничный роутер) агент при каждом apply
+держит `/etc/modprobe.d/vs-router-awg.conf`:
+
+```
+blacklist wireguard
+install wireguard /bin/false
+```
+
+и выгружает модуль (`modprobe -r wireguard`), если он был загружен. Файл
+удаляется автоматически, если хост помечен другим профилем (`panel`) или если в
+конфигурации появился хотя бы один туннель с `protocol: wg` — там ядерный
+WireGuard нужен, и отключение молча перевело бы туннели в userspace.
+
+Ноды и VPS-панели, которые раздают абонентов через `protocol: wg`, модуль
+сохраняют. Посмотреть фактическое состояние: `grep wireguard /proc/modules` и
+`ls /etc/modprobe.d/vs-router-awg.conf`.
+
 ## 3. Caddy с L4 (TLS passthrough) и DNS-провайдерами
 
 Пакетный Caddy не содержит L4-модуль — собирается через xcaddy (см. `docs/lab-03-caddy.md`). Репозиторий Cloudsmith для apt ненадёжен, поэтому xcaddy ставится через Go (уже установлен на шаге 2):
