@@ -409,13 +409,18 @@ class WireGuardReloader:
     """
     def __init__(self, executor=None, filesystem=None,
                  config_dir=Path('/etc/vs-router/wireguard'), sleep=None,
-                 kernel_probe=None):
+                 kernel_probe=None, dns_servers=()):
         import time
         self.executor = executor or SubprocessExecutor()
         self.fs = filesystem or LocalFileSystem()
         self.config_dir = config_dir
         self.sleep = sleep or time.sleep
         self.kernel_probe = kernel_probe or self.probe_kernel_wireguard
+        # Endpoint names are resolved with the host resolver first. A router
+        # whose management link has no DHCP often has no resolver at all, and
+        # then every tunnel apply failed with wireguard.endpoint_unresolved even
+        # though the panel is configured with resolvers it trusts.
+        self.dns_servers = tuple(dns_servers)
 
     @staticmethod
     def probe_kernel_wireguard(executor, protocol='wg'):
@@ -514,8 +519,70 @@ class WireGuardReloader:
         self.fs.write(self.config_dir / 'manifest.json', files['manifest.json'])
 
     @staticmethod
-    def resolve_endpoint(host):
-        """Bound libc DNS resolution without waiting for a stuck resolver thread."""
+    def _dns_query(server, host, qtype=1, timeout=2, port=53):
+        """One UDP A/AAAA query, parsed without a DNS library.
+
+        The agent ships no resolver dependency, and the panel already trusts the
+        servers it configures for its own clients — asking them is the honest
+        fallback when the host has no /etc/resolv.conf worth using.
+        """
+        import random
+        import struct
+        ident = random.randrange(0, 0x10000)
+        packet = struct.pack('!HHHHHH', ident, 0x0100, 1, 0, 0, 0)
+        for label in host.rstrip('.').split('.'):
+            if not label or len(label) > 63:
+                return []
+            packet += bytes([len(label)]) + label.encode('ascii', 'replace')
+        packet += bytes([0]) + struct.pack('!HH', qtype, 1)
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(timeout)
+                sock.sendto(packet, (str(server), port))
+                data, _ = sock.recvfrom(2048)
+        except (OSError, ValueError):
+            return []
+        if len(data) < 12:
+            return []
+        _, flags, questions, answers, _, _ = struct.unpack('!HHHHHH', data[:12])
+        if flags & 0x000F or not answers:
+            return []
+        offset = 12
+        for _ in range(questions):
+            while offset < len(data) and data[offset]:
+                offset += data[offset] + 1
+            offset += 5
+            if offset > len(data):
+                return []
+        found = []
+        for _ in range(answers):
+            if offset + 12 > len(data):
+                break
+            if data[offset] & 0xC0 == 0xC0:
+                offset += 2
+            else:
+                while offset < len(data) and data[offset]:
+                    offset += data[offset] + 1
+                offset += 1
+            if offset + 10 > len(data):
+                break
+            rtype, _, _, rdlen = struct.unpack('!HHIH', data[offset:offset + 10])
+            offset += 10
+            rdata = data[offset:offset + rdlen]
+            offset += rdlen
+            if rtype == 1 and rdlen == 4:
+                found.append(ip_address('.'.join(str(byte) for byte in rdata)))
+            elif rtype == 28 and rdlen == 16:
+                found.append(ip_address(rdata))
+        return found
+
+    def resolve_endpoint(self, host):
+        """Bound libc DNS resolution without waiting for a stuck resolver thread.
+
+        Falls back to the resolvers the panel configures for its own clients: a
+        management link without DHCP leaves the host with no resolver at all, and
+        failing there is an installation detail leaking into the product.
+        """
         try:
             return [ip_address(host)]
         except ValueError:
@@ -536,6 +603,14 @@ class WireGuardReloader:
         except queue.Empty:
             raise ApplyError('wireguard.endpoint_unresolved') from None
         if isinstance(result, Exception) or not result:
+            for server in self.dns_servers:
+                try:
+                    found = (self._dns_query(server, host, 1)
+                             + self._dns_query(server, host, 28))
+                except ValueError:
+                    continue
+                if found:
+                    return found
             raise ApplyError('wireguard.endpoint_unresolved') from None
         return result
 

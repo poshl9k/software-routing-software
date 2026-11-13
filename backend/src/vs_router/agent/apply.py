@@ -220,6 +220,22 @@ class ApplyResult:
         return asdict(self)
 
 
+def _endpoint_resolvers(configuration):
+    """DNS servers the panel already trusts, for endpoint resolution.
+
+    Only plain UDP entries are usable here: TLS/DoH upstreams need a client, and
+    the point of the fallback is to work on a host whose own resolver is missing.
+    """
+    servers = []
+    for upstream in configuration.dns.upstreams:
+        if getattr(upstream, 'mode', 'udp') == 'udp' and upstream.address:
+            servers.append(upstream.address)
+    for forward in configuration.dns.forwards:
+        address = getattr(forward, 'address', None) or str(forward)
+        servers.append(address)
+    return servers
+
+
 class ApplyEngine:
     def __init__(self, *, executor=None, filesystem=None, clock: Clock = time.time,
                  validators=None, reload_commands=None, panel_probe: Callable | None = None,
@@ -625,6 +641,16 @@ class ApplyEngine:
         from . import kernel_module
         self.wireguard_module = kernel_module.sync(
             profile, version.configuration, self.fs, self.executor)
+        # Endpoint names are resolved during the wireguard phase. A router whose
+        # management link has no DHCP has no resolver at all, so hand the
+        # configured upstreams to the reloader as a fallback.
+        resolvers = _endpoint_resolvers(version.configuration)
+        reloader = (self.reload_commands or {}).get('wireguard')
+        if resolvers and reloader is not None:
+            try:
+                reloader.dns_servers = tuple(resolvers)
+            except AttributeError:
+                pass
         tproxy_files, tproxy_validators = _tproxy_branch(version)
         doh_files, doh_validators = _doh_branch(version)
         from . import pppoe_apply
