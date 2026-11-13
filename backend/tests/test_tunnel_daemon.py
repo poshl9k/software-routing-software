@@ -52,5 +52,17 @@ def _dir_with_manifest(protocol):
     import json, tempfile
     from pathlib import Path
     path = Path(tempfile.mkdtemp())
-    (path / "manifest.json").write_text(json.dumps({"awg0": {"protocol": protocol}}))
+    (path / "manifest.json").write_text(json.dumps({"awg0": {"protocol": protocol},
+                                                    "wg0": {"protocol": protocol}}))
     return path
+
+
+def test_wireguard_daemon_path_matches_what_the_release_installs(monkeypatch):
+    """The release installs `wg-go`, not `wireguard-go`: the unit must exec the former."""
+    executed = []
+    monkeypatch.setattr(tunnel_daemon.subprocess, "run",
+                        lambda argv, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr=""))
+    monkeypatch.setattr(tunnel_daemon, "CONFIG_DIR", _dir_with_manifest("wg"))
+    monkeypatch.setattr(tunnel_daemon.os, "execv", lambda path, argv: executed.append(path))
+    tunnel_daemon.main(["prog", "wg0"])
+    assert executed == ["/usr/local/bin/wg-go"]

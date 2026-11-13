@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 CONFIG_DIR = Path('/etc/vs-router/wireguard')
-DAEMON = {('wg', 'userspace'): '/usr/local/bin/wireguard-go',
+DAEMON = {('wg', 'userspace'): '/usr/local/bin/wg-go',
           ('awg', 'userspace'): '/usr/local/bin/awg-go'}
 KIND = {'wg': 'wireguard', 'awg': 'amneziawg'}
 PROTOCOL_BINARY = {'wg': 'wg', 'awg': 'awg'}
