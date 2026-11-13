@@ -479,7 +479,8 @@ function ExitFields({
             value={exit.interface}
             placeholder={{ label: "Выберите интерфейс" }}
             options={choices.interfaces}
-            onChange={(value) => change({ exit: { kind: "interface", interface: value } })}
+            onChange={(value) => change({ exit: { kind: "interface", interface: value,
+              ...(exit.source ? { source: exit.source } : {}) } })}
           />
         )}
         {exit.kind === "outbound" && (
@@ -506,7 +507,26 @@ function ExitFields({
             value={exit.name}
             placeholder={{ label: "Выберите туннель" }}
             options={choices.clientTunnels}
-            onChange={(value) => change({ exit: { kind: "tunnel", name: value } })}
+            onChange={(value) => change({ exit: { kind: "tunnel", name: value,
+              ...(exit.source ? { source: exit.source } : {}) } })}
+          />
+        )}
+        {(exit.kind === "tunnel" || exit.kind === "interface") && (
+          <Field
+            label="Адрес-источник"
+            value={exit.source ?? ""}
+            valid={!exit.source || addressValid(exit.source)}
+            hint={exit.kind === "tunnel"
+              ? "Адрес туннеля на этом хосте. Без него пакеты уйдут с адресом другого маршрута и пир их отбросит"
+              : "Необязательно: адрес интерфейса, с которого выходить. Выход без него использует адрес по маршруту"}
+            onChange={(value) => {
+              const text = value.trim();
+              // An empty field must leave no key at all: the API rejects a source
+              // that belongs to no kind, and `null` would travel as a value.
+              change({ exit: exit.kind === "tunnel"
+                ? { kind: "tunnel", name: exit.name, ...(text ? { source: text } : {}) }
+                : { kind: "interface", interface: exit.interface, ...(text ? { source: text } : {}) } });
+            }}
           />
         )}
         {exit.kind === "block" && (
@@ -794,6 +814,10 @@ export function orderWarnings(configuration: Configuration, rules: RoutingRule[]
     }
     if (exit.kind === "group" && !groups.has(exit.tag ?? "")) {
       warnings.push({ tone: "amber", text: `Правило «${rule.name}»: группа ${exit.tag} не объявлена.` });
+    }
+    if (exit.kind === "tunnel" && !exit.source) {
+      warnings.push({ tone: "amber", text:
+        `Правило «${rule.name}»: у выхода через туннель не задан адрес-источник — пакеты уйдут с адресом другого маршрута, и пир их отбросит.` });
     }
   });
   if (captureOff.size > 0) {

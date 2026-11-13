@@ -555,8 +555,18 @@ def validate_routing(c):
                         for t in c.tunnels)):
                 fail('routing.tunnel_client_required')
             exits.append(member)
+    addresses = {interface.name: {ip_interface(a).ip for a in interface.addresses}
+                 for interface in c.interfaces}
     for target in exits:
         validate_routing_exit(target, tunnels, interfaces, outbound_tags)
+        if target.source is not None:
+            # A bound source is a promise about the host: it must be an address the
+            # exit link actually has, otherwise sing-box fails the dial or the peer
+            # drops the packet under cryptokey routing.
+            link = (tunnels[target.name].interface if target.kind == 'tunnel'
+                    else target.interface)
+            if ip_address(target.source) not in addresses.get(link, set()):
+                fail('routing.exit_source_not_on_interface')
         if target.kind in ('interface', 'tunnel'):
             tag = routing_exit_tag(target)
             # Distinct interfaces can sanitize to the same generated tag.

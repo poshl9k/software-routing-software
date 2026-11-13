@@ -827,6 +827,10 @@ class Exit(Model):
     name: Name | None = None
     #: Host interface name, required for interface only.
     interface: InterfaceName | None = None
+    #: Source address to bind when the exit leaves through an interface or tunnel.
+    #: Without it the kernel picks the source by route, which on a tunnel is the
+    #: wrong address and the remote peer drops the packet (observed live).
+    source: str | None = None
 
     @model_validator(mode="after")
     def check_fields(self):
@@ -834,6 +838,13 @@ class Exit(Model):
                 or (self.kind != 'tunnel' and self.name is not None)
                 or (self.kind != 'interface' and self.interface is not None)):
             raise ValueError('routing.exit_fields_unexpected')
+        if self.source is not None:
+            if self.kind not in ('interface', 'tunnel'):
+                raise ValueError('routing.exit_fields_unexpected')
+            try:
+                ip_address(self.source)
+            except ValueError:
+                raise ValueError('routing.exit_source_invalid') from None
         if self.kind == 'outbound' and self.tag is None:
             raise ValueError('routing.outbound_tag_required')
         if self.kind == 'tunnel' and self.name is None:

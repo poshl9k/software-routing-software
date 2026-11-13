@@ -52,6 +52,22 @@ def _subscriber_peer_addresses(configuration: Configuration) -> list[str]:
                    for address in peer.allowed_ips})
 
 
+def _bound_direct(tag: str, interface: str, source: str | None) -> dict:
+    """Direct outbound pinned to a link, optionally to a fixed source address.
+
+    ``bind_interface`` alone only forces the egress device; the kernel still picks
+    the source by route. On a tunnel that is the wrong address and the remote peer
+    drops the packet under cryptokey routing (observed live: awg0 carried
+    SYN-ACKs outward but every packet sourced from the management address was
+    discarded). ``inet4_bind_address`` states the address the exit must use.
+    """
+    outbound: dict = {"type": "direct", "tag": tag, "bind_interface": interface}
+    if source:
+        field = "inet6_bind_address" if ":" in source else "inet4_bind_address"
+        outbound[field] = source
+    return outbound
+
+
 def generate_subscriber_peers_rule_set(version: ConfigurationVersion) -> dict:
     """Render sing-box source rule-set for dynamic subscriber membership.
 
@@ -290,8 +306,7 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
         if target.kind in ("tunnel", "interface"):
             interface = (tunnels[target.name].interface if target.kind == "tunnel"
                          else target.interface)
-            bound_outbounds.setdefault(tag, {"type": "direct", "tag": tag,
-                                             "bind_interface": interface})
+            bound_outbounds.setdefault(tag, _bound_direct(tag, interface, target.source))
         rules.append(_wrap_subject_and_destination(
             subject_match, destination, {"action": "route", "outbound": tag}))
 
@@ -454,8 +469,7 @@ def generate_singbox(version: ConfigurationVersion,
                 interface = tunnels[member.name].interface
             else:
                 interface = member.interface
-            bound_outbounds.append({'type': 'direct', 'tag': tag,
-                                    'bind_interface': interface})
+            bound_outbounds.append(_bound_direct(tag, interface, member.source))
             bound_tags.add(tag)
     outbounds.extend(bound_outbounds)
     # TProxy final action overrides the default outbound selection

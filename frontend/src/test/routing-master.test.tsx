@@ -533,3 +533,38 @@ it("criterion_S1_order_tab_warns_about_interleaved_server_rule_and_unusable_exit
   expect(screen.getByText(/интерфейса выхода ghost0 нет в конфигурации/)).toBeVisible();
   expect(screen.getByText(/Перехват выключен у сегментов: lan0/)).toBeVisible();
 });
+
+it("criterion_S3_tunnel_exit_saves_the_source_address_it_binds", async () => {
+  // A tunnel exit without a pinned source sends packets with the address of some
+  // other route; the remote peer then drops them under cryptokey routing.
+  const configuration = baseConfiguration();
+  configuration.interfaces = [...configuration.interfaces, {
+    name: "awg0", type: "physical", zone: null, description: null, addressing: "static",
+    addresses: ["10.66.66.5/32"], parent: null, vlan_id: null, members: [],
+  }];
+  configuration.tunnels = [...configuration.tunnels, {
+    name: "rg3_in", interface: "awg0", role: "client", protocol: "awg",
+    private_key: { redacted: true }, listen_port: null, endpoint: "rg3.example:51108",
+    server_public_key: "S".repeat(44), allowed_ips: ["0.0.0.0/0"], keepalive: 25,
+    obfuscation: {}, preshared_key: null, header_protection_key: null,
+    random_trailers: false, disable_cookies: false, open_port: false, peers: [],
+  }];
+  const fetch = setup(configuration);
+  const user = userEvent.setup();
+  await openAdvanced(user);
+  await user.click(screen.getByRole("button", { name: "+ Правило" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "example.net");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Через туннель" }));
+  await user.selectOptions(screen.getByLabelText("Клиентский туннель"), "rg3_in");
+  await user.type(screen.getByLabelText("Адрес-источник"), "10.66.66.5");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.clear(screen.getByLabelText("Имя правила"));
+  await user.type(screen.getByLabelText("Имя правила"), "via_tunnel");
+  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const rules: RoutingRule[] = savedDraft(fetch).routing_rules;
+  expect(rules[0].exit).toEqual({ kind: "tunnel", name: "rg3_in", source: "10.66.66.5" });
+});
