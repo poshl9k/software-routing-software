@@ -144,3 +144,25 @@ def test_the_timer_ships_with_the_installer():
     assert 'OnUnitActiveSec=60s' in timer
     install = (packaging / 'install.sh').read_text(encoding='utf-8')
     assert 'vs-router-health.timer' in install
+
+
+def test_repair_restarts_only_what_is_down():
+    calls = []
+
+    class Down(Executor):
+        def run(self, argv, timeout=None):
+            calls.append(list(argv))
+            if argv[:3] == ['systemctl', 'is-active', '--quiet']:
+                unit = argv[3]
+                return SimpleNamespace(
+                    returncode=3 if unit in ('vs-router-singbox',) else 0,
+                    stdout='', stderr='')
+            if argv[:4] == ['ip', '-4', 'rule', 'show']:
+                rules = '100:' + chr(9) + 'from all fwmark 0x100 lookup 100' + chr(10)
+                return SimpleNamespace(returncode=0, stdout=rules, stderr='')
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    done = health.repair(Down())
+    assert done == ['vs-router-singbox']
+    assert ['systemctl', 'restart', 'vs-router-singbox'] in calls
+    assert ['systemctl', 'restart', 'vs-router-unbound-selected'] not in calls

@@ -124,26 +124,30 @@ def inspect(executor, capture_required: bool, tunnel_interfaces=()) -> list[dict
     return findings
 
 
-def repair(executor, filesystem, version) -> list[str]:
-    """One pass over the typed readiness steps; returns the steps that ran."""
-    from . import tproxy_apply
-    from .policy_route import PolicyRouteLoader
-    from .singbox_service import SingboxService
-    from .unbound_service import UnboundService
+def repair(executor) -> list[str]:
+    """One targeted restart pass; returns the actions that were taken.
 
-    if not tproxy_apply.required(version):
-        return []
-    steps: list[tuple[str, object]] = [('policy', PolicyRouteLoader(executor))]
-    if tproxy_apply.capture_required(version):
-        steps.append(('resolvers', UnboundService(executor, filesystem)))
-    steps.append(('engine', SingboxService(executor, filesystem)))
-    done = []
-    for name, step in steps:
+    Only units and the policy route are touched: the readiness steps used at apply
+    time also write unit files under /etc, which this checker must not need (it runs
+    under ProtectSystem=strict). A repair that fails is simply another finding on the
+    next tick.
+    """
+    done: list[str] = []
+    from .policy_route import PolicyRouteLoader
+
+    try:
+        if PolicyRouteLoader(executor).present() is False:
+            PolicyRouteLoader(executor).apply()
+            done.append('policy')
+    except Exception:  # noqa: BLE001
+        return done
+    for unit in ('vs-router-unbound-selected', 'vs-router-unbound-ordinary', ENGINE_UNIT):
         try:
-            step()
-        except Exception:  # noqa: BLE001 — a repair failure is a finding, not a crash
-            break
-        done.append(name)
+            if _active(executor, unit) is False:
+                executor.run(['systemctl', 'restart', unit], 60)
+                done.append(unit)
+        except Exception:  # noqa: BLE001
+            return done
     return done
 
 
@@ -185,7 +189,7 @@ def main() -> int:
     findings = inspect(executor, capture, _tunnels(configuration))
     repaired: list[str] = []
     if findings and capture:
-        repaired = repair(executor, filesystem, ConfigurationVersion.model_validate(snapshot))
+        repaired = repair(executor)
         findings = inspect(executor, capture, _tunnels(configuration))
     payload = {
         'host': socket.gethostname(),

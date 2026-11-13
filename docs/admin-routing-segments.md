@@ -146,3 +146,32 @@ getent hosts example.com                                         # DNS отве�
   закрывает сегмент, а не переключает его на другой.
 - Доменные правила требуют, чтобы DNS клиента шёл через панель.
 - Управление Wi-Fi/SSID — только Omada.
+
+## Диагностика: сегмент «есть, но не работает»
+
+Захват работает fail-closed: если движок упал, сегмент не выпускает трафик мимо
+туннеля — и это правильно, но не должно быть молчаливым. На хосте раз в минуту
+крутится `vs-router-health.timer`: он сверяет применённую конфигурацию с тем, что
+реально живо (таблицы перехвата, policy route, движок, свежесть handshake у
+туннелей), один раз пытается починить и записывает результат.
+
+```sh
+cat /run/vs-router/health.json        # findings + repaired, отметка времени
+journalctl -u vs-router-health -n 20  # каждая находка строкой в журнале
+systemctl status vs-router-health.timer
+```
+
+Коды находок: `health.capture_tables_missing`, `health.capture_route_missing`,
+`health.engine_inactive`, `health.tunnel_no_handshake`,
+`health.tunnel_handshake_stale`. Пустой `findings` — контур обслуживается.
+
+Чтобы получать их не только в журнале, задайте webhook (JSON POST, без прокси):
+
+```sh
+sudo -S -p '' systemctl edit vs-router-health.service
+# [Service]
+# Environment=VS_ROUTER_ALERT_WEBHOOK=https://alerts.example/hook
+```
+
+Проверка не «кричит волком»: если `nft`, `ip` или `systemctl` не ответили, это
+считается «не проверено», а не поломкой.

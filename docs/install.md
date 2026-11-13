@@ -32,7 +32,20 @@ sudo apt install -y python3 python3-pip python3-venv git \
   wireguard-tools socat curl
 ```
 
-**Порядок важен:** `kea-dhcp4-server` и `kea-ctrl-agent` должны быть установлены **до** установки панели. Установщик создаёт `/etc/kea/kea-api-password`, drop-in'ы `ReadWritePaths=/etc/kea` и AppArmor-override для проверки конфигурации; если Kea появилась позже, apply в профиле `router` падает с `kea.api_password_missing`.
+**Порядок больше не важен.** Профиль `router` ставит `kea-dhcp4-server` и
+`kea-ctrl-agent` сам, а весь control-канал (пароль `/etc/kea/kea-api-password`,
+drop-in'ы `ReadWritePaths=/etc/kea`, `LoadCredential` для web, AppArmor-override,
+пустой seed-конфиг) создаёт `packaging/kea-setup.sh`. Скрипт идемпотентен, поэтому
+на хосте, где Kea появилась уже после панели, достаточно выполнить:
+
+```sh
+sudo sh backend/packaging/kea-setup.sh
+sudo systemctl restart vs-router-agent vs-router-web
+```
+
+Без этого первый DHCP-apply падает с `kea.api_password_missing`, а проверка
+конфигурации — с `agent.validation_failed` (AppArmor не даёт `kea-dhcp4 -t`
+прочитать подготовленный файл в `/run/vs-router/pending`).
 
 `kea-ctrl-agent` нужен для live-аренд и статистики; при чистой установке Debian спросит про backend Kea — memfile подходит.
 
