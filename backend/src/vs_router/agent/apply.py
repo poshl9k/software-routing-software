@@ -281,6 +281,34 @@ class ApplyEngine:
         if self.executor.run(['/usr/sbin/nft', '-f', str(path)], 15).returncode:
             raise ApplyError('agent.reload_failed')
 
+    def _verify_management_access(self, management):
+        """The applied configuration must not cut its own management address.
+
+        The management link is written by the panel on the router profile, so a
+        document that describes it wrongly (or a networkd write that drops it)
+        leaves the host reachable over nothing — the exact lockout that needs a
+        console, and that the lab stand hit three times. The address is compared
+        by host, not by prefix length: a lease or a /24-vs-/16 document is the
+        same host on the wire, and failing on that would be noise.
+
+        Only a pinned separate-LAN address is enforced: on the single-uplink VPS
+        profile the address is a DHCP lease and may legitimately move.
+        """
+        address = getattr(management, 'address', '') or ''
+        if getattr(management, 'mode', 'separate-lan') != 'separate-lan' or not address:
+            return
+        result = self.executor.run(
+            ['ip', '-4', 'addr', 'show', 'dev', management.interface], 15)
+        output = getattr(result, 'stdout', '') or ''
+        if isinstance(output, bytes):
+            output = output.decode('utf-8', 'replace')
+        wanted = re.escape(address.split('/')[0])
+        pattern = 'inet ' + wanted + '/[0-9]+'
+        if re.search(pattern, output):
+            return
+        self._failed_service = 'networkd'
+        raise ApplyError('management.access_lost')
+
     def _verify_tproxy_tables(self, expected=None):
         result = self.executor.run(['/usr/sbin/nft', 'list', 'tables'], 15)
         if result.returncode:
@@ -746,6 +774,8 @@ class ApplyEngine:
                 if PolicyRouteLoader(self.executor).present() is False:
                     self._failed_service = tproxy_apply.POLICY_ROUTE_STEP
                     raise ApplyError('agent.tproxy_policy_route_missing')
+            if management is not None:
+                self._verify_management_access(management)
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
             if self.panel_probe is not None and not self._panel_probe_ready():

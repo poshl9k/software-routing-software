@@ -53,3 +53,19 @@ def test_an_unmarked_host_is_left_alone():
     assert kernel_module.sync(None, Config(["awg"]), fs, executor) == kernel_module.UNCHANGED
     assert kernel_module.BLACKLIST_PATH not in fs.files
     assert executor.calls == []
+
+
+def test_the_agent_may_write_the_module_policy_file():
+    """The agent runs under ProtectSystem=strict.
+
+    `/etc/modprobe.d` is not in its ReadWritePaths, so writing the blacklist
+    (the whole point of the router profile) fails with EROFS and the apply dies
+    with `agent.internal_error` — a green unit test would never notice.
+    """
+    from pathlib import Path
+    unit = (Path(__file__).resolve().parents[1] / 'packaging' /
+            'vs-router-agent.service').read_text(encoding='utf-8')
+    paths = next(line for line in unit.splitlines()
+                 if line.startswith('ReadWritePaths='))
+    assert '/etc/modprobe.d' in paths.split('=', 1)[1].split()
+    assert kernel_module.BLACKLIST_PATH.parent == Path('/etc/modprobe.d')

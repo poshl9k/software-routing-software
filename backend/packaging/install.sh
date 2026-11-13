@@ -117,6 +117,16 @@ if command -v kea-dhcp4 >/dev/null 2>&1; then
 fi
 install -d -m 0755 /usr/local/lib/vs-router
 install -m 0644 "$packaging_dir/wait-for-addresses.py" /usr/local/lib/vs-router/wait-for-addresses.py
+# The panel rewrites nftables and networkd as a whole, so a configuration that is
+# wrong about its own management interface — or an apply that dies half way — can
+# leave the host with no address and no SSH, reachable only from the console. The
+# guard re-asserts the host-owned management record every 30 seconds and is
+# independent of everything the panel generates.
+install -m 0644 "$packaging_dir/vs-router-access-guard.py" /usr/local/lib/vs-router/access-guard.py
+install -m 0644 "$packaging_dir/vs-router-access-guard.service" /etc/systemd/system/vs-router-access-guard.service
+install -m 0644 "$packaging_dir/vs-router-access-guard.timer" /etc/systemd/system/vs-router-access-guard.timer
+systemctl enable vs-router-access-guard.timer >/dev/null 2>&1 || true
+systemctl start vs-router-access-guard.timer >/dev/null 2>&1 || true
 cat > /etc/systemd/system/caddy.service.d/vs-router.conf <<EOF
 [Unit]
 After=
@@ -355,6 +365,19 @@ ExecStartPre=/usr/bin/test -s %d/kea-api-password
 Environment=VS_ROUTER_KEA_API_USER=kea-api
 Environment=VS_ROUTER_KEA_API_PASSWORD_FILE=%d/kea-api-password
 EOF
+    # Debian's AppArmor profile for kea-dhcp4 reads only /etc/kea, so the syntax
+    # check the agent runs against its staged file (/run/vs-router/pending) is
+    # denied and every apply dies with agent.validation_failed on a configuration
+    # that is perfectly valid. The local override grants exactly that path.
+    if [ -d /etc/apparmor.d ] && [ -f /etc/apparmor.d/usr.sbin.kea-dhcp4 ]; then
+        install -d -m 0755 /etc/apparmor.d/local
+        cat > /etc/apparmor.d/local/usr.sbin.kea-dhcp4 <<'EOF'
+# The panel stages its generated configuration and validates it with
+# ``kea-dhcp4 -t`` before installing it. The stock profile reads only /etc/kea.
+/run/vs-router/pending/* r,
+EOF
+        apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4 >/dev/null 2>&1 ||             echo 'WARNING: could not reload the kea AppArmor profile; the first DHCP apply may fail validation' >&2
+    fi
     # The distro default config binds every interface and would hand out leases
     # on this host's uplink, so seed a serve-nothing config until the panel
     # writes its own at the first apply. Never overwrite one the panel owns.

@@ -1,0 +1,22 @@
+[Unit]
+Description=vs-router management access guard
+Documentation=https://hermes-agent.nousresearch.com/docs
+# Runs before the panel's own units matter: a host without its management
+# address is not diagnosable over the network at all.
+Wants=network.target
+After=network.target systemd-networkd.service
+# A guard that reconfigures a live link must not be killed half way.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/vs-router/access-guard.py
+# It only touches the pinned management interface by name/MAC and inserts two
+# accept rules; nothing here can reach the WAN or rewrite a segment.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run
+PrivateTmp=yes
