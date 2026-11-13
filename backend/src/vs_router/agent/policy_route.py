@@ -169,6 +169,30 @@ class PolicyRouteLoader:
 
     add = apply
 
+    def present(self):
+        """True/False when the probe answered, ``None`` when it could not.
+
+        The capture tables are useless (and dangerous) without the rule: TPROXY
+        sends packets to a loopback port reachable only through it, so a missing
+        rule turns every captured segment into a silent black hole. An empty or
+        unreadable ``ip rule`` output is *unverifiable*, not "absent": real
+        iproute2 always prints at least the local and main rules, and treating a
+        silent probe as a failure would make apply depend on the harness.
+        """
+        route = marks.POLICY_ROUTES[0]
+        result = self._result(("ip", "-4", "rule", "show"))
+        if getattr(result, "returncode", 1):
+            return None
+        output = getattr(result, "stdout", "") or ""
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", "replace")
+        if not output.strip():
+            return None
+        try:
+            return _rule_state(output, route)
+        except ApplyError:
+            return False
+
     def remove(self) -> None:
         """Remove the owned rule+route; a missing entry is not an error."""
         for argv in commands("del"):

@@ -285,3 +285,26 @@ def test_teardown_destroys_capture_tables_before_stopping_the_engine():
     systemctl = next(index for index, argv in enumerate(calls) if argv[:1] == ["systemctl"])
     assert nft < systemctl
     assert tproxy_apply.TPROXY_CLEANUP_FILE in " ".join(calls[nft])
+
+
+def test_a_capture_apply_without_the_policy_route_is_never_reported_as_success():
+    """Capture and its delivery route are one tract — verify the pair on apply."""
+    engine, fs, executor = engine_with()
+    engine.reload_commands = {tproxy_apply.POLICY_ROUTE_STEP: (lambda: None),
+                              tproxy_apply.SINGBOX_PROCESS_STEP: (lambda: None)}
+    original = executor.run
+
+    def run(argv, timeout):
+        if list(argv[:4]) == ["ip", "-4", "rule", "show"]:
+            executor.calls.append((list(argv), timeout))
+            # Tables loaded, rule missing: the black-hole state.
+            return SimpleNamespace(returncode=0, stdout="0:\tfrom all lookup local\n", stderr="")
+        return original(argv, timeout)
+    executor.run = run
+    result = engine.apply_version(enabled_version(), validators=_recording_validators([]))
+    # Never "confirmed": the tract is torn down instead of left black-holing.
+    assert result.status in ("failed", "rolled_back")
+    marker = engine.status()
+    assert marker["status"] in ("failed", "rolled_back")
+    assert marker["reason"] in ("agent.tproxy_policy_route_missing", "tproxy_first_apply_failed")
+    assert fs.read(APPLIED_DIR / tproxy_apply.TPROXY_CLEANUP_FILE) == tproxy_apply.cleanup_content()

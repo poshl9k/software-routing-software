@@ -27,7 +27,13 @@ class FakeExecutor:
         self.fail = False
     def run(self, argv, timeout):
         self.calls.append((argv, timeout))
-        return SimpleNamespace(returncode=int(self.fail))
+        if list(argv[:4]) == ["ip", "-4", "rule", "show"]:
+            # A host with the TPROXY policy route in place; a test that needs it
+            # missing overrides run itself.
+            rules = "0:" + chr(9) + "from all lookup local" + chr(10)
+            rules += "100:" + chr(9) + "from all fwmark 0x100 lookup 100" + chr(10)
+            return SimpleNamespace(returncode=0, stdout=rules, stderr="")
+        return SimpleNamespace(returncode=int(self.fail), stdout="", stderr="")
 
 
 @pytest.fixture

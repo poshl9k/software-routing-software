@@ -737,6 +737,15 @@ class ApplyEngine:
                 # Only a capture configuration owns the guard/capture tables;
                 # an engine-only apply (inbounds, ADR-0034) has none to verify.
                 self._verify_tproxy_tables()
+                # The tables and the policy route are one tract: capture without
+                # `ip rule fwmark 0x100 lookup 100` sends every captured packet to
+                # a loopback port that has no route, so it disappears without a
+                # log line. Fail the apply (and roll back) instead of reporting a
+                # contour that silently black-holes its own segments.
+                from .policy_route import PolicyRouteLoader
+                if PolicyRouteLoader(self.executor).present() is False:
+                    self._failed_service = tproxy_apply.POLICY_ROUTE_STEP
+                    raise ApplyError('agent.tproxy_policy_route_missing')
             self.fs.write(APPLIED_DIR / 'snapshot.json', json.dumps(version_snapshot))
             marker['status'] = 'pending' if safe_mode else 'confirmed'
             if self.panel_probe is not None and not self._panel_probe_ready():
