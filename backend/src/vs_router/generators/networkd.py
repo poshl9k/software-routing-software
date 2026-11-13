@@ -28,6 +28,12 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
     /32 (IPv6 uses /128). Static gateways and DNS settings are not generated.
     """
     skip = set(exclude)
+    # Tunnel interfaces are owned by the wireguard phase: it creates the link and
+    # assigns the addresses from the tunnel manifest. Writing a .network here
+    # makes networkd take the link over, and a reconfigure then drops the address
+    # the tunnel just configured (observed live: awg0 lost 10.66.66.5/32 on a
+    # second apply, so packets left the tunnel with the wrong source).
+    skip |= {tunnel.interface for tunnel in version.configuration.tunnels if tunnel.interface}
     interfaces = sorted((i for i in version.configuration.interfaces if i.name not in skip),
                         key=lambda i: i.name)
     assigned = {i.name for i in interfaces if i.zone}

@@ -117,6 +117,12 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
     lines = ["destroy table inet vs_router", "table inet vs_router {"]
     lines += _address_sets(c.aliases, compiler.expanded)
     assigned = [i.name for i in c.interfaces if i.zone]
+    # A tunnel link carries traffic the panel itself originates (a captured segment
+    # leaving through a tunnel exit). It has no zone, so without an explicit mention
+    # every packet arriving from the tunnel is dropped by the fail-closed sets below
+    # — observed live: a TLS handshake through awg0 reached SYN-ACK on the wire and
+    # then died at the whitelist.
+    assigned += sorted({t.interface for t in c.tunnels if t.interface} - set(assigned))
     for chain in ("input", "forward"):
         lines += [f"    chain {chain} {{", f"        type filter hook {chain} priority filter; policy drop;"]
         if chain == "input":
