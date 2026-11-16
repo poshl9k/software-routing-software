@@ -1111,6 +1111,10 @@ export function Tunnels() {
           (t.dns_servers ?? []).length <= 2 && (t.dns_servers ?? []).every((v) => ipValid(v.trim())) &&
           numericValue(t.keepalive) &&
           (t.mtu == null || (Number.isInteger(t.mtu) && t.mtu >= 576 && t.mtu <= 65535)) &&
+          (t.uplink == null || (t.role === "client" &&
+            !!t.uplink.interface.trim() && t.uplink.interface !== t.interface &&
+            ipValid(t.uplink.gateway.trim()) &&
+            (!t.uplink.source?.trim() || ipValid(t.uplink.source.trim())))) &&
           (t.role === "server"
             ? portValid(t.listen_port ?? 0) &&
               t.peers.every(
@@ -1125,15 +1129,24 @@ export function Tunnels() {
             (awgRequired.every((k) => awgValueValid(k, t.obfuscation[k])) &&
               Object.entries(t.obfuscation).every(([k, v]) => awgValueValid(k, v))))
         }
-        clean={(t) => ({
-          ...t,
-          allowed_ips: normalize(t.allowed_ips),
-          dns_servers: normalize(t.dns_servers ?? []),
-          peers: t.peers.map((p) => ({
-            ...p,
-            allowed_ips: normalize(p.allowed_ips),
-          })),
-        })}
+        clean={(t) => {
+          // A half-filled uplink (no gateway yet) is a form state, not data:
+          // it must not reach the draft, or the backend refuses the version.
+          const { uplink, ...rest } = t;
+          return {
+            ...rest,
+            ...(uplink?.gateway.trim()
+              ? { uplink: { interface: uplink.interface, gateway: uplink.gateway.trim(),
+                            ...(uplink.source?.trim() ? { source: uplink.source.trim() } : {}) } }
+              : {}),
+            allowed_ips: normalize(t.allowed_ips),
+            dns_servers: normalize(t.dns_servers ?? []),
+            peers: t.peers.map((p) => ({
+              ...p,
+              allowed_ips: normalize(p.allowed_ips),
+            })),
+          };
+        }}
         summary={(t) => [
           t.name,
           <Badge>{t.role === "server" ? "сервер" : "клиент"}</Badge>,
@@ -1218,6 +1231,25 @@ export function Tunnels() {
                   control={<Checkbox checked={t.default_route === true}
                     onChange={(_, default_route) => patch({ default_route })} />} /></FormWide>
                 {t.default_route === true && <FormWide><InfoNote severity="warning">Весь трафик хоста, включая доступ к панели и SSH, пойдёт через туннель.</InfoNote></FormWide>}
+                <FormWide><FormControlLabel label="Шлюз подключения (uplink)"
+                  control={<Checkbox checked={t.uplink != null}
+                    onChange={(_, on) => patch({ uplink: on ? {
+                      interface: c.interfaces.find((i) => i.name !== t.interface && i.zone === "wan")?.name
+                        ?? c.interfaces.find((i) => i.name !== t.interface)?.name ?? "",
+                      gateway: "",
+                    } : null })} />} /></FormWide>
+                {t.uplink != null && <>
+                  <InterfaceSelect label="Интерфейс uplink" value={t.uplink.interface}
+                    interfaces={c.interfaces.filter((i) => i.name !== t.interface)}
+                    onChange={(v) => patch({ uplink: { ...t.uplink!, interface: v } })} />
+                  <Field label="Шлюз" value={t.uplink.gateway} valid={ipValid(t.uplink.gateway.trim())}
+                    hint="Через него уйдёт подключение к серверу туннеля; может отличаться от шлюза РФ-выхода"
+                    onChange={(v) => patch({ uplink: { ...t.uplink!, gateway: v } })} />
+                  <Field label="Адрес-источник" value={t.uplink.source ?? ""}
+                    valid={!t.uplink.source?.trim() || ipValid(t.uplink.source.trim())}
+                    hint="Необязательно: адрес того же интерфейса для исходящих пакетов туннеля"
+                    onChange={(v) => patch({ uplink: { ...t.uplink!, ...(v.trim() ? { source: v } : { source: undefined }) } })} />
+                </>}
             </>}
           </FormGrid></PageSection>
           <PageSection title="Ключи"><FormGrid>

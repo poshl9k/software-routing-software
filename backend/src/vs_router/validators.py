@@ -5,11 +5,12 @@ label-boundary subtrees overlap, and an exact name overlaps a DNS suffix only
 when it belongs to that subtree (a leading suffix dot excludes the apex).
 """
 from ipaddress import ip_address, ip_interface, ip_network
+from typing import NoReturn
 import re
 import warnings
 
 
-def fail(code):
+def fail(code) -> NoReturn:
     raise ValueError(code)
 
 
@@ -352,6 +353,7 @@ def validate_configuration(c):
     subscribers = {s.name for s in c.subscribers}
     if len(subscribers) != len(c.subscribers):
         fail("subscriber.duplicate_name")
+    transports: dict = {}
     for t in c.tunnels:
         if t.interface not in interfaces:
             fail("tunnel.interface")
@@ -360,6 +362,16 @@ def validate_configuration(c):
                 fail("peer.subscriber_reference")
         for value in (*t.allowed_ips, *(a for p in t.peers for a in p.allowed_ips)):
             ip_network(value)
+        if t.uplink is not None:
+            validate_tunnel_uplink(c, t)
+            endpoint_ip = _endpoint_host(t.endpoint)
+            if endpoint_ip is not None:
+                # Two tunnels on one endpoint share one /32 host route; a
+                # different transport per tunnel on the same endpoint cannot
+                # exist without policy marks, so refuse the ambiguity up front.
+                chosen = (t.uplink.gateway, t.uplink.source)
+                if transports.setdefault(endpoint_ip, chosen) != chosen:
+                    fail("tunnel.uplink_endpoint_conflict")
     wan_addresses = {str(ip_interface(a).ip) for i in c.interfaces if i.zone == "wan" for a in i.addresses}
     for s in c.sites:
         if s.wan_address and s.wan_address not in wan_addresses:
@@ -370,6 +382,42 @@ def validate_configuration(c):
     validate_routing(c)
     derive_dns_detours(c)
     validate_inbounds(c)
+
+
+def _endpoint_host(endpoint):
+    """A tunnel endpoint as a literal IP, or None for a hostname."""
+    if not endpoint:
+        return None
+    host = endpoint[1:].split("]", 1)[0] if endpoint.startswith("[") else endpoint.rsplit(":", 1)[0]
+    try:
+        return ip_address(host)
+    except ValueError:
+        return None
+
+
+def validate_tunnel_uplink(c, tunnel):
+    """A transport gateway is a promise about a WAN link.
+
+    The generated route is ``via <gateway> dev <interface>``, so a hop outside
+    every subnet of that link is unreachable and the tunnel never handshakes;
+    a source that is not an address of the link is rewritten by masquerade
+    instead of leaving as declared. Transport is IPv4 today, like the whole
+    capture/exit machinery.
+    """
+    uplink = tunnel.uplink
+    assert uplink is not None
+    link = next((i for i in c.interfaces if i.name == uplink.interface), None)
+    if link is None or not link.addresses:
+        fail("tunnel.uplink_interface")
+    addresses = [ip_interface(a) for a in link.addresses]
+    gateway = ip_address(uplink.gateway)
+    if gateway.version != 4 or not any(gateway in a.network for a in addresses):
+        fail("tunnel.uplink_gateway_unreachable")
+    if uplink.source is not None and ip_address(uplink.source) not in {a.ip for a in addresses}:
+        fail("tunnel.uplink_source_not_on_interface")
+    endpoint = _endpoint_host(tunnel.endpoint)
+    if endpoint is not None and endpoint.version != 4:
+        fail("tunnel.uplink_gateway_family")
 
 
 def routing_exit_tag(target):

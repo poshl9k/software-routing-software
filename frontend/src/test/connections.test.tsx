@@ -364,3 +364,18 @@ it.each(["cloudflare", "rfc2136"])("saves %s DDNS", async (provider) => {
   await userEvent.click(save());
   expect(draft(fetch).ddns[0]).toMatchObject({ provider, api_token: { plaintext: "token" }, wan_interface: "eth0" });
 });
+
+it("writes a client uplink into the draft; an empty gateway blocks the save", async () => {
+  const client: Tunnel = { ...server, name: "remote", interface: "tun1", role: "client",
+    peers: [], endpoint: "remote.example:51820", server_public_key: "remote-public" };
+  const fetch = await mount(<Tunnels />, { ...wan, tunnels: [client] });
+  await userEvent.click(screen.getByRole("button", { name: "Открыть" }));
+  await userEvent.click(screen.getByRole("button", { name: "Изменить" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "Шлюз подключения (uplink)" }));
+  // Half-filled form: the gateway is empty, so the save stays disabled.
+  expect(save()).toBeDisabled();
+  fill("Шлюз", "203.0.113.9");
+  await userEvent.click(save());
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(draft(fetch).tunnels[0].uplink).toEqual({ interface: "eth0", gateway: "203.0.113.9" });
+});

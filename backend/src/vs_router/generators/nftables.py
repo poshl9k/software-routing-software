@@ -262,6 +262,19 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
                 continue
             lines.append(f'        oifname "{interface}" ip saddr {_nft_set(sorted(subnets))} '
                          f'counter snat ip to {source} comment "exit_snat"')
+        # A tunnel transport that declares its own source must not be rewritten
+        # either: the masquerade set can cover the link (a wide management
+        # prefix does), and rewriting the outer UDP source to the interface
+        # primary defeats the address the operator pinned for that upstream.
+        # Emitted before the automatic rule, which is a first-match chain.
+        for tunnel in sorted(c.tunnels, key=lambda t: t.name):
+            uplink = tunnel.uplink
+            if (tunnel.role != 'client' or uplink is None or not uplink.source
+                    or ':' in uplink.source
+                    or uplink.interface not in {name for group in zones.values() for name in group}):
+                continue
+            lines.append(f'        oifname "{uplink.interface}" ip saddr {uplink.source} '
+                         f'counter snat ip to {uplink.source} comment "transport_snat"')
         if networks:
             lines.append(f'        oifname {names(zones["wan"])} ip saddr {{ ' + ", ".join(networks) + " } counter masquerade")
     lines += ["    }", "}"]

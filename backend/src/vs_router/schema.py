@@ -233,6 +233,35 @@ def awg_parameter(key: str, value):
     raise ValueError("tunnel.awg_parameter")
 
 
+class TunnelUplink(Model):
+    """The WAN link a client tunnel's own handshake traffic must leave through.
+
+    The userspace tunnel daemon opens one connected UDP socket per endpoint,
+    and that socket keeps the route it resolved at connect time — so the
+    endpoint /32 host route must already sit in the main table when ``setconf``
+    runs. Outer UDP packets carry no source address at fib-rule time, so
+    segment policy rules (``From=<source>``) never claim them and the host
+    route is authoritative: a transport gateway may freely differ from the RF
+    exit gateway any segment policy chooses.
+    """
+    interface: InterfaceName
+    gateway: str
+    source: str | None = None
+
+    @model_validator(mode="after")
+    def check_fields(self):
+        try:
+            ip_address(self.gateway)
+        except ValueError:
+            raise ValueError("tunnel.uplink_gateway_invalid") from None
+        if self.source is not None:
+            try:
+                ip_address(self.source)
+            except ValueError:
+                raise ValueError("tunnel.uplink_source_invalid") from None
+        return self
+
+
 class Tunnel(Model):
     name: Name
     interface: InterfaceName
@@ -265,6 +294,11 @@ class Tunnel(Model):
     # Server only: open udp/<listen_port> on the WAN zone so remote clients can
     # reach the server. The panel shows the generated rule on the Firewall page.
     open_port: bool = True
+    # Client only: the WAN link (interface + gateway) the tunnel's own outer
+    # UDP traffic must use, as an endpoint /32 host route in the main table.
+    # Independent of any routing exit: a transport gateway may differ from the
+    # gateway a segment's RF exit picks on the same link.
+    uplink: TunnelUplink | None = None
     # Tunnel device MTU. AmneziaWG obfuscation (paddings, trailers, header
     # protection) consumes tunnel MTU headroom before the outer UDP packet is
     # built; a full-size 1420 MTU plus AWG 3+ additions fragments at a 1500 WAN
@@ -321,6 +355,8 @@ class Tunnel(Model):
         # template. server_public_key belongs to a client only.
         if self.role == "server" and (self.server_public_key or self.listen_port is None):
             raise ValueError("tunnel.server_fields")
+        if self.uplink is not None and self.role != "client":
+            raise ValueError("tunnel.uplink_client_only")
         if self.role == "client" and (self.peers or not self.endpoint or not self.server_public_key):
             raise ValueError("tunnel.client_fields")
         if self.protocol == "awg" and not AWG_CORE <= self.obfuscation.keys():

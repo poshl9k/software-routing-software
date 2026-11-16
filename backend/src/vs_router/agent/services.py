@@ -472,8 +472,14 @@ class WireGuardReloader:
         # default route is up it captures the resolver, so a later lookup would
         # hang. Baking the address into each generated config makes the unit's
         # ExecStartPost and the configure() below resolve nothing.
-        for entry in manifest.values():
-            self.endpoint_address(entry)
+        resolved: dict = {}
+        for iface, entry in manifest.items():
+            resolved[iface] = self.endpoint_address(entry)
+            if entry.get('uplink') and resolved[iface] is not None:
+                # Persisted in the on-disk manifest so a later version that
+                # drops the tunnel (or the uplink) can still retire its route.
+                entry['endpoint_ip'] = str(resolved[iface])
+        self.reconcile_transport(previous, manifest, resolved)
         for iface, old in previous.items():
             new = manifest.get(iface)
             if new is None or old['protocol'] != new['protocol']:
@@ -516,7 +522,10 @@ class WireGuardReloader:
         for entry in previous.values():
             if entry['file'] not in files:
                 self.fs.remove(self.config_dir / entry['file'])
-        self.fs.write(self.config_dir / 'manifest.json', files['manifest.json'])
+        # Round-tripped through the parsed manifest: `endpoint_ip` records the
+        # address this apply resolved, which the raw generator output lacks.
+        self.fs.write(self.config_dir / 'manifest.json',
+                      json.dumps(manifest, sort_keys=True, indent=2) + '\n')
 
     @staticmethod
     def _dns_query(server, host, qtype=1, timeout=2, port=53):
@@ -676,7 +685,19 @@ class WireGuardReloader:
         address = self.endpoint_address(entry)
         defaults = {ip_network(route).version for route in entry['routes']
                     if ip_network(route).prefixlen == 0}
-        if address is not None and address.version in defaults:
+        if entry.get('uplink'):
+            # The transport route must exist before `setconf`: the daemon opens
+            # one connected UDP socket per endpoint and that socket keeps the
+            # route it resolved at connect time. The /32 also wins over any
+            # default the tunnel route adds later, so the handshake always
+            # leaves through the chosen gateway even when the tunnel owns the
+            # default route. Outer UDP packets carry no source address at
+            # fib-rule time, so segment policy rules (`From=<source>`) never
+            # claim them and the main table is authoritative — which is why a
+            # transport gateway may differ from any RF exit gateway on the
+            # same link.
+            self.transport_route(address, entry['uplink'])
+        elif address is not None and address.version in defaults:
             # Keep the peer's own address reachable over the original gateway,
             # or the tunnel default route below swallows the handshake.
             gateway, device = self.endpoint_gateway(address, iface)
@@ -696,6 +717,67 @@ class WireGuardReloader:
         checked(self.executor, ['ip', 'link', 'set', 'dev', iface, 'up'])
         for route in entry['routes']:
             checked(self.executor, self.route('replace', route, iface))
+
+    def transport_route(self, address, uplink):
+        """One tunnel's outer UDP path as an endpoint /32 in the main table.
+
+        The daemon opens one connected UDP socket per endpoint and the socket
+        keeps the route resolved at connect time; a host route placed before
+        `setconf` therefore pins every later packet too. IPv4 only, like the
+        capture/exit machinery.
+        """
+        if address is None:
+            raise ApplyError('wireguard.endpoint_unresolved')
+        if address.version != 4:
+            raise ApplyError('wireguard.uplink_gateway_family')
+        command = ['ip', '-4', 'route', 'replace', f'{address}/32',
+                   'via', uplink['gateway'], 'dev', uplink['interface']]
+        if uplink.get('source'):
+            command += ['src', uplink['source']]
+        checked(self.executor, command)
+
+    def _conf_endpoint_ip(self, entry):
+        """The baked endpoint address of a previously applied tunnel, if any."""
+        try:
+            content = self.fs.read(self.config_dir / entry['file'])
+        except OSError:
+            return None
+        match = self.ENDPOINT.search(content)
+        if match is None:
+            return None
+        value = match.group(1)
+        host = value[1:].split(']', 1)[0] if value.startswith('[') else value.rsplit(':', 1)[0]
+        try:
+            return ip_address(host)
+        except ValueError:
+            return None
+
+    def reconcile_transport(self, previous, manifest, resolved):
+        """Install nothing here; retire routes whose uplink the version dropped.
+
+        The transport route lives in the main table, outside every generated
+        artifact, so a version change is the only writer that can remove it.
+        One endpoint behind two different transports cannot exist — the
+        sockets would race for a single /32 — so an ambiguity fails the apply
+        before anything is wired.
+        """
+        planned: dict[str, dict] = {}
+        for iface, entry in manifest.items():
+            if entry.get('uplink') and resolved.get(iface) is not None:
+                key = str(resolved[iface])
+                if planned.setdefault(key, entry['uplink']) != entry['uplink']:
+                    raise ApplyError('wireguard.endpoint_route_conflict')
+        for iface, old in previous.items():
+            old_uplink = old.get('uplink')
+            if not old_uplink:
+                continue
+            new = manifest.get(iface)
+            if new is not None and new.get('uplink') == old_uplink:
+                continue
+            old_ip = old.get('endpoint_ip') or self._conf_endpoint_ip(old)
+            if old_ip is not None:
+                delete_tunnel_route(self.executor,
+                                    ['ip', '-4', 'route', 'del', f'{old_ip}/32'])
 
     def configure_kernel(self, iface, entry):
         """No userspace daemon: the kernel creates the link, its tool configures it."""

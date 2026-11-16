@@ -325,6 +325,15 @@ def generate_wg_bundle(version, key_material) -> dict[str, str]:
             manifest[t.interface]['mtu'] = t.mtu
         if t.role == 'client':
             manifest[t.interface]['endpoint'] = t.endpoint
+            if t.uplink is not None:
+                # The agent turns this into an endpoint /32 host route in the
+                # main table before `setconf`, so the tunnel's outer UDP leaves
+                # through one chosen gateway regardless of any routing policy.
+                manifest[t.interface]['uplink'] = {
+                    'interface': t.uplink.interface,
+                    'gateway': t.uplink.gateway,
+                    **({'source': t.uplink.source} if t.uplink.source else {}),
+                }
         if t.role != 'server' or not t.peers:
             continue
         metadata = key_material.get(t.name, {})

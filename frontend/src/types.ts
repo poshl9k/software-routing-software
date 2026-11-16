@@ -139,6 +139,8 @@ export interface Tunnel {
   disable_cookies: boolean;
   /** Server only: open udp/<listen_port> on the WAN zone (generated firewall rule). */
   open_port: boolean;
+  /** Client only: the WAN link the tunnel's own outer UDP traffic must use. */
+  uplink?: { interface: string; gateway: string; source?: string } | null;
   /** Tunnel device MTU; empty keeps the host default. Recommended 1200 for AWG 3+. */
   mtu?: number | null;
 }
