@@ -101,6 +101,13 @@ export const api = {
   keygenPeer: () => post<{ preshared_key: string }>("/api/keygen/peer", {}),
   keygenInbound: () => post<Record<string, unknown>>("/api/keygen/inbound", {}),
   keygenPeerKeypair: () => post<{ private_key: string; public_key: string }>("/api/keygen/peer-keypair", {}),
+  /** A ready AWG 3+ mask: the I1 signature packet of a mimicry preset, byte-compatible
+   * with the AWG-Router panel. DNS presets accept an optional custom host / answer IP. */
+  keygenMasking: (preset: "icloud" | "stun" | "quic" | "dns" | "sip" | "none", host?: string, ip?: string) =>
+    post<{ obfuscation: Record<string, string>; sizes: Record<string, number> }>(
+      "/api/keygen/awg-masking",
+      { preset, ...(host ? { host } : {}), ...(ip ? { ip } : {}) },
+    ),
   versions: (signal?: AbortSignal) =>
     request<ConfigurationVersion[]>("/api/versions", { signal }),
   previewTproxy: () => request<TProxyPreview>("/api/draft/tproxy/preview"),

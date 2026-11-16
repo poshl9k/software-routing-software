@@ -24,6 +24,9 @@ async function mount(page: React.ReactNode, config: Configuration = emptyConfigu
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {
     if (path === "/api/status/services") return status.clone();
     if (path === "/api/keygen/tunnel") return keygen(JSON.parse(String(init?.body)).protocol);
+    if (path === "/api/keygen/awg-masking") return new Response(JSON.stringify({
+      obfuscation: { I1: "<r 2><b 0x0102>", I2: "", I3: "", I4: "", I5: "" }, sizes: { I1: 4 },
+    }));
     if (path === "/api/versions") return new Response(JSON.stringify([{ id: 1, status: "confirmed", configuration: config }]));
     if (fail) return new Response(JSON.stringify({ code: "save.failed", message: "Ошибка API" }), { status: 500 });
     return new Response(JSON.stringify({ id: 2, status: "draft", configuration: JSON.parse(String(init?.body)) }));
@@ -46,9 +49,11 @@ async function openTunnel() {
 async function choose(role: "client" | "server", protocol: "wg" | "awg" = "wg") {
   await userEvent.click(screen.getByRole("button", { name: /Добавить туннель/ }));
   if (role === "server") await userEvent.click(screen.getByRole("button", { name: "Поднять сервер" }));
+  await userEvent.click(screen.getByRole("button", { name: "Продолжить" }));
   if (protocol === "awg") fill("Протокол нового туннеля", "awg");
   await userEvent.click(screen.getByRole("button", { name: "Продолжить" }));
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новый туннель" })).not.toBeInTheDocument());
+  await userEvent.click(screen.getByRole("button", { name: "Создать туннель" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /Новый туннель · Шаг/ })).not.toBeInTheDocument());
 }
 it("client/server split filters cards and preserves hidden tunnels when saving either tab", async () => {
   const client: Tunnel = { ...server, name: "remote", interface: "tun1", role: "client",
@@ -230,7 +235,7 @@ it("selects client and protocol before keygen; saves one draft without opening W
   await userEvent.click(screen.getByRole("button", { name: /Добавить туннель/ }));
   expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(0);
   await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Новый туннель" })).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /Новый туннель · Шаг/ })).not.toBeInTheDocument());
   await choose("client", "awg");
   expect(fetch.mock.calls.filter(([p]) => p === "/api/keygen/tunnel")).toHaveLength(1);
   fill("Имя туннеля", "client");
@@ -378,4 +383,31 @@ it("writes a client uplink into the draft; an empty gateway blocks the save", as
   await userEvent.click(save());
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(draft(fetch).tunnels[0].uplink).toEqual({ interface: "eth0", gateway: "203.0.113.9" });
+});
+
+it("builds an AWG mask from a preset and clears it back off", async () => {
+  const fetch = await mount(<Tunnels />, { ...wan, tunnels: [server] });
+  await openTunnel();
+  const dialog = screen.getByRole("dialog", { name: "Туннель: vpn · AmneziaWG · Сервер" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "Показать дополнительные настройки" }));
+  // The DNS presets reveal the optional host / answer fields.
+  expect(within(dialog).queryByLabelText("Имя в DNS-маске (необязательно)")).not.toBeInTheDocument();
+  await userEvent.selectOptions(screen.getByLabelText("Готовая маска (пресет)"), "icloud");
+  fill("Имя в DNS-маске (необязательно)", "MyHost.example");
+  fill("Адрес ответа (необязательно)", "not-an-ip");
+  expect(within(dialog).getByRole("button", { name: "Собрать маску" })).toBeDisabled();
+  fill("Адрес ответа (необязательно)", "17.253.144.10");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Собрать маску" }));
+  await waitFor(() => expect(within(dialog).getByText("Пакет I1 собран: 4 байт.")).toBeVisible());
+  // The request carried the preset and the lower-cased custom host; the answer IP.
+  const masking = fetch.mock.calls.find(([path]) => path === "/api/keygen/awg-masking");
+  expect(JSON.parse(String(masking?.[1]?.body))).toEqual({ preset: "icloud", host: "myhost.example", ip: "17.253.144.10" });
+  // The packet landed in I1; the other signature slots were cleared, the numbers kept.
+  expect(within(dialog).getByLabelText("I1")).toHaveValue("<r 2><b 0x0102>");
+  expect(within(dialog).getByLabelText("I2")).toHaveValue("");
+  expect(within(dialog).getByLabelText("Jc")).toHaveValue("4");
+  // «Без маски» removes the signature packets again.
+  await userEvent.selectOptions(screen.getByLabelText("Готовая маска (пресет)"), "none");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Убрать маску" }));
+  expect(within(dialog).getByLabelText("I1")).toHaveValue("");
 });

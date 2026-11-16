@@ -39,7 +39,7 @@ it("opens the tunnel peer QR dialog from a blob response",async()=>{
 it("generates tunnel keys and fills private key plus AWG parameters",async()=>{
   const cfg={...emptyConfiguration,tunnels:[]};
   const fetch=setup(cfg,(path,init)=>path==="/api/keygen/tunnel"?new Response(JSON.stringify({private_key:"a".repeat(44),public_key:"b".repeat(44),obfuscation:{Jc:4,Jmin:35,Jmax:90,S1:12,S2:95,H1:11,H2:12,H3:13,H4:14}})):new Response(JSON.stringify({id:1,status:"draft",configuration:JSON.parse(String(init?.body))})));
-  const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("button",{name:"+ Добавить туннель"}));await user.selectOptions(screen.getByLabelText("Протокол нового туннеля"),"awg");await user.click(screen.getByRole("button",{name:"Продолжить"}));
+  const user=userEvent.setup();mount(<Tunnels/>);await user.click(await screen.findByRole("button",{name:"+ Добавить туннель"}));await user.click(screen.getByRole("button",{name:"Поднять сервер"}));await user.click(screen.getByRole("button",{name:"Продолжить"}));await user.selectOptions(screen.getByLabelText("Протокол нового туннеля"),"awg");await user.click(screen.getByRole("button",{name:"Продолжить"}));await user.click(screen.getByRole("button",{name:"Создать туннель"}));
   const editor=await screen.findByRole("dialog",{name:/Туннель:/});
   await user.click(within(editor).getByRole("button",{name:"Сгенерировать ключи"}));await waitFor(()=>expect(within(editor).getByLabelText("Приватный ключ")).toHaveValue("a".repeat(44)));
   expect(fetch).toHaveBeenCalledWith("/api/keygen/tunnel",expect.objectContaining({method:"POST",body:JSON.stringify({protocol:"awg"})}));

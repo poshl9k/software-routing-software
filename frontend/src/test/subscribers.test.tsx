@@ -227,17 +227,52 @@ it("criterion_7_invite_needs_tariff_and_ready_password_is_warned", async () => {
   expect(within(dialog).getByRole("button", { name: "Отозвать" })).toBeEnabled();
 });
 
-it("criterion_8_subscription_dialog_shows_badge_and_renews", async () => {
+it("criterion_8_client_card_subscription_tab_shows_badge_and_renews", async () => {
   const fetch = setup("/subscribers");
   const user = userEvent.setup();
   const table = within((await screen.findAllByRole("table"))[0]!);
   await waitFor(() => expect(within(table.getByRole("row", { name: /alice — Алиса/ }))
     .getByText("Активна")).toBeVisible());
   await user.click(within(table.getByRole("row", { name: /alice — Алиса/ }))
-    .getByRole("button", { name: "Подписка" }));
-  const dialog = await screen.findByRole("dialog", { name: "Подписка: alice" });
+    .getByRole("button", { name: "alice — Алиса" }));
+  const dialog = await screen.findByRole("dialog", { name: "Абонент: alice" });
+  await user.click(within(dialog).getByRole("tab", { name: "Подписка" }));
   await user.click(within(dialog).getByRole("button", { name: "Продлить" }));
   await waitFor(() => expect(fetch.mock.calls.some(([url, init]) =>
     url === "/api/portal-admin/subscribers/alice/subscription" && init?.method === "PATCH"
       && JSON.parse(String(init.body)).renew === true)).toBe(true));
+});
+
+it("criterion_9_client_card_shows_overview_devices_and_manage_tabs", async () => {
+  setup("/subscribers");
+  const user = userEvent.setup();
+  const table = within((await screen.findAllByRole("table"))[0]!);
+  await user.click(within(table.getByRole("row", { name: /alice — Алиса/ }))
+    .getByRole("button", { name: "alice — Алиса" }));
+  const dialog = await screen.findByRole("dialog", { name: "Абонент: alice" });
+  // Обзор: описание и подписка
+  expect(within(dialog).getByText("Алиса")).toBeVisible();
+  expect(within(dialog).getByText("Активна")).toBeVisible();
+  // Устройства: пиры туннелей абонента
+  await user.click(within(dialog).getByRole("tab", { name: "Устройства" }));
+  expect(within(dialog).getByText("phone")).toBeVisible();
+  expect(within(dialog).getByText("laptop")).toBeVisible();
+  expect(within(dialog).getAllByText("wg_home").length).toBeGreaterThan(0);
+  expect(within(dialog).getAllByText("10.8.0.2/32").length).toBeGreaterThan(0);
+  expect(within(dialog).queryByText("service")).not.toBeInTheDocument();
+  // Управление: редактирование, приглашение и удаление — только у админа
+  await user.click(within(dialog).getByRole("tab", { name: "Управление" }));
+  expect(within(dialog).getByRole("button", { name: "Изменить" })).toBeEnabled();
+  expect(within(dialog).getByRole("button", { name: "Пригласить" })).toBeEnabled();
+  expect(within(dialog).getByRole("button", { name: "Удалить абонента alice" })).toBeEnabled();
+});
+
+it("operator_client_card_hides_manage_tab", async () => {
+  setup("/subscribers", configuration, panel, "operator");
+  const table = within((await screen.findAllByRole("table"))[0]!);
+  await userEvent.setup().click(within(table.getByRole("row", { name: /alice — Алиса/ }))
+    .getByRole("button", { name: "alice — Алиса" }));
+  const dialog = await screen.findByRole("dialog", { name: "Абонент: alice" });
+  expect(within(dialog).getByRole("tab", { name: "Устройства" })).toBeVisible();
+  expect(within(dialog).queryByRole("tab", { name: "Управление" })).not.toBeInTheDocument();
 });

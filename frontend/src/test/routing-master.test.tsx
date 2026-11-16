@@ -268,7 +268,7 @@ it("criterion_R7_save_writes_routing_rules_into_the_draft_and_never_applies", as
   expect(fetch.mock.calls.some(([path]) => path === "/api/apply")).toBe(false);
 });
 
-it("criterion_R8_rules_table_shows_prose_cells_and_a_per_row_delete_label", async () => {
+it("criterion_R8_rules_are_numbered_cards_with_prose_and_a_per_card_delete_label", async () => {
   const configuration = baseConfiguration();
   configuration.routing_rules = [{
     name: "existing", subject: { kind: "server" }, domain_suffix: ["example.org"],
@@ -277,9 +277,11 @@ it("criterion_R8_rules_table_shows_prose_cells_and_a_per_row_delete_label", asyn
   setup(configuration);
   const user = userEvent.setup();
   await openAdvanced(user);
-  expect(screen.getByRole("cell", { name: "трафик сервера" })).toBeVisible();
-  expect(screen.getByRole("cell", { name: "домены example.org" })).toBeVisible();
-  expect(screen.getByRole("cell", { name: "напрямую" })).toBeVisible();
+  // The flat order is visible as the number on the card.
+  expect(screen.getByText("1")).toBeVisible();
+  expect(screen.getByText("трафик сервера")).toBeVisible();
+  expect(screen.getByText("домены example.org")).toBeVisible();
+  expect(screen.getByText("напрямую")).toBeVisible();
   expect(screen.getByRole("button", { name: "Удалить правило existing" })).toBeVisible();
 });
 
@@ -330,7 +332,7 @@ it("criterion_R11_empty_state_prompts_for_the_first_rule_without_sample_rows", a
   const user = userEvent.setup();
   await openAdvanced(user);
   expect(screen.getByText(/Правил маршрутизации пока нет/)).toBeVisible();
-  expect(screen.queryByRole("cell", { name: /example\.org/ })).not.toBeInTheDocument();
+  expect(screen.queryByText(/example\.org/)).not.toBeInTheDocument();
 });
 
 it("criterion_R12_fail_closed_note_is_visible", async () => {
@@ -419,8 +421,8 @@ it("criterion_S1_segments_is_the_default_view_and_groups_rules_by_source", async
   // own words for destination and exit.
   expect(await screen.findByRole("heading", { name: "lan0 — домашняя сеть" })).toBeVisible();
   expect(screen.getByText(/192\.168\.10\.1\/24 · зона lan/)).toBeVisible();
-  expect(screen.getByRole("cell", { name: "домены example.org" })).toBeVisible();
-  expect(screen.getByRole("cell", { name: "через интерфейс eth0" })).toBeVisible();
+  expect(screen.getByText("домены example.org")).toBeVisible();
+  expect(screen.getByText("через интерфейс eth0")).toBeVisible();
   // A source without a matcher is called out instead of looking harmless.
   expect(screen.getByRole("heading", { name: "Сам сервер" })).toBeVisible();
   expect(screen.getByText(/нет привязки к источнику/)).toBeVisible();

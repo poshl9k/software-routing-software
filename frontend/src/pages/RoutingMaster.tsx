@@ -7,6 +7,7 @@
  * device / interface), a destination and one exit.
  */
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
@@ -309,6 +310,43 @@ export function suggestRuleName(rule: RoutingRule, taken: readonly string[]): st
     if (free(candidate)) return candidate;
   }
   return `${base.slice(0, 26)}_${Date.now().toString(36).slice(-4)}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Numbered rule cards: the ordered rule list shown as numbered cards  */
+/* (AmneziaWG-style) instead of a table. Read-only for a segment group */
+/* and editable in the flat list of the advanced tab.                  */
+/* ------------------------------------------------------------------ */
+
+/** One numbered rule card: number, name, then Кто / Что / Куда in prose. */
+function RuleCard({ number, name, badge, lines, actions }: {
+  number?: string;
+  name?: string;
+  badge?: ReactNode;
+  lines: { term: string; text: string }[];
+  actions?: ReactNode;
+}) {
+  return <article className="routing-rule-card">
+    <div className="routing-rule-head">
+      <span className="routing-rule-num">{number ?? "—"}</span>
+      {name && <Typography variant="body2" className="routing-rule-name">{name}</Typography>}
+      {badge}
+      {actions && <div className="row-actions">{actions}</div>}
+    </div>
+    <dl className="routing-rule-body">
+      {lines.map((line) => <div key={line.term} className="routing-rule-line">
+        <dt>{line.term}</dt><dd>{line.text}</dd>
+      </div>)}
+    </dl>
+  </article>;
+}
+
+function ruleCardLines(rule: RoutingRule) {
+  return [
+    { term: "Кто", text: subjectLabel(rule.subject) },
+    { term: "Что", text: destinationLabel(rule) },
+    { term: "Куда", text: exitLabel(rule.exit) },
+  ];
 }
 
 /* ------------------------------------------------------------------ */
@@ -766,8 +804,9 @@ function SegmentsView({ configuration, groups, disabled, onAdd, onCapture, captu
           генератора. Политика задаётся не на этой странице — редактор появится в срезе S4.
         </InfoNote>}
         {group.rules.length > 0
-          ? <div className="routing-table-wide"><DataTable heads={["Что", "Куда"]}
-            rows={group.rules.map(({ rule }) => [destinationLabel(rule), exitLabel(rule.exit)])} /></div>
+          ? <div className="routing-rule-list">{group.rules.map(({ rule, index }) =>
+            <RuleCard key={rule.name} number={String(index + 1)} name={rule.name}
+              lines={ruleCardLines(rule)} />)}</div>
           : <EmptyState>Правил у этого источника нет.</EmptyState>}
         {group.subject.kind === "interface" && group.rules.length > 0 && !group.captured &&
           <InfoNote severity="warning">
@@ -1059,9 +1098,11 @@ export default function RoutingMasterPage() {
   const fallback = "Трафик устройства абонента без совпадения блокируется; остальной трафик переходит к оставшимся правилам и конечному выходу.";
   // System rows are listed first as a reference, NOT as higher-priority
   // matches. Their condition explicitly says they execute after user rules.
-  const systemRows = [
-    [<Badge key="device" tone="amber">системное правило</Badge>, "Защита устройств абонентов", "После пользовательских правил, если ни одно не совпало", "заблокировать", ""],
-    [<Badge key="final" tone="purple">системное правило</Badge>, "Конечный выход", "После всех правил, только для остального трафика", final, ""],
+  const systemRules = [
+    { tone: "amber" as const, title: "Защита устройств абонентов",
+      condition: "После пользовательских правил, если ни одно не совпало", target: "заблокировать" },
+    { tone: "purple" as const, title: "Конечный выход",
+      condition: "После всех правил, только для остального трафика", target: final },
   ];
   const previewRules = wizardValid && step === 3 ? [...rules, rule] : rules;
 
@@ -1138,7 +1179,7 @@ export default function RoutingMasterPage() {
       </Card>
       <Card title="Что будет дальше">
         <div className="routing-table-wide"><DataTable heads={["Порядок", "Кто / правило", "Условие", "Куда"]}
-          rows={[...systemRows.map((row) => row.slice(0, 4)), ...previewRules.map((item, index) => [String(index + 1), `${item.name} · ${subjectLabel(item.subject)}`,
+          rows={[...systemRules.map((item) => [<Badge key={item.title} tone={item.tone}>системное правило</Badge>, item.title, item.condition, item.target]), ...previewRules.map((item, index) => [String(index + 1), `${item.name} · ${subjectLabel(item.subject)}`,
             destinationLabel(item), exitLabel(item.exit)])]} /></div>
         {!previewRules.length && <EmptyState>Правил маршрутизации пока нет. Создайте первое правило в мастере.</EmptyState>}
         <Typography variant="body2" color="text.secondary" className="routing-subtitle">{fallback}</Typography>
@@ -1159,17 +1200,20 @@ export default function RoutingMasterPage() {
         <Typography variant="body2" color="text.secondary" className="routing-subtitle">
           Первое совпадение выигрывает. Системные строки показаны для справки и не редактируются.
         </Typography>
-        <div className="routing-table-wide"><DataTable heads={["# / правило", "Кто", "Что", "Куда", "Действия"]} rows={[
-          ...systemRows,
-          ...rules.map((item, index) => [ `${index + 1}. ${item.name}`, subjectLabel(item.subject), destinationLabel(item), exitLabel(item.exit),
-            <FormActions key={item.name}>
+        <div className="routing-rule-list">
+          {systemRules.map((item) => <RuleCard key={item.title} badge={
+            <Badge tone={item.tone}>системное правило</Badge>}
+            lines={[{ term: "Кто", text: item.condition }, { term: "Что", text: item.title },
+              { term: "Куда", text: item.target }]} />)}
+          {rules.map((item, index) => <RuleCard key={item.name} number={String(index + 1)}
+            name={item.name} lines={ruleCardLines(item)}
+            actions={<FormActions>
               <Button disabled={disabled} onClick={() => { setRule({ ...item }); setEditingIndex(index); }}>Изменить</Button>
               <Button disabled={disabled || index === 0} onClick={() => move(index, -1)}>Вверх</Button>
               <Button disabled={disabled || index === rules.length - 1} onClick={() => move(index, 1)}>Вниз</Button>
               <DeleteButton label={`Удалить правило ${item.name}`} disabled={disabled} onClick={() => setDeleting({ index, name: item.name })} />
-            </FormActions>,
-          ]),
-        ]} /></div>
+            </FormActions>} />)}
+        </div>
         {!rules.length && <EmptyState>Правил маршрутизации пока нет. Создайте первое правило в мастере.</EmptyState>}
         {!readOnly && <FormActions><Button disabled={disabled} onClick={() => { resetWizard(); setMode("wizard"); }}>+ Правило</Button></FormActions>}
         {editor.isEdit && <EditorFooter saving={editor.saving} valid={pageValid && !readOnly} cancel={editor.cancel} save={save} />}

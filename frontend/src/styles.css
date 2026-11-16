@@ -608,3 +608,56 @@ pre {
     animation: none !important;
   }
 }
+
+/* ================================================================== */
+/* Numbered routing rule cards (RoutingMaster). Layout only: every    */
+/* colour is a --vs-* token from theme.ts, no raw colours here.       */
+/* ================================================================== */
+.routing-rule-list { display: flex; flex-direction: column; gap: 10px; }
+.routing-rule-card {
+  border: 1px solid var(--vs-border);
+  border-radius: 10px;
+  background: var(--vs-surface);
+  padding: 12px 14px;
+  min-width: 0;
+}
+.routing-rule-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.routing-rule-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 7px;
+  background: var(--vs-accent-soft);
+  color: var(--vs-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.routing-rule-name {
+  font-weight: 600;
+  color: var(--vs-text);
+  overflow-wrap: anywhere;
+}
+.routing-rule-head .row-actions { margin-left: auto; }
+.routing-rule-body { display: grid; gap: 4px; margin: 0; }
+.routing-rule-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+.routing-rule-line dt { flex: 0 0 34px; color: var(--vs-text-tertiary); font-size: 12px; }
+.routing-rule-line dd {
+  margin: 0;
+  color: var(--vs-text-secondary);
+  overflow-wrap: anywhere;
+}

@@ -287,6 +287,8 @@ it("criterion_5_criterion_6_new_tunnel_disables_qr_and_conf_without_requests", a
   await userEvent.click(screen.getByRole("button", { name: "+ Добавить туннель" }));
   await userEvent.click(screen.getByRole("button", { name: "Поднять сервер" }));
   await userEvent.click(screen.getByRole("button", { name: "Продолжить" }));
+  await userEvent.click(screen.getByRole("button", { name: "Продолжить" }));
+  await userEvent.click(screen.getByRole("button", { name: "Создать туннель" }));
   const editor = await screen.findByRole("dialog", { name: /Туннель:/ });
   fill(editor, "Имя туннеля", "fresh");
   await userEvent.click(within(editor).getByRole("tab", { name: "Пиры" }));
@@ -526,10 +528,12 @@ it("criterion_12_a_new_awg_tunnel_takes_the_generated_profile_and_port", async (
              listen_port: 41234 })
     : json({}));
   await userEvent.click(screen.getByRole("button", { name: "+ Добавить туннель" }));
-  const scenario = await screen.findByRole("dialog", { name: "Новый туннель" });
-  await userEvent.selectOptions(within(scenario).getByLabelText("Протокол нового туннеля"), "awg");
+  const scenario = await screen.findByRole("dialog", { name: /Новый туннель/ });
   await userEvent.click(within(scenario).getByRole("button", { name: "Поднять сервер" }));
   await userEvent.click(within(scenario).getByRole("button", { name: "Продолжить" }));
+  await userEvent.selectOptions(within(scenario).getByLabelText("Протокол нового туннеля"), "awg");
+  await userEvent.click(within(scenario).getByRole("button", { name: "Продолжить" }));
+  await userEvent.click(within(scenario).getByRole("button", { name: "Создать туннель" }));
   const editor = await screen.findByRole("dialog", { name: /Туннель:/ });
   fill(editor, "Имя туннеля", "maxsec");
   await userEvent.click(within(editor).getByRole("button", { name: "Сохранить" }));

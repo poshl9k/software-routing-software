@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useQueries } from "@tanstack/react-query";
-import { Button, Checkbox, Dialog, DialogContent, DialogTitle, FormControlLabel } from "@mui/material";
+import {
+  Button, Checkbox, Dialog, DialogContent, DialogTitle, FormControlLabel,
+  Stack, Typography,
+} from "@mui/material";
 import { api, portalAdminApi } from "../api";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
@@ -16,11 +19,13 @@ import { FormGrid } from "../components/Form";
 import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 import { Select } from "../components/Select";
+import { ValueTabs } from "../components/Tabs";
 import { nameValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { queryKeys } from "../query";
 import { useConfiguration } from "../state";
-import type { Subscriber } from "../types";
+import { tokens } from "../theme";
+import type { Peer, Subscriber } from "../types";
 
 /** Бейдж подписки в строке абонента: один факт — один бейдж. */
 function subscriptionBadge(sub: { status: string; expires_at: string } | null) {
@@ -48,6 +53,35 @@ function portalHost(record: { custom_hostname: string | null; address: string } 
   return null;
 }
 
+/** Устройство абонента — пир туннеля, привязанный к нему по имени. */
+function subscriberDevice(name: string, tunnels: { name: string; peers: Peer[] }[]) {
+  return tunnels.flatMap((tunnel) =>
+    tunnel.peers.filter((peer) => peer.subscriber === name)
+      .map((peer) => ({ tunnel: tunnel.name, peer })));
+}
+
+const dnsModeLabel = (mode: Peer["dns_mode"]) =>
+  mode === "panel" ? "Панель" : mode === "own" ? "Собственный" : "—";
+
+/** Аватар-инициал абонента: цвет из токенов темы, без новых примитивов. */
+function SubscriberAvatar({ name }: { name: string }) {
+  return (
+    <Typography
+      aria-hidden
+      sx={{
+        flex: "0 0 auto", width: 30, height: 30, borderRadius: "50%",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        backgroundColor: tokens.purpleSoft, color: tokens.purple,
+        fontSize: 13, fontWeight: 600, textTransform: "uppercase",
+      }}
+    >
+      {name.slice(0, 1)}
+    </Typography>
+  );
+}
+
+type CardTab = "overview" | "devices" | "subscription" | "manage";
+
 export default function Subscribers() {
   const { configuration, version, user, error, refresh, setNotice } = useConfiguration();
   const queryClient = useQueryClient();
@@ -58,10 +92,7 @@ export default function Subscribers() {
   const [originalName, setOriginalName] = useState<string | null>(null);
   const [deleteName, setDeleteName] = useState<string | null>(null);
   const subscribers = configuration.subscribers ?? [];
-  const devices = (name: string) => configuration.tunnels.flatMap((tunnel) =>
-    tunnel.peers.filter((peer) => peer.subscriber === name)
-      .map((peer) => `${tunnel.name} / ${peer.name}`));
-  const referenced = originalName !== null && devices(originalName).length > 0;
+  const referenced = originalName !== null && subscriberDevice(originalName, configuration.tunnels).length > 0;
   const duplicate = !!editor.value && subscribers.some((row) =>
     row.name === editor.value?.name && row.name !== originalName);
   const valid = !!editor.value && nameValid(editor.value.name) && !duplicate;
@@ -136,6 +167,17 @@ export default function Subscribers() {
   });
   const subscriptionOf = (index: number) => subscriptionQueries[index]?.data ?? null;
 
+  // ----- Карточка абонента (модалка с вкладками) -----
+  const [subTariff, setSubTariff] = useState("");
+  const [cardFor, setCardFor] = useState<string | null>(null);
+  const [cardTab, setCardTab] = useState<CardTab>("overview");
+  const openCard = (name: string, tab: CardTab = "overview") => {
+    setCardFor(name);
+    setCardTab(tab);
+    const sub = subscriptionOf(subscribers.findIndex((row) => row.name === name));
+    setSubTariff(sub?.tariff_id != null ? String(sub.tariff_id) : "");
+  };
+
   // ----- Приглашение -----
   const [inviteFor, setInviteFor] = useState<string | null>(null);
   const [inviteTariff, setInviteTariff] = useState("");
@@ -173,23 +215,33 @@ export default function Subscribers() {
     setNotice(`${what} скопирован`);
   };
 
-  // ----- Управление подпиской (отдельное окно, открывается просмотром) -----
-  const [subFor, setSubFor] = useState<string | null>(null);
-  const [subTariff, setSubTariff] = useState("");
-  const openSubscription = (name: string) => {
-    setSubFor(name);
-    const sub = subscriptionOf(subscribers.findIndex((row) => row.name === name));
-    setSubTariff(sub?.tariff_id != null ? String(sub.tariff_id) : "");
-  };
+  // ----- Управление подпиской (вкладка карточки) -----
   const patchSubscription = useMutation({
     mutationFn: (body: { tariff_id?: number; renew?: boolean }) =>
-      portalAdminApi.updateSubscription(subFor!, body),
+      portalAdminApi.updateSubscription(cardFor!, body),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.portalSubscription(subFor!) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.portalSubscription(cardFor!) });
       setNotice("Подписка обновлена");
-      setSubFor(null);
     },
   });
+
+  // ----- Поиск и сортировка списка -----
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<"name" | "expiry">("name");
+  const query = search.trim().toLowerCase();
+  const visibleRows = subscribers
+    .map((row, index) => ({ row, index, sub: subscriptionOf(index),
+      devices: subscriberDevice(row.name, configuration.tunnels) }))
+    .filter(({ row, devices }) => !query
+      || row.name.toLowerCase().includes(query)
+      || (row.label ?? "").toLowerCase().includes(query)
+      || devices.some(({ tunnel, peer }) =>
+        `${tunnel} / ${peer.name}`.toLowerCase().includes(query)
+        || peer.allowed_ips.join(" ").toLowerCase().includes(query)))
+    .sort((a, b) => sort === "name" ? a.row.name.localeCompare(b.row.name)
+      // Раньше истекающие — первыми; абоненты без подписки — в конце.
+      : (a.sub ? new Date(a.sub.expires_at).getTime() : Infinity)
+        - (b.sub ? new Date(b.sub.expires_at).getTime() : Infinity));
 
   // ----- Контакт поддержки (настройка портала) -----
   const support = useQuery({ queryKey: queryKeys.portalSettings(), queryFn: portalAdminApi.readSettings, enabled: admin });
@@ -209,25 +261,48 @@ export default function Subscribers() {
   const pageError = error ?? removeSubscriber.error ?? tariffs.error ?? saveTariff.error
     ?? removeTariff.error ?? sendInvite.error ?? revokeInvite.error ?? patchSubscription.error
     ?? support.error ?? saveSupport.error;
+  const cardTabs = admin
+    ? [
+        { value: "overview" as const, label: "Обзор" },
+        { value: "devices" as const, label: "Устройства" },
+        { value: "subscription" as const, label: "Подписка" },
+        { value: "manage" as const, label: "Управление" },
+      ]
+    : [
+        { value: "overview" as const, label: "Обзор" },
+        { value: "devices" as const, label: "Устройства" },
+        { value: "subscription" as const, label: "Подписка" },
+      ];
   return <>
     <PageHeader>Абоненты</PageHeader>
     <ErrorNotice error={pageError} />
     <Card title="Абоненты" action={admin ? <Button disabled={!version || removeSubscriber.isPending}
       onClick={() => { setOriginalName(null); editor.begin({ name: "", label: null }); }}>+ Абонент</Button> : undefined}>
-      <div className="table-wide"><DataTable heads={["Абонент", "Устройств", "Подписка", "Устройства", "Действия"]}
-        empty={<EmptyState>Абонентов нет. Добавьте абонента, затем привяжите к нему пир.</EmptyState>}
-        rows={subscribers.map((row, index) => {
-          const refs = devices(row.name);
-          const badge = subscriptionBadge(subscriptionOf(index));
+      <FormGrid>
+        <Field label="Поиск" value={search} placeholder="Имя, описание или устройство"
+          onChange={setSearch} />
+        <Select label="Сортировка" value={sort} onChange={(v) => setSort(v as "name" | "expiry")}
+          options={[{ value: "name", label: "По имени" }, { value: "expiry", label: "По сроку подписки" }]} />
+      </FormGrid>
+      <div className="table-wide"><DataTable
+        heads={["Абонент", "Устройств", "Устройства", "Подписка", "Действия"]}
+        empty={search.trim()
+          ? <EmptyState>Ничего не найдено по запросу «{search.trim()}».</EmptyState>
+          : <EmptyState>Абонентов нет. Добавьте абонента, затем привяжите к нему пир.</EmptyState>}
+        rows={visibleRows.map(({ row, sub, devices }) => {
+          const badge = subscriptionBadge(sub);
           return [
-            row.label ? `${row.name} — ${row.label}` : row.name,
-            refs.length,
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+              <SubscriberAvatar name={row.name} />
+              <Button sx={{ px: 0, justifyContent: "flex-start" }}
+                onClick={() => openCard(row.name)}>{row.label ? `${row.name} — ${row.label}` : row.name}</Button>
+            </Stack>,
+            devices.length,
+            devices.map(({ tunnel, peer }) => `${tunnel} / ${peer.name}`).join(", ") || "Нет устройств",
             <Badge tone={badge.tone}>{badge.text}</Badge>,
-            refs.join(", ") || "Нет устройств",
             admin ? <>
-              <Button disabled={removeSubscriber.isPending} onClick={() => { setOriginalName(row.name); editor.begin(row); }}>Редактировать</Button>
-              <Button disabled={tariffs.isLoading || tariffList.length === 0} onClick={() => openInvite(row.name)}>Пригласить</Button>
-              <Button onClick={() => openSubscription(row.name)}>Подписка</Button>
+              <Button disabled={tariffs.isLoading || tariffList.length === 0}
+                onClick={() => openInvite(row.name)}>Пригласить</Button>
               <DeleteButton label={`Удалить абонента ${row.name}`} onClick={() => setDeleteName(row.name)} />
             </> : "—",
           ];
@@ -260,6 +335,74 @@ export default function Subscribers() {
       </FormGrid> : supportValue ? <InfoNote>Контакт поддержки: <a href={supportValue} target="_blank" rel="noreferrer">{supportValue}</a></InfoNote>
         : <EmptyState>Контакт поддержки не задан.</EmptyState>}
     </Card>
+
+    {/* Карточка абонента — сводка, устройства, подписка и управление */}
+    {(() => {
+      const index = subscribers.findIndex((row) => row.name === cardFor);
+      if (cardFor === null || index < 0) return null;
+      const row = subscribers[index];
+      const sub = subscriptionOf(index);
+      const badge = subscriptionBadge(sub);
+      const devices = subscriberDevice(row.name, configuration.tunnels);
+      const tariffName = sub?.tariff_id != null
+        ? tariffList.find((t) => t.id === sub.tariff_id)?.name ?? null : null;
+      return <Dialog open onClose={() => setCardFor(null)} fullWidth maxWidth="md" aria-labelledby="client-card-title">
+        <DialogTitle id="client-card-title">Абонент: {row.name}</DialogTitle>
+        <DialogContent>
+          <ValueTabs tabs={cardTabs} value={cardTab} change={setCardTab} />
+          {cardTab === "overview" && <dl className="kv">
+            <dt>Описание</dt><dd>{row.label ?? "—"}</dd>
+            <dt>Устройств</dt><dd>{devices.length}</dd>
+            <dt>Подписка</dt><dd><Badge tone={badge.tone}>{badge.text}</Badge></dd>
+            {sub?.expires_at && <><dt>Истекает</dt><dd>{new Date(sub.expires_at).toLocaleString("ru-RU")}</dd></>}
+            <dt>Тариф</dt><dd>{tariffName ?? "—"}</dd>
+          </dl>}
+          {cardTab === "devices" && <DataTable heads={["Устройство", "Туннель", "Разрешённые IP", "DNS"]}
+            empty={<EmptyState>У абонента нет устройств. Привяжите пир к нему в разделе «Серверы».</EmptyState>}
+            rows={devices.map(({ tunnel, peer }) => [
+              peer.name,
+              tunnel,
+              peer.allowed_ips.join(", ") || "—",
+              dnsModeLabel(peer.dns_mode),
+            ])} />}
+          {cardTab === "subscription" && (sub === null
+            ? <>
+              <InfoNote>У абонента ещё нет подписки — выслайте приглашение.</InfoNote>
+              {admin && <div className="form-actions">
+                <Button disabled={tariffs.isLoading || tariffList.length === 0}
+                  onClick={() => { setCardFor(null); openInvite(row.name); }}>Пригласить</Button>
+              </div>}
+            </>
+            : <>
+              <dl className="kv">
+                <dt>Статус</dt><dd><Badge tone={badge.tone}>{badge.text}</Badge></dd>
+                {sub.expires_at && <><dt>Истекает</dt><dd>{new Date(sub.expires_at).toLocaleString("ru-RU")}</dd></>}
+              </dl>
+              {admin && <>
+                <FormGrid>
+                  <Select label="Тариф" value={subTariff} options={tariffOptions} onChange={setSubTariff} />
+                </FormGrid>
+                <InfoNote>Понижение тарифа не отключает существующие устройства: абонент не сможет создавать новые, пока не влезет в лимит.</InfoNote>
+                <div className="form-actions">
+                  <Button disabled={!subTariff || patchSubscription.isPending}
+                    onClick={() => patchSubscription.mutate({ tariff_id: Number(subTariff) })}>Сменить тариф</Button>
+                  <Button disabled={!subTariff || patchSubscription.isPending}
+                    onClick={() => patchSubscription.mutate({ renew: true })}>Продлить</Button>
+                </div>
+              </>}
+            </>)}
+          {cardTab === "manage" && admin && <>
+            <InfoNote>Удаление убирает абонента вместе с его устройствами и правилами маршрутизации; служебные пиры (без абонента) не затрагиваются.</InfoNote>
+            <div className="form-actions">
+              <Button onClick={() => { setCardFor(null); setOriginalName(row.name); editor.begin(row); }}>Изменить</Button>
+              <Button disabled={tariffs.isLoading || tariffList.length === 0}
+                onClick={() => { setCardFor(null); openInvite(row.name); }}>Пригласить</Button>
+              <DeleteButton label={`Удалить абонента ${row.name}`} onClick={() => { setCardFor(null); setDeleteName(row.name); }} />
+            </div>
+          </>}
+        </DialogContent>
+      </Dialog>;
+    })()}
 
     {/* Редактор абонента — черновик конфигурации */}
     <Dialog open={editor.isEdit} onClose={editor.saving ? undefined : close} fullWidth maxWidth="sm" aria-labelledby="subscriber-editor-title">
@@ -330,38 +473,6 @@ export default function Subscribers() {
             <Button disabled={sendInvite.isPending} onClick={() => setInviteFor(null)}>Отмена</Button>
           </div>
         </>}
-      </DialogContent>
-    </Dialog>
-
-    {/* Подписка */}
-    <Dialog open={subFor !== null} onClose={patchSubscription.isPending ? undefined : () => setSubFor(null)} fullWidth maxWidth="sm" aria-labelledby="subscription-title">
-      <DialogTitle id="subscription-title">Подписка: {subFor ?? ""}</DialogTitle>
-      <DialogContent>
-        {(() => {
-          const index = subscribers.findIndex((row) => row.name === subFor);
-          const sub = index >= 0 ? subscriptionOf(index) : null;
-          if (subFor !== null && sub === null) {
-            return <InfoNote>У абонента ещё нет подписки — выслайте приглашение.</InfoNote>;
-          }
-          const badge = subscriptionBadge(sub);
-          return <>
-            <dl className="kv">
-              <dt>Статус</dt><dd><Badge tone={badge.tone}>{badge.text}</Badge></dd>
-              {sub?.expires_at && <><dt>Истекает</dt><dd>{new Date(sub.expires_at).toLocaleString("ru-RU")}</dd></>}
-            </dl>
-            <FormGrid>
-              <Select label="Тариф" value={subTariff} options={tariffOptions} onChange={setSubTariff} />
-            </FormGrid>
-            <InfoNote>Понижение тарифа не отключает существующие устройства: абонент не сможет создавать новые, пока не влезет в лимит.</InfoNote>
-            <div className="form-actions">
-              <Button disabled={!subTariff || patchSubscription.isPending}
-                onClick={() => patchSubscription.mutate({ tariff_id: Number(subTariff) })}>Сменить тариф</Button>
-              <Button disabled={!subTariff || patchSubscription.isPending}
-                onClick={() => patchSubscription.mutate({ renew: true })}>Продлить</Button>
-              <Button disabled={patchSubscription.isPending} onClick={() => setSubFor(null)}>Закрыть</Button>
-            </div>
-          </>;
-        })()}
       </DialogContent>
     </Dialog>
 

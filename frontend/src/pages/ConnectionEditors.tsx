@@ -44,7 +44,7 @@ import {
   normalize,
 } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { queryKeys } from "../query";
 import { parseWireGuardConf } from "../tunnelConf";
 
@@ -87,6 +87,114 @@ function keygenPatch(
     ...(keys.listen_port ? { listen_port: keys.listen_port } : {}),
     ...(keys.mtu ? { mtu: keys.mtu } : {}),
   };
+}
+
+/** Human text for the masking endpoint's stable codes; the API message IS the code. */
+const maskingErrorTexts: Record<string, string> = {
+  "tunnel.awg_masking_preset": "Неизвестный пресет маски",
+  "tunnel.awg_masking_host": "Имя хоста указано неверно: строчные латинские буквы, цифры и дефисы, точками",
+  "tunnel.awg_masking_ip": "Адрес ответа должен быть IPv4-адресом",
+  "tunnel.awg_signature_text": "В пакете есть текст вне тегов",
+  "tunnel.awg_signature_tag": "Неизвестный тег в пакете",
+  "tunnel.awg_signature_hex": "Неверный hex в теге <b>",
+  "tunnel.awg_signature_number": "Число в теге указано неверно",
+  "tunnel.awg_signature_unsupported": "Тег есть только в одной из реализаций AWG — пакет не переносим",
+  "tunnel.awg_signature_size": "Пакет длиннее 1400 байт — фрагментируется почти на любом пути",
+};
+function maskingErrorText(error: unknown): unknown {
+  if (!(error instanceof ApiError)) return error;
+  const known = maskingErrorTexts[error.code] ?? maskingErrorTexts[error.message];
+  if (known) return new Error(`${known} · ${error.code}`);
+  return error;
+}
+
+/** A DNS name the masking endpoint accepts: ASCII labels a-z0-9- */
+const maskingHostName = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
+/** Ready-mask builder for AWG 3+ tunnels: a mimicry preset produces the I1
+ * signature packet (a DNS answer, STUN, QUIC Initial, SIP INVITE) instead of
+ * hand-written tag soup. The mask belongs to the interface — both ends of one
+ * tunnel must carry identical obfuscation, so a different mask means a
+ * separate server tunnel, never a per-peer setting. */
+function AwgMaskingRow({ t, patch, disabled }: {
+  t: Tunnel;
+  patch: (change: Partial<Tunnel>) => void;
+  disabled: boolean;
+}) {
+  const [preset, setPreset] = useState<string>("none");
+  const [host, setHost] = useState("");
+  const [ip, setIp] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const dnsPreset = preset === "icloud" || preset === "dns";
+  const hostOk = !dnsPreset || !host.trim() || maskingHostName.test(host.trim().toLowerCase());
+  const ipOk = !dnsPreset || !ip.trim()
+    || (addressValid(ip.trim()) && !ip.includes(":"));
+  /** Replace the signature packets, keep the numeric obfuscation parameters. */
+  const applyMask = (packet: string | null) => {
+    const obfuscation = Object.fromEntries(
+      Object.entries(t.obfuscation).filter(([key]) => !awgSignatureKeys.includes(key)));
+    if (packet) obfuscation.I1 = packet;
+    patch({ obfuscation });
+  };
+  const build = () => {
+    setBusy(true); setResult(null); setError(null);
+    api.keygenMasking(preset as "icloud", host.trim().toLowerCase() || undefined, ip.trim() || undefined)
+      .then((mask) => {
+        applyMask(mask.obfuscation.I1 ?? "");
+        setResult(`Пакет I1 собран: ${mask.sizes.I1 ?? 0} байт.`);
+      })
+      .catch((err) => setError(maskingErrorText(err)))
+      .finally(() => setBusy(false));
+  };
+  return <>
+    <FormWide>
+      <FormGrid>
+        <Select
+          label="Готовая маска (пресет)"
+          value={preset}
+          options={[
+            { value: "none", label: "Без маски — убрать сигнатуру" },
+            { value: "icloud", label: "icloud — DNS-ответ (как в конфиге AmneziaVPN)" },
+            { value: "dns", label: "dns — DNS-запрос" },
+            { value: "stun", label: "stun — WebRTC ICE" },
+            { value: "quic", label: "quic — QUIC Initial (1200 байт)" },
+            { value: "sip", label: "sip — SIP INVITE" },
+          ]}
+          onChange={(value) => { setPreset(value); setResult(null); setError(null); }}
+        />
+        {dnsPreset && <Field
+          label="Имя в DNS-маске (необязательно)"
+          value={host}
+          valid={hostOk}
+          hint="Пусто — случайное имя под .com, как в референсной маске"
+          onChange={setHost}
+        />}
+        {dnsPreset && <Field
+          label="Адрес ответа (необязательно)"
+          value={ip}
+          valid={ipOk}
+          hint="Пусто — реальный адрес узла пресета; публичный адрес указывать нельзя (иначе DPI видит ваш IP)"
+          onChange={setIp}
+        />}
+        <FormActions>
+          {preset === "none"
+            ? <Button disabled={disabled} onClick={() => { applyMask(null); setResult("Сигнатурные пакеты убраны."); }}>Убрать маску</Button>
+            : <Button disabled={disabled || busy || !hostOk || !ipOk} onClick={build}>
+                {busy ? "Собираю…" : "Собрать маску"}
+              </Button>}
+        </FormActions>
+      </FormGrid>
+      {result && <InlineStatus tone="green" text={result} />}
+      <InfoNote>
+        Маска подменяет первый пакет handshake (I1) на похожесть на обычный протокол.
+        Параметры обфускации должны совпадать на обеих сторонах одного туннеля:
+        другая маска для части клиентов — отдельный серверный туннель, не настройка пира.
+      </InfoNote>
+      <ErrorNotice error={error} />
+    </FormWide>
+  </>;
 }
 const certificateModeLabels: Record<CaddySite["certificate_mode"], string> = {
   http01: "Авто (HTTP-01)",
@@ -351,7 +459,7 @@ function Collection<T extends Row>({
   title: string;
   addLabel: string;
   empty: (rows: T[]) => T;
-  create?: (rows: T[], role: Tunnel["role"], protocol: Tunnel["protocol"]) => Promise<T>;
+  create?: (rows: T[], role: Tunnel["role"], protocol: Tunnel["protocol"], name?: string) => Promise<T>;
   valid: (v: T) => boolean;
   clean?: (v: T) => T;
   form: (v: T, patch: (p: Partial<T>) => void, created: boolean, noConfiguration: boolean, setError: (error: unknown) => void, importedAddresses: Record<string, string>, setBusy: (busy: boolean) => void) => ReactNode;
@@ -382,6 +490,8 @@ function Collection<T extends Row>({
   const [importAddresses, setImportAddresses] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState(false);
   const [scenario, setScenario] = useState<"client" | "server" | null>(null);
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
+  const [wizardName, setWizardName] = useState("");
   const [protocol, setProtocol] = useState<Tunnel["protocol"]>("wg");
   const [selected, setSelected] = useState<number | null>(null);
   const [viewing, setViewing] = useState(true);
@@ -420,7 +530,7 @@ function Collection<T extends Row>({
         ...(configPatch ? configPatch(rows, imported) : {}),
       };
     });
-  const add = async (role: Tunnel["role"] = "server", chosenProtocol: Tunnel["protocol"] = "wg") => {
+  const add = async (role: Tunnel["role"] = "server", chosenProtocol: Tunnel["protocol"] = "wg", name = "") => {
     const initial = editing ?? currentEditing.current;
     if (!initial || creatingRef.current) return;
     const id = Math.max(next, initial.reduce((max, item) => Math.max(max, item.id + 1), 0));
@@ -435,7 +545,7 @@ function Collection<T extends Row>({
     setCreating(true);
     const epoch = editEpoch.current;
     try {
-      const row = await create(initial.map((v) => v.row), role, chosenProtocol);
+      const row = await create(initial.map((v) => v.row), role, chosenProtocol, name);
       const latest = currentEditing.current;
       if (epoch === editEpoch.current && latest) {
         editor.setValue([...latest, { id, created: true, row }]);
@@ -548,7 +658,7 @@ function Collection<T extends Row>({
                 Импорт .conf
               </Button>
             )}
-            {kind === "tunnels" && !isEdit && <Button disabled={!version} onClick={() => setScenario("client")}>{addLabel}</Button>}
+            {kind === "tunnels" && !isEdit && <Button disabled={!version} onClick={() => { setScenario("client"); setWizardStep(1); setWizardName(""); }}>{addLabel}</Button>}
             {kind !== "tunnels" && <Button disabled={!version || creating} onClick={() => {
               if (isEdit) { void add(); return; }
               const rows = collection.map((row, id) => ({ id, created: false, row }));
@@ -656,17 +766,46 @@ function Collection<T extends Row>({
           {/* Keep the tunnel form mounted so switching tabs cannot replace opaque secret values. */}
           <div hidden={!!selectedTunnel && dialogTab === "peers"}>
             {!viewing && selectedTunnel && <FormActions><DeleteButton label={`Удалить ${selectedTunnel.name || "запись"}`} onClick={() => setDeleteTarget(selected!)} /></FormActions>}
-            {viewing && selectedTunnel ? (
-              <>
+            {viewing && selectedTunnel ? (() => {
+              const service = tunnelStatus?.services.find((item) => item.name === `tunnel:${selectedTunnel.interface}`);
+              return <>
                 <div className="toolbar-actions"><Button variant="contained" onClick={() => setViewing(false)}>Изменить</Button></div>
-                <dl className="kv">
-                  <dt>Имя</dt><dd>{selectedTunnel.name}</dd>
-                  <dt>Роль</dt><dd>{selectedTunnel.role === "server" ? "сервер" : "клиент"}</dd>
-                  <dt>Протокол</dt><dd>{selectedTunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"}</dd>
-                  <dt>Интерфейс</dt><dd>{selectedTunnel.interface}</dd>
-                </dl>
-              </>
-            ) : (
+                <PageSection title="Идентификация">
+                  <dl className="kv">
+                    <dt>Имя</dt><dd>{selectedTunnel.name}</dd>
+                    <dt>Роль</dt><dd>{selectedTunnel.role === "server" ? "сервер" : "клиент"}</dd>
+                    <dt>Протокол</dt><dd>{selectedTunnel.protocol === "wg" ? "WireGuard" : "AmneziaWG"}</dd>
+                    <dt>Интерфейс</dt><dd>{selectedTunnel.interface}</dd>
+                  </dl>
+                </PageSection>
+                <PageSection title="Подключение">
+                  <dl className="kv">
+                    {selectedTunnel.role === "server"
+                      ? <><dt>Порт</dt><dd>{selectedTunnel.listen_port ?? "не задан"}</dd>
+                          <dt>Публичный адрес (endpoint)</dt><dd>{selectedTunnel.endpoint ?? "не задан"}</dd>
+                          <dt>Пиров</dt><dd>{selectedTunnel.peers.length || "нет пиров"}</dd>
+                          <dt>Открыть порт на WAN</dt><dd>{selectedTunnel.open_port ? "да" : "нет"}</dd></>
+                      : <><dt>Endpoint</dt><dd>{selectedTunnel.endpoint ?? "не задан"}</dd>
+                          <dt>Шлюз подключения</dt><dd>{selectedTunnel.uplink?.gateway
+                            ? `${selectedTunnel.uplink.gateway} · ${selectedTunnel.uplink.interface}${selectedTunnel.uplink.source ? ` · src ${selectedTunnel.uplink.source}` : ""}`
+                            : "по умолчанию (main)"}</dd>
+                          <dt>AllowedIPs</dt><dd>{selectedTunnel.allowed_ips.join(", ") || "не заданы"}</dd>
+                          <dt>Маршрут по умолчанию</dt><dd>{selectedTunnel.default_route === true ? "да" : "нет"}</dd></>}
+                  </dl>
+                </PageSection>
+                <PageSection title="Состояние">
+                  <dl className="kv">
+                    {selectedTunnel.role === "client" && <><dt>Handshake</dt><dd><ClientHandshake status={tunnelAvailability?.[selectedTunnel.name]} /></dd></>}
+                    <dt>Служба</dt><dd>{service
+                      ? <InlineStatus tone={service.state === "running" ? "green" : service.state === "stopped" ? "amber" : "unknown"}
+                        text={service.state === "running" ? "Работает" : service.state === "stopped" ? "Остановлена" : "Состояние неизвестно"}
+                        asOf={tunnelStatus?.generated_at} />
+                      : <InlineStatus tone="unknown" text="Статус недоступен" />}</dd>
+                    {version?.status === "draft" && <><dt>Черновик</dt><dd><Badge tone="blue">Черновик</Badge></dd></>}
+                  </dl>
+                </PageSection>
+              </>;
+            })() : (
             <EditorShell isEdit={isEdit} saving={editor.saving} valid={!!allValid && !!version && !creating && !formBusy}
               onCancel={cancel} onSave={() => void save()} view={null} edit={renderEdit} />
             )}
@@ -694,21 +833,37 @@ function Collection<T extends Row>({
           const remaining = (currentEditing.current ?? []).filter((v) => v.id !== deleteTarget);
           currentEditing.current = remaining; editor.setValue(remaining); setDeleteTarget(null);
         }} />}
-      {kind === "tunnels" && <Dialog open={scenario !== null} onClose={() => setScenario(null)} fullWidth aria-labelledby="scenario-title">
-        <DialogTitle id="scenario-title">Новый туннель</DialogTitle>
+      {kind === "tunnels" && <Dialog open={scenario !== null} onClose={() => setScenario(null)} fullWidth maxWidth="sm" aria-labelledby="scenario-title">
+        <DialogTitle id="scenario-title">Новый туннель · Шаг {wizardStep} из 3</DialogTitle>
         <DialogContent>
-          <FormGrid>
-            <FormWide><Button onClick={() => { setScenario(null); setImportOpen(true); }}>Импортировать клиентский .conf</Button></FormWide>
+          {wizardStep === 1 && <FormGrid>
+            <FormWide><p className="sub">Что нужно создать: подключение к чужому серверу или собственный сервер для клиентов.</p></FormWide>
             <Button variant={scenario === "client" ? "contained" : "text"} onClick={() => setScenario("client")}>Подключиться как клиент</Button>
             <Button variant={scenario === "server" ? "contained" : "text"} onClick={() => setScenario("server")}>Поднять сервер</Button>
+            <FormWide><Button onClick={() => { setScenario(null); setImportOpen(true); }}>Импортировать клиентский .conf</Button></FormWide>
+          </FormGrid>}
+          {wizardStep === 2 && <FormGrid>
             <Select label="Протокол нового туннеля" value={protocol} options={[{ value: "wg", label: "WireGuard" }, { value: "awg", label: "AmneziaWG" }]} onChange={(v) => setProtocol(v as Tunnel["protocol"])} />
-          </FormGrid>
-          <InfoNote>До сохранения ничего не создаётся. Сохранение создаёт только черновик; серверный WAN-порт по умолчанию закрыт.</InfoNote>
+            <Field label="Имя туннеля" value={wizardName} valid={wizardName === "" || nameValid(wizardName)}
+              hint="Латиница, цифры, «_»; до 31 символа. Можно изменить позже в редакторе"
+              onChange={setWizardName} />
+          </FormGrid>}
+          {wizardStep === 3 && <InfoNote>
+            Сценарий: {scenario === "server" ? "сервер" : "клиент"} · протокол {protocol === "awg" ? "AmneziaWG" : "WireGuard"}{wizardName.trim() ? ` · имя ${wizardName.trim()}` : ""}.
+            До сохранения ничего не создаётся. Сохранение создаёт только черновик; серверный WAN-порт по умолчанию закрыт. Ключи генерируются автоматически.
+          </InfoNote>}
         </DialogContent>
-        <DialogActions><Button onClick={() => setScenario(null)}>Отмена</Button><Button disabled={creating} onClick={() => {
-          if (!isEdit) { const rows = collection.map((row, id) => ({ id, created: false, row })); currentEditing.current = rows; editor.begin(rows); setNext(collection.length); }
-          void add(scenario ?? "client", protocol);
-        }}>Продолжить</Button></DialogActions>
+        <DialogActions>
+          <Button onClick={() => setScenario(null)}>Отмена</Button>
+          {wizardStep > 1 && <Button onClick={() => setWizardStep((s) => (s - 1) as 1 | 2)}>Назад</Button>}
+          {wizardStep < 3 && <Button
+            disabled={creating || (wizardStep === 1 && scenario === null) || (wizardStep === 2 && wizardName.trim() !== "" && !nameValid(wizardName))}
+            onClick={() => setWizardStep((s) => (s + 1) as 2 | 3)}>Продолжить</Button>}
+          {wizardStep === 3 && <Button disabled={creating} onClick={() => {
+            if (!isEdit) { const rows = collection.map((row, id) => ({ id, created: false, row })); currentEditing.current = rows; editor.begin(rows); setNext(collection.length); }
+            void add(scenario ?? "client", protocol, wizardName.trim());
+          }}>Создать туннель</Button>}
+        </DialogActions>
       </Dialog>}
       {importRow && (
         <Dialog open={importOpen} onClose={closeImport} fullWidth maxWidth="sm" aria-labelledby="tunnel-conf-import-title">
@@ -1030,8 +1185,8 @@ export function Tunnels() {
     mtu: null,
   });
   const [pendingAddresses, setPendingAddresses] = useState<Record<string, string>>({});
-  const createTunnel = async (rows: Tunnel[], role: Tunnel["role"], protocol: Tunnel["protocol"]): Promise<Tunnel> => {
-    const row = { ...emptyTunnel(rows), role, protocol, listen_port: role === "server" ? 51820 : null, open_port: false };
+  const createTunnel = async (rows: Tunnel[], role: Tunnel["role"], protocol: Tunnel["protocol"], name = ""): Promise<Tunnel> => {
+    const row = { ...emptyTunnel(rows), name, role, protocol, listen_port: role === "server" ? 51820 : null, open_port: false };
     if (row.private_key && "plaintext" in row.private_key && row.private_key.plaintext) return row;
     const keys = await api.keygenTunnel(row.protocol);
     if (!keys.private_key?.trim()) throw new Error("Сервер не вернул приватный ключ туннеля");
@@ -1273,6 +1428,7 @@ export function Tunnels() {
             {t.protocol === "awg" && (
               <Card title="Обфускация">
                   <FormGrid>
+                    <AwgMaskingRow t={t} patch={patch} disabled={disabled} />
                     {awgFields.map((k) => (
                       <Field
                         key={k}
