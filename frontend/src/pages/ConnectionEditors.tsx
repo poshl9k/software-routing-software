@@ -587,7 +587,10 @@ function Collection<T extends Row>({
                   <dt>Интерфейс</dt><dd>{tunnel.interface}</dd>
                   {tunnel.role === "server"
                     ? <><dt>Пиров</dt><dd>{tunnel.peers.length || "нет пиров"}</dd></>
-                    : <><dt>Endpoint</dt><dd>{tunnel.endpoint ?? "не задан"}</dd></>}
+                    : <><dt>Endpoint</dt><dd>{tunnel.endpoint ?? "не задан"}</dd>
+                        <dt>Шлюз подключения</dt><dd>{tunnel.uplink?.gateway
+                          ? `${tunnel.uplink.gateway} · ${tunnel.uplink.interface}${tunnel.uplink.source ? ` · src ${tunnel.uplink.source}` : ""}`
+                          : "по умолчанию (main)"}</dd></>}
                 </dl>
                 {version?.status === "draft" && <Badge tone="blue">Черновик</Badge>}
                 {tunnel.role === "client" && <div>
