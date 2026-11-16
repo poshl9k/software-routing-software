@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 
+from vs_router import masking
 from vs_router.api.errors import APIError
 
 from .auth import current_user
@@ -136,6 +137,33 @@ def generate_peer_keypair():
     private = X25519PrivateKey.generate()
     return {"private_key": _b64(private.private_bytes_raw()),
             "public_key": _b64(private.public_key().public_bytes_raw())}
+
+
+class MaskingRequest(BaseModel):
+    """Ask for a ready I1-I5 signature packet set (an AWG 3+ mask)."""
+
+    model_config = ConfigDict(extra="forbid")
+    preset: Literal["icloud", "stun", "quic", "dns", "sip", "none"]
+    # DNS masks only: the name the question asks (or the answer answers), and
+    # the address the answer carries. Defaults mimic the AmneziaVPN packet with
+    # the real Apple address instead of the shared Yandex one.
+    host: str | None = None
+    ip: str | None = None
+
+
+@router.post("/keygen/awg-masking")
+def generate_awg_masking(body: MaskingRequest):
+    """A ready signature packet set: masks mimic the openings of real
+    protocols (a DNS response, STUN, QUIC Initial, SIP INVITE), so a DPI probe
+    sees a plausible protocol instead of the one packet every AmneziaVPN
+    server shares. The masks are deterministic; the randomness lives in the
+    ``<r>/<rc>/<rd>`` tags, resolved per packet by the tunnel device."""
+    try:
+        values = masking.preset(body.preset, host=body.host, ip=body.ip)
+    except ValueError as exc:
+        raise APIError(422, str(exc)) from None
+    sizes = {key: masking.packet_size(value, key) for key, value in values.items() if value}
+    return {"obfuscation": values, "sizes": sizes}
 
 
 class InboundRequest(BaseModel):

@@ -5,6 +5,8 @@ from ipaddress import ip_address
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_serializer, model_validator
 
+from vs_router import masking
+
 Name = Annotated[str, Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,30}$")]
 # Engine-owned tags (DNS servers/rules and references to them) follow sing-box
 # convention and may contain hyphens, e.g. ``dns-direct`` / ``dns-tunnel``.
@@ -228,8 +230,13 @@ def awg_parameter(key: str, value):
         if isinstance(value, str) and AWG_RANGE.fullmatch(value):
             return value
     elif key in AWG_SIGNATURE:
-        if isinstance(value, str) and value and "\n" not in value and "\r" not in value:
-            return value
+        # A signature packet is built from the portable tag set only, with a
+        # hard size limit: a foreign tag keeps the other tunnel side from
+        # starting, and an oversized packet fragments at almost any path.
+        if isinstance(value, str):
+            packet = masking.validate(value, key)
+            if packet:
+                return packet
     raise ValueError("tunnel.awg_parameter")
 
 
@@ -330,11 +337,14 @@ class Tunnel(Model):
     @field_validator("obfuscation")
     @classmethod
     def check_obfuscation(cls, value):
+        checked = {}
         for key, item in value.items():
             if key not in AWG_NUMERIC and key not in AWG_SIGNATURE:
                 raise ValueError("tunnel.awg_key")
-            awg_parameter(key, item)
-        return value
+            # Signature packets are stored normalized (whitespace collapsed):
+            # both tunnel ends then emit identical text from the same contract.
+            checked[key] = awg_parameter(key, item)
+        return checked
 
     @field_validator("keepalive")
     @classmethod

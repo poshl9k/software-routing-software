@@ -130,6 +130,8 @@ async def test_keygen_endpoints(api):
     assert second['listen_port'] != awg['listen_port']
     psk = (await client.post('/api/keygen/peer', json={})).json()['preshared_key']
     assert len(psk) == 44 and len(base64.b64decode(psk, validate=True)) == 32
+
+
 ROUTES = [('get', '/api/versions', None), ('get', '/api/versions/1', None), ('get', '/api/draft/tproxy/preview', None), ('get', '/api/apply/status', None), ('get', '/api/backup/export', None), ('get', '/api/diff/1/2', None), ('post', '/api/draft', {}), ('put', '/api/draft', {}), ('delete', '/api/draft', None), ('post', '/api/draft/validate', None), ('post', '/api/apply', {'version_id': 1}), ('post', '/api/confirm', {'version_id': 1}), ('post', '/api/rollback', {}), ('post', '/api/backup/export', {'include_secrets': True, 'password': 'example-password'}), ('post', '/api/backup/restore', {'schema_version': 1, 'versions': []})]
 
 @pytest.mark.parametrize('method,path,body', ROUTES)
