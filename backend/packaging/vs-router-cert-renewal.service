@@ -1,0 +1,19 @@
+[Unit]
+Description=Renew the vs-router local management leaf certificate
+# The renewal restarts Caddy, so it must not race a Caddy that is still starting.
+Wants=caddy.service
+After=caddy.service
+# A failed renewal must not disable the timer: the next run retries while the
+# old leaf is still valid (MANAGEMENT_CERT_RENEWAL_DAYS of headroom).
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -m vs_router.agent.management_console --renew
+# Writes only the leaf certificate under /etc/caddy/management and reads the CA
+# key under /var/lib/vs-router-bootstrap; nothing else on the host is touched.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/etc/caddy/management /var/lib/vs-router-bootstrap
+PrivateTmp=yes

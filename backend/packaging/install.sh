@@ -374,7 +374,8 @@ systemctl enable vs-router-bootrestore.service vs-router-tproxy-postboot.service
 # ISO path (bootstrap.sh) enabled them. Each unit is enabled only if this build
 # installed it, so a profile that does not ship one does not fail the install.
 for unit in vs-router-web.service vs-router-agent.service \
-            vs-router-rollback.timer vs-router-ddns.timer vs-router-source-update.timer; do
+            vs-router-rollback.timer vs-router-ddns.timer vs-router-source-update.timer \
+            vs-router-cert-renewal.timer; do
     [ -f "/etc/systemd/system/$unit" ] || continue
     systemctl enable "$unit"
 done

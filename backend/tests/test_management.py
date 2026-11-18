@@ -16,7 +16,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from vs_router.management import (Management, verify_identity, validate_management,
+from vs_router.management import (Management, STATE_PATH, verify_identity, validate_management,
                                   validate_site_bindings, unmanaged_host_interfaces)
 from vs_router.schema import Configuration, ConfigurationVersion
 from vs_router.generators.caddy import generate_caddy_json
@@ -116,7 +116,94 @@ def test_legacy_leaf_is_reissued_without_rotating_ca(tmp_path):
     console.provision(STATE.mac, STATE.address)
     assert ca_path.read_bytes() == ca_before
     renewed = x509.load_pem_x509_certificate(cert_path.read_bytes())
+
+def signed_leaf(ca_key, key, days):
+    """A local-CA leaf with the expected SAN/AKI and ``days`` days of life left."""
+    now = datetime.now(timezone.utc)
+    return (x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, STATE.ip)]))
+            .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,
+                                     'vs-router local management CA')]))
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=1))
+            .not_valid_after(now + timedelta(days=days))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(IPv4Address(STATE.ip))]), False)
+            .add_extension(x509.AuthorityKeyIdentifier(
+                x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()).digest, None, None), False)
+            .sign(ca_key, hashes.SHA256()))
     assert renewed.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier
+
+def test_refresh_leaves_a_valid_leaf_alone(tmp_path):
+    host(tmp_path)
+    calls = []
+    console = Console(tmp_path, recording_runner(calls), os.getgid())
+    console.provision(STATE.mac, STATE.address)
+    cert_path = tmp_path / 'etc/caddy/management/server.crt'
+    before = cert_path.read_bytes()
+    calls.clear()
+    state, renewed = console.refresh_certificates()
+    assert state == STATE
+    assert renewed is False
+    assert cert_path.read_bytes() == before
+    assert not any(c[0] == 'systemctl' and c[1:3] == ['restart', 'caddy'] for c in calls)
+
+
+def test_refresh_renews_a_due_leaf_and_verifies_the_panel(tmp_path):
+    host(tmp_path)
+    calls = []
+    console = Console(tmp_path, recording_runner(calls), os.getgid())
+    console.provision(STATE.mac, STATE.address)
+    ca_key = serialization.load_pem_private_key(
+        (tmp_path / 'var/lib/vs-router-bootstrap/ca/ca.key').read_bytes(), None)
+    key = serialization.load_pem_private_key(
+        (tmp_path / 'etc/caddy/management/server.key').read_bytes(), None)
+    cert_path = tmp_path / 'etc/caddy/management/server.crt'
+    cert_path.write_bytes(signed_leaf(ca_key, key, 20).public_bytes(serialization.Encoding.PEM))
+    calls.clear()
+    state, renewed = console.refresh_certificates()
+    assert state == STATE
+    assert renewed is True
+    after = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    assert after.not_valid_after_utc > datetime.now(timezone.utc) + timedelta(days=300)
+    assert after.public_key().public_numbers() == key.public_key().public_numbers()
+    assert ['systemctl', 'restart', 'caddy'] in calls
+    assert any(c[0] == 'curl' and '--cacert' in c for c in calls)
+
+
+def test_failed_renewal_restores_the_previous_leaf(tmp_path):
+    host(tmp_path)
+    calls = []
+    console = Console(tmp_path, recording_runner(calls), os.getgid())
+    console.provision(STATE.mac, STATE.address)
+    ca_key = serialization.load_pem_private_key(
+        (tmp_path / 'var/lib/vs-router-bootstrap/ca/ca.key').read_bytes(), None)
+    key = serialization.load_pem_private_key(
+        (tmp_path / 'etc/caddy/management/server.key').read_bytes(), None)
+    cert_path = tmp_path / 'etc/caddy/management/server.crt'
+    cert_path.write_bytes(signed_leaf(ca_key, key, 20).public_bytes(serialization.Encoding.PEM))
+    previous = cert_path.read_bytes()
+    console.probe_panel = MagicMock(side_effect=subprocess.CalledProcessError(1, ['curl']))
+    calls.clear()
+    with pytest.raises(ValueError, match='cert_renewal_unverified'):
+        console.refresh_certificates()
+    assert cert_path.read_bytes() == previous
+    assert calls.count(['systemctl', 'restart', 'caddy']) == 2
+
+
+def test_refresh_refuses_without_a_management_record(tmp_path):
+    console = Console(tmp_path, recording_runner([]), os.getgid())
+    with pytest.raises(ValueError, match='state_missing'):
+        console.refresh_certificates()
+
+
+def test_refresh_refuses_to_create_a_new_ca(tmp_path):
+    host(tmp_path)
+    console = Console(tmp_path, recording_runner([]), os.getgid())
+    console.write(STATE_PATH, STATE.model_dump_json())
+    with pytest.raises(ValueError, match='certificate_invalid'):
+        console.refresh_certificates()
+
 
 
 @pytest.mark.parametrize('problem', ['one_port', 'mac', 'name', 'wireless', 'uplink'])

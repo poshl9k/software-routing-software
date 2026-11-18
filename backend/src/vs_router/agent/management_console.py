@@ -27,6 +27,10 @@ from ..generators.nftables import generate_nftables
 from ..generators.networkd import deserialize_networkd, serialize_networkd
 from .apply import APPLIED_DIR, LocalFileSystem
 
+# Reissue the local leaf this long before it expires, so the timer never races
+# the expiry and a failed renewal still has time to be retried.
+MANAGEMENT_CERT_RENEWAL_DAYS = 30
+
 
 def resolve_hostname(hostname):
     """Resolve a public name to at least one address; ``OSError`` when it does not.
@@ -102,15 +106,19 @@ class Console:
                     x509.AuthorityKeyIdentifier).value.key_identifier
             except x509.ExtensionNotFound:
                 actual_aki = None
-            expired = cert.not_valid_after_utc <= datetime.now(timezone.utc)
+            remaining = cert.not_valid_after_utc - datetime.now(timezone.utc)
+            due = remaining <= timedelta(days=MANAGEMENT_CERT_RENEWAL_DAYS)
             if (cert.public_key().public_numbers() != key.public_key().public_numbers()
                     or ca.public_key().public_numbers() != ca_key.public_key().public_numbers()
                     or cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
                     .get_values_for_type(x509.IPAddress) != [IPv4Address(state.ip)]
-                    or expired or actual_aki != expected_aki):
+                    or due or actual_aki != expected_aki):
                 cert = self.server_certificate(state, ca_key, key)
                 self.write(TLS_DIR / 'server.crt', cert.public_bytes(serialization.Encoding.PEM).decode(),
                            0o640, self.caddy_gid)
+                renewed = True
+            else:
+                renewed = False
             os.chmod(ca_dir, 0o700)
             os.chmod(ca_dir / 'ca.key', 0o600)
             os.chmod(target, 0o750)
@@ -118,7 +126,7 @@ class Console:
             for name in ('server.key', 'server.crt'):
                 os.chmod(target / name, 0o640)
                 os.chown(target / name, -1, self.caddy_gid)
-            return ca
+            return ca, renewed
         ca_dir.mkdir(mode=0o700)
         now = datetime.now(timezone.utc)
         ca_key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
@@ -142,7 +150,39 @@ class Console:
         self.write(TLS_DIR / 'server.key', private(key), 0o640, self.caddy_gid)
         self.write(TLS_DIR / 'server.crt', cert.public_bytes(pem).decode(), 0o640, self.caddy_gid)
         self.write(TLS_DIR / 'ca.crt', ca.public_bytes(pem).decode(), 0o644, self.caddy_gid)
-        return ca
+        return ca, False
+
+    def refresh_certificates(self):
+        """Renew the local leaf certificate before it expires; post-apply safe.
+
+        Provisioning refuses on an applied host, so the 397-day leaf could never
+        be reissued once the first apply ran. This path reissues only the leaf,
+        against the existing CA — never the CA — and only when ``certificates``
+        decides a renewal is due. The restart must verify the panel before the
+        new leaf is kept: a renewal that fails to verify rolls back to the
+        previous leaf, which is still valid for MANAGEMENT_CERT_RENEWAL_DAYS.
+        """
+        state = read_management(self.path(STATE_PATH))
+        if state is None:
+            raise ValueError('management.state_missing')
+        verify_identity(state, self.path('/sys/class/net'))
+        # A missing pair needs console repair, not a silently different CA.
+        if not self.path(TLS_DIR).exists() or not self.path(STATE_DIR / 'ca').exists():
+            raise ValueError('management.certificate_invalid')
+        cert_path = TLS_DIR / 'server.crt'
+        previous = self.path(cert_path).read_bytes()
+        ca, renewed = self.certificates(state)
+        if not renewed:
+            return state, False
+        try:
+            self.runner(['systemctl', 'restart', 'caddy'])
+            self.runner(['systemctl', 'is-active', '--quiet', 'caddy'])
+            self.probe_panel(state)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.write(cert_path, previous.decode(), 0o640, self.caddy_gid)
+            self.runner(['systemctl', 'restart', 'caddy'])
+            raise ValueError('management.cert_renewal_unverified') from exc
+        return state, True
 
     def provision(self, mac, address):
         state_dir = self.path(STATE_DIR)
@@ -178,7 +218,7 @@ class Console:
                 raise ValueError('management.caddy_ownership_conflict')
         # Record identity before mutations, so a failed retry cannot silently move LAN.
         self.write(STATE_DIR / 'management.json', state.model_dump_json())
-        ca = self.certificates(state)
+        ca, _ = self.certificates(state)
         network = (f'[Match]\nName={state.interface}\nMACAddress={state.mac}\n\n'
                    f'[Network]\nAddress={state.address}\nDHCP=no\nIPv6AcceptRA=no\nLinkLocalAddressing=no\n')
         manifest[network_path.name] = network
@@ -268,7 +308,7 @@ class Console:
             if current.get('apps') and current != expected_caddy:
                 raise ValueError('management.caddy_ownership_conflict')
         self.write(STATE_DIR / 'management.json', state.model_dump_json())
-        ca = self.certificates(state)
+        ca, _ = self.certificates(state)
         self.write('/etc/caddy/caddy.json', json.dumps(expected_caddy), 0o640, self.caddy_gid)
         self.runner(['caddy', 'validate', '--config', str(self.path('/etc/caddy/caddy.json'))])
         self.write(STATE_DIR / 'management.nft', single_uplink_rules(state, ssh_port))
@@ -469,12 +509,22 @@ def main():
     parser.add_argument('--ssh-port', type=int, default=22,
                         help='SSH port kept open on a --single-uplink host (default 22)')
     parser.add_argument('--check', action='store_true', help='identity gate used at service startup')
+    parser.add_argument('--renew', action='store_true',
+                        help='reissue the local leaf certificate when it is near expiry '
+                             '(used by the cert-renewal timer)')
     args = parser.parse_args()
     try:
         if args.custom_hostname is not None and not args.single_uplink:
             raise ValueError('management.custom_hostname_requires_single_uplink')
         if args.check:
             check()
+            return 0
+        if args.renew:
+            if os.geteuid() != 0:
+                raise ValueError('management.root_required')
+            state, renewed = Console().refresh_certificates()
+            print(f'Local certificate renewed: https://{state.ip}/' if renewed
+                  else f'Local certificate still valid: https://{state.ip}/')
             return 0
         if os.geteuid() != 0:
             raise ValueError('management.root_required')

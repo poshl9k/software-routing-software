@@ -1,0 +1,12 @@
+[Unit]
+Description=Renew the vs-router local management certificate before expiry
+
+[Timer]
+# Also at boot: a certificate that expired while the host was off is renewed
+# here instead of surfacing as a TLS failure at the first panel request.
+OnBootSec=30s
+OnUnitActiveSec=7d
+Unit=vs-router-cert-renewal.service
+
+[Install]
+WantedBy=timers.target
