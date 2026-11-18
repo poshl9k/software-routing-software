@@ -587,6 +587,17 @@ def test_online_installer_update_staging_without_optional_metadata(online_update
     assert not (tree / 'backend/alembic').exists()
 
 
+def test_online_install_ships_the_networkd_manifest():
+    """Console provisioning (separate-lan) reads the networkd manifest; the
+    online path must create it when absent, or a multi-port router install
+    cannot be provisioned from the local console."""
+    script = (PACKAGING / 'install.sh').read_text()
+    lines = [line for line in script.splitlines() if 'networkd-manifest.conf' in line]
+    assert lines, 'install.sh must reference the manifest'
+    assert any(line.strip().startswith('[ -f') for line in lines), lines
+    assert not any(line.startswith(': >') for line in lines), lines
+
+
 def test_shell_syntax():
     for script in [*PACKAGING.glob('*.sh'), ROOT / 'installer/make-iso.sh']:
         subprocess.run(['bash', '-n', str(script)], check=True)

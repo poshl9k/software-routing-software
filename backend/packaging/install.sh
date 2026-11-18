@@ -209,6 +209,12 @@ if command -v awg >/dev/null 2>&1 && ! awg --version 2>/dev/null | grep -q "v3\.
 fi
 install -d -m 0770 /etc/vs-router /etc/vs-router/applied /etc/vs-router/confirmed
 chgrp vs-router-web /etc/vs-router /etc/vs-router/applied /etc/vs-router/confirmed
+# Console provisioning (separate-lan) reads this manifest to tell its own
+# networkd files from pre-existing host configuration; without it a multi-port
+# router install cannot be provisioned from the local console. The ISO path
+# writes the real manifest in bootstrap.sh; here an empty one is the contract.
+[ -f /etc/vs-router/networkd-manifest.conf ] || \
+    install -m 0644 -o root -g root /dev/null /etc/vs-router/networkd-manifest.conf
 # pppd reads these as root. Keep credentials private even on an installer rerun.
 install -d -o root -g root -m 0755 /etc/ppp/peers
 for peer in /etc/ppp/peers/vs-router-*; do

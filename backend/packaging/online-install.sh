@@ -261,22 +261,55 @@ fi
 # keeps its record and the console refuses to rewrite it. That is not an install
 # failure — the panel is already published — so continue to verification instead
 # of aborting before the check that actually matters.
+# Wired-port count mirrors vs_router.management.wired_ports: physical NICs only
+# (a /sys/class/net entry with a device, no wireless directory, type 1).
+# VS_ROUTER_SYSNET overrides the sysfs root so tests and dry runs are
+# independent of the real host.
+wired_port_count() {
+    local dir=${VS_ROUTER_SYSNET:-/sys/class/net} n=0 d
+    for d in "$dir"/*; do
+        [ -e "$d/device" ] || continue
+        [ -e "$d/wireless" ] && continue
+        [ "$(cat "$d/type" 2>/dev/null)" = "1" ] || continue
+        n=$((n + 1))
+    done
+    printf '%s\n' "$n"
+}
 if [ "$DRY_RUN" != 1 ]; then
-    set -- --single-uplink --ssh-port "$SSH_PORT"
-    if [ -n "$HOSTNAME_ARG" ]; then set -- "$@" --hostname "$HOSTNAME_ARG"; fi
-    if [ -n "$CUSTOM_HOSTNAME_ARG" ]; then set -- "$@" --custom-hostname "$CUSTOM_HOSTNAME_ARG"; fi
-    if [ -n "$PATH_PREFIX" ]; then set -- "$@" --path-prefix "$PATH_PREFIX"; fi
-    if [ -n "$ADDRESS" ]; then set -- "$@" --address "$ADDRESS"; fi
-    if provisioning=$(python3 -m vs_router.agent.management_console "$@" 2>&1); then
-        printf '%s\n' "$provisioning"
+    wired=$(wired_port_count)
+    if [ "$wired" -gt 1 ] && [ "${PROFILE:-panel}" = router ]; then
+        # A multi-port router host chooses its LAN port and address from the
+        # local console — the panel must never live on the installer's uplink
+        # (ADR-0017). install.sh enabled the console unit for this profile;
+        # deferring to it is the supported path, not an install failure.
+        echo "Multi-port router host ($wired wired ports): panel provisioning is"
+        echo "done from the local console (tty1): assign LAN/WAN roles, set the"
+        echo "LAN address, then 'Save and apply'."
+        if ! systemctl is-enabled --quiet vs-router-console.service; then
+            echo 'ERROR: vs-router-console.service is not enabled; provisioning cannot be finished' >&2
+            exit 1
+        fi
+    elif [ "$wired" -gt 1 ]; then
+        echo "ERROR: $wired wired ports found; the online installer provisions a" \
+            "single-NIC panel host. Use the ISO/console path or a one-NIC host." >&2
+        exit 1
     else
-        case "$provisioning" in
-            *management.already_applied*|*management.migration_not_supported*)
-                echo "NOTE: the panel was already provisioned; keeping the existing record." ;;
-            *)
-                printf '%s\n' "$provisioning" >&2
-                exit 1 ;;
-        esac
+        set -- --single-uplink --ssh-port "$SSH_PORT"
+        if [ -n "$HOSTNAME_ARG" ]; then set -- "$@" --hostname "$HOSTNAME_ARG"; fi
+        if [ -n "$CUSTOM_HOSTNAME_ARG" ]; then set -- "$@" --custom-hostname "$CUSTOM_HOSTNAME_ARG"; fi
+        if [ -n "$PATH_PREFIX" ]; then set -- "$@" --path-prefix "$PATH_PREFIX"; fi
+        if [ -n "$ADDRESS" ]; then set -- "$@" --address "$ADDRESS"; fi
+        if provisioning=$(python3 -m vs_router.agent.management_console "$@" 2>&1); then
+            printf '%s\n' "$provisioning"
+        else
+            case "$provisioning" in
+                *management.already_applied*|*management.migration_not_supported*)
+                    echo "NOTE: the panel was already provisioned; keeping the existing record." ;;
+                *)
+                    printf '%s\n' "$provisioning" >&2
+                    exit 1 ;;
+            esac
+        fi
     fi
 else
     echo "+ management_console --single-uplink --ssh-port $SSH_PORT ${HOSTNAME_ARG:+--hostname $HOSTNAME_ARG} ${CUSTOM_HOSTNAME_ARG:+--custom-hostname $CUSTOM_HOSTNAME_ARG}"

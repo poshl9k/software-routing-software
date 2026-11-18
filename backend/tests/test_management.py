@@ -887,21 +887,42 @@ def test_single_uplink_provision_publishes_both_acme_subjects(tmp_path):
     assert 'iifname "eth0" ip daddr 92.51.36.131 tcp dport 80 accept' in rules
 
 
-@pytest.mark.parametrize('dry_run', [False, True])
-def test_online_installer_forwards_custom_hostname_without_host_actions(dry_run):
+def wired_sysnet(tmp_path, count):
+    """A sysfs tree with ``count`` physical wired ports and no wireless ones."""
+    root = tmp_path / 'sys' / 'class' / 'net'
+    root.mkdir(parents=True)
+    for index in range(count):
+        port = root / f'eth{index}'
+        (port / 'device').mkdir(parents=True)
+        (port / 'type').write_bytes(b'1\n')
+    return root
+
+
+def run_publish_block(tmp_path, *argv, wired=1, extra_fns=''):
+    """Run argument parsing + the publication block of online-install.sh with
+    python3 replaced by an argv recorder. Never executes the privileged
+    installer or console; the sysfs port inventory is a fixture. Extra shell
+    functions (e.g. a systemctl stub) are injected as text, not via PATH."""
     from pathlib import Path
 
     source = (Path(__file__).parents[1] / 'packaging/online-install.sh').read_text()
-    # Run only argument parsing and the publication block, with python3 replaced
-    # by an argv recorder. Never execute the privileged installer or console.
     arguments = source[:source.index('\nrun() {')]
     publish = source[source.index('# --- 6. Publish'):source.index('# --- 7. Verify')]
-    code = arguments + '\npython3() { printf "ARG:%s\\n" "$@"; }\n' + publish
-    argv = ['sh', '-c', code, 'online-install.sh', '--hostname', '92.51.36.131.nip.io',
+    code = (arguments + '\npython3() { printf "ARG:%s\\n" "$@"; }\n'
+            + extra_fns + publish)
+    return subprocess.run(
+        ['sh', '-c', code, 'online-install.sh', *argv],
+        capture_output=True, text=True, timeout=10,
+        env={**os.environ, 'VS_ROUTER_SYSNET': str(wired_sysnet(tmp_path, wired))})
+
+
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_online_installer_forwards_custom_hostname_without_host_actions(dry_run, tmp_path):
+    argv = ['--hostname', '92.51.36.131.nip.io',
             '--custom-hostname', 'panel.example.com']
     if dry_run:
         argv.append('--dry-run')
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+    result = run_publish_block(tmp_path, *argv)
     assert result.returncode == 0, result.stdout + result.stderr
     if dry_run:
         assert '+ management_console --single-uplink --ssh-port 22' in result.stdout
@@ -914,6 +935,28 @@ def test_online_installer_forwards_custom_hostname_without_host_actions(dry_run)
             'ARG:--ssh-port', 'ARG:22', 'ARG:--hostname', 'ARG:92.51.36.131.nip.io',
             'ARG:--custom-hostname', 'ARG:panel.example.com',
         ]
+
+
+def test_online_installer_defers_multiport_router_to_the_console(tmp_path):
+    result = run_publish_block(tmp_path, '--profile', 'router', wired=2,
+                               extra_fns='systemctl() { return 0; }\n')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Multi-port router host (2 wired ports)' in result.stdout
+    assert 'local console (tty1)' in result.stdout
+    assert 'ARG:' not in result.stdout
+
+
+def test_online_installer_multiport_router_fails_without_the_console_unit(tmp_path):
+    result = run_publish_block(tmp_path, '--profile', 'router', wired=2,
+                               extra_fns='systemctl() { return 1; }\n')
+    assert result.returncode == 1
+    assert 'vs-router-console.service is not enabled' in result.stderr
+
+
+def test_online_installer_refuses_multiport_panel_host(tmp_path):
+    result = run_publish_block(tmp_path, wired=2)
+    assert result.returncode == 1
+    assert 'single-NIC panel host' in result.stderr
 
 
 def test_single_uplink_provision_refuses_a_second_port(tmp_path):
