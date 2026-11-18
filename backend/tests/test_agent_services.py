@@ -104,6 +104,27 @@ def test_kea_reload(reply, status, ok):
     assert json.loads(fs.read(source))['Dhcp4']['control-socket']['socket-name'] == '/run/kea/kea4-ctrl-socket'
 
 
+def test_kea_restarts_once_when_the_seed_server_has_no_control_socket():
+    fs, executor = FakeFS(), FakeExecutor()
+    source = APPLIED_DIR / 'kea.json'
+    fs.write(source, generate_kea(ConfigurationVersion()))
+    fs.write(Path('/etc/kea/kea-api-password'), 'secret\n')
+    replies = iter((
+        b'[{"result":1,"text":"unable to forward command to the dhcp4 service: '
+        b'No such file or directory. The server is likely to be offline"}]',
+        b'[{"result":0}]',
+    ))
+
+    def http(request, timeout):
+        response = io.BytesIO(next(replies))
+        response.status = 200
+        return response
+
+    KeaReloader(executor, fs, http)(source)
+
+    assert executor.calls[-1] == (['systemctl', 'restart', 'kea-dhcp4-server'], 15)
+
+
 @pytest.mark.parametrize('password', [None, '', 'secret'])
 def test_kea_transport_and_password_failure(password):
     fs = FakeFS()
@@ -140,7 +161,7 @@ def test_live_adapters_apply_and_rollback():
     assert all(fs.read(APPLIED_DIR / FILES[name]) == value for name, value in originals.items())
     assert len(payloads) == 3
     assert payloads[-1] == originals['kea']
-    assert sum(argv[:2] == ['nft', '-f'] for argv, _ in executor.calls) == 3
+    assert sum(argv[:2] == ['nft', '-f'] for argv, _ in executor.calls) == 1
     assert sum(argv == ['systemctl', 'restart', 'unbound'] for argv, _ in executor.calls) == 3
 
 
@@ -154,7 +175,9 @@ def test_callable_failure_retries_confirmed_and_marks_failed_rollback():
         raise ApplyError('agent.reload_failed')
     engine.reload_commands = {'nftables': fail}
     with pytest.raises(ApplyError, match='rollback_failed'):
-        engine.apply_version(dict(snapshot(2), configuration={'panel_port': 8443}), True)
+        engine.apply_version(dict(snapshot(2), configuration={
+            'interfaces': [{'name': 'eth0', 'zone': 'lan',
+                            'addresses': ['10.0.0.1/24']}]}), True)
     assert len(calls) == 2
     assert engine.status()['status'] == 'rollback_failed'
     assert engine.status()['phases']['nftables'] == 'validated'
@@ -172,11 +195,34 @@ def test_phase_is_recorded_only_after_callable_reload_and_failure_recovers():
         if len(seen) == 1:
             raise ApplyError('agent.reload_failed')
     engine.reload_commands = {'nftables': reload}
-    result = engine.apply_version(dict(snapshot(2), configuration={'panel_port': 8443}), True)
+    result = engine.apply_version(dict(snapshot(2), configuration={
+        'interfaces': [{'name': 'eth0', 'zone': 'lan',
+                        'addresses': ['10.0.0.1/24']}]}), True)
     assert result.status == 'rolled_back'
     assert len(seen) == 2
     assert seen[-1] == original
     assert engine.status()['reason'] == 'agent.reload_failed'
+
+
+def test_rollback_failed_marker_forces_service_reconciliation():
+    fs, executor = FakeFS(), FakeExecutor()
+    engine = ApplyEngine(filesystem=fs, executor=executor)
+    assert engine.apply_version(snapshot()).status == 'confirmed'
+
+    def fail(path):
+        raise ApplyError('agent.reload_failed')
+
+    engine.reload_commands = {'nftables': fail}
+    with pytest.raises(ApplyError, match='rollback_failed'):
+        engine.apply_version(dict(snapshot(2), configuration={
+            'interfaces': [{'name': 'eth0', 'zone': 'lan',
+                            'addresses': ['10.0.0.1/24']}]}), True)
+    assert engine.status()['status'] == 'rollback_failed'
+
+    reloads = []
+    engine.reload_commands = {'nftables': lambda path: reloads.append(fs.read(path))}
+    assert engine.apply_version(snapshot(3)).status == 'confirmed'
+    assert len(reloads) == 1
 
 
 def test_tunnel_activity_reads_handshakes_and_skips_junk():

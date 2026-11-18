@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from vs_router.agent.apply import ApplyEngine, ApplyError, MARKER_PATH, APPLIED_DIR, FILES
@@ -145,6 +146,20 @@ def test_reload_failure_rolls_back(pipeline):
     assert result.reason_service == 'nftables'
 
 
+def test_first_apply_failure_names_the_service(pipeline):
+    engine, _, _, _ = pipeline
+
+    def fail(path):
+        raise ApplyError('agent.reload_failed')
+
+    engine.reload_commands = {'kea': fail}
+    result = engine.apply_version(snapshot())
+
+    assert result.status == 'failed'
+    assert result.reason_service == 'kea'
+    assert engine.status()['reason_service'] == 'kea'
+
+
 def test_injected_validator_callbacks(pipeline):
     engine, _, _, _ = pipeline
     calls = []
@@ -153,6 +168,66 @@ def test_injected_validator_callbacks(pipeline):
         return SimpleNamespace(returncode=0)
     assert engine.apply_version(snapshot(), validators={name: validator for name in FILES}).status == 'confirmed'
     assert dict(calls) == FILES
+
+
+def test_kea_validation_ignores_interfaces_created_by_the_same_apply(pipeline):
+    engine, fs, executor, _ = pipeline
+    content = json.dumps({'Dhcp4': {
+        'interfaces-config': {'interfaces': ['vlan1']},
+        'subnet4': [{'id': 1, 'subnet': '10.10.171.0/24', 'interface': 'vlan1'}],
+    }})
+
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        checked = json.loads(fs.read(Path(argv[-1])))
+        assert checked['Dhcp4']['interfaces-config']['interfaces'] == []
+        assert 'interface' not in checked['Dhcp4']['subnet4'][0]
+        return SimpleNamespace(returncode=0)
+
+    executor.run = run
+    marker = {'phases': {}}
+    engine._install({'kea': content}, marker, {'kea': ['kea-dhcp4', '-t']},
+                    files={'kea': 'kea.json'})
+
+    assert fs.read(APPLIED_DIR / 'kea.json') == content
+
+
+def test_failed_marker_does_not_reload_unchanged_wireguard(pipeline):
+    engine, _, _, _ = pipeline
+    reloads = []
+    engine.reload_commands = {'wireguard': lambda path: reloads.append(path)}
+
+    assert engine.apply_version(snapshot()).status == 'confirmed'
+    assert len(reloads) == 1
+    engine.marker({'version_id': 99, 'status': 'failed', 'phases': {}})
+
+    result = engine.apply_version(dict(snapshot(2), configuration={'panel_port': 8443}))
+
+    assert result.status == 'confirmed'
+    assert len(reloads) == 1
+
+
+def test_rollback_does_not_reload_unchanged_wireguard(pipeline):
+    engine, _, _, _ = pipeline
+    wireguard_reloads = []
+    kea_reloads = []
+
+    def kea(path):
+        kea_reloads.append(path)
+        if len(kea_reloads) == 2:
+            raise ApplyError('agent.reload_failed')
+
+    engine.reload_commands = {
+        'wireguard': lambda path: wireguard_reloads.append(path),
+        'kea': kea,
+    }
+    assert engine.apply_version(snapshot()).status == 'confirmed'
+
+    result = engine.apply_version(dict(snapshot(2), configuration={'panel_port': 8443}), True)
+
+    assert result.status == 'rolled_back'
+    assert len(wireguard_reloads) == 1
+    assert len(kea_reloads) == 3
 
 
 def test_local_filesystem_atomic_move(tmp_path):

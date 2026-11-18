@@ -8,6 +8,7 @@ denied by AppArmor before that.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -60,6 +61,16 @@ def test_the_script_creates_the_control_channel(tmp_path):
 
     seeded = (tmp_path / 'kea' / 'kea-dhcp4.conf').read_text()
     assert '"subnet4": []' in seeded
+
+
+def test_the_seed_config_exposes_the_dhcp_control_socket(tmp_path):
+    result = run_setup(tmp_path)
+    assert result.returncode == 0, result.stderr
+    seeded = (tmp_path / 'kea' / 'kea-dhcp4.conf').read_text()
+    assert json.loads(seeded)['Dhcp4']['control-socket'] == {
+        'socket-type': 'unix',
+        'socket-name': '/run/kea/kea4-ctrl-socket',
+    }
 
 
 def test_a_second_run_is_a_no_op(tmp_path):

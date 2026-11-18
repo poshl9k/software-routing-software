@@ -294,6 +294,11 @@ def validate_configuration(c):
     for s in c.dhcp_subnets:
         if s.id in subnet_ids or s.interface not in interfaces:
             fail("dhcp.id_or_interface")
+        if not interfaces[s.interface].zone:
+            # networkd deliberately leaves unassigned interfaces fail-closed:
+            # no virtual device, address or L2 attachment is created. Kea cannot
+            # serve such an interface, so reject it before native validation.
+            fail("dhcp.interface_unassigned")
         if interfaces[s.interface].addressing == "dhcp":
             # A Kea server interface must not also be a DHCP client: the router
             # would request the address it serves (lockout / ownership conflict).

@@ -211,8 +211,8 @@ class ApplyResult:
     status: str
     phases: dict
     error: dict | None = None
-    # Set on a rolled_back result: why the rollback ran and which service
-    # triggered it, so the panel can show an actionable reason.
+    # Why a rollback ran and which service triggered a failed/rolled-back apply,
+    # so the panel can show an actionable reason.
     reason: str | None = None
     reason_service: str | None = None
 
@@ -390,6 +390,28 @@ class ApplyEngine:
                 for rule_set in config.get('route', {}).get('rule_set', []):
                     if rule_set.get('path') == SUBSCRIBER_PEERS_RULE_SET_PATH:
                         rule_set['path'] = str(PENDING_DIR / files['subscriber_peers'])
+                try:
+                    self.fs.write(staged, json.dumps(config))
+                    result = self.executor.run([*validator, str(staged)], 15)
+                finally:
+                    self.fs.remove(staged)
+            elif name == 'kea' and not callable(validator):
+                # ``kea-dhcp4 -t`` rejects a valid config when its interface is a
+                # VLAN/bridge created by the same apply and therefore does not
+                # exist yet. Domain validation has already proved that every DHCP
+                # subnet names a configured interface; let Kea validate the rest
+                # without consulting the current host interface inventory. The
+                # original config, including its bindings, is installed unchanged.
+                staged = PENDING_DIR / 'kea-check.json'
+                config = json.loads(self.fs.read(path))
+                dhcp = config.get('Dhcp4')
+                if isinstance(dhcp, dict):
+                    interfaces = dhcp.get('interfaces-config')
+                    if isinstance(interfaces, dict):
+                        interfaces['interfaces'] = []
+                    for subnet in dhcp.get('subnet4', []):
+                        if isinstance(subnet, dict):
+                            subnet.pop('interface', None)
                 try:
                     self.fs.write(staged, json.dumps(config))
                     result = self.executor.run([*validator, str(staged)], 15)
@@ -781,14 +803,37 @@ class ApplyEngine:
                 version, key=os.environ.get('VS_ROUTER_SECRET_KEY', '').encode()))
             if doh_files:
                 contents['dnscrypt'] = generate_dnscrypt(version)
-            trusted = (bool(tproxy_files) and backup is not None and
-                       ((previous is not None and previous.get('status') == 'confirmed' and
-                         backup.get('version_id') == previous.get('version_id') and
-                         isinstance(previous.get('phases'), dict)) or
-                        (previous is None and self._confirmed_snapshot_is_live(backup))))
-            trusted_phases = (previous['phases'] if trusted and previous is not None else
-                              {**{name: 'applied' for name in tproxy_files},
-                               tproxy_apply.SINGBOX_PROCESS_STEP: 'applied'} if trusted else None)
+            confirmed_marker = (previous is not None and
+                                previous.get('status') == 'confirmed' and
+                                backup is not None and
+                                backup.get('version_id') == previous.get('version_id') and
+                                isinstance(previous.get('phases'), dict))
+            confirmed_live = backup is not None and self._confirmed_snapshot_is_live(backup)
+            # A failed rollback can restore the confirmed bytes before its
+            # service reload fails. The files then look healthy while the live
+            # process may still hold the rejected configuration, so the next
+            # apply must reconcile every phase instead of trusting file hashes.
+            confirmed_live_is_trusted = (confirmed_live and
+                                         (previous is None or
+                                          previous.get('status') != 'rollback_failed'))
+            # TProxy has process/table state beyond file bytes; its failed marker
+            # must force a full reconciliation. Ordinary artifacts can trust the
+            # confirmed snapshot and the per-file live-byte checks after a failed
+            # unrelated phase.
+            trusted = ((confirmed_marker or confirmed_live_is_trusted) if not tproxy_files else
+                       (confirmed_marker or (previous is None and confirmed_live_is_trusted)))
+            if trusted and previous is not None and previous.get('status') == 'confirmed':
+                trusted_phases = previous['phases']
+            elif trusted:
+                # A failed/rolled-back marker is not authority, but the confirmed
+                # snapshot plus byte-for-byte live-file checks below are. This
+                # avoids restarting an unchanged tunnel merely because another
+                # phase (for example a new DHCP pool) is being applied.
+                trusted_phases = {name: 'applied' for name in apply_files}
+                if tproxy_files:
+                    trusted_phases[tproxy_apply.SINGBOX_PROCESS_STEP] = 'applied'
+            else:
+                trusted_phases = None
             self._install(contents, marker, apply_validators, files=apply_files,
                           steps=self._readiness_steps(version, doh_files),
                           steps_before=('tproxy_interception' if tproxy_files else
@@ -868,6 +913,8 @@ class ApplyEngine:
                 'message': details[0] if details else code,
                 'details': details,
             })
+            if self._failed_service:
+                marker['reason_service'] = self._failed_service
             self.marker(marker)
             if self.ssh_controller is not None:
                 try:
@@ -913,7 +960,8 @@ class ApplyEngine:
                     pass  # Report the primary failure; teardown is best-effort.
             if mutated and backup is None and pppoe_files:
                 self._teardown_pppoe()
-            return ApplyResult(version.id, 'failed', marker['phases'], marker['error'])
+            return ApplyResult(version.id, 'failed', marker['phases'], marker['error'],
+                               reason_service=self._failed_service)
 
     def confirm_version(self, version_id):
         marker = self.status()
@@ -1076,9 +1124,14 @@ class ApplyEngine:
             if confirmed is not None:
                 rollback_steps = self._tproxy_readiness_steps(confirmed)
         try:
+            rollback_trusted_files = backup['files'] if not tproxy_files else None
+            rollback_trusted_phases = ({name: 'applied' for name in rollback_files}
+                                       if rollback_trusted_files is not None else None)
             self._install(contents, marker, rollback_validators, files=rollback_files,
                           steps=rollback_steps,
-                          steps_before='tproxy_interception' if rollback_steps else None)
+                          steps_before='tproxy_interception' if rollback_steps else None,
+                          trusted_files=rollback_trusted_files,
+                          trusted_phases=rollback_trusted_phases)
         except (OSError, subprocess.SubprocessError, ValueError, KeyError, ApplyError) as exc:
             if self.ssh_controller is not None:
                 try:

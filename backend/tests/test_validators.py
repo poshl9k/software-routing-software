@@ -65,6 +65,21 @@ def test_invalid_dhcp(change):
         ConfigurationVersion.model_validate(data)
 
 
+def test_dhcp_requires_an_assigned_interface():
+    with pytest.raises(ValidationError, match="dhcp.interface_unassigned"):
+        Configuration.model_validate({
+            "interfaces": [
+                {"name": "eth0", "zone": "lan"},
+                {"name": "vlan1", "type": "vlan", "parent": "eth0", "vlan_id": 1,
+                 "addresses": ["10.10.171.1/24"]},
+            ],
+            "dhcp_subnets": [{
+                "id": 1, "interface": "vlan1", "subnet": "10.10.171.0/24",
+                "pools": [{"start": "10.10.171.20", "end": "10.10.171.250"}],
+            }],
+        })
+
+
 def test_alias_overlap_allowed():
     Configuration(aliases=[{"name": "overlap", "type": "address", "elements": ["10.0.0.0/24", "10.0.0.1"]}])
 

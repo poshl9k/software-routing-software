@@ -299,17 +299,36 @@ class KeaReloader:
                           data=json.dumps({'command': 'config-reload', 'service': ['dhcp4']}).encode(),
                           headers={'Content-Type': 'application/json', 'Authorization': f'Basic {token}'},
                           method='POST')
-        try:
-            with self.http_client(request, timeout=15) as response:
-                if response.status != 200:
-                    raise ApplyError('agent.reload_failed')
-                result = json.load(response)
-            if (not isinstance(result, list) or len(result) != 1
-                    or not isinstance(result[0], dict)
-                    or type(result[0].get('result')) is not int or result[0]['result'] != 0):
-                raise ApplyError('agent.reload_failed')
-        except (OSError, URLError, ValueError) as exc:
-            raise ApplyError('agent.reload_failed') from exc
+
+        def reload():
+            try:
+                with self.http_client(request, timeout=15) as response:
+                    if response.status != 200:
+                        raise ApplyError('agent.reload_failed')
+                    return json.load(response)
+            except (OSError, URLError, ValueError) as exc:
+                raise ApplyError('agent.reload_failed') from exc
+
+        def succeeded(result):
+            return (isinstance(result, list) and len(result) == 1
+                    and isinstance(result[0], dict)
+                    and type(result[0].get('result')) is int
+                    and result[0]['result'] == 0)
+
+        result = reload()
+        if succeeded(result):
+            return
+        # An older seed config started DHCP without its Unix control socket. The
+        # first panel config already contains the socket, but config-reload cannot
+        # reach the old process to activate it. Restart once from the validated
+        # installed config, then use the normal control channel from then on.
+        text = result[0].get('text', '') if (isinstance(result, list) and len(result) == 1
+                                             and isinstance(result[0], dict)) else ''
+        if isinstance(text, str) and 'unable to forward command' in text:
+            checked(self.executor, ['systemctl', 'restart', 'kea-dhcp4-server'])
+            if succeeded(reload()):
+                return
+        raise ApplyError('agent.reload_failed')
 
 
 class NetworkdReloader:
@@ -321,11 +340,15 @@ class NetworkdReloader:
     """
     def __init__(self, executor=None, filesystem=None,
                  network_dir=Path('/etc/systemd/network'),
-                 manifest_path=Path('/etc/vs-router/networkd-manifest.conf')):
+                 manifest_path=Path('/etc/vs-router/networkd-manifest.conf'),
+                 attempts=50, sleep=None):
+        import time
         self.executor = executor or SubprocessExecutor()
         self.fs = filesystem or LocalFileSystem()
         self.network_dir = network_dir
         self.manifest_path = manifest_path
+        self.attempts = attempts
+        self.sleep = sleep or time.sleep
 
     def __call__(self, path):
         from ..generators.networkd import deserialize_networkd, serialize_networkd
@@ -354,6 +377,19 @@ class NetworkdReloader:
             checked(self.executor, ['networkctl', 'reload'])
         else:
             self.executor.run(['systemctl', 'restart', 'systemd-networkd'], 15)
+        # networkctl reload returns before newly declared .netdev links appear.
+        # Later phases (notably Kea) validate/bind those names immediately, so
+        # wait for the kernel objects rather than racing networkd's async create.
+        virtual_links = sorted(name.removeprefix('10-vs-router-').removesuffix('.netdev')
+                               for name in files if name.endswith('.netdev'))
+        for interface in virtual_links:
+            for attempt in range(self.attempts):
+                if not self.executor.run(['ip', 'link', 'show', 'dev', interface], 15).returncode:
+                    break
+                if attempt + 1 < self.attempts:
+                    self.sleep(0.1)
+            else:
+                raise ApplyError('agent.reload_failed')
         self.fs.write(self.manifest_path, serialize_networkd(files))
 
 

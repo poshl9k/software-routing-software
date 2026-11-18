@@ -73,6 +73,8 @@ if [ ! -f "$applied_dir/kea.json" ] && [ ! -f "$kea_dir/.vs-router-seeded" ]; th
     printf '%s\n' '{"Dhcp4": {"interfaces-config": {"interfaces": []},' \
         ' "lease-database": {"type": "memfile", "persist": true,' \
         ' "name": "/var/lib/kea/kea-leases4.csv"}, "valid-lifetime": 3600,' \
+        ' "control-socket": {"socket-type": "unix",' \
+        ' "socket-name": "/run/kea/kea4-ctrl-socket"},' \
         ' "subnet4": []}}' > "$kea_dir/kea-dhcp4.conf"
     chmod 0640 "$kea_dir/kea-dhcp4.conf"
     if getent group _kea >/dev/null 2>&1; then

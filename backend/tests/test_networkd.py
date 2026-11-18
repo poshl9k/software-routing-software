@@ -145,6 +145,30 @@ def test_reload_failure_restores_files():
     assert fs.read(adapter.manifest_path) == ''
 
 
+def test_reloader_waits_for_new_virtual_links_before_returning():
+    fs, executor = FakeFS(), FakeExecutor()
+    path = APPLIED_DIR / 'networkd.conf'
+    fs.write(path, serialize_networkd({
+        '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nVLAN=vlan1\n',
+        '10-vs-router-vlan1.netdev': '[NetDev]\nName=vlan1\nKind=vlan\n\n[VLAN]\nId=1\n',
+        '10-vs-router-vlan1.network': '[Match]\nName=vlan1\n\n[Network]\nAddress=10.0.0.1/24\n',
+    }))
+    probes = iter((1, 1, 0))
+    sleeps = []
+
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv == ['ip', 'link', 'show', 'dev', 'vlan1']:
+            return SimpleNamespace(returncode=next(probes))
+        return SimpleNamespace(returncode=0)
+
+    executor.run = run
+    NetworkdReloader(executor, fs, attempts=3, sleep=sleeps.append)(path)
+
+    assert sleeps == [0.1, 0.1]
+    assert executor.calls[-1][0] == ['ip', 'link', 'show', 'dev', 'vlan1']
+
+
 def test_interface_description_is_metadata_not_configuration():
     """description is operator-facing only: it round-trips but never reaches
     generated networkd/nftables output, and it is length-limited."""
