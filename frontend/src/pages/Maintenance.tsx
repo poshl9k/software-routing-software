@@ -87,6 +87,7 @@ function masterBridgeError(error: unknown) {
   const fieldIssue = masterBridgeFieldIssue(error);
   const messages: Record<string, string> = {
     "master_bridge.already_configured": "Токен уже подтверждён. Для его замены используйте ротацию на мастере.",
+    "master_bridge.not_configured": "Токен ещё не установлен. Сначала выполните подключение к мастер-порталу.",
     "master_bridge.publication_unavailable": "Токен сохранён, но маршрут не настроен. Проверьте состояние службы и повторите попытку с тем же токеном.",
     "agent.unavailable": "Токен сохранён, но служба управления нодой недоступна. Проверьте её состояние и повторите попытку с тем же токеном.",
     "request.cross_origin": "Запрос отклонён. Откройте панель ноды по её HTTPS-адресу и повторите действие.",
@@ -148,7 +149,15 @@ export default function Maintenance() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.masterBridge() });
     },
   });
-  const bridgeFieldIssue = masterBridgeFieldIssue(setupMasterBridge.error);
+  const renewMasterBridge = useMutation({
+    mutationFn: api.renewMasterBridge,
+    onSuccess: async () => {
+      setNotice("Маршрут обновлён: мастер принимается с нового адреса.");
+      await queryClient.invalidateQueries({ queryKey: queryKeys.masterBridge() });
+    },
+  });
+  const bridgeMutationError = setupMasterBridge.error ?? renewMasterBridge.error;
+  const bridgeFieldIssue = masterBridgeFieldIssue(bridgeMutationError);
   useEffect(() => {
     if (masterBridge.data && !["not_installed", "pending_verification"].includes(masterBridge.data.credential_state)) {
       setBridgeToken("");
@@ -158,7 +167,7 @@ export default function Maintenance() {
     if (bridgeFieldIssue) {
       document.querySelector<HTMLInputElement>(`[name="${bridgeFieldIssue.inputName}"]`)?.focus();
     }
-  }, [bridgeFieldIssue?.inputName, setupMasterBridge.error]);
+  }, [bridgeFieldIssue?.inputName, bridgeMutationError]);
   const panelRecord = panel.data ?? null;
   const domainValid = hostnamePattern.test(domain);
   const masterHostnameValid = hostnamePattern.test(masterHostname);
@@ -322,7 +331,7 @@ export default function Maintenance() {
         {masterBridgeMessage(masterBridge.data)}
       </InfoNote>}
       {masterBridge.isPending && <InfoNote>Чтение состояния подключения…</InfoNote>}
-      {setupMasterBridge.error && <ErrorNotice error={masterBridgeError(setupMasterBridge.error)} />}
+      {bridgeMutationError && <ErrorNotice error={masterBridgeError(bridgeMutationError)} />}
       {masterBridge.data && !masterBridge.error
         && ["not_installed", "pending_verification"].includes(masterBridge.data.credential_state) && <form onSubmit={(event) => {
           event.preventDefault();
@@ -344,6 +353,25 @@ export default function Maintenance() {
           <FormWide><InfoNote>Если токен введён неверно, его можно заменить до первого успешного запроса мастера. После подтверждения повторная установка будет заблокирована.</InfoNote></FormWide>
           <FormWide><FormActions><Button type="submit" variant="contained" disabled={setupMasterBridge.isPending}>
             {setupMasterBridge.isPending ? "Подключаем…" : "Сохранить и подключить"}
+          </Button></FormActions></FormWide>
+        </FormGrid>
+      </form>}
+      {masterBridge.data && !masterBridge.error
+        && masterBridge.data.credential_state === "verified" && <form onSubmit={(event) => {
+          event.preventDefault();
+          setNotice("");
+          renewMasterBridge.mutate({ hostname: masterHostname, source_ip: masterSourceIp });
+        }}>
+        <FormGrid>
+          <Field label="Домен мастера" value={masterHostname} onChange={value => { setMasterHostname(value); renewMasterBridge.reset(); }} autoComplete="off"
+            inputProps={{ name: "master-bridge-hostname", spellCheck: false, pattern: "[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?" }}
+            valid={!masterHostname || masterHostnameValid} hint="Имя хоста мастера без https:// и пути" required />
+          <Field label="Исходящий IP мастера" value={masterSourceIp} onChange={value => { setMasterSourceIp(value); renewMasterBridge.reset(); }} autoComplete="off"
+            inputProps={{ name: "master-bridge-source-ip", spellCheck: false }} valid={!sourceIpIssue}
+            hint={sourceIpIssue?.message ?? "Публичный IPv4 или IPv6, с которого мастер обращается к этой ноде"} required />
+          <FormWide><InfoNote>Токен не нужен: сохранённый остаётся прежним. Укажите новый адрес или имя, если мастер переехал; маршрут Caddy и его allowlist обновятся сразу, а при неудаче останется прежняя пара.</InfoNote></FormWide>
+          <FormWide><FormActions><Button type="submit" variant="contained" disabled={renewMasterBridge.isPending || !masterSourceIp || !masterHostnameValid}>
+            {renewMasterBridge.isPending ? "Обновляем…" : "Обновить маршрут"}
           </Button></FormActions></FormWide>
         </FormGrid>
       </form>}

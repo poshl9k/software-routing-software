@@ -83,6 +83,11 @@ export const api = {
     request<MasterBridgeStatus>("/api/host/master-bridge", {
       method: "POST", cache: "no-store", body: JSON.stringify(body),
     }),
+  /** Move the published bridge route to the master's new name/address (ADR-0035). */
+  renewMasterBridge: (body: { hostname: string; source_ip: string }) =>
+    request<MasterBridgeStatus>("/api/host/master-bridge/publication", {
+      method: "PUT", cache: "no-store", body: JSON.stringify(body),
+    }),
   hostProfile: () => request<HostProfile>("/api/host/profile"),
   /** Publish the panel under an operator-supplied domain (ADR-0025); null clears it. */
   setPanelDomain: (hostname: string | null) =>

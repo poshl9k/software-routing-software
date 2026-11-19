@@ -659,9 +659,12 @@ def test_real_worker_lost_create_expire_and_renew_responses(master_node, tmp_pat
         unavailable.dispose()
 
 
-def test_inbound_users_mirror_active_bridge_devices():
+def test_inbound_users_mirror_active_bridge_devices(monkeypatch):
     """ADR-0034: creating a device grants a VLESS user, deleting it revokes it."""
+    from cryptography.fernet import Fernet
     from types import SimpleNamespace
+
+    monkeypatch.setenv("VS_ROUTER_SECRET_KEY", Fernet.generate_key().decode())
 
     from vs_router.generators.vless_uri import device_uuid
     from vs_router.internal_app import _mirror_inbound_users
@@ -673,7 +676,8 @@ def test_inbound_users_mirror_active_bridge_devices():
                       public_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
                       short_ids=("0123abcd",))
     config = Configuration(inbounds=(inbound,))
-    grant = SimpleNamespace(active=True)
+    grant = SimpleNamespace(active=True, status="active",
+                            expires_at=datetime.now(timezone.utc) + timedelta(days=30))
 
     def device(name, public_key, status):
         return SimpleNamespace(name=name, subscriber_name="s1", public_key=public_key, status=status)
@@ -685,7 +689,9 @@ def test_inbound_users_mirror_active_bridge_devices():
     # No plaintext UUID leaks into the contract: the field stays encrypted.
     assert users[0].uuid.encrypted is True
 
-    revoked = _mirror_inbound_users(config, [active], "delete", grant)
+    # Deleting the device marks it removed; the mirror recomputes from that table.
+    revoked = _mirror_inbound_users(
+        config, [device("phone", "KEY-ONE", "removed")], "delete", grant)
     assert revoked.inbounds[0].users == ()
 
 
@@ -696,4 +702,6 @@ def test_inbound_mirroring_is_a_noop_without_inbounds():
     from vs_router.schema import Configuration
 
     configuration = Configuration()
-    assert _mirror_inbound_users(configuration, [], "device", SimpleNamespace(active=True)) is configuration
+    active_grant = SimpleNamespace(active=True, status="active",
+                                 expires_at=datetime.now(timezone.utc) + timedelta(days=30))
+    assert _mirror_inbound_users(configuration, [], "device", active_grant) is configuration

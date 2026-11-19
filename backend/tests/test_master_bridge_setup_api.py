@@ -274,3 +274,85 @@ async def test_master_bridge_setup_and_status_are_admin_only(api):
     assert logged.status_code == 200
     assert (await client.get('/api/host/master-bridge')).status_code == 403
     assert (await client.post('/api/host/master-bridge', json=setup_body())).status_code == 403
+
+
+async def test_publication_renewal_moves_the_allowlist_without_the_token(api, monkeypatch):
+    """A verified node repairs the route for a moved master (O8), token untouched."""
+    client, engine, _, _ = api
+    await sign_in(client)
+    body = setup_body()
+    calls = []
+
+    def agent(method, params):
+        if method == 'master_bridge_publication_status':
+            return {'publication_state': 'configured_on_disk'}
+        calls.append((method, params))
+        return {'published': True}
+
+    monkeypatch.setattr(host, 'agent_call', agent)
+    assert (await client.post('/api/host/master-bridge', json=body)).status_code == 200
+    with Session(engine) as db:
+        installed = _read_master_tokens(db)
+
+    moved = {'hostname': 'master.example.test', 'source_ip': '48.103.254.105'}
+    response = await client.put('/api/host/master-bridge/publication', json=moved)
+    assert response.status_code == 200, response.text
+    assert response.json() == {'credential_installed': True,
+                               'credential_state': 'pending_verification',
+                               'publication_state': 'configured_on_disk'}
+    assert response.headers['cache-control'] == 'no-store'
+    assert calls[-1][0] == 'set_master_bridge_publication'
+    assert calls[-1][1].model_dump(mode='json') == moved
+    # The bearer credential is neither read nor replaced by a renewal.
+    with Session(engine) as db:
+        assert _read_master_tokens(db) == installed
+        row = db.get(MasterBridgeSetting, MASTER_TOKEN_KEY)
+        assert row is not None
+
+
+async def test_publication_renewal_requires_an_installed_credential(api, monkeypatch):
+    client, engine, _, _ = api
+    await sign_in(client)
+    calls = []
+    monkeypatch.setattr(host, 'agent_call', lambda *args: calls.append(args) or {'published': True})
+
+    response = await client.put('/api/host/master-bridge/publication',
+                                json={'hostname': 'master.example.test', 'source_ip': '48.103.254.105'})
+    assert response.status_code == 409
+    assert response.json()['code'] == 'master_bridge.not_configured'
+    assert calls == []
+    with Session(engine) as db:
+        assert db.get(MasterBridgeSetting, MASTER_TOKEN_KEY) is None
+
+
+async def test_publication_renewal_rejects_a_bad_address_without_calling_the_agent(api, monkeypatch):
+    client, _, _, _ = api
+    await sign_in(client)
+    calls = []
+    monkeypatch.setattr(host, 'agent_call', lambda *args: calls.append(args) or {'published': True})
+    assert (await client.post('/api/host/master-bridge', json=setup_body())).status_code == 200
+    calls.clear()
+
+    response = await client.put('/api/host/master-bridge/publication',
+                                json={'hostname': 'master.example.test', 'source_ip': 'not-an-ip'})
+    assert response.status_code == 422
+    assert response.json()['details'] == [{'path': ['body', 'source_ip'],
+                                           'type': 'value_error', 'message': ''}]
+    assert calls == []
+
+
+async def test_publication_renewal_is_admin_only(api, monkeypatch):
+    client, engine, app, _ = api
+    await sign_in(client)
+    monkeypatch.setattr(host, 'agent_call', lambda *_: {'published': True})
+    assert (await client.post('/api/host/master-bridge', json=setup_body())).status_code == 200
+    with Session(engine) as db:
+        db.add(UserRow(username='operator',
+                       password_hash=app.state.auth.hasher.hash('operator-password'),
+                       role='operator'))
+        db.commit()
+    assert (await client.post('/api/auth/login', json={
+        'username': 'operator', 'password': 'operator-password'})).status_code == 200
+    denied = await client.put('/api/host/master-bridge/publication',
+                              json={'hostname': 'master.example.test', 'source_ip': '48.103.254.105'})
+    assert denied.status_code == 403

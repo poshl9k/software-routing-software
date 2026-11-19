@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from cryptography.fernet import InvalidToken
 from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
@@ -96,3 +97,15 @@ def test_rerun_is_idempotent(engines):
         assert len(list(db.scalars(select(Account)))) == 2
         assert len(list(db.scalars(select(Device)))) == 1
         assert len(list(db.scalars(select(Subscription)))) == 2
+
+
+def test_wrong_node_key_aborts_without_importing_accounts_or_losing_device_keys(engines):
+    portal, master, node_id, (_, master_key) = engines
+    with Session(master) as db:
+        node = db.get(Node, node_id)
+    with pytest.raises(InvalidToken):
+        migrate_portal_db(portal, master, node, Fernet.generate_key(), master_key)
+    with Session(master) as db:
+        assert list(db.scalars(select(Account))) == []
+        assert list(db.scalars(select(Subscription))) == []
+        assert list(db.scalars(select(Device))) == []

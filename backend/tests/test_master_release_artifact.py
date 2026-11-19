@@ -96,6 +96,13 @@ def test_master_installer_keeps_panel_python_and_caddy_untouched():
     assert '"$VENV/bin/python" -m pip' in installer
     assert '"$VENV/bin/python" -m alembic' in installer
     assert 'VENV=/opt/vs-master/venv' in installer
+    # On a fresh master-only VPS the panel's parent directory does not exist;
+    # on an existing panel it must retain its original owner/mode.
+    parent_guard = 'if [ ! -d "$(dirname "$BASE")" ]; then'
+    parent_create = 'install -d -m 0755 -o root -g root "$(dirname "$BASE")"'
+    assert parent_guard in installer and parent_create in installer
+    assert installer.index(parent_guard) < installer.index(parent_create)
+    assert installer.index(parent_create) < installer.index('setfacl -m')
     assert 'setfacl -m "u:$APP_USER:--x" "$(dirname "$BASE")"' in installer
     assert 'chmod o+x' not in installer
     assert 'if [ ! -d "$ETC" ]' in installer
@@ -109,3 +116,16 @@ def test_master_installer_keeps_panel_python_and_caddy_untouched():
                  'vs-master-bot.service', 'vs-master-backup.service'):
         text = (packaging / unit).read_text(encoding='utf-8')
         assert 'ExecStart=/opt/vs-master/venv/bin/python' in text
+
+
+def test_caddy_master_example_carries_no_fleet_hostnames():
+    """The shipped example must not name a real (or excluded) fleet host."""
+    example = (BACKEND / 'packaging/caddy-master.conf').read_text(encoding='utf-8')
+    body = example.split('\n}\n', 1)[1]
+    for host in ('62.60.247.104', '.104', 'poshl9k.ru', '85.209.159.130',
+                 '92.51.36.131', '163.245.41.183', '48.103.254.105',
+                 '77.221.157.30', '185.104.151.133'):
+        assert host not in body, f'real host {host} must not appear in the caddy example'
+    # A documented placeholder keeps the syntax valid but unbindable.
+    assert '203.0.113.10.nip.io' in body and 'master.example.net' in body
+    assert 'reverse_proxy 127.0.0.1:8440' in body

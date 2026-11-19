@@ -17,11 +17,23 @@ from .versions import agent_call
 router = APIRouter(dependencies=[Depends(current_user)])
 
 
-class MasterBridgeSetup(Model):
-    """One-time bridge token handoff through the node's authenticated admin UI."""
-    token: SecretStr
+class BridgePublicationFields(Model):
+    """The published route's target: a panel name and the master's own address."""
     hostname: StrictStr = Field(pattern=HOSTNAME_PATTERN)
     source_ip: StrictStr = Field(min_length=3, max_length=45)
+
+    @field_validator('source_ip')
+    @classmethod
+    def valid_source_ip(cls, value):
+        try:
+            return str(ip_address(value))
+        except ValueError:
+            raise ValueError('master_bridge.source_ip_invalid') from None
+
+
+class MasterBridgeSetup(BridgePublicationFields):
+    """One-time bridge token handoff through the node's authenticated admin UI."""
+    token: SecretStr
 
     @field_validator('token')
     @classmethod
@@ -32,13 +44,9 @@ class MasterBridgeSetup(Model):
             raise ValueError('master_bridge.token_invalid')
         return value
 
-    @field_validator('source_ip')
-    @classmethod
-    def valid_source_ip(cls, value):
-        try:
-            return str(ip_address(value))
-        except ValueError:
-            raise ValueError('master_bridge.source_ip_invalid') from None
+
+class BridgePublication(BridgePublicationFields):
+    """Renew the route without the one-time token: the credential stays as is."""
 
 
 @router.get('/host/interfaces')
@@ -141,6 +149,34 @@ def setup_master_bridge(body: MasterBridgeSetup, response: Response,
     if not isinstance(publication, dict) or publication.get('published') is not True:
         raise APIError(503, 'master_bridge.publication_unavailable')
     _, credential_state = _master_bridge_credential_state(db)
+    return {'credential_installed': True, 'credential_state': credential_state,
+            'publication_state': 'configured_on_disk'}
+
+
+@router.put('/host/master-bridge/publication', dependencies=[Depends(admin)])
+def renew_master_bridge_publication(body: BridgePublication, response: Response,
+                                   db: Session = Depends(get_db)) -> dict[str, str | bool]:
+    """Move the published allowlist to the master's new address (ADR-0035, O8).
+
+    The one-time token is not re-collected: an operator who changes the master's
+    egress IP, or its public name, repairs the host-owned route here. The stored
+    bearer credential is untouched, and publication stays fail-closed inside the
+    agent (marker rewrite, Caddy reload, restore on failure).
+    """
+    response.headers['Cache-Control'] = 'no-store'
+    credential_installed, credential_state = _master_bridge_credential_state(db)
+    if not credential_installed:
+        raise APIError(409, 'master_bridge.not_configured')
+    try:
+        publication = agent_call('set_master_bridge_publication',
+                                 MasterBridgePublicationParams(
+                                     hostname=body.hostname, source_ip=body.source_ip))
+    except APIError:
+        raise
+    except Exception:
+        raise APIError(503, 'agent.unavailable') from None
+    if not isinstance(publication, dict) or publication.get('published') is not True:
+        raise APIError(503, 'master_bridge.publication_unavailable')
     return {'credential_installed': True, 'credential_state': credential_state,
             'publication_state': 'configured_on_disk'}
 

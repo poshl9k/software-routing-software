@@ -1,25 +1,26 @@
-"""One-shot migration of a node's local portal database into the master (ADR-0035 D5).
+"""One-shot migration helper for a node's local portal DB (ADR-0035 D5).
 
-Run during node onboarding: the node's portal process is still readable, but the
-master is about to become the single source of truth. The script:
+This helper is not invoked by node onboarding or the bot. Run it only after an
+operator has reconciled identities, subscriptions and existing peer ownership;
+it does not seed the node's bridge execution cache. The helper:
 
 - maps every portal ``Tariff`` onto the master (matched by name, created when new);
-- creates one master ``Account`` per portal ``Account``; the Telegram ID is the
-  master identity, but the portal schema does not carry a usable one — a
-  stable placeholder ``pending:<subscriber_name>`` is stored and the bot
-  binding (stage 2) replaces it on the subscriber's first ``/start``;
+- creates one master ``Account`` per portal ``Account``; if no Telegram ID is
+  present it stores ``pending:<subscriber_name>``. The bot cannot claim this
+  placeholder on ``/start``, so resolve those identities before cutover;
 - carries every subscription, preserving status and ``expires_at``;
 - re-attaches every device to the target node (``node_id``) and records the
   node-local subscriber name (``node_subscriber``) the node bridge addresses
   operations by;
 - re-encrypts device key material: the node DB holds secrets under the NODE's
-  ``VS_ROUTER_SECRET_KEY``, the master stores them under its own.
+  ``VS_ROUTER_SECRET_KEY``, the master stores them under its own. Decryption
+  failure aborts the transaction rather than silently discarding keys.
 
 The script is idempotent: a subscriber whose placeholder identity already
 exists on the master is updated in place instead of duplicated, and devices are
 matched by (account, node, name). DeviceOp rows are NOT migrated — drain the
 node's pending operations before migrating. Peers in the node's applied router
-configuration are untouched; the master learns them through the bridge.
+configuration are untouched; separate bridge adoption is required.
 """
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -94,10 +95,9 @@ def migrate_portal_db(portal_engine, master_engine, node, node_key, master_key):
             for field in ('private_key', 'preshared_key'):
                 value = getattr(portal, field)
                 if value is not None:
-                    try:
-                        material[field] = encrypt_secret(decrypt_secret(value, node_key), master_key)
-                    except Exception:
-                        material[field] = None
+                    # A wrong node key must abort the entire transaction, not
+                    # silently drop credentials from imported devices.
+                    material[field] = encrypt_secret(decrypt_secret(value, node_key), master_key)
             if device is None:
                 dst.add(Device(account_id=account.id, node_id=node.id,
                                node_subscriber=portal.subscriber_name,

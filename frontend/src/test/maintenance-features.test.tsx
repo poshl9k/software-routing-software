@@ -309,3 +309,26 @@ it("binds a custom panel domain beside the reserve and clears it",async()=>{
   await user.click(screen.getByRole("button",{name:"Убрать свой домен"}));
   await waitFor(()=>expect(fetch).toHaveBeenCalledWith("/api/host/panel-domain",expect.objectContaining({method:"PUT",body:JSON.stringify({hostname:null})})));
 });
+
+it("renews the published master route without re-entering the token",async()=>{
+  let status={credential_installed:true,credential_state:"verified",publication_state:"drift"};
+  const fetch=setup(emptyConfiguration,(path,init)=>{
+    if(path==="/api/host/master-bridge"&&!init?.method)return new Response(JSON.stringify(status));
+    if(path==="/api/host/master-bridge/publication"&&init?.method==="PUT"){
+      expect(JSON.parse(String(init.body))).toEqual({hostname:"my.poshl9k.ru",source_ip:"48.103.254.105"});
+      status={credential_installed:true,credential_state:"verified",publication_state:"configured_on_disk"};
+      return new Response(JSON.stringify(status));
+    }
+    return new Response("{}");
+  });
+  render(<MemoryRouter initialEntries={["/maintenance?tab=master"]}><App/></MemoryRouter>);
+  const user=userEvent.setup();
+  await screen.findByText("admin");
+  expect(await screen.findByText(/Мастер подтвердил токен/)).toBeVisible();
+  expect(screen.queryByLabelText(/Токен из мастер-портала/)).toBeNull();
+  await user.type(screen.getByLabelText(/Домен мастера/),"my.poshl9k.ru");
+  await user.type(screen.getByLabelText(/Исходящий IP мастера/),"48.103.254.105");
+  await user.click(screen.getByRole("button",{name:"Обновить маршрут"}));
+  await waitFor(()=>expect(fetch).toHaveBeenCalledWith("/api/host/master-bridge/publication",expect.objectContaining({method:"PUT",body:JSON.stringify({hostname:"my.poshl9k.ru",source_ip:"48.103.254.105"})})));
+  expect(await screen.findByText(/мастер принимается с нового адреса/)).toBeVisible();
+});

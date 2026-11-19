@@ -22,6 +22,16 @@ if [ -e "$BASE/vs-master.db" ] && \
     echo "existing master DB requires its original key in $ETC/master.env; refusing to replace it" >&2
     exit 1
 fi
+# A restored candidate may coexist with the old master. Never launch a second
+# worker or Telegram poller while the old host still owns those operations.
+if [ "${VS_MASTER_STAGING:-0}" = 1 ]; then
+    for unit in vs-master-worker.service vs-master-bot.service vs-master-backup.timer; do
+        if systemctl is-active --quiet "$unit" || systemctl is-enabled --quiet "$unit"; then
+            echo "staging requires $unit to be stopped and disabled" >&2
+            exit 1
+        fi
+    done
+fi
 
 # Keep the master runtime separate from the panel's system Python.
 export DEBIAN_FRONTEND=noninteractive
@@ -32,6 +42,11 @@ if ! id "$APP_USER" >/dev/null 2>&1; then
     useradd --system --home-dir /var/lib/vs-router --no-create-home --shell /usr/sbin/nologin "$APP_USER"
 fi
 
+# A dedicated master has no panel to create the shared parent first. Leave an
+# existing panel-owned directory and its restrictive permissions untouched.
+if [ ! -d "$(dirname "$BASE")" ]; then
+    install -d -m 0755 -o root -g root "$(dirname "$BASE")"
+fi
 install -d -m 0750 -o "$APP_USER" -g "$APP_GROUP" "$BASE" "$BASE/ui"
 install -d -m 0700 -o "$APP_USER" -g "$APP_GROUP" "$BASE/backups"
 # The panel's parent data directory may be 0770 vs-router-web. Grant only
@@ -99,16 +114,20 @@ install -m 0644 "$SCRIPT_DIR/vs-master-backup.timer" /etc/systemd/system/vs-mast
 systemctl daemon-reload
 systemctl enable --now vs-master-web.service
 systemctl restart vs-master-web.service
-systemctl enable --now vs-master-worker.service
-systemctl restart vs-master-worker.service
-systemctl enable vs-master-bot.service
-if [ "${VS_MASTER_SKIP_ACTIVE_BOT_RESTART:-0}" = 1 ] && \
-    systemctl is-active --quiet vs-master-bot.service; then
-    echo "vs-master-bot is already active; restart skipped by operator"
+if [ "${VS_MASTER_STAGING:-0}" = 1 ]; then
+    echo "VS_MASTER_STAGING=1: worker, bot and backup timer remain stopped"
 else
-    systemctl restart vs-master-bot.service
+    systemctl enable --now vs-master-worker.service
+    systemctl restart vs-master-worker.service
+    systemctl enable vs-master-bot.service
+    if [ "${VS_MASTER_SKIP_ACTIVE_BOT_RESTART:-0}" = 1 ] && \
+        systemctl is-active --quiet vs-master-bot.service; then
+        echo "vs-master-bot is already active; restart skipped by operator"
+    else
+        systemctl restart vs-master-bot.service
+    fi
+    systemctl enable --now vs-master-backup.timer
 fi
-systemctl enable --now vs-master-backup.timer
 
 # This host may already serve the panel. Never replace or reload its Caddyfile.
 # The supplied fragment is an example: adapt hostnames, merge and validate it
@@ -116,8 +135,10 @@ systemctl enable --now vs-master-backup.timer
 install -m 0644 "$SCRIPT_DIR/caddy-master.conf" "$BASE/caddy-master.example"
 
 systemctl is-active --quiet vs-master-web.service || { journalctl -u vs-master-web -n 20 --no-pager; exit 1; }
-systemctl is-active --quiet vs-master-worker.service || { journalctl -u vs-master-worker -n 20 --no-pager; exit 1; }
-systemctl is-active --quiet vs-master-bot.service || { journalctl -u vs-master-bot -n 20 --no-pager; exit 1; }
+if [ "${VS_MASTER_STAGING:-0}" != 1 ]; then
+    systemctl is-active --quiet vs-master-worker.service || { journalctl -u vs-master-worker -n 20 --no-pager; exit 1; }
+    systemctl is-active --quiet vs-master-bot.service || { journalctl -u vs-master-bot -n 20 --no-pager; exit 1; }
+fi
 ready=0
 for attempt in $(seq 1 20); do
     if curl -fsS --max-time 2 http://127.0.0.1:8440/health >/dev/null 2>&1; then

@@ -43,7 +43,14 @@ ssh -i ~/.ssh/vs-router-fleet -o BatchMode=yes root@<host> 'hostname'
 | Хост | Адрес | ED25519 fingerprint |
 | --- | --- | --- |
 | node rg3 | `rg3.poshl9k.ru` | `SHA256:hd1HUZ6xi6niOZGABnVt20PsPdwVvZ1q8sv7LbEYS98` |
-| master | `85.209.159.130` | `SHA256:6Er8kUZgW/9R2BeRLKhGEUmUStlGsLpvc1WLgW0GjtI` |
+| master (ufo.hosting, `root@(none)`) | `85.209.159.130` | `SHA256:6Er8kUZgW/9R2BeRLKhGEUmUStlGsLpvc1WLgW0GjtI` |
+| node rg2 (VM-399813) | `163.245.41.183` | `SHA256:1H7bIr/f2FTOBdC5f4YlRbh3l0VJG4fgVsfWYUTBuDM` |
+| master-кандидат (VM-185730) | `48.103.254.105` | `SHA256:vs5EVVHoiuAL+I9RcDRdoShuz0adJX+L5/Nel7q6VKc` |
+
+19.11.2026 владелец получил три отпечатка выше **из VNC-консолей провайдеров**
+(независимый от SSH канал); все три побайтно совпали с ранее записанными
+`~/.ssh/known_hosts`, а `.130` — ещё и с этой таблицей. Это закрывает O6 плана
+препродакшена для `.130`/`.183`/`.105`. `.104` по D6 не опрашивается.
 
 Смена отпечатка = переустановка хоста или подмена; проверить причину до
 подключения (в известных случаях новый отпечаток сохраняется в отдельный
