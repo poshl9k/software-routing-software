@@ -856,7 +856,13 @@ def create_internal_app(engine=None, *, database_url=None, portal_engine=None):
             live = versions.agent_call('tunnel_activity', {})
         except APIError:
             live = {}
-        return {'active_devices': active, 'tunnels': live if isinstance(live, dict) else {}}
+        # D7: the master must not place subscribers on a node that has no
+        # server tunnel, even when its bridge itself is reachable.
+        server_tunnels = sum(1 for t in row.configuration.tunnels
+                             if t.role == 'server') if row else 0
+        return {'active_devices': active,
+                'server_tunnels': server_tunnels,
+                'tunnels': live if isinstance(live, dict) else {}}
 
     return app
 

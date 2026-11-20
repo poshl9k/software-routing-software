@@ -243,6 +243,15 @@ def _process_op(engine, node_client_factory, op_id, now):
             account = db.get(Account, op.account_id) if op else None
             if op is None:
                 return None
+            if exc.code == 'portal.tunnel_unavailable':
+                # A node that cannot host the peer must not remain a placement
+                # candidate for the next subscriber. The worker's telemetry
+                # pass can promote it again once a server tunnel appears.
+                failed_node = db.get(Node, op.node_id)
+                if failed_node is not None:
+                    failed_node.state = 'down'
+                db.add(Audit(actor=_actor(account), action='node.unavailable',
+                             detail=f'{op.node_id}:{exc.code}', at=now))
             if (op.op == 'expire' or exc.code in ('apply.busy', 'apply.failed',
                                                 'master.entitlement_stale', 'master.operation_stale')
                     or exc.status in _RETRYABLE_STATUS):
@@ -317,7 +326,11 @@ def process_pending(engine, node_client_factory=None, now=None):
                 result = _client(node_client_factory, node).node_state()
                 if not isinstance(result, dict) or not isinstance(result.get('active_devices'), int):
                     continue
-                node.state = 'ok'
+                tunnels = result.get('server_tunnels')
+                # Old nodes do not report the field: keep their previous
+                # behavior during rollout. A node that explicitly reports zero
+                # server tunnels is reachable but must never receive peers.
+                node.state = 'down' if isinstance(tunnels, int) and tunnels <= 0 else 'ok'
                 node.active_peers = int(result['active_devices'])
                 node.last_seen = now
             except BridgeError as exc:

@@ -81,6 +81,13 @@ def test_master_state_without_node_portal_account(master_node):
     assert result['devices'] == []
 
 
+def test_master_state_reports_server_tunnels(master_node):
+    """Telemetry must expose whether the node can host subscriber peers."""
+    result = master_bridge(master_node).node_state()
+    assert result['active_devices'] == 0
+    assert result['server_tunnels'] == 1
+
+
 def test_master_bearer_cannot_mutate_local_portal_device(master_node):
     """A master bearer must not acquire local-portal ownership by device ID."""
     from test_portal_internal import create

@@ -219,6 +219,52 @@ def test_criterion_5_telemetry_ok_and_down_preserves_last_seen(monkeypatch):
         assert second.last_seen == NOW - timedelta(minutes=10)
 
 
+def test_telemetry_without_server_tunnel_demotes_node(monkeypatch):
+    """A reachable node with no server tunnel must never receive peers."""
+    engine, key, account_id, node_id, _ = rig(monkeypatch)
+    bridge = FakeBridge(state_result={'active_devices': 0, 'server_tunnels': 0})
+
+    process_pending(engine, lambda node: bridge, NOW)
+
+    with Session(engine) as db:
+        assert db.get(Node, node_id).state == 'down'
+
+
+def test_telemetry_with_server_tunnel_keeps_node_ok(monkeypatch):
+    engine, key, account_id, node_id, _ = rig(monkeypatch)
+    bridge = FakeBridge(state_result={'active_devices': 3, 'server_tunnels': 1})
+
+    process_pending(engine, lambda node: bridge, NOW)
+
+    with Session(engine) as db:
+        assert (db.get(Node, node_id).state, db.get(Node, node_id).active_peers) == ('ok', 3)
+
+
+def test_legacy_telemetry_without_tunnel_field_stays_compatible(monkeypatch):
+    """Older nodes that do not report the field keep the previous behavior."""
+    engine, key, account_id, node_id, _ = rig(monkeypatch)
+    bridge = FakeBridge(state_result={'active_devices': 2})
+
+    process_pending(engine, lambda node: bridge, NOW)
+
+    with Session(engine) as db:
+        assert db.get(Node, node_id).state == 'ok'
+
+
+def test_tunnel_unavailable_demotes_node_after_failed_create(monkeypatch):
+    """A bridge that rejects peers for lack of tunnel is not a placement candidate."""
+    engine, key, account_id, node_id, _ = rig(monkeypatch)
+    device_id = add_device(engine, account_id, node_id, key, complete=True)
+    op_id = add_op(engine, account_id, node_id, 'activate', device_id)
+    bridge = FakeBridge(device_error=BridgeError(409, 'portal.tunnel_unavailable'))
+
+    process_op(engine, lambda node: bridge, op_id, NOW)
+
+    with Session(engine) as db:
+        assert db.get(Node, node_id).state == 'down'
+        assert db.get(DeviceOp, op_id).status == 'failed'
+
+
 def test_criterion_6_renewal_cancels_pending_expire_and_calls_renew(monkeypatch):
     engine, key, account_id, node_id, _ = rig(monkeypatch)
     add_device(engine, account_id, node_id, key, status='active', complete=True)
