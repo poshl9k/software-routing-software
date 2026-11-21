@@ -175,7 +175,7 @@ async def test_criterion_3_nodes_token_once_safe_get_duplicate_patch_and_in_use(
     assert created.headers['cache-control'] == 'no-store'
     assert len(token) >= 43 and created.text.count(token) == 1
     safe_keys = {'id', 'name', 'bridge_url', 'capacity', 'enabled', 'state',
-                 'role', 'public_entry', 'active_peers', 'last_seen'}
+                 'role', 'public_entry', 'active_peers', 'last_seen', 'default_tunnel'}
     assert set(data) == safe_keys
     with Session(engine) as db:
         row = db.get(Node, data['id'])
@@ -210,6 +210,7 @@ async def test_criterion_3_nodes_token_once_safe_get_duplicate_patch_and_in_use(
     assert patched.status_code == 200
     assert (patched.json()['capacity'], patched.json()['enabled']) == (30, False)
 
+
     with Session(engine) as db:
         account = Account(display_name='Alice', telegram_chat_id='100', password_hash='x')
         db.add(account)
@@ -228,6 +229,26 @@ async def test_criterion_3_nodes_token_once_safe_get_duplicate_patch_and_in_use(
         assert {'node.create', 'node.update', 'node.delete'} <= actions
         assert all(token not in (row.detail or '') and spare_token not in (row.detail or '')
                    for row in db.scalars(select(Audit)))
+
+
+async def test_node_default_tunnel_is_admin_only_and_redacted(master):
+    client, engine, _, _, _ = master
+    assert (await client.put('/api/master-admin/nodes/1/default-tunnel',
+                             json={'tunnel': 'Abonent'})).status_code == 401
+    await initialize(client)
+    created = (await create_node(client)).json()
+    node_id = created['id']
+    path = f'/api/master-admin/nodes/{node_id}/default-tunnel'
+    response = await client.put(path, json={'tunnel': 'Abonent'})
+    assert response.status_code == 200, response.text
+    assert response.json()['default_tunnel'] == 'Abonent'
+    with Session(engine) as db:
+        setting = db.get(Setting, f'default_tunnel:{node_id}')
+        assert setting is not None and setting.value == 'Abonent'
+    cleared = await client.put(path, json={'tunnel': None})
+    assert cleared.status_code == 200 and cleared.json()['default_tunnel'] is None
+    with Session(engine) as db:
+        assert db.get(Setting, f'default_tunnel:{node_id}') is None
 
 
 async def test_criterion_4_rotation_current_auth_success_and_failures_are_atomic(master, monkeypatch):

@@ -210,6 +210,24 @@ async def test_criterion_5_create_picks_freest_ok_node_and_refuses_none(master_p
     assert denied.json()['error']['code'] == 'master.no_node_available'
 
 
+async def test_default_tunnel_from_node_setting_is_used_for_create(master_portal):
+    """A node's default subscriber tunnel must be bound at create time."""
+    client, engine, _, _, _, states, calls, _, ids = master_portal
+    states[('https://n2', f"s{ids['account']}")] = tunnel_state()
+    with Session(engine) as db:
+        db.add(Setting(key=f"default_tunnel:{ids['node2']}", value='Abonent'))
+        db.commit()
+    await login(master_portal)
+    created = await client.post('/api/portal/devices', json={'label': 'Default'})
+    assert created.status_code == 200, created.text
+    payloads = [call[3] for call in calls if call[0] == 'device_op'
+                and call[3]['op'] == 'create']
+    assert payloads and payloads[-1]['tunnel'] == 'Abonent'
+    with Session(engine) as db:
+        device = db.scalar(select(Device).where(Device.label == 'Default'))
+        assert device.node_id == ids['node2']
+
+
 async def test_criterion_6_queued_mutations_and_state_guards(master_portal):
     client, engine, _, _, _, _, _, pending_ops, _ = master_portal
     delete_id = add_device(master_portal, name='delete-me')

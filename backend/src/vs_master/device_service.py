@@ -175,8 +175,10 @@ def create_device(db, account, label, *, engine, node_client_factory, device_loc
     if not candidates:
         raise APIError(409, 'master.no_node_available')
     node = min(candidates, key=lambda item: (-item[0], item[1].id))[1]
+    default = db.get(Setting, f'default_tunnel:{node.id}')
     device = Device(account_id=account.id, node_id=node.id,
                     node_subscriber=f's{account.id}', name=None, label=label,
+                    tunnel_name=default.value if default and default.value else None,
                     allowed_ips=[], status='inactive', created_at=now)
     db.add(device)
     db.flush()

@@ -86,6 +86,7 @@ class NodeBody(Model):
     role: StrictStr = 'both'
     public_entry: str | None = Field(default=None, max_length=255)
 
+
     @field_validator('bridge_url')
     @classmethod
     def bridge_url_valid(cls, value):
@@ -100,6 +101,12 @@ class NodeBody(Model):
     @classmethod
     def public_entry_valid(cls, value):
         return _valid_public_entry(value)
+
+
+class DefaultTunnelBody(Model):
+    tunnel: StrictStr | None = Field(
+        default=None, min_length=1, max_length=64,
+        pattern=r'^[a-zA-Z][a-zA-Z0-9_]{0,30}$')
 
 
 class NodePatch(Model):
@@ -227,11 +234,13 @@ def _valid_public_entry(value):
     return text
 
 
-def node_view(row):
+def node_view(row, db=None):
+    setting = db.get(Setting, f'default_tunnel:{row.id}') if db is not None else None
     return {'id': row.id, 'name': row.name, 'bridge_url': row.bridge_url,
             'capacity': row.capacity, 'enabled': row.enabled, 'state': row.state,
             'role': row.role, 'public_entry': row.public_entry,
-            'active_peers': row.active_peers, 'last_seen': aware(row.last_seen)}
+            'active_peers': row.active_peers, 'last_seen': aware(row.last_seen),
+            'default_tunnel': setting.value if setting and setting.value else None}
 
 
 def get_tariff(db, tariff_id):
@@ -329,7 +338,7 @@ def delete_tariff(tariff_id: int, request: Request, db: Session = Depends(get_db
 
 @router.get('/nodes')
 def list_nodes(db: Session = Depends(get_db)):
-    return [node_view(row) for row in db.scalars(select(Node).order_by(Node.id))]
+    return [node_view(row, db) for row in db.scalars(select(Node).order_by(Node.id))]
 
 
 @router.post('/nodes', status_code=201)
@@ -340,7 +349,7 @@ def create_node(body: NodeBody, request: Request, db: Session = Depends(get_db))
     db.add(row)
     audit(db, 'node.create', body.name, now(request))
     commit_unique(db, 'master.node_exists')
-    return {**node_view(row), 'token': token}
+    return {**node_view(row, db), 'token': token}
 
 
 @router.patch('/nodes/{node_id}')
@@ -355,7 +364,27 @@ def update_node(node_id: int, body: NodePatch, request: Request,
         setattr(row, key, value)
     audit(db, 'node.update', str(node_id), now(request))
     db.commit()
-    return node_view(row)
+    return node_view(row, db)
+
+
+@router.put('/nodes/{node_id}/default-tunnel')
+def put_default_tunnel(node_id: int, body: DefaultTunnelBody, request: Request,
+                       db: Session = Depends(get_db)):
+    """Pick the server tunnel new subscriber devices on this node are bound to."""
+    begin_write(db)
+    get_node(db, node_id)
+    key = f'default_tunnel:{node_id}'
+    setting = db.get(Setting, key)
+    if body.tunnel is None:
+        if setting is not None:
+            db.delete(setting)
+    elif setting is None:
+        db.add(Setting(key=key, value=body.tunnel))
+    else:
+        setting.value = body.tunnel
+    audit(db, 'node.default_tunnel', str(node_id), now(request))
+    db.commit()
+    return node_view(db.get(Node, node_id), db)
 
 
 @router.delete('/nodes/{node_id}', status_code=204)
