@@ -846,7 +846,7 @@ wheels = [
 
 [[package]]
 name = "vs-router-backend"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
