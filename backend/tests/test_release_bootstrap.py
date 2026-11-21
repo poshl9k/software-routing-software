@@ -376,6 +376,9 @@ def test_criterion_9_builder_generates_pinned_posix_entry(tmp_path):
     assert script.is_file() and str(script) in result.stdout
     text = script.read_text()
     assert '__VS_ROUTER_' not in text
+    assert script.read_bytes().count(bytes([13])) == 0, 'POSIX entry must use LF line endings'
+    maker_text = MAKER.read_text()
+    assert 'newline=chr(' + '10)' in maker_text, 'entry renderer must force LF on Windows'
     archive = out / f'vs-router-{commit}.tar.gz'
     assert f"VS_ROUTER_COMMIT='{commit}'" in text
     assert f"VS_ROUTER_BASE_URL='{base}'" in text

@@ -228,7 +228,10 @@ rendered = re.sub('|'.join(re.escape(key) for key in values),
 if '__VS_ROUTER_' in rendered:
     sys.exit('cannot publish get.sh: unreplaced placeholder')
 output = pathlib.Path(sys.argv[2])
-output.write_text(rendered, encoding='utf-8')
+# Force LF: text-mode writes translate to CRLF on Windows and dash rejects
+# `set -eu` with a phantom `set: Illegal option -` on Debian hosts.
+with open(output, 'w', encoding='utf-8', newline=chr(10)) as handle:
+    handle.write(rendered)
 output.chmod(0o755)
 PY
 
