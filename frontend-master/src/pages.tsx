@@ -276,6 +276,8 @@ export function SubscribersPage() {
   const [tariffId, setTariffId] = useState("");
   const [working, setWorking] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [portalToken, setPortalToken] = useState<string | null>(null);
+  const [tokenBusy, setTokenBusy] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [createError, setCreateError] = useState<unknown>(null);
@@ -288,12 +290,22 @@ export function SubscribersPage() {
   useEffect(() => { if (telegramIdConflict) telegramIdInput.current?.focus(); }, [telegramIdConflict]);
 
   async function openSubscriber(subscriber: MasterSubscriber) {
-    setOpen(subscriber); setError(null);
+    setOpen(subscriber); setError(null); setPortalToken(null);
     try {
       const [d, t] = await Promise.all([masterApi.subscriber(subscriber.id), masterApi.tariffs()]);
       setDetail(d); setDevices(d.devices); setTariffs(t);
     } catch (reason) { setError(reason); }
   }
+  async function showPortalToken() {
+    if (!open) return;
+    setTokenBusy(true); setError(null);
+    try {
+      const result = await masterApi.issuePortalLink(open.id);
+      setPortalToken(result.token);
+      await navigator.clipboard?.writeText(result.token);
+    } catch (reason) { setError(reason); } finally { setTokenBusy(false); }
+  }
+
   async function assign(event?: FormEvent) {
     event?.preventDefault(); if (!detail) return;
     setWorking("assign"); setError(null);
@@ -378,6 +390,17 @@ export function SubscribersPage() {
           Подписка: {detail.subscription.tariff_name}, до {new Date(detail.subscription.expires_at).toLocaleDateString("ru-RU")}</Typography>}
         <Button variant="outlined" size="small" sx={{ mt: 1 }} onClick={() => setAssigning(true)}>
           {detail?.subscription ? "Продлить/сменить тариф" : "Назначить подписку"}</Button>
+        <Typography variant="h2" sx={{ mt: 3, mb: 1 }}>Доступ в приложении</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Токен заменяет пароль: показывайте его только владельцу аккаунта.
+        </Typography>
+        <Button variant="outlined" size="small" onClick={() => void showPortalToken()}
+          disabled={tokenBusy}>
+          {tokenBusy ? <CircularProgress size={16} /> : "Показать токен кабинета"}
+        </Button>
+        {portalToken && <TextField label="Токен кабинета" value={portalToken} fullWidth
+          inputProps={{ readOnly: true }} onFocus={e => e.currentTarget.select()}
+          sx={{ mt: 1 }} />}
         <Typography variant="h2" sx={{ mt: 3, mb: 1 }}>Устройства</Typography>
         {devices.length === 0 ? <Typography color="text.secondary">Устройств нет.</Typography> :
           devices.map(device => <Row key={device.id}>

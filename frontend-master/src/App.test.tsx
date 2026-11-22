@@ -619,12 +619,19 @@ test("admin opens subscriber detail and its tariffs with flat API responses", as
     if (input === "/api/master-admin/subscribers/2") {
       return new Response(JSON.stringify({ ...subscriber, devices: [] }), { status: 200 });
     }
+    if (input === "/api/master-admin/subscribers/2/portal-link") {
+      return new Response(JSON.stringify({ token: "cabinet-token-2",
+        cabinet_url: "https://my.poshl9k.ru/login#link=cabinet-token-2" }), { status: 200 });
+    }
     if (input === "/api/master-admin/tariffs") return new Response(JSON.stringify([tariff]), { status: 200 });
     throw new Error(`Unexpected request ${input}`);
   }));
   render(<App />);
   await userEvent.click(await screen.findByRole("tab", { name: "Абоненты" }));
   await userEvent.click(await screen.findByRole("button", { name: "Открыть" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Показать токен кабинета" }));
+  const tokenField = await screen.findByRole("textbox", { name: "Токен кабинета" });
+  expect((tokenField as HTMLInputElement).value).toBe("cabinet-token-2");
   await userEvent.click(await screen.findByRole("button", { name: "Назначить подписку" }));
   expect(await screen.findByRole("option", { name: "Базовый (30 дн.)" })).toBeInTheDocument();
 });
