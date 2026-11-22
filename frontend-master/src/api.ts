@@ -68,7 +68,7 @@ export type MasterDevice = {
   status: string; allowed_ips: string[];
 };
 
-export type PortalAccount = { id: number; display_name: string };
+export type PortalAccount = { id: number; display_name: string; email?: string | null };
 export type PortalMe = {
   account: PortalAccount;
   subscription: { status: "active" | "expired"; expires_at: string;
@@ -110,6 +110,21 @@ async function exportPortalText(id: number, format: PortalExportFormat): Promise
 }
 
 export const portalApi = {
+  confirmEmail: (token: string) => masterRequest<void>("/api/portal/email/confirm", {
+    method: "POST", body: JSON.stringify({ token }),
+  }),
+  requestEmail: (email: string) => masterRequest<void>("/api/portal/email/request", {
+    method: "POST", body: JSON.stringify({ email }),
+  }),
+  forgotPassword: (email: string) => masterRequest<void>("/api/portal/password/forgot", {
+    method: "POST", body: JSON.stringify({ email }),
+  }),
+  resetPassword: (token: string, password: string) => masterRequest<void>("/api/portal/password/reset", {
+    method: "POST", body: JSON.stringify({ token, password }),
+  }),
+  login: (username: string, password: string) => masterRequest<PortalAccount>("/api/portal/login", {
+    method: "POST", body: JSON.stringify({ username, password }),
+  }),
   loginLink: (token: string) => masterRequest<PortalAccount>("/api/portal/login/link", {
     method: "POST", body: JSON.stringify({ token }),
   }),

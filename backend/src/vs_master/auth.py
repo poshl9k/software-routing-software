@@ -1,4 +1,5 @@
-"""Master administrator authentication and process-local sessions."""
+"""Master authentication: process-local sessions bound to durable credentials."""
+import hashlib
 import secrets
 import time
 from datetime import datetime, timezone
@@ -8,7 +9,7 @@ from argon2 import PasswordHasher, Type
 from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
-from sqlalchemy import text
+from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -57,8 +58,8 @@ class AuthState:
 
     def prune(self):
         now = self.tick()
-        self.sessions = {token: deadline for token, deadline in self.sessions.items()
-                         if deadline > now}
+        self.sessions = {token: entry for token, entry in self.sessions.items()
+                         if entry[0] > now}
         self.failures = {key: entry for key, entry in self.failures.items()
                          if entry[1] > now}
 
@@ -72,10 +73,27 @@ def current_admin(request: Request):
     state = request.app.state.auth
     with state.lock:
         state.prune()
-        active = request.cookies.get(COOKIE) in state.sessions
+        token = request.cookies.get(COOKIE)
+        entry = state.sessions.get(token)
+        active = False
+        if entry is not None:
+            # Always read committed credentials, including changes made by the
+            # console command in another process. Never cache this revision.
+            with Session(request.app.state.engine) as db:
+                setting = db.get(Setting, ADMIN_PASSWORD_KEY)
+                active = setting is not None and secrets.compare_digest(
+                    entry[1], _password_revision(setting.value))
+            if not active:
+                state.sessions.pop(token, None)
     if not active:
         raise APIError(401, 'auth.required')
     return 'admin'
+
+
+def _password_revision(password_hash):
+    # Argon2's random salt makes every password change a new revision, even
+    # when the operator chooses the same password. Keep no hash in sessions.
+    return hashlib.sha256(password_hash.encode('utf-8')).hexdigest()
 
 
 def _audit(db, action, detail, state):
@@ -123,17 +141,29 @@ def login(body: Credentials, request: Request, response: Response,
         except (VerificationError, InvalidHashError):
             valid = False
         _audit(db, 'login.success' if valid else 'login.failure', None, state)
-        if not valid:
+        if not valid or setting is None:
             state.failures[key] = (count + 1, deadline)
             db.commit()
             raise APIError(401, 'auth.invalid_credentials')
         state.failures.pop(key, None)
-        if state.hasher.check_needs_rehash(setting.value):
-            setting.value = state.hasher.hash(body.password.get_secret_value())
+        verified_hash = password_hash
+        if state.hasher.check_needs_rehash(verified_hash):
+            replacement = state.hasher.hash(body.password.get_secret_value())
+            # A concurrent console reset must never be overwritten by a login
+            # which verified the old password before that reset committed.
+            changed_key = db.execute(update(Setting).where(
+                Setting.key == ADMIN_PASSWORD_KEY, Setting.value == verified_hash
+            ).values(value=replacement).returning(Setting.key).execution_options(
+                synchronize_session=False)).scalar_one_or_none()
+            if changed_key is None:
+                db.rollback()
+                raise APIError(401, 'auth.invalid_credentials')
+            verified_hash = replacement
+        revision = _password_revision(verified_hash)
         db.commit()
         state.sessions.pop(request.cookies.get(COOKIE), None)
         token = secrets.token_urlsafe(32)
-        state.sessions[token] = state.tick() + TTL
+        state.sessions[token] = (state.tick() + TTL, revision)
     response.set_cookie(COOKIE, token, max_age=TTL, httponly=True, secure=True,
                         samesite='lax', path='/')
     return {'username': 'admin'}

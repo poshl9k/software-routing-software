@@ -66,7 +66,8 @@ class Account(Base):
     """Subscriber identity: Telegram ID is the unique key, name is display text."""
     __tablename__ = 'master_accounts'
     __table_args__ = (CheckConstraint("status IN ('active', 'disabled')", name='ck_master_account_status'),
-                      UniqueConstraint('telegram_chat_id', name='uq_master_account_tg'))
+                      UniqueConstraint('telegram_chat_id', name='uq_master_account_tg'),
+                      Index('uq_master_account_email', 'email', unique=True))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     # Display text only; uniqueness is NOT required (D4).
     display_name: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -75,10 +76,55 @@ class Account(Base):
     telegram_linked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     telegram_linked_chat_id: Mapped[str | None] = mapped_column(String(64))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Only confirmed addresses live here; pending changes live in EmailProof.
+    email: Mapped[str | None] = mapped_column(String(254))
+    password_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default='0')
     status: Mapped[str] = mapped_column(String(8), nullable=False, default='active')
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     # Откуда зарегистрирован клиентский аккаунт: для дневного лимита на IP.
     registration_ip: Mapped[str | None] = mapped_column(String(64))
+
+
+class EmailProof(Base):
+    """One-use subscriber proof; no plaintext bearer token is stored."""
+    __tablename__ = 'master_email_proofs'
+    __table_args__ = (
+        UniqueConstraint('account_id', 'kind', name='uq_master_email_proof_account_kind'),
+        CheckConstraint("kind IN ('verify', 'reset')", name='ck_master_email_proof_kind'),
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey('master_accounts.id', ondelete='CASCADE'), nullable=False)
+    kind: Mapped[str] = mapped_column(String(6), nullable=False)
+    email: Mapped[str] = mapped_column(String(254), nullable=False)
+    password_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class EmailOutbox(Base):
+    """Encrypted mail payload, durable retries and expiring multi-worker claims."""
+    __tablename__ = 'master_email_outbox'
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'delivered', 'suppressed')", name='ck_master_email_status'),
+        CheckConstraint('attempts >= 0', name='ck_master_email_attempts'),
+        Index('ix_master_email_due', 'status', 'next_attempt_at'),
+    )
+    token_hash: Mapped[str] = mapped_column(
+        ForeignKey('master_email_proofs.token_hash', ondelete='CASCADE'), primary_key=True)
+    body_secret: Mapped[EncryptedSecret | None] = mapped_column(SecretJSON())
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default='pending')
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    claim_token: Mapped[str | None] = mapped_column(String(64))
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class EmailRateLimit(Base):
+    """Hashed IP/address/account buckets shared by all web workers."""
+    __tablename__ = 'master_email_rate_limits'
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class MagicLogin(Base):

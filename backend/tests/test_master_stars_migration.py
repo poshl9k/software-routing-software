@@ -7,6 +7,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -30,7 +31,8 @@ def test_stars_migration_prior_data_metadata_constraints_and_guard(tmp_path, mon
         command.upgrade(config, 'head')
         assert 'master_stars_orders' in inspect(engine).get_table_names()
         with engine.connect() as db:
-            assert db.scalar(text('SELECT version_num FROM alembic_version')) == '0006_master'
+            assert db.scalar(text('SELECT version_num FROM alembic_version')) == \
+                ScriptDirectory.from_config(config).get_current_head()
             assert compare_metadata(MigrationContext.configure(db), Base.metadata) == []
             assert db.scalar(text('PRAGMA journal_mode')) == 'wal'
             assert db.scalar(text('SELECT COUNT(*) FROM master_payment_receipts')) == 1

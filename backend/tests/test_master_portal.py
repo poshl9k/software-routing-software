@@ -184,7 +184,7 @@ async def test_criterion_2_cookie_separation_and_me_expired_state(master_portal)
     me = await client.get('/api/portal/me')
     assert me.status_code == 200
     assert me.json()['account'] == {'id': master_portal[-1]['account'],
-                                    'display_name': 'Alice'}
+                                    'display_name': 'Alice', 'email': None}
     assert me.json()['subscription']['status'] == 'expired'
     assert me.json()['subscription']['tariff'] == {'name': 'Base', 'device_limit': 8, 'term_days': 30}
 

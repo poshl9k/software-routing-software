@@ -4,7 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-route
 import { MasterApiError, masterApi } from "./api";
 import { NodesPage, RuleSetsPage, SubscribersPage, TariffsPage } from "./pages";
 import { TelegramPage } from "./TelegramPage";
-import { MagicSignIn, PortalHome, PortalLogin } from "./SubscriberPortal";
+import { MagicSignIn, PortalEmailConfirm, PortalHome, PortalLogin, PortalPasswordForgot, PortalPasswordReset } from "./SubscriberPortal";
 import { takeMagicProof, takePortalLink } from "./magic";
 import { globalStyles, theme } from "../theme";
 import { ThemeProvider } from "@mui/material/styles";
@@ -74,11 +74,27 @@ function Dashboard() {
   </Box></Box>;
 }
 
-function AppRoutes({ magicProof, portalLink }: { magicProof: string | null; portalLink: string | null }) {
+function takeFragmentProof(pathname: string): string | null {
+  if (window.location.pathname !== pathname) return null;
+  const url = new URL(window.location.href);
+  const tokens = new URLSearchParams(url.hash.slice(1)).getAll("token");
+  // Only fragment proofs are accepted; scrub accidental query proofs as well.
+  url.searchParams.delete("token");
+  window.history.replaceState(window.history.state, "", url.pathname + url.search);
+  return tokens.length === 1 && tokens[0] ? tokens[0] : null;
+}
+
+function AppRoutes({ magicProof, portalLink, emailProof, resetProof }: {
+  magicProof: string | null; portalLink: string | null; emailProof: string | null;
+  resetProof: string | null;
+}) {
   return <Routes>
     <Route path="/login" element={magicProof !== null ? <MagicSignIn proof={magicProof} kind="magic" />
       : portalLink !== null ? <MagicSignIn proof={portalLink} kind="link" /> : <AuthForm />} />
     <Route path="/portal/login" element={<PortalLogin />} />
+    <Route path="/portal/password/forgot" element={<PortalPasswordForgot />} />
+    <Route path="/portal/password/reset" element={<PortalPasswordReset token={resetProof} />} />
+    <Route path="/portal/email/confirm" element={<PortalEmailConfirm token={emailProof} />} />
     <Route path="/portal" element={<PortalHome />} />
     <Route path="/setup" element={<AuthForm setup />} />
     <Route path="/" element={<Dashboard />} />
@@ -87,7 +103,9 @@ function AppRoutes({ magicProof, portalLink }: { magicProof: string | null; port
 }
 
 export function App({ magicProof, portalLink }: { magicProof?: string | null; portalLink?: string | null }) {
+  const [emailProof] = useState(() => takeFragmentProof("/portal/email/confirm"));
+  const [resetProof] = useState(() => takeFragmentProof("/portal/password/reset"));
   const proof = magicProof === undefined ? takeMagicProof() : magicProof;
   const link = portalLink === undefined ? takePortalLink() : portalLink;
-  return <ThemeProvider theme={theme}><GlobalStyles styles={globalStyles} /><BrowserRouter><AppRoutes magicProof={proof} portalLink={link} /></BrowserRouter></ThemeProvider>;
+  return <ThemeProvider theme={theme}><GlobalStyles styles={globalStyles} /><BrowserRouter><AppRoutes magicProof={proof} portalLink={link} emailProof={emailProof} resetProof={resetProof} /></BrowserRouter></ThemeProvider>;
 }

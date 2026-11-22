@@ -10,6 +10,7 @@ from vs_portal.errors import install_errors, nested
 from . import (accounts, admin_api, auth, client_api, exports, payments_api, portal_api,
                rulesets_api, subscriptions_api)
 from .models import make_engine
+from . import email_recovery
 
 
 def create_master_app(engine=None, database_url=None, clock=None):
@@ -37,6 +38,7 @@ def create_master_app(engine=None, database_url=None, clock=None):
 
     app.include_router(auth.router, prefix='/api/admin')
     app.include_router(accounts.router, prefix='/api/portal')
+    app.include_router(email_recovery.router, prefix='/api/portal')
     app.include_router(admin_api.router)
     app.include_router(payments_api.router)
     app.include_router(portal_api.router)

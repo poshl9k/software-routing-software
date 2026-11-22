@@ -186,7 +186,8 @@ def current_account(request: Request, db: Session = Depends(get_db)):
         state.prune()
         entry = state.sessions.get(request.cookies.get(COOKIE))
     account = db.get(Account, entry[0]) if entry else None
-    if account is None or account.status != 'active':
+    if (account is None or account.status != 'active' or entry is None
+            or len(entry) != 3 or entry[2] != account.password_revision):
         raise APIError(401, 'auth.required')
     return account
 
@@ -238,10 +239,11 @@ def login(body: Credentials, request: Request, response: Response,
         state.failures.pop(key, None)
         if state.hasher.check_needs_rehash(account.password_hash):
             account.password_hash = state.hasher.hash(body.password.get_secret_value())
+        revision = account.password_revision
         db.commit()
         state.sessions.pop(request.cookies.get(COOKIE), None)
         token = secrets.token_urlsafe(32)
-        state.sessions[token] = (account.id, state.tick() + TTL)
+        state.sessions[token] = (account.id, state.tick() + TTL, revision)
     response.set_cookie(COOKIE, token, max_age=TTL, httponly=True, secure=True,
                         samesite='lax', path='/')
     return public_account(account)
@@ -271,11 +273,12 @@ def login_magic(body: MagicProof, request: Request, response: Response,
             raise APIError(401, 'auth.invalid_credentials')
         proof.consumed_at = now
         _audit(db, account.id, 'portal.login.magic', None, state)
+        revision = account.password_revision
         db.commit()
         state.failures.pop(rate_key, None)
         state.sessions.pop(request.cookies.get(COOKIE), None)
         session = secrets.token_urlsafe(32)
-        state.sessions[session] = (account.id, state.tick() + TTL)
+        state.sessions[session] = (account.id, state.tick() + TTL, revision)
     response.set_cookie(COOKIE, session, max_age=TTL, httponly=True, secure=True,
                         samesite='lax', path='/')
     return public_account(account)
@@ -302,11 +305,12 @@ def login_link(body: LinkProof, request: Request, response: Response,
             raise APIError(401, 'auth.invalid_credentials')
         row.last_used_at = now
         _audit(db, account.id, 'portal.login.link', None, state)
+        revision = account.password_revision
         db.commit()
         state.failures.pop(rate_key, None)
         state.sessions.pop(request.cookies.get(COOKIE), None)
         session = secrets.token_urlsafe(32)
-        state.sessions[session] = (account.id, state.tick() + TTL)
+        state.sessions[session] = (account.id, state.tick() + TTL, revision)
     response.set_cookie(COOKIE, session, max_age=TTL, httponly=True, secure=True,
                         samesite='lax', path='/')
     return public_account(account)
@@ -336,11 +340,11 @@ def me(request: Request, account: Account = Depends(current_account),
     subscription = db.scalar(select(Subscription).where(
         Subscription.account_id == account.id).order_by(Subscription.id.desc()))
     if subscription is None:
-        return {'account': public_account(account), 'subscription': None}
+        return {'account': {**public_account(account), 'email': account.email}, 'subscription': None}
     tariff = db.get(Tariff, subscription.tariff_id)
     expired = (subscription.status != 'active' or subscription.expires_at <=
                request.app.state.portal_auth.now() or tariff is None)
-    return {'account': public_account(account),
+    return {'account': {**public_account(account), 'email': account.email},
             'subscription': {'status': 'expired' if expired else 'active',
                              'expires_at': subscription.expires_at,
                              'tariff': {'name': tariff.name, 'device_limit': tariff.device_limit,

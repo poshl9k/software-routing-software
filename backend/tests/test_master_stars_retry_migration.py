@@ -7,6 +7,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
@@ -32,8 +33,14 @@ def test_retry_migration_preserves_original_order_and_related_event(tmp_path, mo
     now = datetime(2026, 11, 9, tzinfo=timezone.utc)
     try:
         with Session(engine) as db:
-            db.add_all([Account(id=1, display_name='Synthetic', telegram_chat_id='100', password_hash='x'),
-                        Tariff(id=3, name='Super', device_limit=50, term_days=30)])
+            # The old schema has no later email/revision columns, so seed it
+            # with column-scoped SQL rather than today's ORM model.
+            db.execute(text("""INSERT INTO master_accounts
+                (id, display_name, telegram_chat_id, password_hash, status, created_at)
+                VALUES (1, 'Synthetic', '100', 'x', 'active', '2026-11-09')"""))
+            db.execute(text("""INSERT INTO master_tariffs
+                (id, name, device_limit, term_days, created_at)
+                VALUES (3, 'Super', 50, 30, '2026-11-09')"""))
             db.flush()
             db.add(Subscription(id=1, account_id=1, tariff_id=3,
                                 expires_at=now + timedelta(days=30)))
@@ -48,7 +55,7 @@ def test_retry_migration_preserves_original_order_and_related_event(tmp_path, mo
             db.commit()
         command.upgrade(config, 'head')
         with engine.connect() as db:
-            assert db.scalar(text('SELECT version_num FROM alembic_version')) == '0006_master'
+            assert db.scalar(text('SELECT version_num FROM alembic_version')) == ScriptDirectory.from_config(config).get_current_head()
             assert db.scalar(text('SELECT COUNT(*) FROM master_stars_orders')) == 1
             assert db.scalar(text('SELECT order_id FROM master_stars_payment_events')) == 1
             assert db.scalar(text('PRAGMA foreign_key_check')) is None
@@ -81,6 +88,8 @@ def test_retry_history_blocks_downgrade_but_old_order_remains(tmp_path, monkeypa
         with pytest.raises(RuntimeError, match='backup'):
             command.downgrade(config, '0005_master')
         with engine.connect() as db:
+            # The 0006 → 0005 downgrade is the guard that refuses; earlier
+            # reversible revisions have already been applied.
             assert db.scalar(text('SELECT version_num FROM alembic_version')) == '0006_master'
             assert db.scalar(text('SELECT COUNT(*) FROM master_stars_orders')) == 2
             assert db.scalar(text('PRAGMA foreign_key_check')) is None

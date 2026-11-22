@@ -1,7 +1,7 @@
 import { Alert, Box, Button, Card as MuiCard, Chip, CircularProgress, Dialog, DialogActions,
   DialogContent, DialogTitle, Stack, TextField, Typography } from "@mui/material";
-import { useEffect, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { MasterApiError, portalApi, type PortalDevice, type PortalExportFormat, type PortalMe, type PortalOperation, type PortalSubscription } from "./api";
 
 function Page({ title, children }: { title: string; children: ReactNode }) {
@@ -19,9 +19,137 @@ function Page({ title, children }: { title: string; children: ReactNode }) {
   </Box>;
 }
 
+export const PASSWORD_LOGIN_PATH = "/portal/login?method=password";
+
 export function PortalLogin() {
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    setBusy(true); setError(null);
+    try {
+      await portalApi.login(String(data.get("username") ?? ""), String(data.get("password") ?? ""));
+      form.reset();
+      navigate("/portal", { replace: true });
+    } catch {
+      const password = form.elements.namedItem("password") as HTMLInputElement;
+      password.value = "";
+      setError("Не удалось войти. Проверьте имя и пароль или попробуйте позже.");
+    } finally { setBusy(false); }
+  }
   return <Page title="Личный кабинет">
-    <Alert severity="info">Откройте ссылку из Telegram-бота, чтобы войти в кабинет.</Alert>
+    <Alert severity="info" role="note">Откройте ссылку из Telegram-бота, чтобы войти в кабинет.</Alert>
+    {params.get("method") === "password" ? <Box component="form" onSubmit={submit}
+      className="form" sx={{ maxWidth: 440, mt: 3 }} aria-busy={busy}>
+      <TextField label="Имя абонента" name="username" autoComplete="username" required fullWidth
+        inputProps={{ maxLength: 64 }} disabled={busy} />
+      <TextField label="Пароль" name="password" type="password" autoComplete="current-password"
+        required fullWidth inputProps={{ maxLength: 1024 }} disabled={busy} />
+      <ErrorNotice error={error} />
+      <Button type="submit" variant="contained" disabled={busy}>{busy ? "Вход…" : "Войти"}</Button>
+      <Button component={Link} to="/portal/password/forgot">Забыли пароль?</Button>
+    </Box> : <Button component={Link} to={PASSWORD_LOGIN_PATH} variant="contained" sx={{ mt: 3 }}>Войти по паролю</Button>}
+  </Page>;
+}
+
+export function PortalPasswordForgot() {
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    const data = new FormData(event.currentTarget);
+    setBusy(true); setError(null); setSent(false);
+    try {
+      await portalApi.forgotPassword(String(data.get("email") ?? "").trim());
+      setSent(true);
+    } catch { setError("Не удалось отправить запрос. Попробуйте позже."); }
+    finally { setBusy(false); }
+  }
+  return <Page title="Восстановление пароля">
+    <Box component="form" onSubmit={submit} className="form" sx={{ maxWidth: 440 }} aria-busy={busy}>
+      <Alert severity="info" role="note">Укажите подтверждённую почту, привязанную в личном кабинете.</Alert>
+      <TextField label="Электронная почта" name="email" type="email" autoComplete="email"
+        required fullWidth inputProps={{ maxLength: 254 }} disabled={busy} />
+      <ErrorNotice error={error} />
+      {sent && <Alert severity="success" role="status">Если адрес привязан к аккаунту, на него придёт ссылка для восстановления пароля.</Alert>}
+      <Button type="submit" variant="contained" disabled={busy}>{busy ? "Отправка…" : "Отправить ссылку"}</Button>
+      <Button component={Link} to={PASSWORD_LOGIN_PATH}>Вернуться ко входу</Button>
+    </Box>
+  </Page>;
+}
+
+export function PortalPasswordReset({ token }: { token: string | null }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(token ? null : "Ссылка недействительна. Запросите новую в форме восстановления пароля.");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || !token) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const password = String(data.get("password") ?? "");
+    if (password !== String(data.get("confirm") ?? "")) {
+      setError("Пароли не совпадают");
+      return;
+    }
+    setBusy(true); setError(null);
+    try {
+      await portalApi.resetPassword(token, password);
+      form.reset();
+      setDone(true);
+    } catch {
+      setError("Не удалось сменить пароль. Ссылка могла истечь; запросите новую.");
+    } finally { setBusy(false); }
+  }
+
+  return <Page title="Новый пароль">
+    {done ? <Stack spacing={2} sx={{ maxWidth: 440 }}>
+      <Alert severity="success" role="status">Пароль изменён. Войдите в кабинет с новым паролем.</Alert>
+      <Alert severity="info" role="note">Прежние веб-сессии отозваны. Сохранённые ссылки доступа и настройки клиентских приложений остаются действительными.</Alert>
+      <Button component={Link} to={PASSWORD_LOGIN_PATH} variant="contained">Войти по паролю</Button>
+    </Stack> : <Box component="form" onSubmit={submit} className="form" sx={{ maxWidth: 440 }} aria-busy={busy}>
+      <TextField label="Новый пароль" name="password" type="password" autoComplete="new-password"
+        required fullWidth inputProps={{ minLength: 12, maxLength: 1024 }} disabled={busy} />
+      <TextField label="Повторите новый пароль" name="confirm" type="password" autoComplete="new-password"
+        required fullWidth inputProps={{ minLength: 12, maxLength: 1024 }} disabled={busy} />
+      <ErrorNotice error={error} />
+      <Button type="submit" variant="contained" disabled={busy || !token}>{busy ? "Сохранение…" : "Сохранить пароль"}</Button>
+      <Button component={Link} to="/portal/password/forgot">Запросить новую ссылку</Button>
+    </Box>}
+  </Page>;
+}
+
+export function PortalEmailConfirm({ token }: { token: string | null }) {
+  const [confirmed, setConfirmed] = useState(false);
+  const [error, setError] = useState<string | null>(token ? null : "Ссылка недействительна. Запросите новое письмо в кабинете.");
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    // Match magic sign-in: avoid consuming a one-shot proof in StrictMode replay.
+    const timer = window.setTimeout(() => {
+      void portalApi.confirmEmail(token).then(() => {
+        if (!cancelled) setConfirmed(true);
+      }).catch(() => {
+        if (!cancelled) setError("Не удалось подтвердить почту. Запросите новое письмо в кабинете.");
+      });
+    }, 0);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [token]);
+  return <Page title="Подтверждение почты">
+    <Box sx={{ maxWidth: 440 }}>
+      <ErrorNotice error={error} />
+      {confirmed && <Alert severity="success" role="status">Почта подтверждена.</Alert>}
+      {!confirmed && !error && <CircularProgress aria-label="Подтверждение почты" />}
+      <Button component={Link} to="/portal" sx={{ mt: 2 }}>Открыть кабинет</Button>
+    </Box>
   </Page>;
 }
 
@@ -63,6 +191,40 @@ function handshake(value: number | null) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "Нет данных";
   const days = Math.floor(Math.max(0, Date.now() - value * 1000) / 86_400_000);
   return days === 0 ? "Недавно" : `${days} дн. назад`;
+}
+
+function PortalEmailBinding({ email }: { email: string | null }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    const data = new FormData(event.currentTarget);
+    setBusy(true); setError(null); setSent(false);
+    try {
+      await portalApi.requestEmail(String(data.get("email") ?? "").trim());
+      setSent(true);
+    } catch (reason) {
+      if (reason instanceof MasterApiError && reason.status === 401) navigate("/portal/login", { replace: true });
+      else setError("Не удалось отправить запрос. Попробуйте позже.");
+    } finally { setBusy(false); }
+  }
+  return <MuiCard className="surface" elevation={0} sx={{ mt: 3 }}>
+    <Typography component="h2" variant="h2" sx={{ mb: 2 }}>Почта для восстановления пароля</Typography>
+    <Typography sx={{ mb: 2, overflowWrap: "anywhere" }}>
+      {email ? `Подтверждённая почта: ${email}` : "Почта не привязана"}
+    </Typography>
+    <Box component="form" onSubmit={submit} className="form" sx={{ maxWidth: 440 }} aria-busy={busy}>
+      <TextField label="Электронная почта" name="email" type="email" autoComplete="email"
+        required fullWidth inputProps={{ maxLength: 254 }} disabled={busy}
+        helperText="Откройте ссылку из письма, чтобы подтвердить адрес." />
+      <ErrorNotice error={error} />
+      {sent && <Alert severity="success" role="status">Если адрес доступен, на него придёт письмо. До подтверждения привязанная почта не изменится.</Alert>}
+      <Button type="submit" variant="contained" disabled={busy}>{busy ? "Отправка…" : "Подтвердить почту"}</Button>
+    </Box>
+  </MuiCard>;
 }
 
 export function PortalHome() {
@@ -338,6 +500,7 @@ export function PortalHome() {
             </Box>;
           })}</Stack>}
       </MuiCard>
+      <PortalEmailBinding email={me.account.email ?? null} />
     </>}
 
     <Dialog open={dialog === "rotate-link"} onClose={() => setDialog(null)} aria-labelledby="rotate-link-title" fullWidth maxWidth="sm">
