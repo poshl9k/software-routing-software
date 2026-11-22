@@ -892,3 +892,23 @@ async def test_payment_checkout_is_configurable_but_no_aggregator_yet(master_por
     assert checkout.status_code == 200
     assert checkout.json() == {'checkout_url': 'https://pay.example/vell',
                                'provider': 'later'}
+
+
+async def test_client_creates_device_and_then_sees_a_profile(master_portal):
+    client, engine, _, _, _, _, _, _, _ = master_portal
+    registered = await client.post('/api/client/register',
+                                   json={'display_name': 'Сам', **await proof(client)})
+    assert registered.status_code == 200, registered.text
+    token = registered.json()['token']
+
+    created = await client.post('/api/client/devices',
+                                json={'token': token, 'label': 'Телефон'})
+    assert created.status_code in (200, 202), created.text
+    with Session(engine) as db:
+        account_id = registered.json()['account']['id']
+        devices = list(db.scalars(select(Device).where(Device.account_id == account_id)))
+        assert len(devices) == 1
+
+    discovery = await client.post('/api/client/subscriptions', json={'token': token})
+    assert discovery.status_code == 200
+    assert len(discovery.json()['profiles']) == 1

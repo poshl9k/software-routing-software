@@ -14,6 +14,7 @@ from datetime import timedelta
 from hashlib import sha256
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import ConfigDict, Field, SecretStr
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
@@ -22,8 +23,10 @@ from vs_router.api.errors import APIError
 from vs_router.schema import Model
 
 from .accounts import LOGIN_WINDOW, get_db, portal_link_token
+from .device_service import create_device as create_device_record
 from .models import (Account, Audit, ClientChallenge, ClientInvite, Device, DeviceSubscription,
                      PortalLink, Setting, Subscription, Tariff, TrafficUsage)
+from .portal_api import _context
 from .subscriptions_api import _store, _token_of, _view
 
 router = APIRouter(prefix='/api/client')
@@ -159,6 +162,25 @@ def register_client(body: RegisterBody, request: Request,
     token = portal_link_token(request.app.state.engine, account.id, now)
     return {'account': {'id': account.id, 'display_name': account.display_name},
             'token': token, 'subscription': subscription_view}
+
+
+class DeviceBody(Model):
+    model_config = ConfigDict(extra='forbid')
+    token: SecretStr = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=128)
+
+
+@router.post('/devices')
+def client_create_device(body: DeviceBody, request: Request,
+                         db: Session = Depends(get_db)):
+    """Create a device for the account behind a cabinet token, no admin/bot."""
+    digest = sha256(body.token.get_secret_value().encode()).hexdigest()
+    row = db.scalar(select(PortalLink).where(PortalLink.token_hash == digest))
+    account = db.get(Account, row.account_id) if row is not None else None
+    if account is None or account.status != 'active':
+        raise APIError(401, 'auth.invalid_credentials')
+    result = create_device_record(db, account, body.label, **_context(request))
+    return JSONResponse(result, status_code=202 if result.get('status') == 'pending' else 200)
 
 
 @router.post('/checkout')
