@@ -112,7 +112,7 @@ def test_master_migration_round_trip(tmp_path, monkeypatch):
 
         assert db.execute(select(Node)).scalar_one().bridge_token == bridge_token
         assert db.execute(select(Account)).scalar_one().telegram_chat_id == "10001"
-        assert db.execute(select(Tariff)).scalar_one().name == "basic"
+        assert db.execute(select(Tariff).where(Tariff.name == 'basic')).scalar_one().device_limit == 2
         assert db.execute(select(Subscription)).scalar_one().account_id == account.id
         stored_device = db.execute(select(Device)).scalar_one()
         assert stored_device.private_key == private_key

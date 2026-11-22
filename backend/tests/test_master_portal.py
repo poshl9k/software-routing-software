@@ -81,6 +81,8 @@ async def master_portal(monkeypatch):
                      enabled=True, state='ok', active_peers=0, created_at=NOW)
         db.add_all([tariff, account, node1, node2])
         db.flush()
+        db.add(Tariff(name='Demo', device_limit=2, term_days=7,
+                      daily_traffic_limit_mb=500, created_at=NOW))
         db.add(Subscription(account_id=account.id, tariff_id=tariff.id,
                             expires_at=NOW + timedelta(days=30), status='active',
                             updated_at=NOW))
@@ -91,6 +93,29 @@ async def master_portal(monkeypatch):
                            base_url='https://master.test') as client:
         yield client, engine, clock, secret_key, app, states, calls, pending_ops, ids
     engine.dispose()
+
+
+def solve_challenge(challenge: str, difficulty: int) -> str:
+    raw = base64.urlsafe_b64decode(challenge + '=' * (-len(challenge) % 4))
+    for nonce in range(1, 4_000_000):
+        digest = sha256(raw + str(nonce).encode()).digest()
+        zeros = 0
+        for byte in digest:
+            if byte:
+                zeros += 8 - byte.bit_length()
+                break
+            zeros += 8
+        if zeros >= difficulty:
+            return str(nonce)
+    raise AssertionError('PoW challenge not solved')
+
+
+async def proof(client):
+    response = await client.get('/api/client/register/challenge')
+    assert response.status_code == 200, response.text
+    body = response.json()
+    return {'challenge': body['challenge'],
+            'nonce': solve_challenge(body['challenge'], body['difficulty'])}
 
 
 async def login(rig):
@@ -748,7 +773,8 @@ async def test_admin_can_issue_client_credential_without_telegram(master_portal)
 async def test_native_client_registers_with_one_time_invite(master_portal):
     client, engine, _, _, _, _, _, _, ids = master_portal
     invalid = await client.post('/api/client/register',
-                                json={'code': 'not-a-real-invite', 'display_name': 'Ира'})
+                                json={'code': 'not-a-real-invite', 'display_name': 'Ира',
+                                      **await proof(client)})
     assert invalid.status_code == 400
     assert invalid.json()['error']['code'] == 'client.invite_invalid'
 
@@ -764,25 +790,28 @@ async def test_native_client_registers_with_one_time_invite(master_portal):
         assert invite is not None and invite.token_hash != code and invite.used_at is None
 
     registered = await client.post('/api/client/register',
-                                   json={'code': code, 'display_name': '  Новый  '})
+                                   json={'code': code, 'display_name': '  Новый  ',
+                                         **await proof(client)})
     assert registered.status_code == 200, registered.text
     body = registered.json()
     assert body['account']['display_name'] == 'Новый'
     assert body['account']['id'] != ids['account']
-    assert body['subscription']['status'] == 'inactive'
+    assert body['subscription']['status'] == 'active'
+    assert body['subscription']['tariff']['name'] == 'Demo'
+    assert body['subscription']['tariff']['daily_traffic_limit_mb'] == 500
     assert body['token']
 
-    # Токен сразу работает для discovery, но тариф ещё не выдан.
+    # Токен сразу работает для discovery: демо-тариф уже выдан.
     discovery = await client.post('/api/client/subscriptions', json={'token': body['token']})
     assert discovery.status_code == 200
-    assert discovery.json()['subscription']['status'] == 'inactive'
+    assert discovery.json()['subscription']['status'] == 'active'
     assert discovery.json()['profiles'] == []
     assert (await client.post('/api/portal/login/link',
                               json={'token': body['token']})).status_code == 200
 
     # Код одноразовый: повторная регистрация невозможна.
     again = await client.post('/api/client/register',
-                              json={'code': code, 'display_name': 'ДUBL'})
+                              json={'code': code, 'display_name': 'ДUBL', **await proof(client)})
     assert again.status_code == 400
     assert again.json()['error']['code'] == 'client.invite_invalid'
     with Session(engine) as db:
@@ -792,12 +821,14 @@ async def test_native_client_registers_with_one_time_invite(master_portal):
 
 async def test_open_registration_without_invite_or_telegram(master_portal):
     client, engine, _, _, _, _, _, _, ids = master_portal
-    response = await client.post('/api/client/register', json={'display_name': 'Самoreg'})
+    response = await client.post('/api/client/register',
+                                 json={'display_name': 'Самoreg', **await proof(client)})
     assert response.status_code == 200, response.text
     body = response.json()
     assert body['account']['id'] != ids['account']
     assert body['account']['display_name'] == 'Самoreg'
-    assert body['subscription']['status'] == 'inactive'
+    assert body['subscription']['status'] == 'active'
+    assert body['subscription']['tariff']['name'] == 'Demo'
     assert body['token']
 
     discovery = await client.post('/api/client/subscriptions', json={'token': body['token']})
@@ -808,3 +839,56 @@ async def test_open_registration_without_invite_or_telegram(master_portal):
         assert account is not None
         assert account.telegram_chat_id.startswith('client:')
         assert account.telegram_linked_at is None
+
+
+async def test_bad_proof_burns_challenge(master_portal):
+    client, *_ = master_portal
+    challenge = (await client.get('/api/client/register/challenge')).json()
+    bad = await client.post('/api/client/register',
+                            json={'display_name': 'X', 'challenge': challenge['challenge'],
+                                  'nonce': 'definitely-wrong'})
+    assert bad.status_code == 400
+    assert bad.json()['error']['code'] == 'client.pow_invalid'
+    replay = await client.post('/api/client/register',
+                               json={'display_name': 'X', 'challenge': challenge['challenge'],
+                                     'nonce': solve_challenge(challenge['challenge'],
+                                                              challenge['difficulty'])})
+    assert replay.status_code == 400
+    assert replay.json()['error']['code'] == 'client.pow_invalid'
+
+
+async def test_daily_registration_cap_per_ip(master_portal, monkeypatch):
+    client, *_ = master_portal
+    monkeypatch.setattr('vs_master.client_api.MAX_REGISTRATIONS_PER_DAY', 1)
+    first = await client.post('/api/client/register',
+                              json={'display_name': 'Первый', **await proof(client)})
+    assert first.status_code == 200, first.text
+    second = await client.post('/api/client/register',
+                               json={'display_name': 'Второй', **await proof(client)})
+    assert second.status_code == 429
+    assert second.json()['error']['code'] == 'client.registration_limit'
+
+
+async def test_payment_checkout_is_configurable_but_no_aggregator_yet(master_portal):
+    client, engine, _, _, _, _, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    await login(master_portal)
+    issued = await client.post(f'/api/portal/devices/{device_id}/subscription')
+    token = issued.json()['url'].rsplit('/', 1)[-1]
+    assert (await client.post('/api/client/checkout', json={'token': token})).status_code == 404
+
+    assert (await client.post('/api/admin/setup', json={
+        'password': 'administrator-password'})).status_code == 201
+    assert (await client.post('/api/admin/login', json={
+        'username': 'admin', 'password': 'administrator-password'})).status_code == 200
+    bad = await client.put('/api/master-admin/payment-settings',
+                           json={'checkout_url': 'http://pay.example'})
+    assert bad.status_code == 422
+    good = await client.put('/api/master-admin/payment-settings',
+                            json={'checkout_url': 'https://pay.example/vell',
+                                  'provider_name': 'later'})
+    assert good.status_code == 200
+    checkout = await client.post('/api/client/checkout', json={'token': token})
+    assert checkout.status_code == 200
+    assert checkout.json() == {'checkout_url': 'https://pay.example/vell',
+                               'provider': 'later'}

@@ -146,6 +146,11 @@ class SubscriptionBody(Model):
         return self
 
 
+class PaymentSettingsBody(Model):
+    checkout_url: str | None = Field(default=None, max_length=500)
+    provider_name: str | None = Field(default=None, max_length=64)
+
+
 class InviteBody(Model):
     ttl_hours: int = Field(default=72, ge=1, le=720)
 
@@ -539,6 +544,35 @@ def create_client_invite(body: InviteBody, request: Request, db: Session = Depen
     audit(db, 'client.invite_create', 'native', timestamp)
     db.commit()
     return {'code': code, 'expires_at': expires_at, 'ttl_hours': body.ttl_hours}
+
+
+@router.put('/payment-settings')
+def set_payment_settings(body: PaymentSettingsBody, request: Request,
+                         db: Session = Depends(get_db)):
+    """Configure the external checkout URL; the aggregator is not implemented yet."""
+    if body.checkout_url is not None:
+        parsed = urlsplit(body.checkout_url)
+        if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
+                or parsed.password):
+            raise APIError(422, 'master.checkout_url_invalid')
+    timestamp = now(request)
+    values = {'payment_checkout_url': body.checkout_url,
+              'payment_provider_name': body.provider_name}
+    for key, value in values.items():
+        if value is None:
+            row = db.get(Setting, key)
+            if row is not None:
+                db.delete(row)
+            continue
+        row = db.get(Setting, key)
+        if row is None:
+            db.add(Setting(key=key, value=value))
+        else:
+            row.value = value
+    audit(db, 'payment.settings_update', 'external', timestamp)
+    db.commit()
+    return {'configured': body.checkout_url is not None,
+            'checkout_url': body.checkout_url, 'provider_name': body.provider_name}
 
 
 @router.get('/subscribers')

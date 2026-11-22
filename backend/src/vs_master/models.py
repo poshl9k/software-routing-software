@@ -21,7 +21,7 @@ column-type helpers (`UTCDateTime`, `SecretJSON`), which are shared by import.
 from datetime import datetime
 import os
 
-from sqlalchemy import (JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String,
+from sqlalchemy import (JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, String,
                         Text, Index, UniqueConstraint, create_engine, event)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.pool import StaticPool
@@ -77,6 +77,8 @@ class Account(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(8), nullable=False, default='active')
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    # Откуда зарегистрирован клиентский аккаунт: для дневного лимита на IP.
+    registration_ip: Mapped[str | None] = mapped_column(String(64))
 
 
 class MagicLogin(Base):
@@ -176,11 +178,14 @@ class Tariff(Base):
     """Rule for issuing access: device limit and term. Same shape as the portal tariff."""
     __tablename__ = 'master_tariffs'
     __table_args__ = (CheckConstraint('device_limit >= 1', name='ck_master_tariff_device_limit'),
-                      CheckConstraint('term_days >= 1', name='ck_master_tariff_term_days'))
+                      CheckConstraint('term_days >= 1', name='ck_master_tariff_term_days'),
+                      CheckConstraint('daily_traffic_limit_mb IS NULL OR daily_traffic_limit_mb >= 1',
+                                      name='ck_master_tariff_daily_traffic'))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     device_limit: Mapped[int] = mapped_column(Integer, nullable=False)
     term_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    daily_traffic_limit_mb: Mapped[int | None] = mapped_column(Integer)
     price_amount: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
@@ -310,6 +315,29 @@ class ClientInvite(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class ClientChallenge(Base):
+    """Одноразовый proof-of-work вызов для открытой регистрации."""
+    __tablename__ = 'master_client_challenges'
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    difficulty: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class TrafficUsage(Base):
+    """Суточный счётчик байт по устройству; наполняется нодой воркером."""
+    __tablename__ = 'master_traffic_usage'
+    __table_args__ = (UniqueConstraint('device_id', 'day', name='uq_master_traffic_day'),
+                      Index('ix_master_traffic_account_day', 'account_id', 'day'))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey('master_accounts.id'), nullable=False)
+    device_id: Mapped[int] = mapped_column(ForeignKey('master_devices.id'), nullable=False)
+    day: Mapped[Date] = mapped_column(Date, nullable=False)
+    bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
 class DeviceSubscription(Base):
