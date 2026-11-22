@@ -337,6 +337,9 @@ class TrafficUsage(Base):
     device_id: Mapped[int] = mapped_column(ForeignKey('master_devices.id'), nullable=False)
     day: Mapped[Date] = mapped_column(Date, nullable=False)
     bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    # Последние кумулятивные счётчики туннеля: дельта за день считается из них.
+    rx_total: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    tx_total: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 

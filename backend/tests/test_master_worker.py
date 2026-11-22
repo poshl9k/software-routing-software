@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from vs_master.bridge import BridgeError
 from vs_master.models import (Account, Audit, Base, Device, DeviceOp, Node, Subscription,
-                              Tariff, make_engine)
-from vs_master.worker import process_op, process_pending
+                              Tariff, TrafficUsage, make_engine)
+from vs_master.worker import LIMIT_ACTIVATE, LIMIT_DEACTIVATE, process_op, process_pending
 from vs_router.secrets import decrypt_secret, encrypt_secret
 
 
@@ -146,7 +146,8 @@ def test_stale_fence_retries_create_without_discarding_key_material(monkeypatch,
     with Session(engine) as db:
         device = db.get(Device, device_id)
         assert device is not None and device.status == 'inactive'
-        assert device.public_key and device.private_key and device.preshared_key
+        # PSK намеренно не генерируется: mihomo не handshake'ит с AWG-пиром с PSK.
+        assert device.public_key and device.private_key
         assert db.scalar(select(Audit)) is None
 
 
@@ -430,3 +431,55 @@ def test_entitlement_revision_is_durable_not_wall_clock_based(monkeypatch):
     assert first['version'] < expired['version'] < renewed['version']
     with Session(engine) as db:
         assert _entitlement(db, account_id, NOW) == renewed
+
+
+def _state(counters):
+    return {'active_devices': 1, 'server_tunnels': 1, 'tunnels': {'awg0': counters}}
+
+
+def test_daily_traffic_counter_deactivates_and_reactivates(monkeypatch):
+    engine, key, account_id, node_id, tariff_id = rig(monkeypatch)
+    with Session(engine) as db:
+        tariff = db.get(Tariff, tariff_id)
+        subscription = db.scalar(select(Subscription))
+        assert tariff is not None and subscription is not None
+        tariff.daily_traffic_limit_mb = 1
+        subscription.expires_at = NOW + timedelta(days=10)
+        db.commit()
+    device_id = add_device(engine, account_id, node_id, key, status='active', complete=True)
+    bridge = FakeBridge(state_result=_state([
+        {'public_key': 'public-old', 'rx_bytes': 0, 'tx_bytes': 0}]))
+    factory = lambda node: bridge
+
+    # Первое наблюдение — только базовая линия, списаний нет.
+    process_pending(engine, factory, now=NOW)
+    with Session(engine) as db:
+        usage = db.scalar(select(TrafficUsage))
+        assert usage is not None and usage.bytes == 0
+
+    # Второй опрос: 1,2 МБ > лимита 1 МБ → деактивация через DeviceOp.
+    bridge.state_result = _state([
+        {'public_key': 'public-old', 'rx_bytes': 600_000, 'tx_bytes': 600_000}])
+    process_pending(engine, factory, now=NOW)
+    with Session(engine) as db:
+        usage = db.scalar(select(TrafficUsage))
+        assert usage is not None
+        assert usage.bytes == 1_200_000
+        device = db.get(Device, device_id)
+        assert device is not None
+        applied = db.scalar(select(DeviceOp).where(DeviceOp.op == 'deactivate'))
+        assert applied is not None and applied.status == 'applied'
+        assert device.status == 'inactive' and applied.detail == LIMIT_DEACTIVATE
+
+    # Следующий день: новый счётчик, лимит не превышен → активация.
+    next_day = NOW + timedelta(days=1)
+    bridge.state_result = _state([
+        {'public_key': 'public-old', 'rx_bytes': 600_000, 'tx_bytes': 600_000}])
+    process_pending(engine, factory, now=next_day)
+    with Session(engine) as db:
+        device = db.get(Device, device_id)
+        assert device is not None
+        activate = db.scalar(select(DeviceOp).where(
+            DeviceOp.op == 'activate', DeviceOp.detail == LIMIT_ACTIVATE))
+        assert activate is not None and activate.status == 'applied'
+        assert device.status == 'active'

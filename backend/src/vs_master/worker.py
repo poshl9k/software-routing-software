@@ -13,7 +13,8 @@ from vs_portal.security import get_secret_key
 from vs_router.secrets import decrypt_secret, encrypt_secret
 
 from .bridge import BridgeClient, BridgeError
-from .models import Account, Audit, Device, DeviceOp, Node, Setting, Subscription, utcnow
+from .models import (Account, Audit, Device, DeviceOp, Node, Setting, Subscription, Tariff,
+                     TrafficUsage, utcnow)
 from .notifications import enqueue_subscription
 
 
@@ -230,7 +231,8 @@ def _process_op(engine, node_client_factory, op_id, now):
                 elif op.op == 'deactivate':
                     device.status = 'inactive'
             op.status = 'applied'
-            op.detail = 'renewed' if renewing else None
+            marker = op.detail if isinstance(op.detail, str) and op.detail.startswith('daily_limit_') else None
+            op.detail = 'renewed' if renewing else marker
             op.applied_at = now
             db.add(Audit(actor=_actor(account), action=f'device.{op.op}.applied',
                          detail=str(op.id), at=now))
@@ -285,6 +287,94 @@ def _mappings(db, account_id, node_id=None, active_only=False):
     return list(db.execute(query.distinct()))
 
 
+MIB = 1024 * 1024
+LIMIT_DEACTIVATE = 'daily_limit_deactivate'
+LIMIT_ACTIVATE = 'daily_limit_activate'
+
+
+def _daily_limit(db, account_id, now):
+    subscription = db.scalar(select(Subscription).where(
+        Subscription.account_id == account_id).order_by(Subscription.id.desc()))
+    if (subscription is None or subscription.status != 'active'
+            or subscription.expires_at <= now):
+        return None
+    tariff = db.get(Tariff, subscription.tariff_id)
+    return tariff.daily_traffic_limit_mb if tariff is not None else None
+
+
+def _has_op(db, device_id, op, detail):
+    return db.scalar(select(DeviceOp.id).where(
+        DeviceOp.device_id == device_id, DeviceOp.op == op, DeviceOp.detail == detail,
+        DeviceOp.status.in_(('pending', 'applied')))) is not None
+
+
+def sync_traffic_usage(db, node, tunnels, now):
+    """Save daily byte deltas from node WireGuard counters and enforce the cap.
+
+    Counters are cumulative per peer; the first observation is a baseline, so
+    traffic that happened before the master started watching is not charged.
+    A device over its tariff limit is deactivated through the normal DeviceOp
+    path and is reactivated on a later pass once the next day is below the cap.
+    """
+    if not isinstance(tunnels, dict):
+        return
+    counters = {}
+    for peers in tunnels.values():
+        if not isinstance(peers, list):
+            continue
+        for peer in peers:
+            if not isinstance(peer, dict) or not isinstance(peer.get('public_key'), str):
+                continue
+            try:
+                pair = (max(0, int(peer.get('rx_bytes') or 0)),
+                        max(0, int(peer.get('tx_bytes') or 0)))
+            except (TypeError, ValueError):
+                continue
+            key = peer['public_key']
+            previous = counters.get(key)
+            if previous is None or sum(pair) > sum(previous):
+                counters[key] = pair
+
+    devices = list(db.scalars(select(Device).where(
+        Device.node_id == node.id, Device.status != 'removed',
+        Device.public_key.is_not(None))))
+    for device in devices:
+        limit = _daily_limit(db, device.account_id, now)
+        row = db.scalar(select(TrafficUsage).where(
+            TrafficUsage.device_id == device.id, TrafficUsage.day == now.date()))
+        current = counters.get(device.public_key)
+        if current is not None:
+            rx, tx = current
+            if row is None:
+                row = TrafficUsage(account_id=device.account_id, device_id=device.id,
+                                   day=now.date(), bytes=0, rx_total=rx, tx_total=tx,
+                                   updated_at=now)
+                db.add(row)
+            else:
+                delta = max(0, rx - row.rx_total) + max(0, tx - row.tx_total)
+                row.bytes += delta
+                row.rx_total, row.tx_total = rx, tx
+                row.updated_at = now
+
+        if device.status == 'active' and limit is not None and row is not None \
+                and row.bytes >= limit * MIB \
+                and not _has_op(db, device.id, 'deactivate', LIMIT_DEACTIVATE):
+            db.add(DeviceOp(account_id=device.account_id, node_id=device.node_id,
+                            device_id=device.id, op='deactivate', status='pending',
+                            detail=LIMIT_DEACTIVATE, created_at=now))
+        elif device.status == 'inactive' and limit is not None:
+            last = db.scalar(select(DeviceOp).where(
+                DeviceOp.device_id == device.id, DeviceOp.op == 'deactivate',
+                DeviceOp.detail == LIMIT_DEACTIVATE).order_by(DeviceOp.id.desc()))
+            if (last is not None and last.status == 'applied'
+                    and not _has_op(db, device.id, 'activate', LIMIT_ACTIVATE)
+                    and (row is None or row.bytes < limit * MIB)):
+                db.add(DeviceOp(account_id=device.account_id, node_id=device.node_id,
+                                device_id=device.id, op='activate', status='pending',
+                                detail=LIMIT_ACTIVATE, created_at=now))
+    db.commit()
+
+
 def process_pending(engine, node_client_factory=None, now=None):
     """Run one expiry, renewal, telemetry, and pending-op replay pass."""
     now = now or utcnow()
@@ -333,6 +423,7 @@ def process_pending(engine, node_client_factory=None, now=None):
                 node.state = 'down' if isinstance(tunnels, int) and tunnels <= 0 else 'ok'
                 node.active_peers = int(result['active_devices'])
                 node.last_seen = now
+                sync_traffic_usage(db, node, result.get('tunnels'), now)
             except BridgeError as exc:
                 if exc.status == 503:
                     node.state = 'down'
