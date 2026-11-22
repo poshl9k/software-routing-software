@@ -343,6 +343,18 @@ class TrafficUsage(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
+class RegistrationDevice(Base):
+    """Учёт регистраций по локальному идентификатору устройства, а не по IP."""
+    __tablename__ = 'master_registration_devices'
+    __table_args__ = (UniqueConstraint('device_hash', 'day', name='uq_master_reg_device_day'),
+                      Index('ix_master_reg_device_day', 'day'))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    day: Mapped[Date] = mapped_column(Date, nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+
 class DeviceSubscription(Base):
     """Revocable per-device subscription link.
 

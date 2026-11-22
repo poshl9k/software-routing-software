@@ -110,12 +110,13 @@ def solve_challenge(challenge: str, difficulty: int) -> str:
     raise AssertionError('PoW challenge not solved')
 
 
-async def proof(client):
+async def proof(client, device_id='a' * 64):
     response = await client.get('/api/client/register/challenge')
     assert response.status_code == 200, response.text
     body = response.json()
     return {'challenge': body['challenge'],
-            'nonce': solve_challenge(body['challenge'], body['difficulty'])}
+            'nonce': solve_challenge(body['challenge'], body['difficulty']),
+            'device_id': device_id}
 
 
 async def login(rig):
@@ -846,18 +847,19 @@ async def test_bad_proof_burns_challenge(master_portal):
     challenge = (await client.get('/api/client/register/challenge')).json()
     bad = await client.post('/api/client/register',
                             json={'display_name': 'X', 'challenge': challenge['challenge'],
-                                  'nonce': 'definitely-wrong'})
+                                  'nonce': 'definitely-wrong', 'device_id': 'a' * 64})
     assert bad.status_code == 400
     assert bad.json()['error']['code'] == 'client.pow_invalid'
     replay = await client.post('/api/client/register',
                                json={'display_name': 'X', 'challenge': challenge['challenge'],
                                      'nonce': solve_challenge(challenge['challenge'],
-                                                              challenge['difficulty'])})
+                                                              challenge['difficulty']),
+                                     'device_id': 'a' * 64})
     assert replay.status_code == 400
     assert replay.json()['error']['code'] == 'client.pow_invalid'
 
 
-async def test_daily_registration_cap_per_ip(master_portal, monkeypatch):
+async def test_daily_registration_cap_per_device(master_portal, monkeypatch):
     client, *_ = master_portal
     monkeypatch.setattr('vs_master.client_api.MAX_REGISTRATIONS_PER_DAY', 1)
     first = await client.post('/api/client/register',
@@ -867,6 +869,11 @@ async def test_daily_registration_cap_per_ip(master_portal, monkeypatch):
                                json={'display_name': 'Второй', **await proof(client)})
     assert second.status_code == 429
     assert second.json()['error']['code'] == 'client.registration_limit'
+    # Другое устройство не блокируется лимитом первого, даже с тем же IP.
+    other = await client.post('/api/client/register',
+                              json={'display_name': 'Другое',
+                                    **await proof(client, device_id='b' * 64)})
+    assert other.status_code == 200, other.text
 
 
 async def test_payment_checkout_is_configurable_but_no_aggregator_yet(master_portal):

@@ -10,7 +10,7 @@ to revoke access.
 import base64
 import secrets
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 from hashlib import sha256
 
 from fastapi import APIRouter, Depends, Request
@@ -19,13 +19,14 @@ from pydantic import ConfigDict, Field, SecretStr
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from vs_portal.security import get_secret_key
 from vs_router.api.errors import APIError
 from vs_router.schema import Model
 
 from .accounts import LOGIN_WINDOW, get_db, portal_link_token
 from .device_service import create_device as create_device_record
 from .models import (Account, Audit, ClientChallenge, ClientInvite, Device, DeviceSubscription,
-                     PortalLink, Setting, Subscription, Tariff, TrafficUsage)
+                     PortalLink, RegistrationDevice, Setting, Subscription, Tariff, TrafficUsage)
 from .portal_api import _context
 from .subscriptions_api import _store, _token_of, _view
 
@@ -48,6 +49,8 @@ class RegisterBody(Model):
     display_name: str = Field(min_length=1, max_length=64)
     challenge: str = Field(min_length=16, max_length=128)
     nonce: str = Field(min_length=1, max_length=64)
+    device_id: str = Field(min_length=16, max_length=128,
+                           pattern=r'^[0-9a-fA-F]{16,128}$')
 
 
 def _leading_zero_bits(digest: bytes) -> int:
@@ -84,7 +87,8 @@ def register_client(body: RegisterBody, request: Request,
     """Создать аккаунт абонента без Telegram и без администратора.
 
     Защита от массовых аккаунтов: одноразовый proof-of-work вызов, не более
-    трёх регистраций с одного адреса в сутки и общий rate limit. Демо-тариф
+    трёх регистраций с одного устройства в сутки (локальный ID хешируется
+    серверным секретом; IP не используется) и общий rate limit. Демо-тариф
     выдаётся автоматически; платный тариф подключается отдельно.
     """
     state = request.app.state.portal_auth
@@ -118,11 +122,11 @@ def register_client(body: RegisterBody, request: Request,
             state.failures[rate_key] = (count + 1, deadline)
             raise APIError(400, 'client.pow_invalid')
 
-        daily = db.scalar(select(func.count(Account.id)).where(
-            Account.registration_ip == address,
-            Account.created_at >= now - timedelta(days=1),
-            Account.telegram_chat_id.like('client:%')))
-        if (daily or 0) >= MAX_REGISTRATIONS_PER_DAY:
+        device_hash = sha256(body.device_id.lower().encode() + get_secret_key()).hexdigest()
+        device_row = db.scalar(select(RegistrationDevice).where(
+            RegistrationDevice.device_hash == device_hash,
+            RegistrationDevice.day == now.date()))
+        if (device_row.count if device_row is not None else 0) >= MAX_REGISTRATIONS_PER_DAY:
             db.rollback()
             raise APIError(429, 'client.registration_limit')
 
@@ -142,6 +146,12 @@ def register_client(body: RegisterBody, request: Request,
                           status='active', created_at=now, registration_ip=address[:64])
         db.add(account)
         db.flush()
+        if device_row is None:
+            db.add(RegistrationDevice(device_hash=device_hash, day=now.date(),
+                                      count=1, updated_at=now))
+        else:
+            device_row.count += 1
+            device_row.updated_at = now
         challenge.used_at = now
         if invite is not None:
             invite.used_at = now
