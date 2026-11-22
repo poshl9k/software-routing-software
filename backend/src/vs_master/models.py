@@ -296,6 +296,22 @@ class PortalLink(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
+class ClientInvite(Base):
+    """Одноразовый код для регистрации абонента из нативного клиента.
+
+    Сырой код не хранится: в БД только SHA-256 для поиска. Код гасится в момент
+    создания аккаунта; аккаунт остаётся без подписки до выдачи её администратором.
+    """
+    __tablename__ = 'master_client_invites'
+    __table_args__ = (Index('ix_master_client_invite_account', 'account_id'),)
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey('master_accounts.id'))
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, default='admin')
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
 class DeviceSubscription(Base):
     """Revocable per-device subscription link.
 

@@ -10,11 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from vs_master.accounts import COOKIE as PORTAL_COOKIE
+from vs_master.accounts import portal_link_token
 from vs_master.app import create_master_app
 from vs_master.auth import COOKIE as ADMIN_COOKIE
 from vs_master.bridge import BridgeError
 from vs_master.worker import _ensure_create_material
-from vs_master.models import (PortalLink, Account, Base, Device, DeviceOp, DeviceSubscription, Node, RuleSet,
+from vs_master.models import (ClientInvite, PortalLink, Account, Base, Device, DeviceOp, DeviceSubscription, Node, RuleSet,
                               Setting, Subscription, Tariff, make_engine)
 from hashlib import sha256
 from vs_router.secrets import decrypt_secret, encrypt_secret
@@ -441,6 +442,8 @@ async def test_subscription_link_is_issued_once_serves_yaml_and_is_revocable(mas
     # carry it because the master stores the token hash alone.
     assert issued.json()['qr'].startswith('data:image/png;base64,')
     assert issued.json()['clash_url'] == 'clash://install-config?url=' + url
+    assert issued.json()['conf_url'] == url + '?format=conf'
+    assert issued.json()['amnezia_url'] == url + '?format=amnezia'
     token = url.rsplit('/', 1)[-1]
     with Session(engine) as db:
         row = db.get(DeviceSubscription, device_id)
@@ -450,6 +453,15 @@ async def test_subscription_link_is_issued_once_serves_yaml_and_is_revocable(mas
     assert served.status_code == 200, served.text
     assert served.headers['Cache-Control'] == 'no-store'
     assert 'amnezia-wg-option:' in served.text and 'GEOIP,RU,DIRECT' in served.text
+
+    # Native Vell Client consumes the same credential with ?format=conf.
+    native = await client.get(f'/api/portal/sub/{token}?format=conf')
+    assert native.status_code == 200, native.text
+    assert '[Interface]' in native.text and 'PrivateKey =' in native.text
+    assert '[Peer]' in native.text and 'Endpoint =' in native.text
+    assert 'amnezia-wg-option:' not in native.text
+    amnezia = await client.get(f'/api/portal/sub/{token}?format=amnezia')
+    assert amnezia.status_code == 200 and amnezia.text.startswith('vpn://')
 
     # The link is stable: asking again returns the same token, and the cabinet can
     # redisplay it (and its QR) because the token is stored encrypted as well.
@@ -677,3 +689,122 @@ async def test_vless_export_refuses_without_an_inbound(master_portal):
     response = await client.get(f'/api/portal/devices/{device_id}/export?format=vless')
     assert response.status_code == 409
     assert response.json()['error']['code'] == 'portal.inbound_unavailable'
+
+
+async def test_native_client_discovers_subscriptions_without_telegram(master_portal):
+    client, engine, _, _, _, states, _, _, ids = master_portal
+    device_id = add_device(master_portal)
+    states[('https://n1', f"s{ids['account']}")] = awg31_state()
+    link = portal_link_token(engine, ids['account'], NOW)
+
+    invalid = await client.post('/api/client/subscriptions', json={'token': 'nope'})
+    assert invalid.status_code == 401
+    assert invalid.json()['error']['code'] == 'auth.invalid_credentials'
+
+    response = await client.post('/api/client/subscriptions', json={'token': link})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['account']['id'] == ids['account']
+    assert body['subscription']['status'] == 'active'
+    assert len(body['profiles']) == 1
+    profile = body['profiles'][0]
+    assert profile['device_id'] == device_id and profile['label'] == 'Phone'
+    assert profile['url'].endswith('?format=conf')
+    assert profile['qr'].startswith('data:image/png;base64,')
+
+    # The conf link is a working native profile and the token is idempotent.
+    served = await client.get(profile['url'])
+    assert served.status_code == 200 and 'PrivateKey =' in served.text
+    again = await client.post('/api/client/subscriptions', json={'token': link})
+    assert again.json()['profiles'][0]['url'] == profile['url']
+
+    # Expired entitlement hides devices instead of handing out dead profiles.
+    with Session(engine) as db:
+        subscription = db.scalar(select(Subscription).where(
+            Subscription.account_id == ids['account']))
+        assert subscription is not None
+        subscription.expires_at = NOW - timedelta(days=1)
+        db.commit()
+    expired = await client.post('/api/client/subscriptions', json={'token': link})
+    assert expired.status_code == 200
+    assert expired.json()['subscription']['status'] == 'expired'
+    assert expired.json()['profiles'] == []
+
+
+async def test_admin_can_issue_client_credential_without_telegram(master_portal):
+    client, engine, _, _, _, _, _, _, ids = master_portal
+    assert (await client.post('/api/admin/setup', json={
+        'password': 'administrator-password'})).status_code == 201
+    assert (await client.post('/api/admin/login', json={
+        'username': 'admin', 'password': 'administrator-password'})).status_code == 200
+    issued = await client.post(f"/api/master-admin/subscribers/{ids['account']}/portal-link")
+    assert issued.status_code == 200, issued.text
+    token = issued.json()['token']
+    assert token and issued.json()['cabinet_url'].endswith('#link=' + token)
+    response = await client.post('/api/client/subscriptions', json={'token': token})
+    assert response.status_code == 200 and response.json()['account']['id'] == ids['account']
+
+
+async def test_native_client_registers_with_one_time_invite(master_portal):
+    client, engine, _, _, _, _, _, _, ids = master_portal
+    invalid = await client.post('/api/client/register',
+                                json={'code': 'not-a-real-invite', 'display_name': 'Ира'})
+    assert invalid.status_code == 400
+    assert invalid.json()['error']['code'] == 'client.invite_invalid'
+
+    assert (await client.post('/api/admin/setup', json={
+        'password': 'administrator-password'})).status_code == 201
+    assert (await client.post('/api/admin/login', json={
+        'username': 'admin', 'password': 'administrator-password'})).status_code == 200
+    issued = await client.post('/api/master-admin/invites', json={'ttl_hours': 24})
+    assert issued.status_code == 201, issued.text
+    code = issued.json()['code']
+    with Session(engine) as db:
+        invite = db.scalar(select(ClientInvite))
+        assert invite is not None and invite.token_hash != code and invite.used_at is None
+
+    registered = await client.post('/api/client/register',
+                                   json={'code': code, 'display_name': '  Новый  '})
+    assert registered.status_code == 200, registered.text
+    body = registered.json()
+    assert body['account']['display_name'] == 'Новый'
+    assert body['account']['id'] != ids['account']
+    assert body['subscription']['status'] == 'inactive'
+    assert body['token']
+
+    # Токен сразу работает для discovery, но тариф ещё не выдан.
+    discovery = await client.post('/api/client/subscriptions', json={'token': body['token']})
+    assert discovery.status_code == 200
+    assert discovery.json()['subscription']['status'] == 'inactive'
+    assert discovery.json()['profiles'] == []
+    assert (await client.post('/api/portal/login/link',
+                              json={'token': body['token']})).status_code == 200
+
+    # Код одноразовый: повторная регистрация невозможна.
+    again = await client.post('/api/client/register',
+                              json={'code': code, 'display_name': 'ДUBL'})
+    assert again.status_code == 400
+    assert again.json()['error']['code'] == 'client.invite_invalid'
+    with Session(engine) as db:
+        invite = db.scalar(select(ClientInvite))
+        assert invite is not None and invite.used_at is not None
+
+
+async def test_open_registration_without_invite_or_telegram(master_portal):
+    client, engine, _, _, _, _, _, _, ids = master_portal
+    response = await client.post('/api/client/register', json={'display_name': 'Самoreg'})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['account']['id'] != ids['account']
+    assert body['account']['display_name'] == 'Самoreg'
+    assert body['subscription']['status'] == 'inactive'
+    assert body['token']
+
+    discovery = await client.post('/api/client/subscriptions', json={'token': body['token']})
+    assert discovery.status_code == 200
+    assert discovery.json()['account']['display_name'] == 'Самoreg'
+    with Session(engine) as db:
+        account = db.get(Account, body['account']['id'])
+        assert account is not None
+        assert account.telegram_chat_id.startswith('client:')
+        assert account.telegram_linked_at is None

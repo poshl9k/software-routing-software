@@ -26,12 +26,15 @@ from .device_service import device_owned
 from .exports import device_export
 from .models import Account, Device, DeviceSubscription, utcnow
 from .portal_api import _client_factory
+from . import rulesets
 
 router = APIRouter(prefix='/api/portal')
 
 
-def _link(request, token):
-    base = str(request.base_url).rstrip('/')
+def _link(request, db, token):
+    # A reverse proxy is the normal deployment: request.base_url can be the
+    # internal http origin, which would hand clients an unreachable URL.
+    base = rulesets.public_url(db) or str(request.base_url).rstrip('/')
     return f'{base}/api/portal/sub/{token}'
 
 
@@ -52,16 +55,19 @@ def _token_of(row):
         return None
 
 
-def _view(request, row):
+def _view(request, db, row):
     token = _token_of(row)
     if token is None:
-        return {'url': None, 'qr': None, 'clash_url': None, 'singbox_url': None}
-    url = _link(request, token)
-    # The same stable token serves the sing-box profile (ADR-0034 slice 4): the
-    # link is one URL, the format is chosen by the client through ``?format=``.
+        return {'url': None, 'qr': None, 'clash_url': None, 'singbox_url': None,
+                'conf_url': None, 'amnezia_url': None}
+    url = _link(request, db, token)
+    # One stable token serves every profile format (ADR-0034 slice 4, plus the
+    # native-client formats): rotation and revocation cover all of them at once.
     return {'url': url, 'qr': _qr_data_url(url),
             'clash_url': 'clash://install-config?url=' + url,
-            'singbox_url': url + '?format=singbox'}
+            'singbox_url': url + '?format=singbox',
+            'conf_url': url + '?format=conf',
+            'amnezia_url': url + '?format=amnezia'}
 
 
 def _stamp(row):
@@ -98,9 +104,9 @@ def issue_subscription(identity: str, request: Request,
     row = db.get(DeviceSubscription, device.id)
     if row is None or _token_of(row) is None:
         row = _store(db, row, device, utcnow())
-        return JSONResponse({'created': True, **_view(request, row),
+        return JSONResponse({'created': True, **_view(request, db, row),
                              'created_at': _stamp(row)}, status_code=201)
-    return JSONResponse({'created': False, **_view(request, row),
+    return JSONResponse({'created': False, **_view(request, db, row),
                          'created_at': _stamp(row)}, status_code=200)
 
 
@@ -112,7 +118,7 @@ def rotate_subscription(identity: str, request: Request,
     device = _owned(db, account, identity)
     now = utcnow()
     row = _store(db, db.get(DeviceSubscription, device.id), device, now)
-    return {'created': True, **_view(request, row), 'created_at': _stamp(row)}
+    return {'created': True, **_view(request, db, row), 'created_at': _stamp(row)}
 
 
 @router.get('/devices/{identity}/subscription')
@@ -123,9 +129,10 @@ def subscription_state(identity: str, request: Request,
     row = db.get(DeviceSubscription, device.id)
     if row is None:
         return {'active': False, 'created_at': None, 'last_used_at': None,
-                'url': None, 'qr': None, 'clash_url': None, 'singbox_url': None}
+                'url': None, 'qr': None, 'clash_url': None, 'singbox_url': None,
+                'conf_url': None, 'amnezia_url': None}
     return {'active': True, 'created_at': row.created_at, 'last_used_at': row.last_used_at,
-            **_view(request, row)}
+            **_view(request, db, row)}
 
 
 @router.delete('/devices/{identity}/subscription', status_code=204)
@@ -138,7 +145,8 @@ def revoke_subscription(identity: str, account: Account = Depends(current_accoun
         db.commit()
 
 
-SUB_FORMATS = {'mihomo': 'mihomo', 'singbox': 'singbox'}
+SUB_FORMATS = {'mihomo': 'mihomo', 'singbox': 'singbox',
+               'conf': 'conf', 'amnezia': 'amnezia'}
 
 
 @router.get('/sub/{token}')
@@ -147,7 +155,8 @@ def fetch_subscription(token: str, request: Request, format: str = 'mihomo',
     """Public profile delivery: the token is the credential, so never log it.
 
     ``format`` selects the profile the client understands: ``mihomo`` (default,
-    unchanged) or ``singbox`` for subscribers on a VLESS+Reality inbound.
+    unchanged), ``singbox`` for VLESS+Reality, or ``conf`` / ``amnezia`` for
+    native WireGuard/AmneziaWG clients such as Vell Client.
     """
     if format not in SUB_FORMATS:
         raise APIError(422, 'portal.export_format')

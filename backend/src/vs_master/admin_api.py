@@ -1,6 +1,7 @@
 """Authenticated administrator API for the master-owned subscriber database."""
 import secrets
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from urllib.parse import urlsplit
 
 from argon2 import PasswordHasher, Type
@@ -17,10 +18,11 @@ from vs_router.schema import Model
 from vs_router.secrets import decrypt_secret, encrypt_secret
 
 from . import exports, ruleset_import, rulesets
+from .accounts import portal_link_token
 from .auth import current_admin
 from .bridge import BridgeClient, BridgeError
-from .models import (Account, Audit, Device, Node, RuleSet, RuleSetSource, Setting, Subscription,
-                     Tariff)
+from .models import (Account, Audit, ClientInvite, Device, Node, RuleSet, RuleSetSource, Setting,
+                     Subscription, Tariff)
 from .notifications import enqueue_subscription
 
 router = APIRouter(prefix='/api/master-admin', dependencies=[Depends(current_admin)])
@@ -142,6 +144,10 @@ class SubscriptionBody(Model):
         if (self.days is None) == (self.expires_at is None):
             raise ValueError('master.subscription_expiry_required')
         return self
+
+
+class InviteBody(Model):
+    ttl_hours: int = Field(default=72, ge=1, le=720)
 
 
 class SubscriberBody(Model):
@@ -499,6 +505,40 @@ def create_subscriber(body: SubscriberBody, request: Request, db: Session = Depe
     audit(db, 'subscriber.create', str(account.id), timestamp)
     commit_unique(db, 'master.subscriber_exists')
     return subscriber_view(db, account)
+
+
+@router.post('/subscribers/{account_id}/portal-link')
+def issue_portal_link(account_id: int, request: Request, db: Session = Depends(get_db)):
+    """Issue the stable client credential without involving Telegram.
+
+    The raw token is shown exactly once here; the master stores only its hash
+    and an encrypted copy, so repeat calls return the same value until rotated.
+    """
+    account = db.get(Account, account_id)
+    if account is None:
+        raise APIError(404, 'master.subscriber_not_found')
+    token = portal_link_token(request.app.state.engine, account_id, now(request))
+    audit(db, 'subscriber.portal_link_issue', str(account_id), now(request))
+    db.commit()
+    origin = rulesets.public_url(db) or str(request.base_url).rstrip('/')
+    return {'token': token, 'cabinet_url': f'{origin}/login#link={token}'}
+
+
+@router.post('/invites', status_code=201)
+def create_client_invite(body: InviteBody, request: Request, db: Session = Depends(get_db)):
+    """Issue a one-time code for registering directly from the native client.
+
+    The raw code is returned once; only its SHA-256 is stored. Registration does
+    NOT grant a subscription — the admin still assigns a tariff separately.
+    """
+    code = secrets.token_urlsafe(24)
+    timestamp = now(request)
+    expires_at = timestamp + timedelta(hours=body.ttl_hours)
+    db.add(ClientInvite(token_hash=sha256(code.encode()).hexdigest(),
+                        created_by='admin', created_at=timestamp, expires_at=expires_at))
+    audit(db, 'client.invite_create', 'native', timestamp)
+    db.commit()
+    return {'code': code, 'expires_at': expires_at, 'ttl_hours': body.ttl_hours}
 
 
 @router.get('/subscribers')
