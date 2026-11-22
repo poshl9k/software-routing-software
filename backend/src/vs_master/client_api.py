@@ -316,7 +316,8 @@ def _entitlement(db, account_id, now):
     return {'status': status,
             'expires_at': sub.expires_at,
             'daily': {'used_bytes': int(used), 'limit_mb': limit_mb},
-            'tariff': {'name': tariff.name, 'device_limit': tariff.device_limit}
+            'tariff': {'name': tariff.name, 'device_limit': tariff.device_limit,
+                       'daily_traffic_limit_mb': tariff.daily_traffic_limit_mb}
             if tariff is not None else None}, active and status == 'active'
 
 
