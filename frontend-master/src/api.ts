@@ -189,7 +189,7 @@ export const masterApi = {
   subscriber: (id: number) => masterRequest<MasterSubscriber & { devices: MasterDevice[] }>(`/api/master-admin/subscribers/${id}`),
   issuePortalLink: (id: number) => masterRequest<{ token: string; cabinet_url: string }>(
     `/api/master-admin/subscribers/${id}/portal-link`, { method: "POST" }),
-  assignSubscription: (id: number, body: { tariff_id: number; days?: number }) =>
+  assignSubscription: (id: number, body: { tariff_id: number; days?: number; expires_at?: string }) =>
     masterRequest<NonNullable<MasterSubscriber["subscription"]>>(`/api/master-admin/subscribers/${id}/subscription`,
       { method: "PUT", body: JSON.stringify(body) }),
 };

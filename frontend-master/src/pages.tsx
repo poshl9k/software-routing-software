@@ -264,6 +264,12 @@ export function TariffsPage() {
   </Box>;
 }
 
+function toDateInput(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+}
+
 export function SubscribersPage() {
   const [subscribers, setSubscribers] = useState<MasterSubscriber[]>([]);
   const [error, setError] = useState<unknown>(null);
@@ -274,6 +280,7 @@ export function SubscribersPage() {
   const [tariffs, setTariffs] = useState<MasterTariff[]>([]);
   const [assigning, setAssigning] = useState(false);
   const [tariffId, setTariffId] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
   const [working, setWorking] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [portalToken, setPortalToken] = useState<string | null>(null);
@@ -291,6 +298,7 @@ export function SubscribersPage() {
 
   async function openSubscriber(subscriber: MasterSubscriber) {
     setOpen(subscriber); setError(null); setPortalToken(null);
+    setExpiryDate(toDateInput(subscriber.subscription?.expires_at));
     try {
       const [d, t] = await Promise.all([masterApi.subscriber(subscriber.id), masterApi.tariffs()]);
       setDetail(d); setDevices(d.devices); setTariffs(t);
@@ -309,7 +317,15 @@ export function SubscribersPage() {
   async function assign(event?: FormEvent) {
     event?.preventDefault(); if (!detail) return;
     setWorking("assign"); setError(null);
-    try { await masterApi.assignSubscription(detail.id, { tariff_id: Number(tariffId), days: tariffs.find(t => t.id === Number(tariffId))?.term_days }); setAssigning(false); await openSubscriber(detail); await load(); }
+    try {
+      const tariffIdNumber = Number(tariffId);
+      const body = expiryDate
+        ? { tariff_id: tariffIdNumber, expires_at: `${expiryDate}T23:59:59Z` }
+        : { tariff_id: tariffIdNumber,
+            days: tariffs.find(t => t.id === tariffIdNumber)?.term_days };
+      await masterApi.assignSubscription(detail.id, body);
+      setAssigning(false); await openSubscriber(detail); await load();
+    }
     catch (reason) { setError(reason); } finally { setWorking(null); }
   }
 
@@ -419,6 +435,10 @@ export function SubscribersPage() {
             <option value="" disabled>Выберите тариф</option>
             {tariffs.map(tariff => <option key={tariff.id} value={tariff.id}>{tariff.name} ({tariff.term_days} дн.)</option>)}
           </TextField>
+          <TextField type="date" label="Дата окончания подписки" value={expiryDate}
+            onChange={e => setExpiryDate(e.target.value)} fullWidth
+            InputLabelProps={{ shrink: true }}
+            helperText="Оставьте пустым, чтобы использовать срок из тарифа" />
         </Box>
       </DialogContent>
       <DialogActions><Button onClick={() => setAssigning(false)}>Отмена</Button>

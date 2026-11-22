@@ -613,9 +613,16 @@ test("admin opens subscriber detail and its tariffs with flat API responses", as
     subscription: null, device_count: 0 };
   const tariff = { id: 3, name: "Базовый", device_limit: 1, term_days: 30,
     price_amount: null, created_at: "2026-11-08T00:00:00Z" };
-  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+  const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
     if (input === "/api/master-admin/nodes") return new Response(JSON.stringify([]), { status: 200 });
     if (input === "/api/master-admin/subscribers") return new Response(JSON.stringify([subscriber]), { status: 200 });
+    if (input === "/api/master-admin/subscribers/2/subscription" && init?.method === "PUT") {
+      expect(JSON.parse(String(init.body))).toEqual({
+        tariff_id: 3, expires_at: "2027-01-15T23:59:59Z",
+      });
+      return new Response(JSON.stringify({ tariff_id: 3, tariff_name: "Базовый",
+        expires_at: "2027-01-15T23:59:59Z", status: "active" }), { status: 200 });
+    }
     if (input === "/api/master-admin/subscribers/2") {
       return new Response(JSON.stringify({ ...subscriber, devices: [] }), { status: 200 });
     }
@@ -625,7 +632,8 @@ test("admin opens subscriber detail and its tariffs with flat API responses", as
     }
     if (input === "/api/master-admin/tariffs") return new Response(JSON.stringify([tariff]), { status: 200 });
     throw new Error(`Unexpected request ${input}`);
-  }));
+  });
+  vi.stubGlobal("fetch", fetcher);
   render(<App />);
   await userEvent.click(await screen.findByRole("tab", { name: "Абоненты" }));
   await userEvent.click(await screen.findByRole("button", { name: "Открыть" }));
@@ -634,6 +642,12 @@ test("admin opens subscriber detail and its tariffs with flat API responses", as
   expect((tokenField as HTMLInputElement).value).toBe("cabinet-token-2");
   await userEvent.click(await screen.findByRole("button", { name: "Назначить подписку" }));
   expect(await screen.findByRole("option", { name: "Базовый (30 дн.)" })).toBeInTheDocument();
+  await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Тариф" }), "3");
+  await userEvent.type(await screen.findByLabelText("Дата окончания подписки"), "2027-01-15");
+  await userEvent.click(await screen.findByRole("button", { name: "Назначить" }));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
+    "/api/master-admin/subscribers/2/subscription",
+    expect.objectContaining({ method: "PUT" })));
 });
 
 test("admin can create an unlinked subscriber by Telegram ID", async () => {
