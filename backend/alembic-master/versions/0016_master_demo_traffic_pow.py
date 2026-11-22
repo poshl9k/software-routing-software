@@ -37,7 +37,7 @@ def upgrade():
     if existing is None:
         conn.execute(sa.text(
             "INSERT INTO master_tariffs (name, device_limit, term_days, daily_traffic_limit_mb, "
-            "price_amount, created_at) VALUES ('Demo', 2, 7, 500, NULL, CURRENT_TIMESTAMP)"
+            "price_amount, created_at) VALUES ('Demo', 1, 7, 500, NULL, CURRENT_TIMESTAMP)"
         ))
 
 

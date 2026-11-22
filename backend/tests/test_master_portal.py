@@ -81,7 +81,7 @@ async def master_portal(monkeypatch):
                      enabled=True, state='ok', active_peers=0, created_at=NOW)
         db.add_all([tariff, account, node1, node2])
         db.flush()
-        db.add(Tariff(name='Demo', device_limit=2, term_days=7,
+        db.add(Tariff(name='Demo', device_limit=1, term_days=7,
                       daily_traffic_limit_mb=500, created_at=NOW))
         db.add(Subscription(account_id=account.id, tariff_id=tariff.id,
                             expires_at=NOW + timedelta(days=30), status='active',
@@ -919,3 +919,68 @@ async def test_client_creates_device_and_then_sees_a_profile(master_portal):
     discovery = await client.post('/api/client/subscriptions', json={'token': token})
     assert discovery.status_code == 200
     assert len(discovery.json()['profiles']) == 1
+
+
+async def test_demo_tariff_allows_only_one_device(master_portal):
+    client, engine, *_ = master_portal
+    registered = await client.post('/api/client/register',
+                                   json={'display_name': 'Демо', **await proof(client)})
+    assert registered.status_code == 200, registered.text
+    token = registered.json()['token']
+    assert (await client.post('/api/client/devices',
+                              json={'token': token, 'label': 'Первый'})).status_code in (200, 202)
+    second = await client.post('/api/client/devices',
+                               json={'token': token, 'label': 'Второй'})
+    assert second.status_code == 403
+    assert second.json()['error']['code'] == 'portal.device_limit'
+
+
+async def test_demo_cannot_share_but_paid_can_join_with_scoped_token(master_portal):
+    client, engine, *_ = master_portal
+    registered = await client.post('/api/client/register',
+                                   json={'display_name': 'Владелец', **await proof(client)})
+    assert registered.status_code == 200, registered.text
+    token = registered.json()['token']
+    account_id = registered.json()['account']['id']
+
+    denied = await client.post('/api/client/share', json={'token': token})
+    assert denied.status_code == 403
+    assert denied.json()['error']['code'] == 'client.share_not_allowed'
+
+    with Session(engine) as db:
+        paid = Tariff(name='Paid', device_limit=5, term_days=30, created_at=NOW)
+        db.add(paid)
+        db.flush()
+        sub = db.scalar(select(Subscription).where(Subscription.account_id == account_id))
+        assert sub is not None
+        sub.tariff_id = paid.id
+        db.commit()
+
+    assert (await client.post('/api/client/devices',
+                              json={'token': token, 'label': 'Первый'})).status_code in (200, 202)
+    shared = await client.post('/api/client/share', json={'token': token})
+    assert shared.status_code == 200, shared.text
+    code = shared.json()['code']
+
+    joined = await client.post('/api/client/join', json={
+        'code': code, 'label': 'Второй', 'device_id': 'b' * 64})
+    assert joined.status_code == 200, joined.text
+    joined_token = joined.json()['token']
+    assert joined_token != token
+
+    owner = await client.post('/api/client/subscriptions', json={'token': token})
+    assert owner.status_code == 200
+    assert owner.json()['share']['allowed'] is True
+    assert len(owner.json()['profiles']) == 2
+    assert [p['in_use'] for p in owner.json()['profiles']] == [False, True]
+
+    scoped = await client.post('/api/client/subscriptions', json={'token': joined_token})
+    assert scoped.status_code == 200
+    assert len(scoped.json()['profiles']) == 1
+    assert scoped.json()['profiles'][0]['in_use'] is False
+
+    for path, payload in (('/api/client/share', {'token': joined_token}),
+                          ('/api/client/devices', {'token': joined_token, 'label': 'x'})):
+        blocked = await client.post(path, json=payload)
+        assert blocked.status_code == 403
+        assert blocked.json()['error']['code'] == 'client.share_not_allowed'

@@ -249,6 +249,8 @@ class Device(Base):
     # Preferred foreign exit for this device's chain; None keeps the node default.
     egress_node_id: Mapped[int | None] = mapped_column(ForeignKey('master_nodes.id'))
     tunnel_name: Mapped[str | None] = mapped_column(String(64))
+    # Отпечаток системного ID первого приложения, которое начало использовать этот пир.
+    client_fingerprint: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
@@ -297,6 +299,9 @@ class PortalLink(Base):
     account_id: Mapped[int] = mapped_column(ForeignKey('master_accounts.id'), primary_key=True)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     token_secret: Mapped[EncryptedSecret] = mapped_column(SecretJSON(), nullable=False)
+    # Отпечаток устройства, которое зарегистрировало аккаунт (для подсказки
+    # «пир уже используется»); токен остаётся полным кабинетным.
+    device_fingerprint: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
@@ -353,6 +358,33 @@ class RegistrationDevice(Base):
     day: Mapped[Date] = mapped_column(Date, nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+
+class ScopedLink(Base):
+    """Токен, выданный по share-коду: видит только один пир аккаунта."""
+    __tablename__ = 'master_client_device_links'
+    __table_args__ = (Index('ix_master_client_device_account', 'account_id'),)
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey('master_accounts.id'), nullable=False)
+    device_id: Mapped[int] = mapped_column(ForeignKey('master_devices.id'), nullable=False)
+    device_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_secret: Mapped[EncryptedSecret] = mapped_column(SecretJSON(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class ClientShare(Base):
+    """Одноразовый код приглашения для подключения ещё одного устройства."""
+    __tablename__ = 'master_client_shares'
+    __table_args__ = (Index('ix_master_client_share_account', 'account_id'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey('master_accounts.id'), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    token_secret: Mapped[EncryptedSecret] = mapped_column(SecretJSON(), nullable=False)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
 
 
 class DeviceSubscription(Base):

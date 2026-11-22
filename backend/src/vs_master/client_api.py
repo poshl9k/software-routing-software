@@ -22,11 +22,13 @@ from sqlalchemy.orm import Session
 from vs_portal.security import get_secret_key
 from vs_router.api.errors import APIError
 from vs_router.schema import Model
+from vs_router.secrets import decrypt_secret, encrypt_secret
 
 from .accounts import LOGIN_WINDOW, get_db, portal_link_token
 from .device_service import create_device as create_device_record
-from .models import (Account, Audit, ClientChallenge, ClientInvite, Device, DeviceSubscription,
-                     PortalLink, RegistrationDevice, Setting, Subscription, Tariff, TrafficUsage)
+from .models import (Account, Audit, ClientChallenge, ClientInvite, ClientShare, Device,
+                     DeviceSubscription, PortalLink, RegistrationDevice, ScopedLink, Setting,
+                     Subscription, Tariff, TrafficUsage)
 from .portal_api import _context
 from .subscriptions_api import _store, _token_of, _view
 
@@ -36,6 +38,89 @@ router = APIRouter(prefix='/api/client')
 class LinkProof(Model):
     model_config = ConfigDict(extra='forbid')
     token: SecretStr = Field(min_length=1, max_length=128)
+
+
+class JoinBody(Model):
+    model_config = ConfigDict(extra='forbid')
+    code: SecretStr = Field(min_length=8, max_length=128)
+    label: str = Field(min_length=1, max_length=128)
+    device_id: str = Field(min_length=16, max_length=128,
+                           pattern=r'^[0-9a-fA-F]{16,128}$')
+
+
+SHARE_TTL = timedelta(hours=24)
+SHARE_MAX_USES = 5
+DEMO_TARIFF = 'Demo'
+
+
+def _resolve_link(db, token: str):
+    """Return (account, scoped_link_or_None) for any native client credential."""
+    digest = sha256(token.encode()).hexdigest()
+    link = db.scalar(select(PortalLink).where(PortalLink.token_hash == digest))
+    scoped = None
+    if link is None:
+        scoped = db.get(ScopedLink, digest)
+        if scoped is None:
+            raise APIError(401, 'auth.invalid_credentials')
+        account = db.get(Account, scoped.account_id)
+    else:
+        account = db.get(Account, link.account_id)
+    if account is None or account.status != 'active':
+        raise APIError(401, 'auth.invalid_credentials')
+    return account, scoped
+
+
+@router.post('/share')
+def client_share(body: LinkProof, request: Request, db: Session = Depends(get_db)):
+    """Issue a short-lived code for adding devices to a paid account."""
+    account, scoped = _resolve_link(db, body.token.get_secret_value())
+    if scoped is not None:
+        raise APIError(403, 'client.share_not_allowed')
+    entitlement, active = _entitlement(db, account.id, request.app.state.portal_auth.now())
+    if not active or (entitlement['tariff'] or {}).get('name') == DEMO_TARIFF:
+        raise APIError(403, 'client.share_not_allowed')
+    raw = secrets.token_urlsafe(18)
+    now = request.app.state.portal_auth.now()
+    db.add(ClientShare(account_id=account.id, token_hash=sha256(raw.encode()).hexdigest(),
+                       token_secret=encrypt_secret(raw, get_secret_key()),
+                       max_uses=SHARE_MAX_USES, used_count=0,
+                       expires_at=now + SHARE_TTL, created_at=now))
+    db.add(Audit(actor='client', action='client.share', detail=str(account.id), at=now))
+    db.commit()
+    return {'code': raw, 'expires_at': (now + SHARE_TTL).isoformat(),
+            'max_devices': SHARE_MAX_USES, 'used': 0}
+
+
+@router.post('/join')
+def client_join(body: JoinBody, request: Request, db: Session = Depends(get_db)):
+    """Redeem a share code: one fresh peer and one device-scoped token."""
+    now = request.app.state.portal_auth.now()
+    digest = sha256(body.code.get_secret_value().encode()).hexdigest()
+    share = db.scalar(select(ClientShare).where(ClientShare.token_hash == digest))
+    if share is None or share.expires_at <= now or share.used_count >= share.max_uses:
+        raise APIError(400, 'client.share_invalid')
+    account = db.get(Account, share.account_id)
+    if account is None or account.status != 'active':
+        raise APIError(400, 'client.share_invalid')
+    entitlement, active = _entitlement(db, account.id, now)
+    if not active:
+        raise APIError(403, 'client.subscription_inactive')
+    result = create_device_record(db, account, body.label, **_context(request))
+    device_id = result.get('device_id')
+    if device_id is None:
+        raise APIError(409, 'portal.device_limit')
+    device = db.get(Device, device_id)
+    if device is None:
+        raise APIError(409, 'portal.device_limit')
+    device.client_fingerprint = body.device_id
+    raw = secrets.token_urlsafe(32)
+    db.add(ScopedLink(token_hash=sha256(raw.encode()).hexdigest(), account_id=account.id,
+                      device_id=device.id, device_fingerprint=body.device_id,
+                      token_secret=encrypt_secret(raw, get_secret_key()), created_at=now))
+    share.used_count += 1
+    db.add(Audit(actor='client', action='client.join', detail=str(device.id), at=now))
+    db.commit()
+    return {'token': raw, 'device_id': device.id, 'status': result.get('status', 'pending')}
 
 
 CHALLENGE_TTL = 300
@@ -170,6 +255,11 @@ def register_client(body: RegisterBody, request: Request,
         state.failures.pop(rate_key, None)
 
     token = portal_link_token(request.app.state.engine, account.id, now)
+    link = db.scalar(select(PortalLink).where(
+        PortalLink.token_hash == sha256(token.encode()).hexdigest()))
+    if link is not None:
+        link.device_fingerprint = device_hash
+        db.commit()
     return {'account': {'id': account.id, 'display_name': account.display_name},
             'token': token, 'subscription': subscription_view}
 
@@ -184,11 +274,9 @@ class DeviceBody(Model):
 def client_create_device(body: DeviceBody, request: Request,
                          db: Session = Depends(get_db)):
     """Create a device for the account behind a cabinet token, no admin/bot."""
-    digest = sha256(body.token.get_secret_value().encode()).hexdigest()
-    row = db.scalar(select(PortalLink).where(PortalLink.token_hash == digest))
-    account = db.get(Account, row.account_id) if row is not None else None
-    if account is None or account.status != 'active':
-        raise APIError(401, 'auth.invalid_credentials')
+    account, scoped = _resolve_link(db, body.token.get_secret_value())
+    if scoped is not None:
+        raise APIError(403, 'client.share_not_allowed')
     result = create_device_record(db, account, body.label, **_context(request))
     return JSONResponse(result, status_code=202 if result.get('status') == 'pending' else 200)
 
@@ -239,19 +327,23 @@ def client_subscriptions(body: LinkProof, request: Request,
     state = request.app.state.portal_auth
     address = request.client.host if request.client else 'unknown'
     rate_key = ('client_link', address)
+    current_fingerprint = None
     with state.lock:
         state.prune()
         count, deadline = state.failures.get(rate_key, (0, state.tick() + LOGIN_WINDOW))
         if count >= 5:
             raise APIError(429, 'auth.rate_limited')
-        digest = sha256(body.token.get_secret_value().encode()).hexdigest()
-        row = db.scalar(select(PortalLink).where(PortalLink.token_hash == digest))
-        account = db.get(Account, row.account_id) if row is not None else None
-        if row is None or account is None or account.status != 'active':
-            state.failures[rate_key] = (count + 1, deadline)
-            raise APIError(401, 'auth.invalid_credentials')
+        account, scoped = _resolve_link(db, body.token.get_secret_value())
         now = state.now()
-        row.last_used_at = now
+        if scoped is not None:
+            scoped.last_used_at = now
+            current_fingerprint = scoped.device_fingerprint
+        else:
+            link = db.scalar(select(PortalLink).where(
+                PortalLink.token_hash == sha256(body.token.get_secret_value().encode()).hexdigest()))
+            if link is not None:
+                link.last_used_at = now
+                current_fingerprint = link.device_fingerprint
         entitlement, active = _entitlement(db, account.id, now)
         db.commit()
         state.failures.pop(rate_key, None)
@@ -260,16 +352,22 @@ def client_subscriptions(body: LinkProof, request: Request,
     if active:
         devices = db.scalars(select(Device).where(
             Device.account_id == account.id, Device.status != 'removed').order_by(Device.id))
+        if scoped is not None:
+            devices = db.scalars(select(Device).where(
+                Device.id == scoped.device_id, Device.status != 'removed'))
         for device in devices:
             token_row = db.get(DeviceSubscription, device.id)
             if token_row is None or _token_of(token_row) is None:
                 token_row = _store(db, token_row, device, now)
             view = _view(request, db, token_row)
+            used_elsewhere = bool(device.client_fingerprint and current_fingerprint
+                                  and device.client_fingerprint != current_fingerprint)
             profiles.append({
                 'device_id': device.id,
                 'label': device.label,
                 'device_name': device.name,
                 'status': device.status,
+                'in_use': used_elsewhere,
                 # The native client always wants a wg-quick .conf; the other
                 # URLs are returned so one discovery call covers every client.
                 'url': view['conf_url'],
@@ -280,4 +378,6 @@ def client_subscriptions(body: LinkProof, request: Request,
             })
     return {'account': {'id': account.id, 'display_name': account.display_name},
             'subscription': entitlement,
+            'share': {'allowed': bool(active and (entitlement['tariff'] or {}).get('name')
+                                     != DEMO_TARIFF)},
             'profiles': profiles}
