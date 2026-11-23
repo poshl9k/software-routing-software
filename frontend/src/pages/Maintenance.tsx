@@ -18,7 +18,7 @@ import { PageHeader } from "../components/PageHeader";
 import { InterfaceSelect } from "../components/Select";
 import { PageTabs } from "../components/Tabs";
 import { FormActions, FormGrid, FormWide } from "../components/Form";
-import type { MasterBridgeStatus, UpdateStatus } from "../types";
+import type { MasterBridgeStatus, PingResult, UpdateStatus } from "../types";
 
 const tabs = ["Резервные копии", "Диагностика", "Выпуск установки", "Домен панели", "Мастер"];
 const tabKeys = ["backup", "diagnostics", "release", "domain", "master"];
@@ -122,7 +122,7 @@ export default function Maintenance() {
   const [host, setHost] = useState("");
   const [count, setCount] = useState(4);
   const [iface, setIface] = useState("");
-  const [ping, setPing] = useState<{ sent: number; received: number; loss_pct: number; min_avg_max_ms: number[] } | null>(null);
+  const [ping, setPing] = useState<PingResult | null>(null);
   const [trace, setTrace] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
@@ -239,7 +239,12 @@ export default function Maintenance() {
           <InterfaceSelect label="Интерфейс" value={iface} interfaces={configuration.interfaces} emptyLabel="Автоматически" sx={{ width: 200 }} onChange={setIface} />
           <Button disabled={!admin || busy || !host.trim() || count < 1 || count > 5} onClick={() => void perform(async () => setPing(await api.ping({ host: host.trim(), count, ...(iface ? { source_interface: iface } : {}) })))}>Ping</Button>
         </div>
-        {ping && <p>Отправлено: {ping.sent} · Получено: {ping.received} · Потери: {ping.loss_pct}% · min/avg/max: {ping.min_avg_max_ms.join(" / ")} мс</p>}
+        {ping && <>
+          <p>Отправлено: {ping.sent} · Получено: {ping.received} · Потери: {ping.loss_pct}%</p>
+          {ping.min_avg_max_ms?.length
+            ? <p>min/avg/max: {ping.min_avg_max_ms.join(" / ")} мс</p>
+            : <InfoNote severity="warning">Ответов нет: узел недоступен или ICMP заблокирован.</InfoNote>}
+        </>}
       </Card>
       <Card title="Traceroute">
         <div className="diag-controls">

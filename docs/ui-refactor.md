@@ -54,6 +54,7 @@ except where a change was explicitly agreed (TODO-API copy, `demo` rename).
 
 ## Review follow-ups (applied)
 - [x] `Field` floats its label when a placeholder is present (label/placeholder overlap)
+- [x] `Field` + native `<datalist>` for the exit source: pick a configured panel address or type another one
 - [x] `EditorShell.edit` accepts a render function, so the edit branch is only evaluated in edit mode
 - [x] `SelectField.required` opt-in — no false "empty value" error for the universal enum select
 - [x] `Select.ariaLabel` — unique accessible name for the repeated Network row selects (verified on the native `<select>`)

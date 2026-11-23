@@ -521,7 +521,7 @@ export interface DHCPLease {
   cltt: number; valid_lft: number; expires_in: number;
 }
 export interface ImportPreview { ok: boolean; errors: { line: number; message: string }[]; aliases: Alias[] }
-export interface PingResult { sent: number; received: number; loss_pct: number; min_avg_max_ms: number[] }
+export interface PingResult { sent: number; received: number; loss_pct: number; min_avg_max_ms: number[] | null }
 export interface ApplyResult {
   version_id: number;
   status:

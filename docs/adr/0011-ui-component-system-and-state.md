@@ -55,7 +55,8 @@ with local loading/error state and no cache.
    `getByLabelText` in the tests still matches. `Field`/`Select` reserve one
    helper line so rows keep equal height instead of jumping when a message
    appears. `Field` is the only text input a page uses: its API covers
-   `autoComplete`, `readOnly`, `required`, native `inputProps` (min/max/pattern),
+   `autoComplete`, `readOnly`, `required`, native `inputProps` (min/max/pattern,
+   `list` with a sibling `<datalist>` for pick-or-type values),
    `className`/`sx` and an optional `onChange` (read-only values). `Toggle`
    (switch) is the standalone boolean; `Checkbox` remains for multi-select
    groups and dense inline options. Tab strips are also a primitive: `PageTabs`

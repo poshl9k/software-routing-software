@@ -57,6 +57,11 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
   const ruInterfaces = (configuration.interfaces ?? [])
     .filter((item) => item.zone && item.zone !== "wan")
     .map((item) => ({ value: item.name, label: item.name }));
+  const sourceAddresses = [...new Map((configuration.interfaces ?? []).flatMap((item) =>
+    (item.addresses ?? []).map((address) => [address, {
+      value: address,
+      label: item.description ? `${item.name} — ${item.description}` : item.name,
+    }] as const))).values()];
 
   const begin = () => editor.begin(group?.rules.map((entry) => entry.rule) ?? []);
   const open = group !== null;
@@ -198,13 +203,21 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
                     setRules(rules.map((rule, index) => index === rules.length - 1 ? { ...rule, exit } : rule));
                   }} />
                 {restInterfaceExit && <>
-                  <Field label="Адрес-источник" value={restInterfaceExit.source ?? ""}
-                    valid={!restInterfaceExit.source || addressValid(restInterfaceExit.source)}
-                    hint="Адрес интерфейса выхода, с которого отправлять трафик"
-                    onChange={(value) => setRestExit({ kind: "interface",
-                      interface: restInterfaceExit.interface ?? "",
-                      ...(value.trim() ? { source: value.trim() } : {}),
-                      ...(restInterfaceExit.gateway ? { gateway: restInterfaceExit.gateway } : {}) })} />
+                  <>
+                    <Field label="Адрес-источник" value={restInterfaceExit.source ?? ""}
+                      valid={!restInterfaceExit.source || addressValid(restInterfaceExit.source)}
+                      hint="Выберите адрес панели или введите другой вручную"
+                      inputProps={{ list: "segment-source-addresses" }}
+                      onChange={(value) => setRestExit({ kind: "interface",
+                        interface: restInterfaceExit.interface ?? "",
+                        ...(value.trim() ? { source: value.trim() } : {}),
+                        ...(restInterfaceExit.gateway ? { gateway: restInterfaceExit.gateway } : {}) })} />
+                    <datalist id="segment-source-addresses">
+                      {sourceAddresses.map((address) => (
+                        <option key={address.value} value={address.value} label={address.label} />
+                      ))}
+                    </datalist>
+                  </>
                   <Field label="Шлюз" value={restInterfaceExit.gateway ?? ""}
                     valid={!restInterfaceExit.gateway || addressValid(restInterfaceExit.gateway)}
                     hint="Адрес вышестоящего роутера в подсети интерфейса"

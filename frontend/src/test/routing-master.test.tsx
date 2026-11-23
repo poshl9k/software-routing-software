@@ -596,6 +596,26 @@ it("criterion_S3_interface_exit_saves_source_and_gateway", async () => {
     source: "203.0.113.10", gateway: "203.0.113.1" });
 });
 
+it("offers panel addresses for the exit source without blocking manual entry", async () => {
+  setup();
+  const user = userEvent.setup();
+  await openAdvanced(user);
+  await user.click(screen.getByRole("button", { name: "+ Правило" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.type(screen.getByLabelText("Свои домены (по одному в строке)"), "example.net");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Через интерфейс" }));
+
+  const source = screen.getByLabelText("Адрес-источник");
+  expect(source).toHaveAttribute("list", "routing-source-addresses");
+  const options = Array.from(document.getElementById("routing-source-addresses")?.querySelectorAll("option") ?? []);
+  expect(options.map((option) => option.getAttribute("value"))).toEqual(
+    expect.arrayContaining(["203.0.113.10/24", "192.168.10.1/24"]));
+  expect(options[0].getAttribute("label")).toBeTruthy();
+  await user.type(source, "203.0.113.99");
+  expect(source).toHaveValue("203.0.113.99");
+});
+
 // --- S5: segment editor ---------------------------------------------------
 
 const segmentConfiguration = (): Configuration => {

@@ -65,6 +65,10 @@ allowed imports there are `Alert`, `Button`, `Checkbox`, `Dialog*`,
 - Pass `required`, `autoComplete`, `inputProps`, `maxLength`, `readOnly` to
   `Field` instead of raw props. `readOnly` fields must omit `onChange` (the type
   enforces it); a non-read-only field must have one.
+- When a value can be chosen from known values **or typed freely** (an exit
+  source address, for example), keep `Field` and pass
+  `inputProps={{ list: "<id>" }}` with a sibling `<datalist id="<id>">` holding
+  the options. A `Select` would block manual entry.
 - Use `hint` for persistent guidance and `valid={false}` for an error state;
   **never** pass `error`/`helperText` to a `Field`. The helper line is reserved
   so rows keep equal height — do not remove that.

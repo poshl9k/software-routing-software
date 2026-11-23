@@ -124,6 +124,7 @@ interface SubjectInterface {
 
 interface ExitChoices {
   interfaces: { value: string; label: string }[];
+  sourceAddresses: { value: string; label: string }[];
   outbounds: { value: string; label: string }[];
   groups: { value: string; label: string }[];
   clientTunnels: { value: string; label: string }[];
@@ -162,6 +163,11 @@ function exitChoices(cfg: Configuration): ExitChoices {
       value: item.name,
       label: item.description ? `${item.name} — ${item.description}` : item.name,
     })),
+    sourceAddresses: [...new Map((cfg.interfaces ?? []).flatMap((item: Interface) =>
+      (item.addresses ?? []).map((address) => [address, {
+        value: address,
+        label: item.description ? `${item.name} — ${item.description}` : item.name,
+      }] as const))).values()],
     outbounds: (cfg.proxies?.outbounds ?? []).map((outbound) => ({
       value: outbound.tag,
       label: outbound.tag,
@@ -553,24 +559,32 @@ function ExitFields({
           />
         )}
         {(exit.kind === "tunnel" || exit.kind === "interface") && (
-          <Field
-            label="Адрес-источник"
-            value={exit.source ?? ""}
-            valid={!exit.source || addressValid(exit.source)}
-            hint={exit.kind === "tunnel"
-              ? "Адрес туннеля на этом хосте. Без него пакеты уйдут с адресом другого маршрута и пир их отбросит"
-              : "Необязательно: адрес интерфейса, с которого выходить. Выход без него использует адрес по маршруту"}
-            onChange={(value) => {
-              const text = value.trim();
-              // An empty field must leave no key at all: the API rejects a source
-              // that belongs to no kind, and `null` would travel as a value.
-              change({ exit: exit.kind === "tunnel"
-                ? { kind: "tunnel", name: exit.name, ...(text ? { source: text } : {}) }
-                : { kind: "interface", interface: exit.interface,
-                    ...(text ? { source: text } : {}),
-                    ...(exit.gateway ? { gateway: exit.gateway } : {}) } });
-            }}
-          />
+          <>
+            <Field
+              label="Адрес-источник"
+              value={exit.source ?? ""}
+              valid={!exit.source || addressValid(exit.source)}
+              hint={exit.kind === "tunnel"
+                ? "Адрес туннеля на этом хосте. Без него пакеты уйдут с адресом другого маршрута и пир их отбросит"
+                : "Необязательно: адрес интерфейса, с которого выходить. Выберите адрес панели или введите другой вручную"}
+              inputProps={{ list: "routing-source-addresses" }}
+              onChange={(value) => {
+                const text = value.trim();
+                // An empty field must leave no key at all: the API rejects a source
+                // that belongs to no kind, and `null` would travel as a value.
+                change({ exit: exit.kind === "tunnel"
+                  ? { kind: "tunnel", name: exit.name, ...(text ? { source: text } : {}) }
+                  : { kind: "interface", interface: exit.interface,
+                      ...(text ? { source: text } : {}),
+                      ...(exit.gateway ? { gateway: exit.gateway } : {}) } });
+              }}
+            />
+            <datalist id="routing-source-addresses">
+              {choices.sourceAddresses.map((address) => (
+                <option key={address.value} value={address.value} label={address.label} />
+              ))}
+            </datalist>
+          </>
         )}
         {exit.kind === "interface" && (
           <Field

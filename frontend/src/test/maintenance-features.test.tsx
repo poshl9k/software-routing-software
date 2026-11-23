@@ -19,6 +19,21 @@ function setup(configuration=sampleConfiguration, extras: (path:string,init?:Req
 }
 function mount(node:React.ReactNode){render(<MemoryRouter><RouterProvider>{node}</RouterProvider></MemoryRouter>);}
 
+it("shows a warning instead of crashing when ping has no replies",async()=>{
+  setup(emptyConfiguration,(path)=>path==="/api/diag/ping"
+    ?new Response(JSON.stringify({sent:4,received:0,loss_pct:100,min_avg_max_ms:null}))
+    :new Response("{}"));
+  const user=userEvent.setup();
+  render(<MemoryRouter initialEntries={["/maintenance?tab=diagnostics"]}><App/></MemoryRouter>);
+  const card=(await screen.findByText("Диагностика ping")).closest(".card") as HTMLElement;
+  await user.type(within(card).getByLabelText("Узел"),"192.0.2.1");
+  const pingButton=within(card).getByRole("button",{name:"Ping"});
+  await waitFor(()=>expect(pingButton).toBeEnabled());
+  await user.click(pingButton);
+  expect(await within(card).findByText(/Ответов нет/)).toBeVisible();
+  expect(within(card).queryByText(/min\/avg\/max/)).toBeNull();
+});
+
 it("loads runtime leases in the DHCP leases tab",async()=>{
   setup(emptyConfiguration,(path)=>path==="/api/dhcp/leases"?new Response(JSON.stringify([{ip:"192.168.1.5",mac:"aa:bb",hostname:"laptop",subnet:"192.168.1.0/24",expires_in:90}])):new Response("{}"));
   const user=userEvent.setup();mount(<DHCP/>);await user.click(screen.getByRole("tab",{name:"Аренды"}));expect(await screen.findByText("laptop")).toBeVisible();expect(screen.getByText("1 мин")).toBeVisible();
