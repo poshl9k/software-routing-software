@@ -153,11 +153,14 @@ python3 -c 'import json;d=json.load(open("/etc/vs-router/applied/singbox.json"))
 - в таблице он стоит сразу под родителем с подписью «IPVLAN на …» и бейджем
   `IPVLAN L2`.
 
-Ограничение текущей реализации: поддерживается только режим L2. **MACVLAN bridge**
-(каждый виртуальный интерфейс со своим MAC) — возможный вариант на будущее:
-потребуется поле режима в схеме и генератор `[MACVLAN] Mode=bridge` + `MACVLAN=`
-в родителе. Выбирайте его, если вышестоящий роутер ожидает разные MAC-адреса;
-IPVLAN L2 сохраняет MAC родителя и безопаснее при MAC-привязке провайдера.
+Реализованы оба варианта: `virtualip` (IPVLAN L2) и `virtualmac` (MACVLAN bridge).
+Debian 13 с systemd 257 **не понимает ключ `IPvLAN=`** в `[Network]` — journald
+показывает `Unknown key 'IPvLAN' ... ignoring`, netdev не создаётся и apply
+откатывается. На таком хосте используйте «Виртуальный IP (MACVLAN bridge)»:
+генератор пишет `Kind=macvlan`, `[MACVLAN] Mode=bridge` и `MACVLAN=<имя>`
+в родителе. IPVLAN L2 сохраняет MAC родителя и безопаснее там, где systemd его
+поддерживает; MACVLAN даёт каждому интерфейсу свой MAC — убедитесь, что апстрим
+их разрешает.
 
 ### 2.7. Перехват и применение
 

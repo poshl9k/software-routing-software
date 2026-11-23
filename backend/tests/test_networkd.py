@@ -339,3 +339,15 @@ def test_reloader_finds_ipvlan_parent_in_a_bundle():
     NetworkdReloader(executor, fs)(APPLIED_DIR / 'networkd.conf')
 
     assert not any(argv[:3] == ['ip', 'link', 'del'] for argv, _ in executor.calls)
+
+
+def test_macvlan_bridge_generation_attaches_to_the_parent():
+    files = generate_networkd(ConfigurationVersion(configuration={'interfaces': [
+        {'name': 'eth0', 'zone': 'wan', 'addresses': []},
+        {'name': 'vip0', 'type': 'virtualmac', 'parent': 'eth0', 'zone': 'wan',
+         'addresses': ['192.0.2.2/24']},
+    ]}))
+    netdev = files['10-vs-router-vip0.netdev']
+    assert 'Kind=macvlan' in netdev
+    assert '[MACVLAN]\nMode=bridge' in netdev
+    assert 'MACVLAN=vip0' in files['10-vs-router-eth0.network']

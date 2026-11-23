@@ -196,7 +196,7 @@ def validate_configuration(c):
     # A parent link that carries an assigned VLAN is a trunk: it must not also run
     # its own DHCP client (two clients on one port).
     stacked_parents = {i.parent for i in c.interfaces
-                       if i.type in ("vlan", "virtualip") and i.zone and i.parent}
+                       if i.type in ("vlan", "virtualip", "virtualmac") and i.zone and i.parent}
     # networkd keys a netdev by (parent, VID): two VLANs claiming the same tag
     # on one trunk make reload fail with "Failed to create netdev: File exists"
     # and roll the whole apply back. Refuse the document before touching host.
@@ -236,7 +236,7 @@ def validate_configuration(c):
                 fail("interface.address_host_required")
         if i.type == "vlan" and (i.parent not in interfaces or i.vlan_id is None or i.parent == i.name):
             fail("interface.vlan_parent")
-        if i.type == "virtualip":
+        if i.type in ("virtualip", "virtualmac"):
             parent = interfaces.get(i.parent) if i.parent else None
             if parent is None or parent is i or parent.type != "physical":
                 fail("interface.virtualip_parent")

@@ -91,12 +91,14 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
             if i.type != "physical":
                 # virtualip is a product-level name for an IPVLAN L2 device:
                 # the kernel/systemd kind is ipvlan, not "virtualip".
-                kind = "ipvlan" if i.type == "virtualip" else i.type
+                kind = {"virtualip": "ipvlan", "virtualmac": "macvlan"}.get(i.type, i.type)
                 netdev = ["[NetDev]", f"Name={i.name}", f"Kind={kind}"]
                 if i.type == "vlan":
                     netdev += ["", "[VLAN]", f"Id={i.vlan_id}"]
                 if i.type == "virtualip":
                     netdev += ["", "[IPVLAN]", "Mode=L2"]
+                if i.type == "virtualmac":
+                    netdev += ["", "[MACVLAN]", "Mode=bridge"]
                 files[prefix + ".netdev"] = "\n".join(netdev) + "\n"
             if i.name in bridges:
                 lines.append(f"Bridge={bridges[i.name]}")
@@ -116,6 +118,8 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
                       if v.type == "vlan" and v.zone and v.parent == i.name]
             lines += [f"IPvLAN={v.name}" for v in interfaces
                       if v.type == "virtualip" and v.zone and v.parent == i.name]
+            lines += [f"MACVLAN={v.name}" for v in interfaces
+                      if v.type == "virtualmac" and v.zone and v.parent == i.name]
             for route in sorted((r for r in version.configuration.static_routes
                                  if r.enabled and r.interface == i.name),
                                 key=lambda r: (r.destination, r.gateway or "", r.metric)):

@@ -27,7 +27,7 @@ class EncryptedSecret(Model):
 
 class Interface(Model):
     name: InterfaceName
-    type: Literal["physical", "bridge", "vlan", "virtualip"] = "physical"
+    type: Literal["physical", "bridge", "vlan", "virtualip", "virtualmac"] = "physical"
     zone: Name | None = None
     # Free-form operator note / friendly label. UI-only metadata: generators
     # must never emit it into networkd/nftables/WireGuard output.
