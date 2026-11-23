@@ -220,3 +220,31 @@ it("stages an addressless static port as a VLAN parent", async () => {
     expect.objectContaining({ name: "eth0", type: "physical", addresses: [] }),
   ]));
 });
+
+
+it("removes the primary address so a physical port can be an addressless trunk", async () => {
+  let configuration: Configuration = { ...emptyConfiguration, interfaces: [{
+    name: "ens224", type: "physical" as const, zone: "wan", description: "Аплинк",
+    addressing: "static" as const, addresses: ["192.168.107.2/24"], parent: null, vlan_id: null, members: [],
+  }] };
+  const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (init?.method === "PUT") configuration = JSON.parse(String(init.body));
+    const version = { id: 1, status: "draft", configuration };
+    return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] : path === "/api/host/interfaces" ? [
+      { name: "ens224", kind: "physical", parent: null, operstate: "UP" },
+    ] : version)));
+  });
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+
+  await user.click(await screen.findByRole("button", { name: "Аплинк" }));
+  const dialog = screen.getByRole("dialog", { name: /Интерфейс: Аплинк/ });
+  await user.clear(within(dialog).getByLabelText("Основной адрес (CIDR)"));
+  expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeEnabled();
+  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+
+  await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
+  const saved = JSON.parse(String(fetch.mock.calls.filter(([, init]) => init?.method === "PUT").at(-1)![1].body));
+  expect(saved.interfaces[0].addresses).toEqual([]);
+});
