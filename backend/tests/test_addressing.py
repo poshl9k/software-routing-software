@@ -131,3 +131,23 @@ def test_interface_address_must_be_a_host_address(address):
                                            'addresses': [address]}]})
     assert result['valid'] is False
     assert 'interface.address_host_required' in found
+
+
+def test_two_vlans_cannot_claim_same_parent_and_vlan_id():
+    result, found = codes({'interfaces': [
+        {'name': 'eth0', 'zone': 'wan', 'addresses': []},
+        {'name': 'v1', 'type': 'vlan', 'parent': 'eth0', 'vlan_id': 1, 'zone': 'wan'},
+        {'name': 'v2', 'type': 'vlan', 'parent': 'eth0', 'vlan_id': 1, 'zone': 'wan'},
+    ]})
+    assert result['valid'] is False
+    assert 'interface.vlan_duplicate_id' in found
+
+
+def test_same_vlan_id_on_a_different_parent_is_allowed():
+    result, found = codes({'interfaces': [
+        {'name': 'eth0', 'zone': 'wan', 'addresses': []},
+        {'name': 'eth1', 'zone': 'lan', 'addresses': []},
+        {'name': 'v1', 'type': 'vlan', 'parent': 'eth0', 'vlan_id': 1, 'zone': 'wan'},
+        {'name': 'v2', 'type': 'vlan', 'parent': 'eth1', 'vlan_id': 1, 'zone': 'lan'},
+    ]})
+    assert 'interface.vlan_duplicate_id' not in found

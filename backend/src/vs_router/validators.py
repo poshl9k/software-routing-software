@@ -196,6 +196,13 @@ def validate_configuration(c):
     # A parent link that carries an assigned VLAN is a trunk: it must not also run
     # its own DHCP client (two clients on one port).
     vlan_parents = {i.parent for i in c.interfaces if i.type == "vlan" and i.zone and i.parent}
+    # networkd keys a netdev by (parent, VID): two VLANs claiming the same tag
+    # on one trunk make reload fail with "Failed to create netdev: File exists"
+    # and roll the whole apply back. Refuse the document before touching host.
+    vlan_keys = [(i.parent, i.vlan_id) for i in c.interfaces
+                 if i.type == "vlan" and i.parent and i.vlan_id is not None]
+    if len(vlan_keys) != len(set(vlan_keys)):
+        fail("interface.vlan_duplicate_id")
     if len({i.pppoe_username for i in c.interfaces if i.addressing == "pppoe"}) != sum(
             i.addressing == "pppoe" for i in c.interfaces):
         fail("interface.pppoe_duplicate_username")
