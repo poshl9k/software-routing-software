@@ -248,3 +248,36 @@ it("removes the primary address so a physical port can be an addressless trunk",
   const saved = JSON.parse(String(fetch.mock.calls.filter(([, init]) => init?.method === "PUT").at(-1)![1].body));
   expect(saved.interfaces[0].addresses).toEqual([]);
 });
+
+
+it("groups VLAN rows directly under their parent with a gap between groups", async () => {
+  const configuration: Configuration = { ...emptyConfiguration, interfaces: [
+    { name: "vlan1", type: "vlan" as const, parent: "ens256", vlan_id: 201, zone: "lan", description: "Гостевая",
+      addressing: "static" as const, addresses: ["172.20.1.1/24"], members: [] },
+    { name: "ens224", type: "physical" as const, zone: "wan", description: "Аплинк",
+      addressing: "static" as const, addresses: ["192.168.107.2/24"], parent: null, vlan_id: null, members: [] },
+    { name: "ens256", type: "physical" as const, zone: "lan", description: "Транк WiFi",
+      addressing: "static" as const, addresses: [], parent: null, vlan_id: null, members: [] },
+    { name: "vlan2", type: "vlan" as const, parent: "ens256", vlan_id: 50, zone: null, description: "Управление AP",
+      addressing: "static" as const, addresses: [], members: [] },
+  ] };
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string) => Promise.resolve(
+    new Response(JSON.stringify(path === "/api/versions"
+      ? [{ id: 1, status: "draft", configuration }]
+      : path === "/api/host/interfaces" ? [
+        { name: "ens256", kind: "physical", parent: null, operstate: "UP" },
+        { name: "ens224", kind: "physical", parent: null, operstate: "UP" },
+      ] : { id: 1, status: "draft", configuration })),
+  )));
+  render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+
+  await screen.findByRole("button", { name: "Транк WiFi" });
+  const lines = (await screen.findAllByRole("row")).map((row) => row.textContent ?? "");
+  const at = (name: string) => lines.findIndex((line) => line.includes(name));
+  expect(at("Транк WiFi")).toBeLessThan(at("Управление AP"));
+  expect(at("Управление AP")).toBeLessThan(at("Гостевая"));
+  expect(at("Гостевая")).toBeLessThan(at("Аплинк"));
+  expect(screen.getByText("VLAN 50")).toBeInTheDocument();
+  expect(screen.getAllByText(/VLAN на ens256/)).toHaveLength(2);
+  expect(document.querySelectorAll("tbody tr")).toHaveLength(5);
+});

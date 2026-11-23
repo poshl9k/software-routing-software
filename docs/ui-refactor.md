@@ -17,6 +17,7 @@ except where a change was explicitly agreed (TODO-API copy, `demo` rename).
 - [x] `EmptyState.tsx`, `InfoNote.tsx` (replaces `Todo`, drops `TODO-API ·` prefix)
 - [x] `PageHeader.tsx` — the `h1.page-title` contract
 - [x] `Card.tsx`, `DataTable.tsx` (empty-state aware), `Tabs.tsx` (`PageTabs`)
+- [x] `DataTable` row dialect: `null` = a quiet group gap, `{cells, className}` = one styled row (used to group VLANs under their parent)
 - [x] `Field.tsx`, `Select.tsx` (`Select`/`SelectField`/`InterfaceSelect`), `Toggle.tsx`
 - [x] `ErrorNotice.tsx`, `EditorShell.tsx` (+ `EditorFooter`, `EditorFieldset`)
 - [x] `hooks/useDraftEditor.ts` — one draft lifecycle for all 7 editors

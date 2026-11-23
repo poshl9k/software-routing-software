@@ -456,6 +456,11 @@ pre {
   min-width: 760px;
 }
 
+/* A VLAN row sits under its parent: quiet accent, no tree indentation. */
+.vlan-child-row .MuiTableCell-root:first-child {
+  box-shadow: inset 3px 0 0 var(--vs-accent);
+}
+
 /* Table editors: controls fill their column so rows stay aligned. */
 .MuiTableCell-root .MuiFormControl-root {
   width: 100%;

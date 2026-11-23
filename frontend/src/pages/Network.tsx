@@ -1,4 +1,4 @@
-import { Button, Dialog, DialogContent, DialogTitle } from "@mui/material";
+import { Button, Dialog, DialogContent, DialogTitle, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useConfiguration } from "../state";
@@ -272,6 +272,35 @@ export default function Network() {
       (i.addressing !== "pppoe" || (i.type === "physical" && i.zone === "wan" && !i.parent && !i.members.length && !rows.some((other) => other.type === "vlan" && other.parent === i.name) && !!i.pppoe_username?.trim() && secretValid(i.pppoe_password ?? null) && !c.dhcp_subnets?.some((subnet) => subnet.interface === i.name))) &&
       (i.type !== "vlan" || (i.vlan_id !== null && Number.isInteger(i.vlan_id) && i.vlan_id >= 1 && i.vlan_id <= 4094)));
 
+  const parentNames = new Set(rows.map((i) => i.name));
+  const vlanChildren = new Map<string, Editable[]>();
+  for (const row of rows)
+    if (row.type === "vlan" && row.parent && parentNames.has(row.parent))
+      vlanChildren.set(row.parent, [...(vlanChildren.get(row.parent) ?? []), row]);
+  for (const children of vlanChildren.values())
+    children.sort((a, b) => (a.vlan_id ?? 0) - (b.vlan_id ?? 0));
+  const groups: Editable[][] = [];
+  const emitted = new Set<string>();
+  const emitGroup = (name: string) => {
+    const parent = rows.find((i) => i.name === name);
+    if (!parent || emitted.has(name)) return;
+    emitted.add(name);
+    groups.push([parent, ...(vlanChildren.get(name) ?? []).filter((child) => {
+      if (emitted.has(child.name)) return false;
+      emitted.add(child.name);
+      return true;
+    })]);
+  };
+  for (const row of rows) {
+    if (emitted.has(row.name)) continue;
+    if (row.type === "vlan" && row.parent && parentNames.has(row.parent)) {
+      emitGroup(row.parent);
+      if (!emitted.has(row.name)) { emitted.add(row.name); groups.push([row]); }
+    } else emitGroup(row.name);
+  }
+  const orderedRows: (Editable | null)[] = groups.flatMap((group, index) =>
+    index ? [null, ...group] : group);
+
   const nameOptions = (i: Editable): SelectOption[] => {
     const options: SelectOption[] = [];
     if (i.name && !allRealNics.some((p) => p.name === i.name))
@@ -304,17 +333,25 @@ export default function Network() {
         <Card title="Интерфейсы и зоны" action={<FormActions><Button onClick={() => setQuickOpen(true)}>Быстро подключить</Button><Button onClick={addRow}>Добавить интерфейс</Button><Button onClick={() => setVirtualOpen(true)}>+ Виртуальный интерфейс</Button></FormActions>}>
           {!rows.length && <EmptyState>Нет назначенных интерфейсов</EmptyState>}
           {!!rows.length && <DataTable heads={["Название", "Системное имя", "Роль", "IP", "Конфигурация", "Состояние"]}
-            rows={rows.map((i) => {
+            rows={orderedRows.map((i) => {
+              if (i === null) return null;
               const host = allRealNics.find((h) => h.name === i.name);
               const live = liveAddresses[i.name] ?? [];
-              return [
-                <Button onClick={() => open(i.key)}>{i.description?.trim() || "Без названия"}</Button>,
-                i.name || "Не выбрано",
+              const isChild = i.type === "vlan" && !!i.parent && parentNames.has(i.parent);
+              return { className: isChild ? "vlan-child-row" : undefined, cells: [
+                <>
+                  <Button onClick={() => open(i.key)}>{i.description?.trim() || "Без названия"}</Button>
+                  {isChild && <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>{`VLAN на ${i.parent}`}</Typography>}
+                </>,
+                <>
+                  {i.name || "Не выбрано"}
+                  {i.type === "vlan" && i.vlan_id !== null && <Badge tone="purple">{`VLAN ${i.vlan_id}`}</Badge>}
+                </>,
                 <Badge tone={!i.zone ? "amber" : i.zone === "wan" ? "red" : "blue"}>{i.zone === "wan" ? "Интернет (WAN)" : i.zone === "lan" ? "Домашняя сеть (LAN)" : i.zone ? i.zone.toUpperCase() : "Не назначен"}</Badge>,
                 i.addressing === "pppoe" ? <InlineStatus tone="unknown" text="PPPoE: состояние подключения недоступно" /> : i.addressing === "dhcp" ? <InlineStatus tone={hostAddresses.isPending || hostAddresses.isError ? "unknown" : live.length ? "green" : "amber"} text={hostAddresses.isPending ? "DHCP: загрузка" : hostAddresses.isError ? "DHCP: данные недоступны" : live.length ? `DHCP: ${live.join(", ")}` : "DHCP: адрес не получен"} /> : i.addresses.join(", ") || "Адрес не задан",
                 <Badge tone={version?.status === "draft" || isEditMode ? "amber" : version ? "blue" : "amber"}>{version?.status === "draft" || isEditMode ? "Черновик" : version ? "Применено" : "Статус неизвестен"}</Badge>,
                 hostInterfaces.isPending ? <InlineStatus tone="unknown" text="Состояние хоста: загрузка" /> : hostInterfaces.isError || !host ? <InlineStatus tone="unknown" text="Состояние хоста недоступно" /> : host.kind !== "physical" ? <InlineStatus tone="unknown" text={`Состояние ${host.operstate}; данные о кабеле недоступны`} /> : <InlineStatus tone={host.operstate === "UP" ? "green" : host.operstate === "DOWN" ? "red" : "unknown"} text={`Кабель: ${host.operstate === "UP" ? "подключён" : host.operstate === "DOWN" ? "отключён" : host.operstate}`} />,
-              ];
+              ] };
             })} />}
         </Card>
         <Dialog open={selectedKey !== null && selected !== null} onClose={cancel} fullWidth maxWidth="md" aria-labelledby="interface-editor-title">
