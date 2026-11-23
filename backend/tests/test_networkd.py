@@ -304,3 +304,38 @@ def test_reloader_rejects_unsafe_bundle_before_writes():
         NetworkdReloader(executor, fs)(path)
     assert list(fs.files) == [path]
     assert executor.calls == []
+
+
+def test_ipvlan_l2_generation_attaches_to_the_parent():
+    files = generate_networkd(ConfigurationVersion(configuration={'interfaces': [
+        {'name': 'eth0', 'zone': 'wan', 'addresses': []},
+        {'name': 'vip0', 'type': 'virtualip', 'parent': 'eth0', 'zone': 'wan',
+         'addresses': ['192.0.2.2/24', '192.0.2.3/32']},
+    ]}))
+    netdev = files['10-vs-router-vip0.netdev']
+    assert '[NetDev]\nName=vip0\nKind=ipvlan\n' in netdev
+    assert '[IPVLAN]\nMode=L2\n' in netdev
+    parent = files['10-vs-router-eth0.network']
+    assert 'IPvLAN=vip0' in parent
+    child = files['10-vs-router-vip0.network']
+    assert 'Address=192.0.2.2/24' in child
+    assert 'Address=192.0.2.3/32' in child
+
+
+def test_reloader_finds_ipvlan_parent_in_a_bundle():
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(APPLIED_DIR / 'networkd.conf', serialize_networkd({
+        '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nIPvLAN=vip0\n',
+        '10-vs-router-vip0.netdev': '[NetDev]\nName=vip0\nKind=ipvlan\n\n[IPVLAN]\nMode=L2\n',
+        '10-vs-router-vip0.network': '[Match]\nName=vip0\n\n[Network]\nAddress=192.0.2.2/24\n',
+    }))
+    values = iter((json.dumps([{'ifname': 'vip0', 'link': 'eth0',
+                                'linkinfo': {'info_kind': 'ipvlan'}}]),
+                   json.dumps([{'ifname': 'vip0', 'link': 'eth0',
+                                'linkinfo': {'info_kind': 'ipvlan'}}])))
+    executor.run = lambda argv, timeout: SimpleNamespace(
+        returncode=0, stdout=next(values) if argv == ['ip', '-j', '-d', 'link', 'show', 'dev', 'vip0'] else '')
+
+    NetworkdReloader(executor, fs)(APPLIED_DIR / 'networkd.conf')
+
+    assert not any(argv[:3] == ['ip', 'link', 'del'] for argv, _ in executor.calls)

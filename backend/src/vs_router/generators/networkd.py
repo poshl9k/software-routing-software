@@ -51,6 +51,7 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
     Bridge members must also have a zone; addresses belong on the bridge.
     VLANs attach through VLAN= in the parent's [Network], including bridge parents;
     [VLAN] Id= is the canonical netdev syntax, with no Parent= or BridgeVLAN needed.
+    virtualip is an IPVLAN L2 device attached with IPvLAN= in the parent's [Network].
     WAN order is retained: primary keeps its prefix, additional IPv4 addresses use
     /32 (IPv6 uses /128). Static gateways and DNS settings are not generated.
     """
@@ -88,9 +89,14 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
             lines.append("# Unassigned: fail-closed, no addresses or L2 attachments.")
         else:
             if i.type != "physical":
-                netdev = ["[NetDev]", f"Name={i.name}", f"Kind={i.type}"]
+                # virtualip is a product-level name for an IPVLAN L2 device:
+                # the kernel/systemd kind is ipvlan, not "virtualip".
+                kind = "ipvlan" if i.type == "virtualip" else i.type
+                netdev = ["[NetDev]", f"Name={i.name}", f"Kind={kind}"]
                 if i.type == "vlan":
                     netdev += ["", "[VLAN]", f"Id={i.vlan_id}"]
+                if i.type == "virtualip":
+                    netdev += ["", "[IPVLAN]", "Mode=L2"]
                 files[prefix + ".netdev"] = "\n".join(netdev) + "\n"
             if i.name in bridges:
                 lines.append(f"Bridge={bridges[i.name]}")
@@ -108,6 +114,8 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
                     lines.append("BindCarrier=" + " ".join(members))
             lines += [f"VLAN={v.name}" for v in interfaces
                       if v.type == "vlan" and v.zone and v.parent == i.name]
+            lines += [f"IPvLAN={v.name}" for v in interfaces
+                      if v.type == "virtualip" and v.zone and v.parent == i.name]
             for route in sorted((r for r in version.configuration.static_routes
                                  if r.enabled and r.interface == i.name),
                                 key=lambda r: (r.destination, r.gateway or "", r.metric)):

@@ -151,3 +151,31 @@ def test_same_vlan_id_on_a_different_parent_is_allowed():
         {'name': 'v2', 'type': 'vlan', 'parent': 'eth1', 'vlan_id': 1, 'zone': 'lan'},
     ]})
     assert 'interface.vlan_duplicate_id' not in found
+
+
+def test_virtualip_requires_an_assigned_physical_parent():
+    result, found = codes({'interfaces': [
+        {'name': 'eth0', 'zone': 'lan', 'addresses': []},
+        {'name': 'vip0', 'type': 'virtualip', 'parent': 'missing', 'zone': 'wan',
+         'addresses': ['192.0.2.2/24']},
+    ]})
+    assert result['valid'] is False
+    assert 'interface.virtualip_parent' in found
+
+    result, found = codes({'interfaces': [
+        {'name': 'eth0', 'zone': None, 'addresses': []},
+        {'name': 'vip0', 'type': 'virtualip', 'parent': 'eth0', 'zone': 'wan',
+         'addresses': ['192.0.2.2/24']},
+    ]})
+    assert result['valid'] is False
+    assert 'interface.virtualip_parent_unassigned' in found
+
+
+def test_virtualip_with_physical_parent_is_valid():
+    result, found = codes({'interfaces': [
+        {'name': 'eth0', 'zone': 'wan', 'addresses': []},
+        {'name': 'vip0', 'type': 'virtualip', 'parent': 'eth0', 'zone': 'wan',
+         'addresses': ['192.0.2.2/24']},
+    ]})
+    assert 'interface.virtualip_parent' not in found
+    assert 'interface.virtualip_parent_unassigned' not in found

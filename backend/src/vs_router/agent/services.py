@@ -363,7 +363,10 @@ def _declared_parent(files, name):
         # networkd is ever reloaded.
         parser = configparser.ConfigParser(interpolation=None, strict=False)
         parser.read_string(content)
-        if name in parser.get('Network', 'VLAN', fallback='').split():
+        # A stacked virtual link can be declared by VLAN=, IPvLAN= or
+        # MACVLAN= in the parent's .network. All repeat legally.
+        if any(name in parser.get('Network', key, fallback='').split()
+               for key in ('VLAN', 'IPvLAN', 'MACVLAN')):
             return parser.get('Match', 'Name', fallback=None)
     return None
 

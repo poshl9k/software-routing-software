@@ -139,7 +139,7 @@ export default function Network() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [deleteKey, setDeleteKey] = useState<string | null>(null);
   const [virtualOpen, setVirtualOpen] = useState(false);
-  const [virtualType, setVirtualType] = useState<"vlan" | "bridge">("vlan");
+  const [virtualType, setVirtualType] = useState<"vlan" | "bridge" | "virtualip">("vlan");
   const [virtualParent, setVirtualParent] = useState("");
   const [quickOpen, setQuickOpen] = useState(false);
   const [params, setParams] = useSearchParams();
@@ -196,8 +196,8 @@ export default function Network() {
     editor.setValue(updated);
   };
 
-  const addVirtual = (type: "vlan" | "bridge", parent: string | null = null) => {
-    const prefix = type === "vlan" ? "vlan" : "br";
+  const addVirtual = (type: "vlan" | "bridge" | "virtualip", parent: string | null = null) => {
+    const prefix = type === "vlan" ? "vlan" : type === "virtualip" ? "vip" : "br";
     let id = 1;
     while ([...rows, ...allRealNics].some((i) => i.name === `${prefix}${id}`)) id++;
     const next = [...rows];
@@ -269,23 +269,28 @@ export default function Network() {
     new Set(staticAddresses).size === staticAddresses.length &&
     rows.every((i) => validName(i) &&
       (i.addressing !== "static" || i.addresses.every((a) => a.includes("/") && addressValid(a.trim()))) &&
-      (i.addressing !== "pppoe" || (i.type === "physical" && i.zone === "wan" && !i.parent && !i.members.length && !rows.some((other) => other.type === "vlan" && other.parent === i.name) && !!i.pppoe_username?.trim() && secretValid(i.pppoe_password ?? null) && !c.dhcp_subnets?.some((subnet) => subnet.interface === i.name))) &&
-      (i.type !== "vlan" || (i.vlan_id !== null && Number.isInteger(i.vlan_id) && i.vlan_id >= 1 && i.vlan_id <= 4094)));
+      (i.addressing !== "pppoe" || (i.type === "physical" && i.zone === "wan" && !i.parent && !i.members.length && !rows.some((other) => (other.type === "vlan" || other.type === "virtualip") && other.parent === i.name) && !!i.pppoe_username?.trim() && secretValid(i.pppoe_password ?? null) && !c.dhcp_subnets?.some((subnet) => subnet.interface === i.name))) &&
+      (i.type !== "vlan" || (i.vlan_id !== null && Number.isInteger(i.vlan_id) && i.vlan_id >= 1 && i.vlan_id <= 4094)) &&
+      (i.type !== "virtualip" || (!!i.parent && rows.some((p) => p.name === i.parent && p.type === "physical" && !!p.zone))));
 
   const parentNames = new Set(rows.map((i) => i.name));
-  const vlanChildren = new Map<string, Editable[]>();
+  const stackedChildren = new Map<string, Editable[]>();
   for (const row of rows)
-    if (row.type === "vlan" && row.parent && parentNames.has(row.parent))
-      vlanChildren.set(row.parent, [...(vlanChildren.get(row.parent) ?? []), row]);
-  for (const children of vlanChildren.values())
-    children.sort((a, b) => (a.vlan_id ?? 0) - (b.vlan_id ?? 0));
+    if ((row.type === "vlan" || row.type === "virtualip") && row.parent && parentNames.has(row.parent))
+      stackedChildren.set(row.parent, [...(stackedChildren.get(row.parent) ?? []), row]);
+  for (const children of stackedChildren.values())
+    children.sort((a, b) => {
+      const av = a.type === "vlan" ? a.vlan_id ?? 0 : 10000;
+      const bv = b.type === "vlan" ? b.vlan_id ?? 0 : 10000;
+      return av - bv || a.name.localeCompare(b.name);
+    });
   const groups: Editable[][] = [];
   const emitted = new Set<string>();
   const emitGroup = (name: string) => {
     const parent = rows.find((i) => i.name === name);
     if (!parent || emitted.has(name)) return;
     emitted.add(name);
-    groups.push([parent, ...(vlanChildren.get(name) ?? []).filter((child) => {
+    groups.push([parent, ...(stackedChildren.get(name) ?? []).filter((child) => {
       if (emitted.has(child.name)) return false;
       emitted.add(child.name);
       return true;
@@ -293,7 +298,7 @@ export default function Network() {
   };
   for (const row of rows) {
     if (emitted.has(row.name)) continue;
-    if (row.type === "vlan" && row.parent && parentNames.has(row.parent)) {
+    if ((row.type === "vlan" || row.type === "virtualip") && row.parent && parentNames.has(row.parent)) {
       emitGroup(row.parent);
       if (!emitted.has(row.name)) { emitted.add(row.name); groups.push([row]); }
     } else emitGroup(row.name);
@@ -337,15 +342,16 @@ export default function Network() {
               if (i === null) return null;
               const host = allRealNics.find((h) => h.name === i.name);
               const live = liveAddresses[i.name] ?? [];
-              const isChild = i.type === "vlan" && !!i.parent && parentNames.has(i.parent);
+              const isChild = (i.type === "vlan" || i.type === "virtualip") && !!i.parent && parentNames.has(i.parent);
               return { className: isChild ? "vlan-child-row" : undefined, cells: [
                 <>
                   <Button onClick={() => open(i.key)}>{i.description?.trim() || "Без названия"}</Button>
-                  {isChild && <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>{`VLAN на ${i.parent}`}</Typography>}
+                  {isChild && <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>{i.type === "virtualip" ? `IPVLAN на ${i.parent}` : `VLAN на ${i.parent}`}</Typography>}
                 </>,
                 <>
                   {i.name || "Не выбрано"}
                   {i.type === "vlan" && i.vlan_id !== null && <Badge tone="purple">{`VLAN ${i.vlan_id}`}</Badge>}
+                  {i.type === "virtualip" && <Badge tone="purple">IPVLAN L2</Badge>}
                 </>,
                 <Badge tone={!i.zone ? "amber" : i.zone === "wan" ? "red" : "blue"}>{i.zone === "wan" ? "Интернет (WAN)" : i.zone === "lan" ? "Домашняя сеть (LAN)" : i.zone ? i.zone.toUpperCase() : "Не назначен"}</Badge>,
                 i.addressing === "pppoe" ? <InlineStatus tone="unknown" text="PPPoE: состояние подключения недоступно" /> : i.addressing === "dhcp" ? <InlineStatus tone={hostAddresses.isPending || hostAddresses.isError ? "unknown" : live.length ? "green" : "amber"} text={hostAddresses.isPending ? "DHCP: загрузка" : hostAddresses.isError ? "DHCP: данные недоступны" : live.length ? `DHCP: ${live.join(", ")}` : "DHCP: адрес не получен"} /> : i.addresses.join(", ") || "Адрес не задан",
@@ -387,9 +393,9 @@ export default function Network() {
                 <FormWide><InfoNote>{selected.addressing === "dhcp" ? hostAddresses.isPending ? "Полученный адрес: загрузка…" : hostAddresses.isError ? "Полученный адрес: состояние недоступно" : `Полученный адрес: ${(liveAddresses[selected.name] ?? []).join(", ") || "адрес не получен"}` : selected.addressing === "pppoe" ? "PPPoE: запуск подключения после применения черновика." : "Статические адреса показаны из конфигурации."}</InfoNote></FormWide>
               </FormGrid></PageSection>
               <PageSection title="Тип и подключение"><FormGrid>
-                <Select label="Тип" value={selected.type} options={[{value:"physical",label:"Физический"},{value:"bridge",label:"Мост"},{value:"vlan",label:"VLAN"}]} onChange={(v) => setField(selected.key,{type:v as Interface["type"], ...(selected.addressing === "pppoe" && v !== "physical" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
+                <Select label="Тип" value={selected.type} options={[{value:"physical",label:"Физический"},{value:"bridge",label:"Мост"},{value:"vlan",label:"VLAN"},{value:"virtualip",label:"Виртуальный IP (IPVLAN L2)"}]} onChange={(v) => setField(selected.key,{type:v as Interface["type"], ...(selected.addressing === "pppoe" && v !== "physical" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
                 {selected.type === "physical" && !selected.name && <Select label="Выбрать системное имя" value={selected.name} error={!!selected.name && !validName(selected)} placeholder={{label:"— выберите интерфейс —"}} options={nameOptions(selected)} onChange={(name) => setField(selected.key,{name})} />}
-                {selected.type === "vlan" && <><Select label="Родительский интерфейс" value={selected.parent ?? ""} placeholder={{label:"— выберите —"}} options={candidates(selected,physicalNics).filter((name) => name === selected.parent || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{parent:v || null})} /><Field label="VLAN ID" type="number" value={selected.vlan_id ?? ""} onChange={(v) => setField(selected.key,{vlan_id:Number(v) || null})} /></>}
+                {(selected.type === "vlan" || selected.type === "virtualip") && <><Select label="Родительский интерфейс" value={selected.parent ?? ""} placeholder={{label:"— выберите —"}} options={candidates(selected,physicalNics).filter((name) => name === selected.parent || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{parent:v || null})} /><Field label="VLAN ID" type="number" value={selected.vlan_id ?? ""} onChange={(v) => setField(selected.key,{vlan_id:Number(v) || null})} /></>}
                 {selected.type === "bridge" && <FormWide>{selected.members.map((m,index) => <FormActions key={`${m}-${index}`}><Select ariaLabel={`Участник ${selected.key} ${index}`} value={m} error={!m || !rows.some((r) => r.key !== selected.key && r.name === m && r.zone)} placeholder={{label:"— выберите —"}} options={candidates(selected,allRealNics).filter((name) => selected.members.includes(name) || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{members:selected.members.map((row,r) => r === index ? v : row)})} /><DeleteButton label={`Удалить участника ${m}`} onClick={() => setField(selected.key,{members:selected.members.filter((_,r) => r !== index)})} /></FormActions>)}
                   {candidates(selected,allRealNics).some((name) => !selected.members.includes(name) && !usedByOtherRows(selected).has(name)) && <Button onClick={() => {const free=candidates(selected,allRealNics).find((name) => !selected.members.includes(name) && !usedByOtherRows(selected).has(name));if(free)setField(selected.key,{members:[...selected.members,free]});}}>+ участник</Button>}
                 </FormWide>}
@@ -404,9 +410,9 @@ export default function Network() {
         <Dialog open={virtualOpen} onClose={() => setVirtualOpen(false)} fullWidth maxWidth="sm" aria-labelledby="virtual-interface-title">
           <DialogTitle id="virtual-interface-title">Виртуальный интерфейс</DialogTitle>
           <DialogContent><FormGrid>
-            <Select label="Тип виртуального интерфейса" value={virtualType} options={[{value:"vlan",label:"VLAN"},{value:"bridge",label:"Мост"}]} onChange={(v) => setVirtualType(v as "vlan" | "bridge")} />
-            {virtualType === "vlan" && <Select label="Родительский порт" value={virtualParent} placeholder={{label:"— выберите порт —"}} options={physicalNics.map((p) => ({value:p.name,label:p.name}))} onChange={setVirtualParent} />}
-            <FormWide><FormActions><Button onClick={() => setVirtualOpen(false)}>Отмена</Button><Button variant="contained" disabled={virtualType === "vlan" && !physicalNics.some((p) => p.name === virtualParent)} onClick={() => { setVirtualOpen(false); addVirtual(virtualType, virtualType === "vlan" ? virtualParent : null); }}>Создать</Button></FormActions></FormWide>
+            <Select label="Тип виртуального интерфейса" value={virtualType} options={[{value:"vlan",label:"VLAN"},{value:"virtualip",label:"Виртуальный IP (IPVLAN L2)"},{value:"bridge",label:"Мост"}]} onChange={(v) => setVirtualType(v as "vlan" | "bridge" | "virtualip")} />
+            {(virtualType === "vlan" || virtualType === "virtualip") && <Select label="Родительский порт" value={virtualParent} placeholder={{label:"— выберите порт —"}} options={physicalNics.map((p) => ({value:p.name,label:p.name}))} onChange={setVirtualParent} />}
+            <FormWide><FormActions><Button onClick={() => setVirtualOpen(false)}>Отмена</Button><Button variant="contained" disabled={(virtualType === "vlan" || virtualType === "virtualip") && !physicalNics.some((p) => p.name === virtualParent)} onClick={() => { setVirtualOpen(false); addVirtual(virtualType, (virtualType === "vlan" || virtualType === "virtualip") ? virtualParent : null); }}>Создать</Button></FormActions></FormWide>
           </FormGrid></DialogContent>
         </Dialog>
         {draftDirty && version?.status === "draft" && <p className="sub">Черновик изменён и ожидает применения (экран «Применение»).</p>}

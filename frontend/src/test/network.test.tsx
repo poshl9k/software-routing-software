@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
@@ -260,6 +260,8 @@ it("groups VLAN rows directly under their parent with a gap between groups", asy
       addressing: "static" as const, addresses: [], parent: null, vlan_id: null, members: [] },
     { name: "vlan2", type: "vlan" as const, parent: "ens256", vlan_id: 50, zone: null, description: "Управление AP",
       addressing: "static" as const, addresses: [], members: [] },
+    { name: "vip0", type: "virtualip" as const, parent: "ens224", zone: "wan", description: "Второй апстрим",
+      addressing: "static" as const, addresses: ["192.168.116.253/32"], members: [], vlan_id: null },
   ] };
   vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string) => Promise.resolve(
     new Response(JSON.stringify(path === "/api/versions"
@@ -277,7 +279,46 @@ it("groups VLAN rows directly under their parent with a gap between groups", asy
   expect(at("Транк WiFi")).toBeLessThan(at("Управление AP"));
   expect(at("Управление AP")).toBeLessThan(at("Гостевая"));
   expect(at("Гостевая")).toBeLessThan(at("Аплинк"));
+  expect(at("Аплинк")).toBeLessThan(at("Второй апстрим"));
   expect(screen.getByText("VLAN 50")).toBeInTheDocument();
+  expect(screen.getByText("IPVLAN L2")).toBeInTheDocument();
   expect(screen.getAllByText(/VLAN на ens256/)).toHaveLength(2);
-  expect(document.querySelectorAll("tbody tr")).toHaveLength(5);
+  expect(screen.getByText(/IPVLAN на ens224/)).toBeInTheDocument();
+  expect(document.querySelectorAll("tbody tr")).toHaveLength(6);
+});
+
+
+it("creates an IPVLAN L2 virtual interface from the existing dialog", async () => {
+  let configuration: Configuration = { ...emptyConfiguration, interfaces: [{
+    name: "eth0", type: "physical" as const, zone: "wan", description: "Аплинк",
+    addressing: "static" as const, addresses: [], parent: null, vlan_id: null, members: [],
+  }] };
+  const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (init?.method === "PUT") configuration = JSON.parse(String(init.body));
+    const version = { id: 1, status: "draft", configuration };
+    return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] : path === "/api/host/interfaces" ? [
+      { name: "eth0", kind: "physical", parent: null, operstate: "UP" },
+    ] : version)));
+  });
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+
+  await user.click(await screen.findByRole("button", { name: "+ Виртуальный интерфейс" }));
+  const dialog = screen.getByRole("dialog", { name: "Виртуальный интерфейс" });
+  await user.selectOptions(within(dialog).getByLabelText("Тип виртуального интерфейса"), "virtualip");
+  await user.selectOptions(within(dialog).getByLabelText("Родительский порт"), "eth0");
+  await user.click(within(dialog).getByRole("button", { name: "Создать" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Виртуальный интерфейс" })).toBeNull());
+
+  const editor = await screen.findByRole("dialog", { name: /Интерфейс: vip1/ });
+  await waitFor(() => expect(editor).not.toHaveAttribute("aria-hidden"));
+  // MUI keeps the nested dialog's exit transition alive in jsdom; fireEvent
+  // avoids a pointer-events race that does not exist in a real browser.
+  fireEvent.click(within(editor).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
+  const saved = JSON.parse(String(fetch.mock.calls.filter(([, init]) => init?.method === "PUT").at(-1)![1].body));
+  expect(saved.interfaces).toEqual(expect.arrayContaining([
+    expect.objectContaining({ name: "vip1", type: "virtualip", parent: "eth0" }),
+  ]));
 });

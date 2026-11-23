@@ -4,7 +4,7 @@ export type Secret =
   | { plaintext: string }; // Write-only API input; encrypted by the server.
 export interface Interface {
   name: string;
-  type: "physical" | "bridge" | "vlan";
+  type: "physical" | "bridge" | "vlan" | "virtualip";
   zone: string | null;
   /** Free-form operator note / friendly label; UI-only, never generated. */
   description: string | null;
