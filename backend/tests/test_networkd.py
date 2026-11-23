@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from vs_router.agent.apply import ApplyEngine, APPLIED_DIR, ApplyError
+from vs_router.agent import services as agent_services
 from vs_router.agent.services import NetworkdReloader
 from vs_router.api import configuration as api_configuration
 from vs_router.generators import generate_networkd, serialize_networkd
@@ -316,7 +317,8 @@ def test_ipvlan_l2_generation_attaches_to_the_parent():
     assert '[NetDev]\nName=vip0\nKind=ipvlan\n' in netdev
     assert '[IPVLAN]\nMode=L2\n' in netdev
     parent = files['10-vs-router-eth0.network']
-    assert 'IPvLAN=vip0' in parent
+    assert 'IPVLAN=vip0' in parent
+    assert 'IPvLAN=' not in parent
     child = files['10-vs-router-vip0.network']
     assert 'Address=192.0.2.2/24' in child
     assert 'Address=192.0.2.3/32' in child
@@ -326,7 +328,7 @@ def test_reloader_finds_ipvlan_parent_in_a_bundle(monkeypatch):
     monkeypatch.setattr('vs_router.agent.services.host_supports_ipvlan', lambda: True)
     fs, executor = FakeFS(), FakeExecutor()
     fs.write(APPLIED_DIR / 'networkd.conf', serialize_networkd({
-        '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nIPvLAN=vip0\n',
+        '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nIPVLAN=vip0\n',
         '10-vs-router-vip0.netdev': '[NetDev]\nName=vip0\nKind=ipvlan\n\n[IPVLAN]\nMode=L2\n',
         '10-vs-router-vip0.network': '[Match]\nName=vip0\n\n[Network]\nAddress=192.0.2.2/24\n',
     }))
@@ -358,9 +360,68 @@ def test_reloader_refuses_ipvlan_on_a_host_without_support(monkeypatch):
     monkeypatch.setattr('vs_router.agent.services.host_supports_ipvlan', lambda: False)
     fs, executor = FakeFS(), FakeExecutor()
     fs.write(APPLIED_DIR / 'networkd.conf', serialize_networkd({
-        '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nIPvLAN=vip0\n',
+        '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nIPVLAN=vip0\n',
         '10-vs-router-vip0.netdev': '[NetDev]\nName=vip0\nKind=ipvlan\n\n[IPVLAN]\nMode=L2\n',
         '10-vs-router-vip0.network': '[Match]\nName=vip0\n\n[Network]\nAddress=192.0.2.2/24\n',
     }))
     with pytest.raises(ApplyError, match='agent.ipvlan_unsupported'):
         NetworkdReloader(executor, fs)(APPLIED_DIR / 'networkd.conf')
+
+
+def test_host_supports_ipvlan_checks_the_uppercase_parser_key(monkeypatch):
+    class Binary:
+        spelling = b'Network.IPVLAN IPVLAN.Mode'
+
+        def __init__(self, path):
+            self.path = path
+
+        def read_bytes(self):
+            return self.spelling if str(self.path).endswith('systemd-networkd') else b''
+
+    monkeypatch.setattr(agent_services, 'Path', Binary)
+    assert agent_services.host_supports_ipvlan() is True
+
+    class LegacyBinary(Binary):
+        spelling = b'Network.IPvLAN IPvLAN.Mode'
+
+    monkeypatch.setattr(agent_services, 'Path', LegacyBinary)
+    assert agent_services.host_supports_ipvlan() is False
+
+
+def test_reloader_drops_macvlan_child_when_parent_switches_to_ipvlan(monkeypatch):
+    """One rx_handler per parent: MACVLAN children must go before IPvLAN comes."""
+    monkeypatch.setattr('vs_router.agent.services.host_supports_ipvlan', lambda: True)
+    fs, executor = FakeFS(), FakeExecutor()
+    manifest = APPLIED_DIR / 'manifest.conf'
+    fs.write(manifest, serialize_networkd({
+        '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nMACVLAN=vip0\n',
+        '10-vs-router-vip0.netdev': '[NetDev]\nName=vip0\nKind=macvlan\n\n[MACVLAN]\nMode=bridge\n',
+        '10-vs-router-vip0.network': '[Match]\nName=vip0\n\n[Network]\nAddress=192.0.2.2/24\n',
+    }))
+    incoming = APPLIED_DIR / 'incoming.conf'
+    fs.write(incoming, serialize_networkd({
+        '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nIPVLAN=ip0\n',
+        '10-vs-router-ip0.netdev': '[NetDev]\nName=ip0\nKind=ipvlan\n\n[IPVLAN]\nMode=L2\n',
+        '10-vs-router-ip0.network': '[Match]\nName=ip0\n\n[Network]\nAddress=192.0.2.3/24\n',
+    }))
+
+    def link(name, kind):
+        return json.dumps([{'ifname': name, 'link': 'eth0',
+                            'linkinfo': {'info_kind': kind}}])
+
+    calls = []
+
+    def run(argv, timeout):
+        calls.append((list(argv), timeout))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(link('vip0', 'macvlan')
+                    if argv == ['ip', '-j', '-d', 'link', 'show', 'dev', 'vip0']
+                    else link('ip0', 'ipvlan')
+                    if argv == ['ip', '-j', '-d', 'link', 'show', 'dev', 'ip0'] else ''))
+
+    executor.run = run
+
+    NetworkdReloader(executor, fs, manifest_path=manifest)(incoming)
+
+    assert (['ip', 'link', 'del', 'vip0'], 15) in calls

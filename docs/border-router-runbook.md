@@ -146,7 +146,8 @@ python3 -c 'import json;d=json.load(open("/etc/vs-router/applied/singbox.json"))
 - родитель — существующий физический интерфейс с назначенной зоной;
 - у виртуального интерфейса своя зона, свои адреса и своё имя;
 - в `.netdev` это `Kind=ipvlan` + `[IPVLAN] Mode=L2`, а в `.network` родителя
-  пишется `IPvLAN=<имя>`;
+  пишется `IPVLAN=<имя>` — именно с заглавной `V` (ключ регистрочувствителен;
+  написание `IPvLAN=` networkd игнорирует как `Unknown key`);
 - такой интерфейс выбирается везде, где и обычный: как источник/назначение
   в правилах маршрутизации (включая пару «адрес-источник + шлюз»), в зонах
   файрвола, в слушателях DNS;
@@ -156,14 +157,17 @@ python3 -c 'import json;d=json.load(open("/etc/vs-router/applied/singbox.json"))
 Реализованы оба варианта: `virtualip` (IPVLAN L2) и `virtualmac` (MACVLAN bridge).
 Агент сообщает поддержку IPVLAN в `/api/host/profile` (`ipvlan: true/false`): панель скрывает
 пункт IPVLAN, если хостовый networkd его не понимает, а apply с таким типом отклоняется
-кодом `agent.ipvlan_unsupported` до изменения сети.
-Debian 13 с systemd 257 **не понимает ключ `IPvLAN=`** в `[Network]` — journald
-показывает `Unknown key 'IPvLAN' ... ignoring`, netdev не создаётся и apply
-откатывается. На таком хосте используйте «Виртуальный IP (MACVLAN bridge)»:
-генератор пишет `Kind=macvlan`, `[MACVLAN] Mode=bridge` и `MACVLAN=<имя>`
-в родителе. IPVLAN L2 сохраняет MAC родителя и безопаснее там, где systemd его
-поддерживает; MACVLAN даёт каждому интерфейсу свой MAC — убедитесь, что апстрим
-их разрешает.
+кодом `agent.ipvlan_unsupported` до изменения сети. Debian 13 с systemd 257 ключ
+`IPVLAN=` понимает — проверено на живом хосте: `ip link add link ens224 name vip2
+type ipvlan mode l2` с адресом `192.168.116.253/24` даёт ARP `REACHABLE`, ping
+до `192.168.116.254` без потерь и HTTP 200.
+
+Выбирайте IPVLAN L2, если апстрим не разрешает чужие MAC-адреса (например,
+портгруппа ESXi с Forged Transmits = Reject): IPVLAN сохраняет MAC родителя.
+MACVLAN даёт каждому интерфейсу свой MAC и требует разрешения подмены MAC на
+апстриме. Ядро разрешает только один rx-handler на родителя, поэтому IPVLAN и
+MACVLAN-дети **не могут сосуществовать на одном порту** (`Device is already in
+use`); агент сам удаляет старых детей при смене типа через apply.
 
 ### 2.7. Перехват и применение
 

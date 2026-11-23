@@ -343,20 +343,22 @@ class KeaReloader:
 
 
 def host_supports_ipvlan() -> bool:
-    """Whether the installed networkd knows the IPvLAN= parent directive.
+    """Whether the installed networkd knows the IPVLAN= parent directive.
 
-    systemds before 262 accept MACVLAN= but reject IPvLAN= with "Unknown key"
-    at reload time, which would otherwise roll back the whole apply. Reading
-    the binary is a local, side-effect-free probe; man pages may be absent.
+    The parser key is spelled IPVLAN with an upper-case V; the product used
+    to emit IPvLAN=, which networkd logs as "Unknown key" and silently
+    ignores, leaving the child unattached. Reading the binary is a local,
+    side-effect-free probe; man pages may be absent.
     """
     for path in ('/usr/lib/systemd/systemd-networkd',
                  '/lib/systemd/systemd-networkd',
                  '/usr/libexec/systemd/systemd-networkd'):
         try:
-            if b'IPvLAN' in Path(path).read_bytes():
-                return True
+            data = Path(path).read_bytes()
         except OSError:
             continue
+        if b'Network.IPVLAN' in data and b'IPVLAN.Mode' in data:
+            return True
     return False
 
 
@@ -372,7 +374,7 @@ def _netdev_spec(content):
 
 
 def _declared_parent(files, name):
-    """Parent whose .network attaches ``name`` via VLAN= in the same bundle."""
+    """Parent whose .network attaches ``name`` via VLAN=/IPVLAN=/MACVLAN=."""
     for filename, content in files.items():
         if not filename.endswith('.network'):
             continue
@@ -381,10 +383,11 @@ def _declared_parent(files, name):
         # networkd is ever reloaded.
         parser = configparser.ConfigParser(interpolation=None, strict=False)
         parser.read_string(content)
-        # A stacked virtual link can be declared by VLAN=, IPvLAN= or
-        # MACVLAN= in the parent's .network. All repeat legally.
+        # A stacked virtual link can be declared by VLAN=, IPVLAN= or
+        # MACVLAN= in the parent's .network. All repeat legally. The old
+        # IPvLAN= spelling is still read so pre-fix bundles can be rolled back.
         if any(name in parser.get('Network', key, fallback='').split()
-               for key in ('VLAN', 'IPvLAN', 'MACVLAN')):
+               for key in ('VLAN', 'IPVLAN', 'IPvLAN', 'MACVLAN')):
             return parser.get('Match', 'Name', fallback=None)
     return None
 
@@ -435,7 +438,8 @@ class NetworkdReloader:
     def _expected_link(self, interface, files):
         """Kind, VLAN id and parent declared by the incoming netdev bundle."""
         kind, vlan_id = _netdev_spec(files[f'10-vs-router-{interface}.netdev'])
-        parent = _declared_parent(files, interface) if kind == 'vlan' else None
+        parent = (_declared_parent(files, interface)
+                  if kind in ('vlan', 'ipvlan', 'macvlan') else None)
         return kind, vlan_id, parent
 
     @staticmethod
@@ -443,7 +447,7 @@ class NetworkdReloader:
         if state is None or not kind:
             return False
         mismatch = state['kind'] != kind
-        if kind == 'vlan':
+        if kind in ('vlan', 'ipvlan', 'macvlan'):
             mismatch |= vlan_id is not None and state['vlan_id'] != vlan_id
             mismatch |= parent is not None and state['parent'] != parent
         return mismatch
@@ -478,6 +482,29 @@ class NetworkdReloader:
             checked(self.executor, ['chmod', '0644', str(destination)])
         for name in sorted(previous.keys() - files.keys()):
             self.fs.remove(self.network_dir / name)
+        # The kernel allows a single rx_handler per parent, so MACVLAN and
+        # IPvLAN children cannot coexist on one link ("Device is already in
+        # use"). When a version changes a parent from one kind to the other,
+        # drop its old children before the reload even if their names changed.
+        new_virtual = {
+            name.removeprefix('10-vs-router-').removesuffix('.netdev'): _netdev_spec(content)
+            for name, content in files.items() if name.endswith('.netdev')}
+        for name, content in previous.items():
+            if not name.endswith('.netdev'):
+                continue
+            old_interface = name.removeprefix('10-vs-router-').removesuffix('.netdev')
+            old_kind, _ = _netdev_spec(content)
+            if (old_kind not in ('ipvlan', 'macvlan')
+                    or old_interface in new_virtual
+                    or self._link_state(old_interface) is None):
+                continue
+            old_parent = _declared_parent(previous, old_interface)
+            if old_parent is None:
+                continue
+            if any(kind in ('ipvlan', 'macvlan') and kind != old_kind
+                   and _declared_parent(files, new_interface) == old_parent
+                   for new_interface, (kind, _) in new_virtual.items()):
+                checked(self.executor, ['ip', 'link', 'del', old_interface])
         virtual_links = sorted(name.removeprefix('10-vs-router-').removesuffix('.netdev')
                                for name in files if name.endswith('.netdev'))
         # A stale netdev keeps its name occupied, so networkd silently skips

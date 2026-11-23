@@ -51,7 +51,7 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
     Bridge members must also have a zone; addresses belong on the bridge.
     VLANs attach through VLAN= in the parent's [Network], including bridge parents;
     [VLAN] Id= is the canonical netdev syntax, with no Parent= or BridgeVLAN needed.
-    virtualip is an IPVLAN L2 device attached with IPvLAN= in the parent's [Network].
+    virtualip is an IPVLAN L2 device attached with IPVLAN= in the parent's [Network].
     WAN order is retained: primary keeps its prefix, additional IPv4 addresses use
     /32 (IPv6 uses /128). Static gateways and DNS settings are not generated.
     """
@@ -116,7 +116,7 @@ def generate_networkd(version: ConfigurationVersion, *, exclude: Iterable[str] =
                     lines.append("BindCarrier=" + " ".join(members))
             lines += [f"VLAN={v.name}" for v in interfaces
                       if v.type == "vlan" and v.zone and v.parent == i.name]
-            lines += [f"IPvLAN={v.name}" for v in interfaces
+            lines += [f"IPVLAN={v.name}" for v in interfaces
                       if v.type == "virtualip" and v.zone and v.parent == i.name]
             lines += [f"MACVLAN={v.name}" for v in interfaces
                       if v.type == "virtualmac" and v.zone and v.parent == i.name]
