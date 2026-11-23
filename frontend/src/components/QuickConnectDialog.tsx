@@ -46,7 +46,8 @@ export function QuickConnectDialog({ open, onClose, onAdd, ports, existing, load
     (isVirtual ? ifaceNameValid(systemName) && !used.has(systemName) && !ports.some((p) => p.name === systemName) : free.some((p) => p.name === choice.port)) &&
     (choice.scenario === "bridge" ? choice.members.length >= 2 && choice.members.every((m) => bridgePorts.some((p) => p.name === m)) :
       (choice.scenario === "vlan" ? availableParents.some((p) => p.name === choice.port) && Number.isInteger(vlanId) && vlanId >= 1 && vlanId <= 4094 && !existing.some((i) => i.type === "vlan" && i.parent === choice.port && i.vlan_id === vlanId) : true)) &&
-    addressValidNow && !existing.some((i) => i.addresses.some((a) => a.trim().toLowerCase() === choice.address.trim().toLowerCase() && !!choice.address.trim())) && (choice.scenario !== "static" || !!choice.address.trim())
+    // A static parent may carry no IP: it exists only to hold VLANs.
+    addressValidNow && !existing.some((i) => i.addresses.some((a) => a.trim().toLowerCase() === choice.address.trim().toLowerCase() && !!choice.address.trim()))
   );
   const nextAllowed = step === 0 || step === 1 && selectionValid || step === 2 && (choice.scenario !== "dhcp" || !!choice.zone);
   const portOptions = (choice.scenario === "vlan" ? availableParents : free).map((p) => ({
@@ -72,7 +73,7 @@ export function QuickConnectDialog({ open, onClose, onAdd, ports, existing, load
         {isVirtual && <Field label="Системное имя" value={choice.name} valid={!choice.name || ifaceNameValid(systemName) && !used.has(systemName) && !ports.some((p) => p.name === systemName)} hint="Уникальное имя интерфейса в системе" onChange={(name) => set({ name })} />}
         <Field label="Дружественное имя" value={choice.description} maxLength={64} onChange={(description) => set({ description })} />
         {choice.scenario === "vlan" && <Field label="VLAN ID" type="number" value={choice.vlanId} inputProps={{ min: 1, max: 4094 }} valid={!choice.vlanId || Number.isInteger(vlanId) && vlanId >= 1 && vlanId <= 4094 && !existing.some((i) => i.type === "vlan" && i.parent === choice.port && i.vlan_id === vlanId)} onChange={(vlanId) => set({ vlanId })} />}
-        {needsAddress && <Field label="Адрес (CIDR)" value={choice.address} placeholder="192.168.10.1/24" valid={addressValidNow} hint={choice.scenario === "static" ? "Укажите адрес в формате IP/маска" : "Необязательно; без адреса интерфейс остаётся без IP"} onChange={(address) => set({ address })} />}
+        {needsAddress && <Field label="Адрес (CIDR)" value={choice.address} placeholder="192.168.10.1/24" valid={addressValidNow} hint="Необязательно; без адреса интерфейс остаётся без IP — например, транк для VLAN" onChange={(address) => set({ address })} />}
         {(loading || unavailable || !physical.length || !free.length && choice.scenario !== "vlan") && <FormWide><InfoNote>{loading ? "Загрузка портов хоста…" : unavailable ? "Порты хоста недоступны. Подключение невозможно." : "Нет доступных физических портов."}</InfoNote></FormWide>}
       </FormGrid>}
       {step === 2 && <Select label="Роль интерфейса" value={choice.zone} placeholder={{ label: roleLabels[""] }} options={[{ value: "wan", label: roleLabels.wan }, { value: "lan", label: roleLabels.lan }]} onChange={(zone) => set({ zone })} />}

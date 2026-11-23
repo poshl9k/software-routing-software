@@ -188,3 +188,35 @@ it("quick VLAN and bridge stage complete references without a partial write", as
     expect.objectContaining({ name: "eth1", zone: null }),
   ]));
 });
+
+
+it("stages an addressless static port as a VLAN parent", async () => {
+  let configuration: Configuration = emptyConfiguration;
+  const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (init?.method === "PUT") configuration = JSON.parse(String(init.body));
+    const version = { id: 1, status: "draft", configuration };
+    return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] : path === "/api/host/interfaces" ? [
+      { name: "eth0", kind: "physical", parent: null, mac: "00:00:00:00:00:01", operstate: "UP" },
+    ] : version)));
+  });
+  vi.stubGlobal("fetch", fetch);
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+
+  await user.click(await screen.findByRole("button", { name: "Быстро подключить" }));
+  await user.selectOptions(screen.getByLabelText("Сценарий подключения"), "static");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.selectOptions(screen.getByLabelText("Физический порт"), "eth0");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  expect(screen.getByLabelText("Адресация")).toHaveValue("Без IP-адреса");
+  await user.click(screen.getByRole("button", { name: "Добавить в черновик" }));
+
+  const editor = await screen.findByRole("dialog", { name: /Интерфейс: eth0/ });
+  await user.click(within(editor).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(true));
+  const saved = JSON.parse(String(fetch.mock.calls.filter(([, init]) => init?.method === "PUT").at(-1)![1].body));
+  expect(saved.interfaces).toEqual(expect.arrayContaining([
+    expect.objectContaining({ name: "eth0", type: "physical", addresses: [] }),
+  ]));
+});

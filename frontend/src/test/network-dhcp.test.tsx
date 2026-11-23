@@ -191,7 +191,7 @@ it("quick DHCP adds to local draft only and saves through the editor", async () 
   expect(saved.interfaces).toEqual([expect.objectContaining({ name: "eth0", type: "physical", zone: "wan", description: "Провайдер", addressing: "dhcp", addresses: [] })]);
 });
 
-it("quick static rejects missing CIDR and cancellation leaves no draft", async () => {
+it("quick static allows an addressless parent, rejects malformed CIDR, and cancellation leaves no draft", async () => {
   const fetch = vi.fn().mockImplementation((path: string) => {
     const version = { id: 1, status: "draft", configuration: emptyConfiguration };
     return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] : path === "/api/host/interfaces" ? [
@@ -205,7 +205,7 @@ it("quick static rejects missing CIDR and cancellation leaves no draft", async (
   await user.selectOptions(screen.getByLabelText("Сценарий подключения"), "static");
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.selectOptions(screen.getByLabelText("Физический порт"), "eth1");
-  expect(screen.getByRole("button", { name: "Далее" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Далее" })).toBeEnabled();
   await user.type(screen.getByLabelText("Адрес (CIDR)"), "invalid");
   expect(screen.getByRole("button", { name: "Далее" })).toBeDisabled();
   await user.clear(screen.getByLabelText("Адрес (CIDR)"));
