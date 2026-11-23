@@ -89,6 +89,34 @@ it("opens the interface editor from a row and keeps role fields inside the dialo
   expect(screen.queryByLabelText("Роль / зона")).toBeNull();
 });
 
+it("deleting an interface closes the editor and writes the reduced draft", async () => {
+  const configuration: Configuration = { ...emptyConfiguration, interfaces: [
+    { name: "eth0", type: "physical", zone: "lan", description: "Первый",
+      addressing: "static", addresses: [], parent: null, vlan_id: null, members: [] },
+    { name: "eth1", type: "physical", zone: "lan", description: "Второй",
+      addressing: "static", addresses: [], parent: null, vlan_id: null, members: [] },
+  ] };
+  const saves: Configuration[] = [];
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (init?.method === "PUT") saves.push(JSON.parse(String(init.body)));
+    const version = { id: 1, status: "draft", configuration };
+    return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] : version)));
+  }));
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+
+  await user.click(await screen.findByRole("button", { name: "Первый" }));
+  const editor = screen.getByRole("dialog", { name: /Интерфейс: Первый/ });
+  await user.click(within(editor).getByRole("button", { name: "Удалить интерфейс eth0" }));
+  const confirm = screen.getByRole("dialog", { name: "Удалить интерфейс?" });
+  await user.click(within(confirm).getByRole("button", { name: "Удалить" }));
+
+  await waitFor(() => expect(saves).toHaveLength(1));
+  expect(saves[0].interfaces.map((i) => i.name)).toEqual(["eth1"]);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.queryByRole("dialog", { name: /Интерфейс: Второй/ })).toBeNull();
+});
+
 it("creates, edits and deletes static routes only through the single draft", async () => {
   const user = userEvent.setup();
   let configuration: Configuration = { ...emptyConfiguration, interfaces: [{

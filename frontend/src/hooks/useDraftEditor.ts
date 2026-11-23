@@ -17,8 +17,10 @@ export interface DraftEditor<T> {
    * Persist the current working copy. `commit` maps the local value to a full
    * configuration; the hook saves the draft, shows the shared notice and exits
    * edit mode, retaining the local value and surfacing the error on failure.
+   * `override` is for an action that has already replaced the working copy in
+   * the same event: React has not re-rendered yet, so `value` is still stale.
    */
-  save: (commit: (value: T) => Configuration) => Promise<void>;
+  save: (commit: (value: T) => Configuration, override?: T) => Promise<void>;
 }
 
 /**
@@ -39,12 +41,13 @@ export function useDraftEditor<T>(): DraftEditor<T> {
     setError(null);
   }, []);
   const save = useCallback(
-    async (commit: (value: T) => Configuration) => {
-      if (!version || value === null) return;
+    async (commit: (value: T) => Configuration, override?: T) => {
+      const current = override ?? value;
+      if (!version || current === null) return;
       setSaving(true);
       setError(null);
       try {
-        const saved = await saveDraft(commit(value));
+        const saved = await saveDraft(commit(current));
         setNotice(`Черновик v${saved.id} сохранён`);
         setValue(null);
       } catch (err) {

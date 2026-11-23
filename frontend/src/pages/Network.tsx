@@ -5,7 +5,7 @@ import { useConfiguration } from "../state";
 import { api } from "../api";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
-import type { HostInterface, Interface, StaticRoute } from "../types";
+import type { Configuration, HostInterface, Interface, StaticRoute } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
 import { DataTable } from "../components/DataTable";
@@ -237,35 +237,35 @@ export default function Network() {
     else editor.begin(next);
     setSelectedKey(key);
   };
-  const removeRow = (i: Editable) => {
-    try {
-      editor.setValue(rows.filter((row) => row.key !== i.key));
-      if (selectedKey === i.key) setSelectedKey(rows.find((row) => row.key !== i.key)?.key ?? i.key);
-      setDeleteKey(null);
-    } catch (error) {
-      editor.setError(error);
-    }
+  const commitInterfaces = (value: Editable[]): Configuration => ({
+    ...c,
+    interfaces: value.map(({ key: _key, ...rest }) => ({
+      ...rest,
+      pppoe_username: rest.addressing === "pppoe" ? rest.pppoe_username?.trim() : undefined,
+      pppoe_password: rest.addressing === "pppoe" ? rest.pppoe_password : undefined,
+      name: rest.name.trim(),
+      description: rest.description?.trim() || null,
+      // A DHCP client owns no static address: never send the address a row
+      // held before it was switched to DHCP (avoids interface.dhcp_with_addresses
+      // and a stale-address conflict at apply time).
+      addresses:
+        rest.addressing !== "static"
+          ? []
+          : rest.addresses.filter((a) => a.trim()),
+      members: rest.members.filter((m) => m.trim()),
+    })),
+  });
+
+  const removeRow = async (i: Editable) => {
+    // Delete closes the editor and writes straight to the draft: leaving the
+    // reduced list only in local state would strand it after the dialog closes.
+    await editor.save(commitInterfaces, rows.filter((row) => row.key !== i.key));
+    setSelectedKey(null);
+    setDeleteKey(null);
   };
 
   const save = async () => {
-    await editor.save((value) => ({
-      ...c,
-      interfaces: value.map(({ key: _key, ...rest }) => ({
-        ...rest,
-        pppoe_username: rest.addressing === "pppoe" ? rest.pppoe_username?.trim() : undefined,
-        pppoe_password: rest.addressing === "pppoe" ? rest.pppoe_password : undefined,
-        name: rest.name.trim(),
-        description: rest.description?.trim() || null,
-        // A DHCP client owns no static address: never send the address a row
-        // held before it was switched to DHCP (avoids interface.dhcp_with_addresses
-        // and a stale-address conflict at apply time).
-        addresses:
-          rest.addressing !== "static"
-            ? []
-            : rest.addresses.filter((a) => a.trim()),
-        members: rest.members.filter((m) => m.trim()),
-      })),
-    }));
+    await editor.save(commitInterfaces);
   };
 
   const validName = (i: Editable) => ifaceNameValid(i.name.trim());
@@ -426,7 +426,7 @@ export default function Network() {
         {draftDirty && version?.status === "draft" && <p className="sub">Черновик изменён и ожидает применения (экран «Применение»).</p>}
         <QuickConnectDialog open={quickOpen} onClose={() => setQuickOpen(false)} onAdd={addQuick}
           ports={allRealNics} existing={rows} loading={hostInterfaces.isPending} unavailable={hostInterfaces.isError} />
-        <ConfirmDialog open={deleteKey !== null} title="Удалить интерфейс?" body={`Интерфейс ${rows.find((i) => i.key === deleteKey)?.name || "без имени"} будет удалён из черновика. Проверьте зависимости и доступ к панели перед применением.`} confirmLabel="Удалить" cancelLabel="Отмена" danger onConfirm={() => {const target=rows.find((i) => i.key === deleteKey);if(target)removeRow(target);}} onCancel={() => setDeleteKey(null)} />
+        <ConfirmDialog open={deleteKey !== null} title="Удалить интерфейс?" body={`Интерфейс ${rows.find((i) => i.key === deleteKey)?.name || "без имени"} будет удалён из черновика. Проверьте зависимости и доступ к панели перед применением.`} confirmLabel="Удалить" cancelLabel="Отмена" danger onConfirm={() => {const target=rows.find((i) => i.key === deleteKey);if(target)void removeRow(target);else setDeleteKey(null);}} onCancel={() => setDeleteKey(null)} />
       </>}
 
       {knownTab === "wan" && (
