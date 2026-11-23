@@ -66,7 +66,12 @@ class ConfigurationRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     def snapshot(self) -> ConfigurationVersion:
-        return ConfigurationVersion(
+        # The model revalidates nested Configuration instances on construction,
+        # which would reject a draft that became invalid after a rule was
+        # tightened and take down /api/versions. The row was already parsed by
+        # ConfigurationJSON on read; assemble the view without a second pass.
+        # Writes and /api/apply still validate the document strictly.
+        return ConfigurationVersion.model_construct(
             id=self.id,
             status=self.status,
             profile=self.profile,

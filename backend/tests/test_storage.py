@@ -114,6 +114,7 @@ def test_invalid_stored_draft_stays_readable_but_apply_validation_rejects_it(dat
     """A tightened rule must not make older drafts unreadable in the panel."""
     import json
     from vs_router.api.configuration import validate
+    from vs_router.api.versions import view
 
     engine, _ = database
     document = scenario("edge").configuration.model_dump(mode="json")
@@ -126,6 +127,8 @@ def test_invalid_stored_draft_stays_readable_but_apply_validation_rejects_it(dat
     with Session(engine) as session:
         row = session.get(ConfigurationRow, 1)
         assert row.configuration.interfaces[0].addresses == ("192.168.116.0/24",)
+        # The versions endpoint must be able to render this row, not just load it.
+        assert view(row)["id"] == 1
         result = validate(row.configuration.model_dump(mode="json"))
         assert result["valid"] is False
         assert any("interface.address_host_required" in str(e) for e in result["errors"])
