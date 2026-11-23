@@ -195,3 +195,57 @@ def test_doh_server_on_a_plain_upstream_is_rejected():
     with pytest.raises(ValidationError, match="dns.upstream_doh_server_unexpected"):
         ConfigurationVersion(configuration={"dns": {
             "upstreams": [{"address": "1.1.1.1", "doh_server": "cloudflare"}]}})
+
+
+def _service_version():
+    return ConfigurationVersion.model_validate({"configuration": {
+        "interfaces": [
+            {"name": "eth0", "zone": "wan", "addresses": ["203.0.113.2/24"]},
+            {"name": "eth1", "zone": "lan", "addresses": ["10.10.20.1/24"]},
+            {"name": "vlan1", "type": "vlan", "parent": "eth1", "vlan_id": 201,
+             "zone": "lan", "addresses": ["172.20.1.1/24"]},
+        ],
+        "dhcp_subnets": [{"id": 1, "interface": "vlan1", "subnet": "172.20.1.0/24",
+                          "pools": [{"start": "172.20.1.20", "end": "172.20.1.250"}],
+                          "routers": ["172.20.1.1"], "dns_servers": ["172.20.1.1"]}],
+        "dns": {"interfaces": ["vlan1"], "access_control": ["172.20.1.0/24"]},
+    }})
+
+
+def test_dhcp_server_rule_is_generated_from_subnets():
+    text = generate_nftables(_service_version())
+    assert 'iifname "vlan1" udp sport 68 udp dport 67 counter accept comment "dhcp_server_vlan1"' in text
+
+
+def test_dns_resolver_rule_follows_listeners_and_access_control():
+    text = generate_nftables(_service_version())
+    assert ('iifname { "vlan1" } meta nfproto ipv4 ip saddr { 172.20.1.0/24 } '
+            'meta l4proto { tcp, udp } th dport 53 counter accept comment "dns_resolver_auto"') in text
+    assert 'comment "dns_resolver_auto"' not in generate_nftables(ConfigurationVersion())
+
+
+def test_explicit_dns_block_precedes_automatic_accept():
+    version = _service_version()
+    data = version.model_dump()
+    data["configuration"]["firewall_rules"] = [{
+        "name": "dns_block", "ingress_zone": "lan", "protocol": "udp",
+        "src": "172.20.1.0/24", "dst": "zone:router", "destination_ports": "53",
+        "action": "block", "order": 0,
+    }]
+    text = generate_nftables(ConfigurationVersion.model_validate(data))
+    block = text.index('comment "dns_block"')
+    auto = text.index('comment "dns_resolver_auto"')
+    assert block < auto
+
+
+def test_exit_snat_is_automatic_without_capture():
+    version = _service_version()
+    data = version.model_dump()
+    data["configuration"]["routing_rules"] = [{
+        "name": "wifi_upstream", "subject": {"kind": "interface", "interface": "vlan1"},
+        "ip_cidr": ["0.0.0.0/0"], "domain_suffix": [], "domain_exact": [], "rule_sets": [],
+        "exit": {"kind": "interface", "interface": "eth0",
+                 "source": "203.0.113.2", "gateway": "203.0.113.1"},
+    }]
+    text = generate_nftables(ConfigurationVersion.model_validate(data))
+    assert 'oifname "eth0" ip saddr { 172.20.1.0/24 } counter snat ip to 203.0.113.2 comment "exit_snat"' in text

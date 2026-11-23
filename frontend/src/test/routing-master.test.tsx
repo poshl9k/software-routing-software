@@ -660,3 +660,70 @@ it("criterion_S5_preset_rebuilds_the_segment_with_its_catch_all", async () => {
   expect(rule.ip_cidr).toEqual(["0.0.0.0/0"]);
   expect(rule.exit).toEqual({ kind: "direct" });
 });
+
+
+function capturedConfiguration(): Configuration {
+  const configuration = baseConfiguration();
+  configuration.tproxy = { ...configuration.tproxy, enabled: true, ingress_interfaces: ["lan0"] };
+  configuration.routing_rules = [{ name: "ru_direct", subject: { kind: "interface", interface: "lan0" },
+    domain_suffix: ["example.org"], domain_exact: [], ip_cidr: [], rule_sets: [],
+    exit: { kind: "direct" } }];
+  return configuration;
+}
+
+it("criterion_S4_dns_policy_editor_saves_servers_and_rules", async () => {
+  const fetch = setup(capturedConfiguration());
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Настроить DNS-политику" }));
+  const dialog = await screen.findByRole("dialog", { name: "DNS-политика перехвата" });
+
+  await user.click(within(dialog).getByRole("button", { name: "Добавить DNS-сервер" }));
+  const serverDialog = screen.getByRole("dialog", { name: /DNS-сервер: Новый сервер/ });
+  await user.type(within(serverDialog).getByLabelText("Тег сервера"), "local");
+  await user.type(within(serverDialog).getByLabelText("Адрес сервера"), "192.168.10.9");
+  await user.click(within(serverDialog).getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /DNS-сервер: Новый сервер/ })).not.toBeInTheDocument());
+  const mainAfterServer = screen.getByRole("dialog", { name: "DNS-политика перехвата" });
+
+  await user.click(within(mainAfterServer).getByRole("button", { name: "Добавить DNS-правило" }));
+  const ruleDialog = screen.getByRole("dialog", { name: /DNS-правило: Новое правило/ });
+  await user.type(within(ruleDialog).getByLabelText("Имя правила"), "local_rule");
+  await user.selectOptions(within(ruleDialog).getByLabelText("Сервер"), "local");
+  await user.type(within(ruleDialog).getByLabelText("Доменные суффиксы"), "example.org");
+  await user.click(within(ruleDialog).getByRole("button", { name: "Отмена" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /DNS-правило: Новое правило/ })).not.toBeInTheDocument());
+  const mainAfterRule = screen.getByRole("dialog", { name: "DNS-политика перехвата" });
+
+  await user.click(within(mainAfterRule).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const saved = savedDraft(fetch).tproxy.dns;
+  expect(saved.servers).toMatchObject([{ tag: "local", server: "192.168.10.9", type: "udp" }]);
+  expect(saved.rules).toMatchObject([{ name: "local_rule", server: "local", domain_suffix: ["example.org"] }]);
+});
+
+it("criterion_S4_dns_policy_editor_blocks_an_empty_server", async () => {
+  setup(capturedConfiguration());
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Настроить DNS-политику" }));
+  const dialog = await screen.findByRole("dialog", { name: "DNS-политика перехвата" });
+  expect(within(dialog).getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await user.click(within(dialog).getByRole("button", { name: "Добавить DNS-сервер" }));
+  const serverDialog = screen.getByRole("dialog", { name: /DNS-сервер: Новый сервер/ });
+  expect(within(serverDialog).getByRole("button", { name: "Сохранить" })).toBeDisabled();
+});
+
+
+it("criterion_S4_segment_exit_persists_source_and_gateway", async () => {
+  const configuration = segmentConfiguration();
+  configuration.routing_rules[1].exit = { kind: "interface", interface: "eth0" };
+  const fetch = setup(configuration);
+  const user = userEvent.setup();
+  await openSegmentEditor(user);
+  await user.type(screen.getByLabelText("Адрес-источник"), "203.0.113.5");
+  await user.type(screen.getByLabelText("Шлюз"), "203.0.113.1");
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(savedRules(fetch)[1].exit).toMatchObject({
+    kind: "interface", source: "203.0.113.5", gateway: "203.0.113.1",
+  }));
+});

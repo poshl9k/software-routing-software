@@ -1,5 +1,5 @@
 """Deterministic ruleset for a router-owned nftables table; no host I/O."""
-from ipaddress import ip_address, ip_interface
+from ipaddress import ip_address, ip_interface, ip_network
 from ..schema import ConfigurationVersion
 from ..validators import address, expand_aliases, routing_subject_interface_cidrs
 from . import marks
@@ -157,6 +157,15 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
                                   if i.zone and i.addressing == "dhcp")
             if dhcp_clients:
                 lines.append(f'        iifname {names(dhcp_clients)} udp sport 67 udp dport 68 counter accept comment "dhcp_client"')
+        if chain == "input":
+            # Kea serves DHCP from a raw socket, but the accept is still
+            # generated from the configured subnets: the listener set must
+            # follow the document rather than a hand-written firewall rule.
+            server_ifs = sorted({s.interface for s in c.dhcp_subnets
+                                 if s.interface in assigned})
+            for interface in server_ifs:
+                lines.append(f'        iifname "{interface}" udp sport 68 udp dport 67 '
+                             f'counter accept comment "dhcp_server_{interface}"')
         if assigned:
             lines.append(f"        iifname != {names(assigned)} drop")
             if chain == "forward":
@@ -202,6 +211,19 @@ def generate_nftables(version: ConfigurationVersion, management=None) -> str:
                              f'ip daddr {p.target} {p.protocol} dport {p.target_port} '
                              f'counter accept comment "auto_{p.name}"')
         lines.extend(compiler.rules(c.firewall_rules, chain))
+        if chain == "input":
+            # Queries to the panel resolver are local traffic, so the
+            # forward chain never sees them. Emit after the operator rules:
+            # an explicit block must still win over this convenience accept.
+            listeners = sorted({name for name in c.dns.interfaces
+                                if name in assigned and name not in zones.get("wan", ())})
+            clients = sorted({str(net) for raw in c.dns.access_control
+                              for net in [ip_network(raw, strict=False)]
+                              if net.version == 4})
+            if listeners and clients:
+                lines.append(f'        iifname {names(listeners)} meta nfproto ipv4 '
+                             f'ip saddr {_nft_set(clients)} meta l4proto {{ tcp, udp }} '
+                             f'th dport {DNS_PORT} counter accept comment "dns_resolver_auto"')
         if chain == "forward" and "wan" in zones:
             # A server tunnel exists to carry its clients' traffic outward; with
             # default-deny and no rule, every packet from the device is dropped

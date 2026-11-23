@@ -16,6 +16,8 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { InfoNote } from "../components/InfoNote";
 import { PageSection } from "../components/PageSection";
 import { Select } from "../components/Select";
+import { Field } from "../components/Field";
+import { addressValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { useConfiguration } from "../state";
 import type { SegmentGroup } from "./RoutingMaster";
@@ -104,6 +106,7 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
   };
 
   const restRule = rules.length > 0 && isCatchAll(rules[rules.length - 1]) ? rules[rules.length - 1] : null;
+  const restInterfaceExit = restRule?.exit.kind === "interface" ? restRule.exit : null;
   const problems: string[] = [];
   rules.forEach((rule) => {
     if (!hasDestination(rule)) problems.push(`Правило «${rule.name}» без назначения.`);
@@ -113,6 +116,14 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
     }
   });
   if (!restRule) problems.push("Последним должно идти правило «Всё остальное» (0.0.0.0/0).");
+  if (restInterfaceExit?.source && !addressValid(restInterfaceExit.source))
+    problems.push("Адрес-источник выхода указан неверно.");
+  if (restInterfaceExit?.gateway && !addressValid(restInterfaceExit.gateway))
+    problems.push("Шлюз выхода указан неверно.");
+  if (restInterfaceExit?.source && !restInterfaceExit.gateway)
+    problems.push("При адресе-источнике нужен шлюз вышестоящего роутера.");
+  const setRestExit = (exit: RoutingExit) => setRules(
+    rules.map((rule, index) => index === rules.length - 1 ? { ...rule, exit } : rule));
   const valid = !!group && problems.length === 0;
 
   const save = async () => {
@@ -186,6 +197,22 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
                       : value === "direct" ? { kind: "direct" } : { kind: "interface", interface: value };
                     setRules(rules.map((rule, index) => index === rules.length - 1 ? { ...rule, exit } : rule));
                   }} />
+                {restInterfaceExit && <>
+                  <Field label="Адрес-источник" value={restInterfaceExit.source ?? ""}
+                    valid={!restInterfaceExit.source || addressValid(restInterfaceExit.source)}
+                    hint="Адрес интерфейса выхода, с которого отправлять трафик"
+                    onChange={(value) => setRestExit({ kind: "interface",
+                      interface: restInterfaceExit.interface ?? "",
+                      ...(value.trim() ? { source: value.trim() } : {}),
+                      ...(restInterfaceExit.gateway ? { gateway: restInterfaceExit.gateway } : {}) })} />
+                  <Field label="Шлюз" value={restInterfaceExit.gateway ?? ""}
+                    valid={!restInterfaceExit.gateway || addressValid(restInterfaceExit.gateway)}
+                    hint="Адрес вышестоящего роутера в подсети интерфейса"
+                    onChange={(value) => setRestExit({ kind: "interface",
+                      interface: restInterfaceExit.interface ?? "",
+                      ...(restInterfaceExit.source ? { source: restInterfaceExit.source } : {}),
+                      ...(value.trim() ? { gateway: value.trim() } : {}) })} />
+                </>}
                 <InfoNote>«Всё остальное» всегда последнее: правило с 0.0.0.0/0 без доменных условий.</InfoNote>
               </> : <InfoNote severity="warning">
                 Нет правила «Всё остальное» — трафик без совпадения останется без политики сегмента.

@@ -28,6 +28,7 @@ table inet vs_router {
         type filter hook input priority filter; policy drop;
         tcp dport 22 counter drop comment "ssh_unselected"
         iifname "lo" accept
+        iifname "eth1" udp sport 68 udp dport 67 counter accept comment "dhcp_server_eth1"
         iifname != { "eth0", "eth1" } drop
         ct state invalid drop
         ct state established,related accept
@@ -37,6 +38,7 @@ table inet vs_router {
         iifname { "eth1" } meta nfproto ipv6 ip6 saddr @a_clients_6 meta l4proto tcp tcp dport { 443, 8000-8080 } counter accept comment "web_allow"
         iifname { "eth1" } meta nfproto ipv4 counter log prefix "vs-router " reject comment "reject_rest"
         iifname { "eth1" } meta nfproto ipv6 counter log prefix "vs-router " reject comment "reject_rest"
+        iifname { "eth1" } meta nfproto ipv4 ip saddr { 192.168.10.0/24 } meta l4proto { tcp, udp } th dport 53 counter accept comment "dns_resolver_auto"
     }
     chain forward {
         type filter hook forward priority filter; policy drop;

@@ -35,6 +35,7 @@ import { Card } from "../components/Card";
 import { ValueTabs } from "../components/Tabs";
 import { useConfiguration, useApplyCommands } from "../state";
 import { SegmentEditor } from "./SegmentEditor";
+import { DnsPolicyDialog } from "./TProxyDnsPolicy";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 import { nameValid, addressValid, domainValid } from "../components/validators";
 import { api, ApiError } from "../api";
@@ -748,7 +749,7 @@ export function segmentGroups(configuration: Configuration, rules: RoutingRule[]
   return [...groups.values()];
 }
 
-function SegmentsView({ configuration, groups, disabled, onAdd, onCapture, captureBusy, captureError, dnsPolicyMissing, dnsDenied }: {
+function SegmentsView({ configuration, groups, disabled, onAdd, onCapture, captureBusy, captureError, dnsPolicyMissing, dnsDenied, onDnsPolicy }: {
   configuration: Configuration;
   groups: SegmentGroup[];
   disabled: boolean;
@@ -757,6 +758,7 @@ function SegmentsView({ configuration, groups, disabled, onAdd, onCapture, captu
   captureBusy: boolean;
   captureError: unknown;
   dnsPolicyMissing: boolean;
+  onDnsPolicy: () => void;
   /** Captured segments whose subnet the resolver's access list does not allow. */
   dnsDenied: ReadonlySet<string>;
 }) {
@@ -800,8 +802,8 @@ function SegmentsView({ configuration, groups, disabled, onAdd, onCapture, captu
           Список разрешённых сетей задаётся на странице DNS.
         </InfoNote>}
         {captureName && group.captured && dnsPolicyMissing && <InfoNote severity="warning">
-          У контура захвата не задана DNS-политика TProxy: применение завершится ошибкой
-          генератора. Политика задаётся не на этой странице — редактор появится в срезе S4.
+          У контура захвата не задана DNS-политика TProxy: применение завершится ошибкой генератора.
+          <Button onClick={onDnsPolicy} disabled={disabled}>Настроить DNS-политику</Button>
         </InfoNote>}
         {group.rules.length > 0
           ? <div className="routing-rule-list">{group.rules.map(({ rule, index }) =>
@@ -977,6 +979,7 @@ export default function RoutingMasterPage() {
   const navigate = useNavigate();
   const editor = useDraftEditor<RoutingRule[]>();
   const [mode, setMode] = useState<MasterMode>("segments");
+  const [dnsPolicyOpen, setDnsPolicyOpen] = useState(false);
   const [step, setStep] = useState<WizardStep>(0);
   const [rule, setRule] = useState<RoutingRule>(() => emptyRule());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -1107,6 +1110,7 @@ export default function RoutingMasterPage() {
   const previewRules = wizardValid && step === 3 ? [...rules, rule] : rules;
 
   return <RoutingSurface>
+    <DnsPolicyDialog open={dnsPolicyOpen} onClose={() => setDnsPolicyOpen(false)} />
     <ErrorNotice error={routingErrorText(apiError)} />
     <ErrorNotice error={routingErrorText(editor.error)} />
     <ValueTabs value={mode} change={(value) => setMode(value)}
@@ -1116,6 +1120,7 @@ export default function RoutingMasterPage() {
     {mode === "segments" && <SegmentsView configuration={configuration} groups={segmentGroups(configuration, rules)}
       captureBusy={captureBusy} captureError={captureError} onCapture={(name, on) => void setCapture(name, on)}
       dnsPolicyMissing={(configuration.tproxy.dns.servers ?? []).length === 0}
+      onDnsPolicy={() => setDnsPolicyOpen(true)}
       dnsDenied={dnsDeniedSegments(configuration)}
       disabled={disabled} onAdd={(next) => {
         // A segment card knows its source, so the wizard opens on the
