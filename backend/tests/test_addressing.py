@@ -123,3 +123,11 @@ def test_migration_marks_legacy_addressless_wan_as_dhcp(tmp_path):
     assert interfaces['eth0'].get('addressing') == 'dhcp'
     # An interface with a static address is untouched.
     assert 'addressing' not in interfaces['eth1']
+
+
+@pytest.mark.parametrize('address', ['192.168.116.0/24', '192.168.116.255/24'])
+def test_interface_address_must_be_a_host_address(address):
+    result, found = codes({'interfaces': [{'name': 'eth0', 'zone': 'wan',
+                                           'addresses': [address]}]})
+    assert result['valid'] is False
+    assert 'interface.address_host_required' in found

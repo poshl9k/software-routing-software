@@ -218,7 +218,14 @@ def validate_configuration(c):
         if i.zone == "router":
             fail("interface.router_zone_reserved")
         for addr in i.addresses:
-            ip_interface(addr)
+            parsed = ip_interface(addr)
+            # A network/broadcast address cannot be a host address on an
+            # interface. With no host bits (/31, /32, /127, /128) both ends of
+            # the block are usable and there is nothing to reject.
+            if (parsed.network.prefixlen < parsed.max_prefixlen - 1
+                    and parsed.ip in (parsed.network.network_address,
+                                      parsed.network.broadcast_address)):
+                fail("interface.address_host_required")
         if i.type == "vlan" and (i.parent not in interfaces or i.vlan_id is None or i.parent == i.name):
             fail("interface.vlan_parent")
         if any(m not in interfaces or m == i.name for m in i.members):
