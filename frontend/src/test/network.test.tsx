@@ -117,6 +117,33 @@ it("deleting an interface closes the editor and writes the reduced draft", async
   expect(screen.queryByRole("dialog", { name: /Интерфейс: Второй/ })).toBeNull();
 });
 
+it("keeps the dialog open and shows a backend rejection of an address removal", async () => {
+  const configuration: Configuration = { ...emptyConfiguration, interfaces: [
+    { name: "ens256", type: "physical", zone: "lan", description: "Транк",
+      addressing: "static", addresses: ["10.10.20.1/24"], parent: null, vlan_id: null, members: [] },
+  ], dns: { ...emptyConfiguration.dns, interfaces: ["ens256"] } };
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (init?.method === "PUT")
+      return Promise.resolve(new Response(JSON.stringify({
+        code: "configuration.invalid", message: "Некорректная конфигурация",
+        details: [{ message: "dns.interface_address_required" }],
+      }), { status: 422 }));
+    const version = { id: 1, status: "draft", configuration };
+    return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] : version)));
+  }));
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+
+  await user.click(await screen.findByRole("button", { name: "Транк" }));
+  const dialog = screen.getByRole("dialog", { name: /Интерфейс: Транк/ });
+  await user.clear(within(dialog).getByLabelText("Основной адрес (CIDR)"));
+  expect(within(dialog).getByText(/слушателем DNS/)).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+
+  await waitFor(() => expect(within(dialog).getByText(/dns.interface_address_required/)).toBeInTheDocument());
+  expect(screen.getByRole("dialog", { name: /Интерфейс: Транк/ })).toBeInTheDocument();
+});
+
 it("creates, edits and deletes static routes only through the single draft", async () => {
   const user = userEvent.setup();
   let configuration: Configuration = { ...emptyConfiguration, interfaces: [{

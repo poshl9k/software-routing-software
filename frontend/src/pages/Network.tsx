@@ -341,7 +341,7 @@ export default function Network() {
       />
 
       {knownTab === "interfaces" && <>
-        <ErrorNotice error={editor.error} /><ErrorNotice error={hostError} />
+        {!selected && <ErrorNotice error={editor.error} />}<ErrorNotice error={hostError} />
         <Card title="Интерфейсы и зоны" action={<FormActions><Button onClick={() => setQuickOpen(true)}>Быстро подключить</Button><Button onClick={addRow}>Добавить интерфейс</Button><Button onClick={() => setVirtualOpen(true)}>+ Виртуальный интерфейс</Button></FormActions>}>
           {!rows.length && <EmptyState>Нет назначенных интерфейсов</EmptyState>}
           {!!rows.length && <DataTable heads={["Название", "Системное имя", "Роль", "IP", "Конфигурация", "Состояние"]}
@@ -375,6 +375,7 @@ export default function Network() {
               <DeleteButton label={`Удалить интерфейс ${selected.name || "без имени"}`} onClick={() => setDeleteKey(selected.key)} />
             </DialogTitle>
             <DialogContent dividers>
+              <ErrorNotice error={editor.error} />
               <PageSection title="Идентификация"><FormGrid>
                 <Field label="Системное имя" value={selected.name || "Не выбрано"} readOnly />
                 <Field label="MAC" value={allRealNics.find((h) => h.name === selected.name)?.mac ?? "Данные недоступны"} readOnly />
@@ -398,6 +399,7 @@ export default function Network() {
                   {selected.addressing === "static" && selected.addresses.length > 0 && <DeleteButton label={`Удалить адрес ${selected.name || "интерфейса"}`} onClick={() => setField(selected.key,{addresses:selected.addresses.slice(1)})} />}
                 </FormActions>}
                 {selected.addressing === "static" && <FormWide>{selected.addresses.slice(1).map((address,index) => <FormActions key={index}><Field ariaLabel={`Дополнительный адрес ${index + 1} (CIDR)`} value={address} valid={address.includes("/") && addressValid(address) && staticAddresses.filter((a) => a === address.trim().toLowerCase()).length === 1} hint="Укажите уникальный IP/CIDR" onChange={(v) => setField(selected.key,{addresses:selected.addresses.map((a,n) => n === index + 1 ? v : a)})} /><DeleteButton label={`Удалить дополнительный адрес ${index + 1}`} onClick={() => setField(selected.key,{addresses:selected.addresses.filter((_,n) => n !== index + 1)})} /></FormActions>)}<Button onClick={() => setField(selected.key,{addresses:[...(selected.addresses.length ? selected.addresses : [""]),""]})}>Добавить адрес</Button></FormWide>}
+                {selected.addressing === "static" && !selected.addresses.length && c.dns.interfaces.includes(selected.name) && <FormWide><InfoNote>Этот интерфейс указан слушателем DNS. Чтобы оставить его без адреса, сначала уберите его из «DNS → Интерфейсы» — иначе черновик будет отклонён.</InfoNote></FormWide>}
                 <FormWide><InfoNote>{selected.addressing === "dhcp" ? hostAddresses.isPending ? "Полученный адрес: загрузка…" : hostAddresses.isError ? "Полученный адрес: состояние недоступно" : `Полученный адрес: ${(liveAddresses[selected.name] ?? []).join(", ") || "адрес не получен"}` : selected.addressing === "pppoe" ? "PPPoE: запуск подключения после применения черновика." : "Статические адреса показаны из конфигурации."}</InfoNote></FormWide>
               </FormGrid></PageSection>
               <PageSection title="Тип и подключение"><FormGrid>

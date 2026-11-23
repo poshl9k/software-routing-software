@@ -157,7 +157,7 @@ export default function Firewall() {
   return (
     <>
       <PageHeader>Firewall</PageHeader>
-      <ErrorNotice error={editor.error ?? apiError} />
+      {composerIndex === null && <ErrorNotice error={editor.error ?? apiError} />}
       {!isEditMode && (
         <div className="toolbar-actions">
           <Button
@@ -598,6 +598,7 @@ export default function Firewall() {
         return <Dialog open onClose={editor.saving ? undefined : () => setComposerIndex(null)} fullWidth maxWidth="md" aria-labelledby="firewall-rule-editor-title">
           <DialogTitle id="firewall-rule-editor-title">Правило: {r.name || "Новое правило"}</DialogTitle>
           <DialogContent>
+            <ErrorNotice error={editor.error} />
             <EditorFieldset disabled={editor.saving}>
               <PageSection title="Идентификация"><FormGrid>
                 <Field label="Имя" value={r.name} valid={uniqueName(r.name, rows.firewall_rules)} onChange={name => updateRule(composerIndex, { name })} />
