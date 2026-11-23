@@ -108,3 +108,24 @@ def test_tunnel_role_cannot_change_between_versions(database):
         config["tunnels"][0].update(role="client", endpoint="vpn.example:51820", server_public_key="public-key")
         with pytest.raises(ValueError, match="role_immutable"):
             save_version(session, ConfigurationVersion(id=2, configuration=config))
+
+
+def test_invalid_stored_draft_stays_readable_but_apply_validation_rejects_it(database):
+    """A tightened rule must not make older drafts unreadable in the panel."""
+    import json
+    from vs_router.api.configuration import validate
+
+    engine, _ = database
+    document = scenario("edge").configuration.model_dump(mode="json")
+    document["interfaces"][0]["addresses"] = ["192.168.116.0/24"]
+    with engine.begin() as conn:
+        conn.execute(text(
+            "insert into configuration_versions (id, status, profile, configuration, created_at) "
+            "values (1, 'draft', 'router', :cfg, '2026-01-01 00:00:00')"),
+            {"cfg": json.dumps(document)})
+    with Session(engine) as session:
+        row = session.get(ConfigurationRow, 1)
+        assert row.configuration.interfaces[0].addresses == ("192.168.116.0/24",)
+        result = validate(row.configuration.model_dump(mode="json"))
+        assert result["valid"] is False
+        assert any("interface.address_host_required" in str(e) for e in result["errors"])

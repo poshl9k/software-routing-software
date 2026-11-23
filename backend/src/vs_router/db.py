@@ -42,7 +42,11 @@ class ConfigurationJSON(TypeDecorator):
         return Configuration.model_validate(value).model_dump(mode="json")
 
     def process_result_value(self, value, dialect):
-        return Configuration.model_validate(value)
+        # Structural parsing stays mandatory; domain rules are enforced on
+        # writes and by /api/apply. Skipping them here keeps a stale draft
+        # visible instead of turning every /api/versions read into a 500.
+        return Configuration.model_validate(
+            value, context={"skip_domain_validation": True})
 
 
 class Base(DeclarativeBase):

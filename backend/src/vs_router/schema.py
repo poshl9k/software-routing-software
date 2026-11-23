@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from ipaddress import ip_address
 from typing import Annotated, Literal
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationInfo, field_validator, model_serializer, model_validator
 
 from vs_router import masking
 
@@ -991,7 +991,12 @@ class Configuration(Model):
     inbounds: tuple[Inbound, ...] = ()
 
     @model_validator(mode="after")
-    def validate_domain(self):
+    def validate_domain(self, info: ValidationInfo):
+        # Reads of persisted versions pass this flag: a draft saved before a
+        # rule was tightened must stay readable so it can be edited or deleted.
+        # Writes and apply/validate do not pass it and stay strict.
+        if info.context and info.context.get("skip_domain_validation"):
+            return self
         from .validators import validate_configuration
         validate_configuration(self)
         return self
