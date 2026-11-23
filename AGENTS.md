@@ -35,7 +35,9 @@
   its status table before any routing/UI work.
 - Operational references: `docs/deploy-ssh.md` (fleet SSH key, host fingerprints),
   `docs/install.md`, `installer/README.md`,
-  `docs/admin.md`, `docs/tunnel-proxy-apply.md`. `docs/lab-01` through `lab-04`
+  `docs/admin.md`, `docs/tunnel-proxy-apply.md`,
+  `docs/border-router-runbook.md` (порядок настройки пограничного роутера).
+  `docs/lab-01` through `lab-04`
   reports record specific past VM checks, not blanket current guarantees.
 
 ## Project map
