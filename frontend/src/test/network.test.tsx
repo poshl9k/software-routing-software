@@ -298,7 +298,9 @@ it("creates an IPVLAN L2 virtual interface from the existing dialog", async () =
     const version = { id: 1, status: "draft", configuration };
     return Promise.resolve(new Response(JSON.stringify(path === "/api/versions" ? [version] : path === "/api/host/interfaces" ? [
       { name: "eth0", kind: "physical", parent: null, operstate: "UP" },
-    ] : version)));
+    ] : path === "/api/host/profile"
+      ? { profile: "router", declared: true, dhcp: true, ipvlan: true }
+      : version)));
   });
   vi.stubGlobal("fetch", fetch);
   const user = userEvent.setup();
@@ -321,4 +323,26 @@ it("creates an IPVLAN L2 virtual interface from the existing dialog", async () =
   expect(saved.interfaces).toEqual(expect.arrayContaining([
     expect.objectContaining({ name: "vip1", type: "virtualip", parent: "eth0" }),
   ]));
+});
+
+
+it("hides IPVLAN creation when the host networkd has no support", async () => {
+  const configuration: Configuration = emptyConfiguration;
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string) => Promise.resolve(
+    new Response(JSON.stringify(path === "/api/versions"
+      ? [{ id: 1, status: "draft", configuration }]
+      : path === "/api/host/interfaces"
+        ? [{ name: "eth0", kind: "physical", parent: null, operstate: "UP" }]
+        : path === "/api/host/profile"
+          ? { profile: "router", declared: true, dhcp: true, ipvlan: false }
+          : { id: 1, status: "draft", configuration })),
+  )));
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><Network /></RouterProvider></MemoryRouter>);
+
+  await user.click(await screen.findByRole("button", { name: "+ Виртуальный интерфейс" }));
+  const dialog = screen.getByRole("dialog", { name: "Виртуальный интерфейс" });
+  const type = within(dialog).getByLabelText("Тип виртуального интерфейса");
+  expect(within(type).queryByRole("option", { name: /IPVLAN L2/ })).toBeNull();
+  expect(within(type).getByRole("option", { name: /MACVLAN bridge/ })).toBeInTheDocument();
 });

@@ -342,6 +342,24 @@ class KeaReloader:
         raise ApplyError('agent.reload_failed')
 
 
+def host_supports_ipvlan() -> bool:
+    """Whether the installed networkd knows the IPvLAN= parent directive.
+
+    systemds before 262 accept MACVLAN= but reject IPvLAN= with "Unknown key"
+    at reload time, which would otherwise roll back the whole apply. Reading
+    the binary is a local, side-effect-free probe; man pages may be absent.
+    """
+    for path in ('/usr/lib/systemd/systemd-networkd',
+                 '/lib/systemd/systemd-networkd',
+                 '/usr/libexec/systemd/systemd-networkd'):
+        try:
+            if b'IPvLAN' in Path(path).read_bytes():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _netdev_spec(content):
     """``(kind, vlan_id)`` declared by a .netdev file; absent values are None."""
     # networkd files legitimately repeat keys such as Address=. The strict
@@ -449,6 +467,9 @@ class NetworkdReloader:
                 previous = {}
         except ValueError as exc:
             raise ApplyError('agent.reload_failed') from exc
+        if (not host_supports_ipvlan()
+                and any('Kind=ipvlan' in content for content in files.values())):
+            raise ApplyError('agent.ipvlan_unsupported')
         # Journal the union first: interrupted writes remain discoverable on rollback.
         self.fs.write(self.manifest_path, serialize_networkd(previous | files))
         for name, content in files.items():

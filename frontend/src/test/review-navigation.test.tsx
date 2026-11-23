@@ -126,7 +126,7 @@ it("labels the events page and explains that its journal is unavailable", async 
 
 /** Product identity and DHCP availability come from the host profile, not management. */
 const profile = (dhcp: boolean, product: HostProfile["profile"] = dhcp ? "router" : "panel", declared = true): HostProfile =>
-  ({ profile: product, declared, dhcp });
+  ({ profile: product, declared, dhcp, ipvlan: true });
 
 function openOn(path: string, hostProfile: unknown = profile(true), management: unknown = { dhcp: false }) {
   const fetch = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(

@@ -6,9 +6,9 @@ import App from "../App";
 import { emptyConfiguration, sampleConfiguration } from "../fixtures";
 import type { Configuration, HostProfile } from "../types";
 
-const panel: HostProfile = { profile: "panel", declared: true, dhcp: true };
-const router: HostProfile = { profile: "router", declared: true, dhcp: true };
-const legacy: HostProfile = { profile: null, declared: false, dhcp: true };
+const panel: HostProfile = { profile: "panel", declared: true, dhcp: true, ipvlan: true };
+const router: HostProfile = { profile: "router", declared: true, dhcp: true, ipvlan: true };
+const legacy: HostProfile = { profile: null, declared: false, dhcp: true, ipvlan: true };
 const configuration: Configuration = {
   ...emptyConfiguration,
   subscribers: [{ name: "alice", label: "Алиса" }, { name: "bob", label: null }],

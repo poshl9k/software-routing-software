@@ -121,6 +121,7 @@ async def test_criterion_6_host_profile_authenticated_live_rpc(api, monkeypatch,
     read_profile = profile.read_profile
     monkeypatch.setattr(profile, 'read_profile', lambda: read_profile(path))
     handlers = daemon.make_handlers(ApplyEngine(filesystem=FakeFS(), executor=FakeExecutor()), database)
+    monkeypatch.setattr('vs_router.agent.services.host_supports_ipvlan', lambda: False)
     calls = []
 
     class Transport:
@@ -145,7 +146,8 @@ async def test_criterion_6_host_profile_authenticated_live_rpc(api, monkeypatch,
                             lambda name: f'/usr/sbin/{name}' if dhcp else None)
         response = await client.get('/api/host/profile')
         assert response.status_code == 200
-        assert response.json() == {'profile': marker, 'declared': marker is not None, 'dhcp': dhcp}
+        assert response.json() == {'profile': marker, 'declared': marker is not None,
+                                   'dhcp': dhcp, 'ipvlan': False}
         assert calls[-1]['method'] == 'profile'
         assert calls[-1]['params'] == {}
     with pytest.raises(ValueError):

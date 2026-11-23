@@ -581,6 +581,7 @@ export interface HostProfile {
   profile: "router" | "panel" | null;
   declared: boolean;
   dhcp: boolean;
+  ipvlan: boolean;
 }
 
 /** First-run management endpoint; `single-uplink` means the one port is also the uplink. */

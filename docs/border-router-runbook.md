@@ -154,6 +154,9 @@ python3 -c 'import json;d=json.load(open("/etc/vs-router/applied/singbox.json"))
   `IPVLAN L2`.
 
 Реализованы оба варианта: `virtualip` (IPVLAN L2) и `virtualmac` (MACVLAN bridge).
+Агент сообщает поддержку IPVLAN в `/api/host/profile` (`ipvlan: true/false`): панель скрывает
+пункт IPVLAN, если хостовый networkd его не понимает, а apply с таким типом отклоняется
+кодом `agent.ipvlan_unsupported` до изменения сети.
 Debian 13 с systemd 257 **не понимает ключ `IPvLAN=`** в `[Network]` — journald
 показывает `Unknown key 'IPvLAN' ... ignoring`, netdev не создаётся и apply
 откатывается. На таком хосте используйте «Виртуальный IP (MACVLAN bridge)»:

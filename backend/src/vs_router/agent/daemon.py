@@ -257,9 +257,11 @@ def dhcp_available() -> bool:
 def profile() -> dict:
     """Read-only product identity, independent of the management assignment."""
     from ..profile import read_profile
+    from .services import host_supports_ipvlan
 
     marker = read_profile()
-    return {'profile': marker, 'declared': marker is not None, 'dhcp': dhcp_available()}
+    return {'profile': marker, 'declared': marker is not None,
+            'dhcp': dhcp_available(), 'ipvlan': host_supports_ipvlan()}
 
 
 def management() -> dict | None:

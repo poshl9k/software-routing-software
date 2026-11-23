@@ -322,7 +322,8 @@ def test_ipvlan_l2_generation_attaches_to_the_parent():
     assert 'Address=192.0.2.3/32' in child
 
 
-def test_reloader_finds_ipvlan_parent_in_a_bundle():
+def test_reloader_finds_ipvlan_parent_in_a_bundle(monkeypatch):
+    monkeypatch.setattr('vs_router.agent.services.host_supports_ipvlan', lambda: True)
     fs, executor = FakeFS(), FakeExecutor()
     fs.write(APPLIED_DIR / 'networkd.conf', serialize_networkd({
         '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nIPvLAN=vip0\n',
@@ -351,3 +352,15 @@ def test_macvlan_bridge_generation_attaches_to_the_parent():
     assert 'Kind=macvlan' in netdev
     assert '[MACVLAN]\nMode=bridge' in netdev
     assert 'MACVLAN=vip0' in files['10-vs-router-eth0.network']
+
+
+def test_reloader_refuses_ipvlan_on_a_host_without_support(monkeypatch):
+    monkeypatch.setattr('vs_router.agent.services.host_supports_ipvlan', lambda: False)
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(APPLIED_DIR / 'networkd.conf', serialize_networkd({
+        '10-vs-router-eth0.network': '[Match]\nName=eth0\n\n[Network]\nIPvLAN=vip0\n',
+        '10-vs-router-vip0.netdev': '[NetDev]\nName=vip0\nKind=ipvlan\n\n[IPVLAN]\nMode=L2\n',
+        '10-vs-router-vip0.network': '[Match]\nName=vip0\n\n[Network]\nAddress=192.0.2.2/24\n',
+    }))
+    with pytest.raises(ApplyError, match='agent.ipvlan_unsupported'):
+        NetworkdReloader(executor, fs)(APPLIED_DIR / 'networkd.conf')

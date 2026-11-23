@@ -27,6 +27,7 @@ import { Select, InterfaceSelect, type SelectOption } from "../components/Select
 import { Toggle } from "../components/Toggle";
 import { addressValid, ifaceNameValid, ipValid, secretValid } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
+import { useHostProfile } from "../hooks/useHostProfile";
 import { SecretField } from "./ConnectionEditors";
 
 type Editable = Interface & { key: string };
@@ -149,6 +150,7 @@ export default function Network() {
     : "interfaces";
 
   const hostInterfaces = useQuery({ queryKey: queryKeys.hostInterfaces(), queryFn: api.hostInterfaces });
+  const hostProfile = useHostProfile();
   const hostError = hostInterfaces.error;
   const allRealNics = Array.isArray(hostInterfaces.data) ? hostInterfaces.data : [];
   const physicalNics = allRealNics.filter((i) => i.kind === "physical");
@@ -156,6 +158,10 @@ export default function Network() {
   const rows: Editable[] = editor.value ?? c.interfaces.map((i) => ({ ...i, key: i.name }));
   const isEditMode = editor.isEdit;
   const selected = rows.find((i) => i.key === selectedKey) ?? null;
+  const ipvlanSupported = hostProfile.data?.ipvlan === true;
+  // Keep an already stored IPVLAN visible so it can be removed, but never
+  // offer it as a new choice on a host whose networkd cannot create it.
+  const showIpvlan = ipvlanSupported || selected?.type === "virtualip";
   useEffect(() => { if (!editor.isEdit && selectedKey) setSelectedKey(null); }, [editor.isEdit, selectedKey]);
   const open = (key: string) => {
     if (!editor.isEdit) editor.begin(rows);
@@ -395,7 +401,7 @@ export default function Network() {
                 <FormWide><InfoNote>{selected.addressing === "dhcp" ? hostAddresses.isPending ? "Полученный адрес: загрузка…" : hostAddresses.isError ? "Полученный адрес: состояние недоступно" : `Полученный адрес: ${(liveAddresses[selected.name] ?? []).join(", ") || "адрес не получен"}` : selected.addressing === "pppoe" ? "PPPoE: запуск подключения после применения черновика." : "Статические адреса показаны из конфигурации."}</InfoNote></FormWide>
               </FormGrid></PageSection>
               <PageSection title="Тип и подключение"><FormGrid>
-                <Select label="Тип" value={selected.type} options={[{value:"physical",label:"Физический"},{value:"bridge",label:"Мост"},{value:"vlan",label:"VLAN"},{value:"virtualip",label:"Виртуальный IP (IPVLAN L2)"},{value:"virtualmac",label:"Виртуальный IP (MACVLAN bridge)"}]} onChange={(v) => setField(selected.key,{type:v as Interface["type"], ...(selected.addressing === "pppoe" && v !== "physical" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
+                <Select label="Тип" value={selected.type} options={[{value:"physical",label:"Физический"},{value:"bridge",label:"Мост"},{value:"vlan",label:"VLAN"},...(showIpvlan ? [{value:"virtualip",label:"Виртуальный IP (IPVLAN L2)"}] : []),{value:"virtualmac",label:"Виртуальный IP (MACVLAN bridge)"}]} onChange={(v) => setField(selected.key,{type:v as Interface["type"], ...(selected.addressing === "pppoe" && v !== "physical" ? {addressing:"static",pppoe_username:undefined,pppoe_password:undefined} : {})})} />
                 {selected.type === "physical" && !selected.name && <Select label="Выбрать системное имя" value={selected.name} error={!!selected.name && !validName(selected)} placeholder={{label:"— выберите интерфейс —"}} options={nameOptions(selected)} onChange={(name) => setField(selected.key,{name})} />}
                 {(selected.type === "vlan" || selected.type === "virtualip" || selected.type === "virtualmac") && <><Select label="Родительский интерфейс" value={selected.parent ?? ""} placeholder={{label:"— выберите —"}} options={candidates(selected,physicalNics).filter((name) => name === selected.parent || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{parent:v || null})} /><Field label="VLAN ID" type="number" value={selected.vlan_id ?? ""} onChange={(v) => setField(selected.key,{vlan_id:Number(v) || null})} /></>}
                 {selected.type === "bridge" && <FormWide>{selected.members.map((m,index) => <FormActions key={`${m}-${index}`}><Select ariaLabel={`Участник ${selected.key} ${index}`} value={m} error={!m || !rows.some((r) => r.key !== selected.key && r.name === m && r.zone)} placeholder={{label:"— выберите —"}} options={candidates(selected,allRealNics).filter((name) => selected.members.includes(name) || !usedByOtherRows(selected).has(name)).map((name) => ({value:name,label:optLabel(name)}))} onChange={(v) => setField(selected.key,{members:selected.members.map((row,r) => r === index ? v : row)})} /><DeleteButton label={`Удалить участника ${m}`} onClick={() => setField(selected.key,{members:selected.members.filter((_,r) => r !== index)})} /></FormActions>)}
@@ -412,7 +418,7 @@ export default function Network() {
         <Dialog open={virtualOpen} onClose={() => setVirtualOpen(false)} fullWidth maxWidth="sm" aria-labelledby="virtual-interface-title">
           <DialogTitle id="virtual-interface-title">Виртуальный интерфейс</DialogTitle>
           <DialogContent><FormGrid>
-            <Select label="Тип виртуального интерфейса" value={virtualType} options={[{value:"vlan",label:"VLAN"},{value:"virtualip",label:"Виртуальный IP (IPVLAN L2)"},{value:"virtualmac",label:"Виртуальный IP (MACVLAN bridge)"},{value:"bridge",label:"Мост"}]} onChange={(v) => setVirtualType(v as "vlan" | "bridge" | "virtualip" | "virtualmac")} />
+            <Select label="Тип виртуального интерфейса" value={virtualType} options={[{value:"vlan",label:"VLAN"},...(ipvlanSupported ? [{value:"virtualip",label:"Виртуальный IP (IPVLAN L2)"}] : []),{value:"virtualmac",label:"Виртуальный IP (MACVLAN bridge)"},{value:"bridge",label:"Мост"}]} onChange={(v) => setVirtualType(v as "vlan" | "bridge" | "virtualip" | "virtualmac")} />
             {(virtualType === "vlan" || virtualType === "virtualip" || virtualType === "virtualmac") && <Select label="Родительский порт" value={virtualParent} placeholder={{label:"— выберите порт —"}} options={physicalNics.map((p) => ({value:p.name,label:p.name}))} onChange={setVirtualParent} />}
             <FormWide><FormActions><Button onClick={() => setVirtualOpen(false)}>Отмена</Button><Button variant="contained" disabled={(virtualType === "vlan" || virtualType === "virtualip" || virtualType === "virtualmac") && !physicalNics.some((p) => p.name === virtualParent)} onClick={() => { setVirtualOpen(false); addVirtual(virtualType, (virtualType === "vlan" || virtualType === "virtualip" || virtualType === "virtualmac") ? virtualParent : null); }}>Создать</Button></FormActions></FormWide>
           </FormGrid></DialogContent>
