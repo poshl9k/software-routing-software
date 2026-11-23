@@ -531,3 +531,24 @@ def test_dns_policy_passes_singbox_check(tmp_path):
     config.write_text(json.dumps(preview))
     check = subprocess.run([str(sb), "check", "-c", str(config)], capture_output=True, text=True)
     assert check.returncode == 0, check.stderr
+
+
+def test_remote_rule_sets_download_through_an_existing_client_tunnel():
+    """GitHub is reachable via the tunnel, not the management uplink."""
+    source = {"name": "geo", "format": "srs", "url": "https://example.org/geo.srs"}
+    data = {"interfaces": [{"name": "wg1"}],
+            "tunnels": [{"name": "client_vpn", "interface": "wg1", "role": "client",
+                         "protocol": "wg", "endpoint": "vpn.example:51820",
+                         "server_public_key": "S" * 44,
+                         "private_key": {"encrypted": True, "ciphertext": "gAAAAplaceholder"}}],
+            "tproxy": {"rules": [{"name": "r", "rule_sets": ["geo"]}]},
+            "routing_rules": [{"name": "site", "subject": {"kind": "server"},
+                               "ip_cidr": ["0.0.0.0/0"], "domain_suffix": [],
+                               "domain_exact": [], "rule_sets": [],
+                               "exit": {"kind": "tunnel", "name": "client_vpn"}}],
+            "rule_sets": [source]}
+    generated = generate_singbox(ConfigurationVersion.model_validate({"configuration": data}))
+    assert generated["route"]["rule_set"][0] == {
+        "type": "remote", "tag": "geo", "format": "binary", "url": "https://example.org/geo.srs",
+        "download_detour": "routing-tunnel:client_vpn",
+    }

@@ -531,6 +531,15 @@ def generate_singbox(version: ConfigurationVersion,
         # This tag identifies a generator-owned local file; accepting a user
         # declaration with the same tag would redirect fail-closed matching.
         raise ValueError("routing.ruleset_tag_reserved")
+    # Remote rule-set URLs must be reachable while the engine starts: a single
+    # unreachable set aborts startup and takes the whole capture contour down.
+    # On a router the management uplink may not reach the rule-set CDN while a
+    # declared client tunnel does, so pin downloads to that outbound when it is
+    # actually present in this rendering.
+    outbound_tags = {outbound["tag"] for outbound in outbounds}
+    download_detour = next((tag for tunnel in configuration.tunnels
+                            if tunnel.role == "client" and tunnel.interface
+                            if (tag := f"routing-tunnel:{tunnel.name}") in outbound_tags), None)
     rule_set_entries = []
     for name in sorted(referenced_sets):
         source = declared.get(name)
@@ -539,8 +548,11 @@ def generate_singbox(version: ConfigurationVersion,
         engine_format = {"srs": "binary", "json": "source"}.get(source.format)
         if engine_format is None:
             raise ValueError(f"routing.ruleset_format: {source.format}")
-        rule_set_entries.append({"type": "remote", "tag": name,
-                                 "format": engine_format, "url": source.url})
+        entry = {"type": "remote", "tag": name,
+                 "format": engine_format, "url": source.url}
+        if download_detour is not None:
+            entry["download_detour"] = download_detour
+        rule_set_entries.append(entry)
     if configuration.routing_rules:
         rule_set_entries.append({
             "type": "local",
