@@ -1,5 +1,5 @@
 import json
-from ipaddress import IPv4Network, ip_interface, ip_network
+from ipaddress import IPv4Network, ip_address, ip_interface, ip_network
 from ..schema import ConfigurationVersion, DNSUpstream
 from .dnscrypt import DOH_LISTEN_ADDR, DOH_LISTEN_PORT
 
@@ -94,6 +94,17 @@ def tproxy_unbound_listener_addresses(version: ConfigurationVersion) -> dict[str
     # as a broken resolver. Refuse to generate instead, with the two siblings above.
     if not c.tproxy.dns.servers:
         raise ValueError("tproxy.dns_policy_required")
+    # The split contour replaces the plain unbound unit with two resolvers bound
+    # to interface addresses, so nothing listens on 127.0.0.1:53 any more. A
+    # policy pointing the engine there makes sing-box fail at startup while it
+    # tries to resolve remote rule-set URLs — fail at generation instead.
+    for server in c.tproxy.dns.servers:
+        try:
+            host = ip_address(server.server)
+        except ValueError:
+            continue
+        if host.is_loopback and (server.server_port or 53) == 53:
+            raise ValueError("tproxy.dns_server_loopback_53")
     if c.dns.recursive or any(f.domain == "." for f in c.dns.forwards):
         raise ValueError("tproxy.dns_split_root_unsupported")
     addresses = [ip_interface(a).ip for name in c.dns.interfaces

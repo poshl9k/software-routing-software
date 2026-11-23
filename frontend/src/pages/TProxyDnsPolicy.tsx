@@ -27,6 +27,11 @@ const transportOptions = [
   { value: "https", label: "DoH" },
 ] as const;
 
+const loopback53 = (server: TProxyDNSServer): boolean => {
+  const host = server.server.trim().replace(/^\[|\]$/g, "");
+  return (host === "::1" || /^127\./.test(host)) && (server.server_port ?? 53) === 53;
+};
+
 const emptyServer = (): TProxyDNSServer => ({
   tag: "",
   type: "udp",
@@ -80,6 +85,7 @@ export function DnsPolicyDialog({ open, onClose }: { open: boolean; onClose: () 
   const valid = servers.length > 0
     && servers.every((item) => engineTagValid(item.tag)
       && (ipValid(item.server) || domainValid(item.server))
+      && !loopback53(item)
       && item.server_port !== null && portValid(item.server_port)
       && (item.type !== "tls" || !!item.tls_name)
       && (!item.domain_resolver || engineTagValid(item.domain_resolver)))
@@ -146,8 +152,12 @@ export function DnsPolicyDialog({ open, onClose }: { open: boolean; onClose: () 
             hint="Латиница, цифры, дефис и _, до 31 символа" onChange={(tag) => updateServer({ tag })} />
           <Select label="Транспорт" value={server.type} options={transportOptions}
             onChange={(type) => updateServer({ type: type as TProxyDNSServer["type"] })} />
-          <Field label="Адрес сервера" value={server.server} valid={ipValid(server.server) || domainValid(server.server)}
-            hint="IP или домен; при домене нужен хотя бы один сервер с IP" onChange={(value) => updateServer({ server: value })} />
+          <Field label="Адрес сервера" value={server.server}
+            valid={(ipValid(server.server) || domainValid(server.server)) && !loopback53(server)}
+            hint={loopback53(server)
+              ? "127.0.0.1:53 недоступен: в контуре перехвата там нет слушателя. Укажите адрес доступного DNS, например 192.168.10.9"
+              : "IP или домен; при домене нужен хотя бы один сервер с IP"}
+            onChange={(value) => updateServer({ server: value })} />
           <Field label="Порт" type="number" value={String(server.server_port ?? "")}
             valid={server.server_port !== null && portValid(server.server_port)}
             onChange={(value) => updateServer({ server_port: value ? Number(value) : null })} />

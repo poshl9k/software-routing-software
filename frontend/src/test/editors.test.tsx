@@ -254,3 +254,12 @@ it("shows DNS list actions and honest logging visibility", async () => {
   expect(screen.getByText("Через указанные DNS-серверы")).toBeVisible();
   expect(screen.getByText("Просмотр DNS-запросов пока не подключён к API.")).toBeVisible();
 });
+
+
+it("exposes the TProxy DNS policy editor from the DNS page", async () => {
+  mockApi();
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DNS /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("button", { name: "Настроить DNS-политику" }));
+  expect(await screen.findByRole("dialog", { name: "DNS-политика перехвата" })).toBeVisible();
+});

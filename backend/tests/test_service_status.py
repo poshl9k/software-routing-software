@@ -59,7 +59,10 @@ def test_rpc_accepts_only_empty_service_status_params():
 
 
 def test_fixed_services_are_probed_with_injected_executor():
-    executor = FakeExecutor(codes={'unbound.service': 3, 'caddy.service': 4})
+    executor = FakeExecutor(codes={'unbound.service': 3,
+                                   'vs-router-unbound-selected.service': 3,
+                                   'vs-router-unbound-ordinary.service': 3,
+                                   'caddy.service': 4})
     result = _status(ApplyEngine(executor=executor, filesystem=FakeFiles()), None)
     services = {item['name']: item for item in result['services']}
     assert datetime.fromisoformat(result['generated_at']).tzinfo is not None
@@ -73,6 +76,8 @@ def test_fixed_services_are_probed_with_injected_executor():
     assert executor.calls == [
         (['systemctl', 'is-active', 'kea-dhcp4-server.service'], 5),
         (['systemctl', 'is-active', 'unbound.service'], 5),
+        (['systemctl', 'is-active', 'vs-router-unbound-selected.service'], 5),
+        (['systemctl', 'is-active', 'vs-router-unbound-ordinary.service'], 5),
         (['systemctl', 'is-active', 'caddy.service'], 5),
         (['systemctl', 'is-active', 'vs-router-singbox.service'], 5),
     ]
@@ -174,3 +179,13 @@ async def test_missing_agent_socket_returns_503(api, monkeypatch, tmp_path):
     assert response.status_code == 503
     assert response.headers['cache-control'] == 'no-store'
     assert response.json()['code'] == 'agent.unavailable'
+
+
+def test_split_resolvers_make_unbound_running_when_the_plain_unit_is_stopped():
+    executor = FakeExecutor(codes={'unbound.service': 3,
+                                   'vs-router-unbound-selected.service': 0,
+                                   'vs-router-unbound-ordinary.service': 0})
+    result = _status(ApplyEngine(executor=executor, filesystem=FakeFiles()), None)
+    services = {item['name']: item for item in result['services']}
+    assert services['unbound']['state'] == 'running'
+    assert 'перехвата' in services['unbound']['detail']

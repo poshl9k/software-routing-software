@@ -1,6 +1,6 @@
 """Offline resolver layout only; never activates a TProxy DNS service."""
 import pytest
-from vs_router.schema import ConfigurationVersion
+from vs_router.schema import ConfigurationVersion, TProxyDNSServer
 from vs_router.generators.unbound import (generate_unbound, generate_tproxy_unbound_split,
                                           tproxy_unbound_listener_addresses)
 from vs_router.generators.nftables import (generate_tproxy_dns_listener_guard,
@@ -155,3 +155,25 @@ def test_split_rejects_ipv6_listener_and_shared_ip_even_on_non_dns_interface():
         changed = v.configuration.model_copy(update={"interfaces": interfaces})
         with pytest.raises(ValueError, match="tproxy.dns_split_address_unsupported"):
             generate_tproxy_unbound_split(v.model_copy(update={"configuration": changed}))
+
+
+def test_loopback_port_53_policy_is_rejected_as_unreachable():
+    """The split contour has no 127.0.0.1:53 listener; the engine would crash."""
+    v = version()
+    dns = v.configuration.tproxy.dns.model_copy(update={
+        "servers": (TProxyDNSServer(tag="local", server="127.0.0.1", server_port=53),)})
+    tproxy = v.configuration.tproxy.model_copy(update={"dns": dns})
+    bad = v.model_copy(update={"configuration": v.configuration.model_copy(
+        update={"tproxy": tproxy})})
+    with pytest.raises(ValueError, match="tproxy.dns_server_loopback_53"):
+        tproxy_unbound_listener_addresses(bad)
+
+
+def test_loopback_nonstandard_port_is_still_allowed():
+    v = version()
+    dns = v.configuration.tproxy.dns.model_copy(update={
+        "servers": (TProxyDNSServer(tag="local", server="127.0.0.1", server_port=5300),)})
+    tproxy = v.configuration.tproxy.model_copy(update={"dns": dns})
+    ok = v.model_copy(update={"configuration": v.configuration.model_copy(
+        update={"tproxy": tproxy})})
+    assert tproxy_unbound_listener_addresses(ok)["selected"]

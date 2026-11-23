@@ -11,6 +11,7 @@ import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 import { PageTabs } from "../components/Tabs";
 import { DHCPEditor, DNSEditor } from "./ServiceEditors";
+import { DnsPolicyDialog } from "./TProxyDnsPolicy";
 import { Sites, DDNS } from "./ConnectionEditors";
 import { api, ApiError } from "../api";
 import { useQuery } from "@tanstack/react-query";
@@ -105,9 +106,9 @@ export function DNS() {
   );
 }
 function DNSReadOnly({ actions }: { actions: { addRecord: () => void; addForward: () => void; edit: () => void } }) {
-  const {
-    configuration: { dns },
-  } = useConfiguration();
+  const { configuration } = useConfiguration();
+  const { dns, tproxy } = configuration;
+  const [policyOpen, setPolicyOpen] = useState(false);
   const telemetry = useServiceTelemetry();
   const formatUpstream = (u: DNSUpstream) => {
     if (u.mode === "https") return `DoH · ${u.doh_server}`;
@@ -134,8 +135,13 @@ function DNSReadOnly({ actions }: { actions: { addRecord: () => void; addForward
           <dt>Где отвечает DNS</dt><dd>{dns.interfaces.join(", ") || "—"}</dd>
           <dt>Каким сетям разрешён доступ</dt><dd>{dns.access_control.join(", ") || "—"}</dd>
           <dt>Записывать DNS-запросы</dt><dd>{dns.log_queries ? "Да" : "Нет"}</dd>
+          <dt>DNS-политика перехвата</dt><dd>{tproxy.dns.servers.map((s) => `${s.server}${s.server_port ? `:${s.server_port}` : ""}`).join(", ") || "Не задана"}</dd>
         </dl>
       </Card>
+      <Card title="Политика DNS для перехвата" action={<Button onClick={() => setPolicyOpen(true)}>Настроить DNS-политику</Button>}>
+        <InfoNote>Серверы и правила нужны движку перехвата. Указывайте доступный DNS-сервер: 127.0.0.1:53 в контуре перехвата не слушается.</InfoNote>
+      </Card>
+      <DnsPolicyDialog open={policyOpen} onClose={() => setPolicyOpen(false)} />
       <Card title="Журнал запросов DNS">
         <EmptyState>Просмотр DNS-запросов пока не подключён к API.</EmptyState>
       </Card>

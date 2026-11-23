@@ -66,8 +66,18 @@ class ServiceStatus:
 
     def __call__(self):
         from .singbox_service import SINGBOX_UNIT
-        services = [self._unit('kea', 'kea-dhcp4-server.service'),
-                    self._unit('unbound', 'unbound.service'),
+        kea = self._unit('kea', 'kea-dhcp4-server.service')
+        unbound = self._unit('unbound', 'unbound.service')
+        selected = self._unit('unbound:selected', 'vs-router-unbound-selected.service')
+        ordinary = self._unit('unbound:ordinary', 'vs-router-unbound-ordinary.service')
+        # In the capture contour the plain unit is intentionally stopped: two
+        # dedicated resolvers own the listeners. Report their live state under
+        # the DNS row instead of showing a stopped service that still serves.
+        if selected['state'] == 'running' or ordinary['state'] == 'running':
+            unbound = {'name': 'unbound', 'state': 'running',
+                       'detail': 'Активны split-резолверы перехвата'}
+        services = [kea,
+                    unbound,
                     self._unit('caddy', 'caddy.service'),
                     self._unit('tproxy', SINGBOX_UNIT),
                     {'name': 'ddns', 'state': 'unknown',
