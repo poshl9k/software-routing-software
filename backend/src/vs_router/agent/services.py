@@ -1,5 +1,6 @@
 """Live service adapters; commands and HTTP transport are injectable."""
 import base64
+import configparser
 import json
 import logging
 import queue
@@ -331,12 +332,34 @@ class KeaReloader:
         raise ApplyError('agent.reload_failed')
 
 
+def _netdev_spec(content):
+    """``(kind, vlan_id)`` declared by a .netdev file; absent values are None."""
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read_string(content)
+    return (parser.get('NetDev', 'Kind', fallback=None),
+            parser.getint('VLAN', 'Id', fallback=None))
+
+
+def _declared_parent(files, name):
+    """Parent whose .network attaches ``name`` via VLAN= in the same bundle."""
+    for filename, content in files.items():
+        if not filename.endswith('.network'):
+            continue
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read_string(content)
+        if name in parser.get('Network', 'VLAN', fallback='').split():
+            return parser.get('Match', 'Name', fallback=None)
+    return None
+
+
 class NetworkdReloader:
     """Install owned files and reload networkd; retain ownership across failures.
 
     Only files recorded in our manifest are removed. networkctl reload applies
     changed .network files but does not delete existing virtual kernel devices
     when their .netdev disappears; device teardown is outside this adapter.
+    A live netdev whose kind/VID/parent disagrees with the incoming bundle is
+    removed first: networkd cannot recreate a netdev under an occupied name.
     """
     def __init__(self, executor=None, filesystem=None,
                  network_dir=Path('/etc/systemd/network'),
@@ -349,6 +372,52 @@ class NetworkdReloader:
         self.manifest_path = manifest_path
         self.attempts = attempts
         self.sleep = sleep or time.sleep
+
+    def _link_state(self, interface):
+        """Actual kind/VLAN/parent of a live netdev, or None when unknown."""
+        result = self.executor.run(
+            ['ip', '-j', '-d', 'link', 'show', 'dev', interface], 15)
+        if result.returncode:
+            return None
+        try:
+            links = json.loads(getattr(result, 'stdout', '') or '')
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(links, list) or len(links) != 1 or not isinstance(links[0], dict):
+            return None
+        link = links[0]
+        info = link.get('linkinfo')
+        if not isinstance(info, dict):
+            return None
+        data = info.get('info_data')
+        if not isinstance(data, dict):
+            data = {}
+        return {'kind': info.get('info_kind'), 'vlan_id': data.get('id'),
+                'parent': link.get('link')}
+
+    def _expected_link(self, interface, files):
+        """Kind, VLAN id and parent declared by the incoming netdev bundle."""
+        kind, vlan_id = _netdev_spec(files[f'10-vs-router-{interface}.netdev'])
+        parent = _declared_parent(files, interface) if kind == 'vlan' else None
+        return kind, vlan_id, parent
+
+    @staticmethod
+    def _stale(state, kind, vlan_id, parent):
+        if state is None or not kind:
+            return False
+        mismatch = state['kind'] != kind
+        if kind == 'vlan':
+            mismatch |= vlan_id is not None and state['vlan_id'] != vlan_id
+            mismatch |= parent is not None and state['parent'] != parent
+        return mismatch
+
+    def _reconcile_virtual_link(self, interface, files):
+        """Drop a same-named link left by an older config. networkd cannot
+        recreate a netdev while its name is taken by a different VID/kind.
+        """
+        kind, vlan_id, parent = self._expected_link(interface, files)
+        if self._stale(self._link_state(interface), kind, vlan_id, parent):
+            checked(self.executor, ['ip', 'link', 'del', interface])
 
     def __call__(self, path):
         from ..generators.networkd import deserialize_networkd, serialize_networkd
@@ -369,6 +438,13 @@ class NetworkdReloader:
             checked(self.executor, ['chmod', '0644', str(destination)])
         for name in sorted(previous.keys() - files.keys()):
             self.fs.remove(self.network_dir / name)
+        virtual_links = sorted(name.removeprefix('10-vs-router-').removesuffix('.netdev')
+                               for name in files if name.endswith('.netdev'))
+        # A stale netdev keeps its name occupied, so networkd silently skips
+        # creation and the old VID stays on the wire. Drop it after the files
+        # are installed and before the reload can recreate the link.
+        for interface in virtual_links:
+            self._reconcile_virtual_link(interface, files)
         # networkd may be absent on non-networkd hosts (lab/other init):
         # files are still installed; reload failure must not roll back apply.
         active = self.executor.run(
@@ -380,8 +456,6 @@ class NetworkdReloader:
         # networkctl reload returns before newly declared .netdev links appear.
         # Later phases (notably Kea) validate/bind those names immediately, so
         # wait for the kernel objects rather than racing networkd's async create.
-        virtual_links = sorted(name.removeprefix('10-vs-router-').removesuffix('.netdev')
-                               for name in files if name.endswith('.netdev'))
         for interface in virtual_links:
             for attempt in range(self.attempts):
                 if not self.executor.run(['ip', 'link', 'show', 'dev', interface], 15).returncode:
@@ -389,6 +463,12 @@ class NetworkdReloader:
                 if attempt + 1 < self.attempts:
                     self.sleep(0.1)
             else:
+                raise ApplyError('agent.reload_failed')
+        # Verification closes the loop: a link that survived with the old
+        # VID must fail the apply instead of being confirmed on the wire.
+        for interface in virtual_links:
+            kind, vlan_id, parent = self._expected_link(interface, files)
+            if self._stale(self._link_state(interface), kind, vlan_id, parent):
                 raise ApplyError('agent.reload_failed')
         self.fs.write(self.manifest_path, serialize_networkd(files))
 

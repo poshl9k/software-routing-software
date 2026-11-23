@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -166,7 +167,99 @@ def test_reloader_waits_for_new_virtual_links_before_returning():
     NetworkdReloader(executor, fs, attempts=3, sleep=sleeps.append)(path)
 
     assert sleeps == [0.1, 0.1]
-    assert executor.calls[-1][0] == ['ip', 'link', 'show', 'dev', 'vlan1']
+    assert [argv for argv, _ in executor.calls].count(
+        ['ip', 'link', 'show', 'dev', 'vlan1']) == 3
+
+
+def _vlan_bundle(vlan_id=201, parent='eth0'):
+    return serialize_networkd({
+        '10-vs-router-eth0.network': f'[Match]\nName={parent}\n\n[Network]\nVLAN=vlan1\n',
+        '10-vs-router-vlan1.netdev': f'[NetDev]\nName=vlan1\nKind=vlan\n\n[VLAN]\nId={vlan_id}\n',
+        '10-vs-router-vlan1.network': '[Match]\nName=vlan1\n\n[Network]\nAddress=172.20.1.1/24\n',
+    })
+
+
+def _vlan_link(vlan_id, parent='eth0'):
+    return json.dumps([{'ifname': 'vlan1', 'link': parent,
+                        'linkinfo': {'info_kind': 'vlan',
+                                     'info_data': {'id': vlan_id}}}])
+
+
+def test_reloader_replaces_stale_vlan_with_wrong_id():
+    """A netdev left from an earlier config must not survive under the same name."""
+    fs, executor = FakeFS(), FakeExecutor()
+    path = APPLIED_DIR / 'networkd.conf'
+    fs.write(path, _vlan_bundle())
+    states = iter((_vlan_link(1), _vlan_link(201)))
+
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv == ['ip', '-j', '-d', 'link', 'show', 'dev', 'vlan1']:
+            return SimpleNamespace(returncode=0, stdout=next(states, _vlan_link(201)))
+        return SimpleNamespace(returncode=0, stdout='')
+
+    executor.run = run
+    NetworkdReloader(executor, fs)(path)
+
+    assert ['ip', 'link', 'del', 'vlan1'] in [argv for argv, _ in executor.calls]
+
+
+def _link_probe(executor, name, states):
+    values = iter(states)
+
+    def run(argv, timeout):
+        executor.calls.append((argv, timeout))
+        if argv == ['ip', '-j', '-d', 'link', 'show', 'dev', name]:
+            return SimpleNamespace(returncode=0, stdout=next(values))
+        return SimpleNamespace(returncode=0, stdout='')
+
+    executor.run = run
+
+
+def test_reloader_keeps_vlan_that_matches():
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(APPLIED_DIR / 'networkd.conf', _vlan_bundle())
+    _link_probe(executor, 'vlan1', [_vlan_link(201), _vlan_link(201)])
+
+    NetworkdReloader(executor, fs)(APPLIED_DIR / 'networkd.conf')
+
+    assert not any(argv[:3] == ['ip', 'link', 'del'] for argv, _ in executor.calls)
+
+
+def test_reloader_replaces_vlan_on_wrong_parent():
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(APPLIED_DIR / 'networkd.conf', _vlan_bundle())
+    _link_probe(executor, 'vlan1', [_vlan_link(201, 'eth9'), _vlan_link(201)])
+
+    NetworkdReloader(executor, fs)(APPLIED_DIR / 'networkd.conf')
+
+    assert ['ip', 'link', 'del', 'vlan1'] in [argv for argv, _ in executor.calls]
+
+
+def test_reloader_replaces_netdev_of_foreign_kind():
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(APPLIED_DIR / 'networkd.conf', serialize_networkd({
+        '10-vs-router-br0.netdev': '[NetDev]\nName=br0\nKind=bridge\n',
+        '10-vs-router-br0.network': '[Match]\nName=br0\n\n[Network]\nAddress=10.0.0.1/24\n',
+    }))
+    foreign = json.dumps([{'ifname': 'br0',
+                           'linkinfo': {'info_kind': 'vlan', 'info_data': {'id': 1}}}])
+    recreated = json.dumps([{'ifname': 'br0', 'linkinfo': {'info_kind': 'bridge'}}])
+    _link_probe(executor, 'br0', [foreign, recreated])
+
+    NetworkdReloader(executor, fs)(APPLIED_DIR / 'networkd.conf')
+
+    assert ['ip', 'link', 'del', 'br0'] in [argv for argv, _ in executor.calls]
+
+
+def test_reloader_fails_if_stale_netdev_survives():
+    """Do not confirm an apply that left the wrong VID on the wire."""
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(APPLIED_DIR / 'networkd.conf', _vlan_bundle())
+    _link_probe(executor, 'vlan1', [_vlan_link(1), _vlan_link(1)])
+
+    with pytest.raises(ApplyError, match='agent.reload_failed'):
+        NetworkdReloader(executor, fs)(APPLIED_DIR / 'networkd.conf')
 
 
 def test_interface_description_is_metadata_not_configuration():
