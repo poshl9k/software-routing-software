@@ -236,6 +236,25 @@ def test_reloader_replaces_vlan_on_wrong_parent():
     assert ['ip', 'link', 'del', 'vlan1'] in [argv for argv, _ in executor.calls]
 
 
+def test_reloader_accepts_repeated_address_lines_on_vlan_parent():
+    """Multiple WAN addresses are legal in .network; configparser must not choke."""
+    fs, executor = FakeFS(), FakeExecutor()
+    fs.write(APPLIED_DIR / 'networkd.conf', serialize_networkd({
+        '10-vs-router-eth0.network': (
+            '[Match]\nName=eth0\n\n[Network]\n'
+            'Address=192.168.107.2/24\nAddress=192.168.116.253/32\nVLAN=vlan1\n'),
+        '10-vs-router-vlan1.netdev': (
+            '[NetDev]\nName=vlan1\nKind=vlan\n\n[VLAN]\nId=201\n'),
+        '10-vs-router-vlan1.network': (
+            '[Match]\nName=vlan1\n\n[Network]\nAddress=172.20.1.1/24\n'),
+    }))
+    _link_probe(executor, 'vlan1', [_vlan_link(201), _vlan_link(201)])
+
+    NetworkdReloader(executor, fs)(APPLIED_DIR / 'networkd.conf')
+
+    assert not any(argv[:3] == ['ip', 'link', 'del'] for argv, _ in executor.calls)
+
+
 def test_reloader_replaces_netdev_of_foreign_kind():
     fs, executor = FakeFS(), FakeExecutor()
     fs.write(APPLIED_DIR / 'networkd.conf', serialize_networkd({

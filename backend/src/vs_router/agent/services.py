@@ -344,7 +344,10 @@ class KeaReloader:
 
 def _netdev_spec(content):
     """``(kind, vlan_id)`` declared by a .netdev file; absent values are None."""
-    parser = configparser.ConfigParser(interpolation=None)
+    # networkd files legitimately repeat keys such as Address=. The strict
+    # default raises DuplicateOptionError and stalls the apply before
+    # networkd is ever reloaded.
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
     parser.read_string(content)
     return (parser.get('NetDev', 'Kind', fallback=None),
             parser.getint('VLAN', 'Id', fallback=None))
@@ -355,7 +358,10 @@ def _declared_parent(files, name):
     for filename, content in files.items():
         if not filename.endswith('.network'):
             continue
-        parser = configparser.ConfigParser(interpolation=None)
+        # networkd files legitimately repeat keys such as Address=. The strict
+        # default raises DuplicateOptionError and stalls the apply before
+        # networkd is ever reloaded.
+        parser = configparser.ConfigParser(interpolation=None, strict=False)
         parser.read_string(content)
         if name in parser.get('Network', 'VLAN', fallback='').split():
             return parser.get('Match', 'Name', fallback=None)
