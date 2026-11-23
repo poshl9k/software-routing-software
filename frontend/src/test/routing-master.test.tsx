@@ -608,10 +608,11 @@ it("offers panel addresses for the exit source without blocking manual entry", a
 
   const source = screen.getByLabelText("Адрес-источник");
   expect(source).toHaveAttribute("list", "routing-source-addresses");
+  expect(source).toHaveAttribute("autocomplete", "off");
   const options = Array.from(document.getElementById("routing-source-addresses")?.querySelectorAll("option") ?? []);
   expect(options.map((option) => option.getAttribute("value"))).toEqual(
-    expect.arrayContaining(["203.0.113.10/24", "192.168.10.1/24"]));
-  expect(options[0].getAttribute("label")).toBeTruthy();
+    expect.arrayContaining(["203.0.113.10", "192.168.10.1"]));
+  expect(options[0].getAttribute("label")).toContain("/24");
   await user.type(source, "203.0.113.99");
   expect(source).toHaveValue("203.0.113.99");
 });

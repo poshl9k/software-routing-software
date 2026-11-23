@@ -164,10 +164,13 @@ function exitChoices(cfg: Configuration): ExitChoices {
       label: item.description ? `${item.name} — ${item.description}` : item.name,
     })),
     sourceAddresses: [...new Map((cfg.interfaces ?? []).flatMap((item: Interface) =>
-      (item.addresses ?? []).map((address) => [address, {
-        value: address,
-        label: item.description ? `${item.name} — ${item.description}` : item.name,
-      }] as const))).values()],
+      (item.addresses ?? []).map((address) => {
+        const ip = address.split("/")[0];
+        return [ip, {
+          value: ip,
+          label: `${address} — ${item.description ? `${item.name} — ${item.description}` : item.name}`,
+        }] as const;
+      }))).values()],
     outbounds: (cfg.proxies?.outbounds ?? []).map((outbound) => ({
       value: outbound.tag,
       label: outbound.tag,
@@ -566,8 +569,9 @@ function ExitFields({
               valid={!exit.source || addressValid(exit.source)}
               hint={exit.kind === "tunnel"
                 ? "Адрес туннеля на этом хосте. Без него пакеты уйдут с адресом другого маршрута и пир их отбросит"
-                : "Необязательно: адрес интерфейса, с которого выходить. Выберите адрес панели или введите другой вручную"}
+                : "Необязательно: выберите адрес панели или введите IP вручную (без маски)"}
               inputProps={{ list: "routing-source-addresses" }}
+              autoComplete="off"
               onChange={(value) => {
                 const text = value.trim();
                 // An empty field must leave no key at all: the API rejects a source

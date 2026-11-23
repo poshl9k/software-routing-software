@@ -58,10 +58,13 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
     .filter((item) => item.zone && item.zone !== "wan")
     .map((item) => ({ value: item.name, label: item.name }));
   const sourceAddresses = [...new Map((configuration.interfaces ?? []).flatMap((item) =>
-    (item.addresses ?? []).map((address) => [address, {
-      value: address,
-      label: item.description ? `${item.name} — ${item.description}` : item.name,
-    }] as const))).values()];
+    (item.addresses ?? []).map((address) => {
+      const ip = address.split("/")[0];
+      return [ip, {
+        value: ip,
+        label: `${address} — ${item.description ? `${item.name} — ${item.description}` : item.name}`,
+      }] as const;
+    }))).values()];
 
   const begin = () => editor.begin(group?.rules.map((entry) => entry.rule) ?? []);
   const open = group !== null;
@@ -206,8 +209,9 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
                   <>
                     <Field label="Адрес-источник" value={restInterfaceExit.source ?? ""}
                       valid={!restInterfaceExit.source || addressValid(restInterfaceExit.source)}
-                      hint="Выберите адрес панели или введите другой вручную"
+                      hint="Выберите адрес панели или введите IP вручную (без маски)"
                       inputProps={{ list: "segment-source-addresses" }}
+                      autoComplete="off"
                       onChange={(value) => setRestExit({ kind: "interface",
                         interface: restInterfaceExit.interface ?? "",
                         ...(value.trim() ? { source: value.trim() } : {}),

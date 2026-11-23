@@ -68,7 +68,11 @@ allowed imports there are `Alert`, `Button`, `Checkbox`, `Dialog*`,
 - When a value can be chosen from known values **or typed freely** (an exit
   source address, for example), keep `Field` and pass
   `inputProps={{ list: "<id>" }}` with a sibling `<datalist id="<id>">` holding
-  the options. A `Select` would block manual entry.
+  the options. The option `value` must be the canonical field value (a bare IP
+  for an exit source — the API rejects a CIDR); put the prefix and interface
+  name in the option `label`. Set `autoComplete="off"` so the browser does not
+  mix its own saved values into the native dropdown. A `Select` would block
+  manual entry.
 - Use `hint` for persistent guidance and `valid={false}` for an error state;
   **never** pass `error`/`helperText` to a `Field`. The helper line is reserved
   so rows keep equal height — do not remove that.
