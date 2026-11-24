@@ -111,6 +111,11 @@ def unit_content(bind_service: bool = False) -> str:
         "\n"
         "[Service]\n"
         "Type=simple\n"
+        "User=root\n"
+        # Materialized rule-set files live under /var/lib/vs-router/sources,
+        # whose group is vs-router-web. The engine drops CAP_DAC_OVERRIDE with
+        # CapabilityBoundingSet, so group membership is required to traverse it.
+        "Group=vs-router-web\n"
         f"ExecStart={SINGBOX_BINARY} run -c {SINGBOX_CONFIG}\n"
         "Restart=on-failure\n"
         "NoNewPrivileges=true\n"

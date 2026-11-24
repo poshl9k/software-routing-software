@@ -88,6 +88,8 @@ def test_unit_is_pinned_minimal_and_secret_free():
     assert (f"ExecStart={singbox_service.SINGBOX_BINARY} run -c "
             f"{singbox_service.SINGBOX_CONFIG}") in text
     assert "NoNewPrivileges=true" in text
+    assert "User=root" in text
+    assert "Group=vs-router-web" in text
     assert "AmbientCapabilities=CAP_NET_ADMIN" in text
     assert "CapabilityBoundingSet=CAP_NET_ADMIN" in text
     assert "ProtectSystem=strict" in text

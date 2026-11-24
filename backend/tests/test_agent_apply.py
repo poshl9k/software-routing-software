@@ -242,6 +242,15 @@ def test_local_filesystem_atomic_move(tmp_path):
     assert list(destination.parent.iterdir()) == [destination]
 
 
+def test_local_filesystem_writes_materialized_rule_sets_group_readable(tmp_path):
+    import stat
+    from vs_router.agent.apply import LocalFileSystem
+    fs = LocalFileSystem()
+    path = tmp_path / 'sources' / 'ru-ips.rule_set'
+    fs.write(path, '{"version": 1, "rules": []}')
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
 @pytest.mark.parametrize('marker', [None, {'status': 'confirmed', 'deadline': 1},
                                     {'status': 'rolled_back', 'deadline': 1},
                                     {'status': 'confirmed', 'deadline': None}])

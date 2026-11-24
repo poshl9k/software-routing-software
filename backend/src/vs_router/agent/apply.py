@@ -96,6 +96,11 @@ class LocalFileSystem:
                     # Fail closed if the agent lacks root privileges.
                     os.fchmod(stream.fileno(), 0o600)
                     os.fchown(stream.fileno(), 0, 0)
+                elif path.suffix == '.rule_set':
+                    # sing-box runs with a reduced capability set (no
+                    # CAP_DAC_OVERRIDE) and joins vs-router-web to traverse the
+                    # source tree; the group must be able to read the set.
+                    os.fchmod(stream.fileno(), 0o640)
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
