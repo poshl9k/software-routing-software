@@ -100,9 +100,16 @@ async function openMaster(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("tab", { name: "Мастер" }));
 }
 
+async function expandRuleGroups(user: ReturnType<typeof userEvent.setup>) {
+  for (const summary of screen.queryAllByRole("button", { name: /^Группа правил:/ })) {
+    if (summary.getAttribute("aria-expanded") === "false") await user.click(summary);
+  }
+}
+
 async function openAdvanced(user: ReturnType<typeof userEvent.setup>) {
   await openMaster(user);
   await user.click(screen.getByRole("tab", { name: "Расширенные настройки" }));
+  await expandRuleGroups(user);
 }
 
 /** Walk the wizard to a rule with the given exit and return its name. */
@@ -668,6 +675,64 @@ it("criterion_S5_saving_requires_the_catch_all_rule_last", async () => {
   await user.click(screen.getByRole("button", { name: "Удалить правило 2" }));
   expect(screen.getByText(/Последним должно идти правило «Всё остальное»/)).toBeVisible();
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+});
+
+it("criterion_S5_advanced_groups_collapse_and_keep_global_numbers", async () => {
+  const configuration = baseConfiguration();
+  const rule = (name: string, subject: RoutingRule["subject"], domain: string) => ({
+    name, subject, domain_suffix: [domain], domain_exact: [], ip_cidr: [], rule_sets: [],
+    exit: { kind: "direct" },
+  } as RoutingRule);
+  configuration.routing_rules = [
+    rule("srv_first", { kind: "server" }, "first.test"),
+    rule("lan_second", { kind: "interface", interface: "lan0" }, "second.test"),
+    rule("srv_third", { kind: "server" }, "third.test"),
+  ];
+  setup(configuration);
+  const user = userEvent.setup();
+  await openMaster(user);
+  await user.click(screen.getByRole("tab", { name: "Расширенные настройки" }));
+
+  const summaries = screen.getAllByRole("button", { name: /^Группа правил:/ });
+  expect(summaries).toHaveLength(2);
+  expect(summaries.every((item) => item.getAttribute("aria-expanded") === "false")).toBe(true);
+  expect(screen.queryByRole("button", { name: "Удалить правило srv_first" })).not.toBeInTheDocument();
+
+  await user.click(summaries[0]);
+  expect(summaries[0].getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("button", { name: "Удалить правило srv_first" })).toBeVisible();
+  expect(document.querySelector(".routing-group-body")).not.toBeNull();
+
+  await expandRuleGroups(user);
+  const numbers = Array.from(document.querySelectorAll(".routing-group-body .routing-rule-num"))
+    .map((item) => item.textContent);
+  expect(numbers).toEqual(["1", "3", "2"]);
+});
+
+it("criterion_S5_missing_catch_all_can_be_added_with_a_chosen_exit", async () => {
+  const configuration = segmentConfiguration();
+  configuration.routing_rules = configuration.routing_rules.filter((rule) => rule.name !== "lan_rest");
+  const fetch = setup(configuration);
+  const user = userEvent.setup();
+  await openSegmentEditor(user);
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+
+  await user.click(screen.getByRole("button", { name: "Добавить «Всё остальное»" }));
+  expect(screen.queryByText(/Нет правила «Всё остальное»/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeEnabled();
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "Выход для остального трафика" }), "eth0");
+  await user.type(screen.getByLabelText("Адрес-источник"), "203.0.113.5");
+  await user.type(screen.getByLabelText("Шлюз"), "203.0.113.1");
+  await user.click(screen.getByRole("button", { name: "Сохранить" }));
+
+  await waitFor(() => expect(savedRules(fetch).length).toBe(2));
+  const rules = savedRules(fetch);
+  expect(rules.map((rule) => rule.name)).toEqual(["lan_ru", "lan0_rest"]);
+  expect(rules[1].ip_cidr).toEqual(["0.0.0.0/0"]);
+  expect(rules[1].exit).toMatchObject({
+    kind: "interface", interface: "eth0", source: "203.0.113.5", gateway: "203.0.113.1",
+  });
 });
 
 it("criterion_S5_preset_rebuilds_the_segment_with_its_catch_all", async () => {

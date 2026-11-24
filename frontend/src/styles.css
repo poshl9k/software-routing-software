@@ -618,6 +618,9 @@ pre {
 /* Numbered routing rule cards (RoutingMaster). Layout only: every    */
 /* colour is a --vs-* token from theme.ts, no raw colours here.       */
 /* ================================================================== */
+.routing-group-body { max-height: 320px; overflow-y: auto; scrollbar-color: var(--vs-scrollbar) transparent; scrollbar-width: thin; }
+.routing-group-body::-webkit-scrollbar { width: 8px; }
+.routing-group-body::-webkit-scrollbar-thumb { background: var(--vs-scrollbar); border-radius: 4px; }
 .routing-rule-list { display: flex; flex-direction: column; gap: 10px; }
 .routing-rule-card {
   border: 1px solid var(--vs-border);

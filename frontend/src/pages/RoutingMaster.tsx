@@ -32,6 +32,7 @@ import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
 import { Toggle } from "../components/Toggle";
 import { Card } from "../components/Card";
+import { ExpertDisclosure } from "../components/ExpertDisclosure";
 import { ValueTabs } from "../components/Tabs";
 import { useConfiguration, useApplyCommands } from "../state";
 import { SegmentEditor } from "./SegmentEditor";
@@ -1221,22 +1222,41 @@ export default function RoutingMasterPage() {
       </Card>
       <Card title="Правила маршрутизации">
         <Typography variant="body2" color="text.secondary" className="routing-subtitle">
-          Первое совпадение выигрывает. Системные строки показаны для справки и не редактируются.
+          Правила сгруппированы по входу. Группы свернуты — раскройте нужную; длинный список
+          прокручивается внутри группы. Номера — позиции в общем списке, первое совпадение выигрывает.
+          Системные строки показаны для справки и не редактируются.
         </Typography>
         <div className="routing-rule-list">
           {systemRules.map((item) => <RuleCard key={item.title} badge={
             <Badge tone={item.tone}>системное правило</Badge>}
             lines={[{ term: "Кто", text: item.condition }, { term: "Что", text: item.title },
               { term: "Куда", text: item.target }]} />)}
-          {rules.map((item, index) => <RuleCard key={item.name} number={String(index + 1)}
-            name={item.name} lines={ruleCardLines(item)}
-            actions={<FormActions>
-              <Button disabled={disabled} onClick={() => { setRule({ ...item }); setEditingIndex(index); }}>Изменить</Button>
-              <Button disabled={disabled || index === 0} onClick={() => move(index, -1)}>Вверх</Button>
-              <Button disabled={disabled || index === rules.length - 1} onClick={() => move(index, 1)}>Вниз</Button>
-              <DeleteButton label={`Удалить правило ${item.name}`} disabled={disabled} onClick={() => setDeleting({ index, name: item.name })} />
-            </FormActions>} />)}
         </div>
+        {segmentGroups(configuration, rules).map((group) => {
+          const first = (group.rules[0]?.index ?? 0) + 1;
+          const last = (group.rules[group.rules.length - 1]?.index ?? 0) + 1;
+          const kind = group.subject.kind === "interface" ? "Интерфейс"
+            : group.subject.kind === "device" ? "Устройство" : "Сервер";
+          return <ExpertDisclosure key={group.key}
+            ariaLabel={`Группа правил: ${group.title}`}
+            title={<>
+              {kind} · <strong>{group.title}</strong> · {group.rules.length}{" "}
+              {plural(group.rules.length, "правило", "правила", "правил")} · № {first}–{last}
+            </>}>
+            <div className="routing-group-body">
+              <div className="routing-rule-list">
+                {group.rules.map(({ rule, index }) => <RuleCard key={rule.name} number={String(index + 1)}
+                  name={rule.name} lines={ruleCardLines(rule)}
+                  actions={<FormActions>
+                    <Button disabled={disabled} onClick={() => { setRule({ ...rule }); setEditingIndex(index); }}>Изменить</Button>
+                    <Button disabled={disabled || index === 0} onClick={() => move(index, -1)}>Вверх</Button>
+                    <Button disabled={disabled || index === rules.length - 1} onClick={() => move(index, 1)}>Вниз</Button>
+                    <DeleteButton label={`Удалить правило ${rule.name}`} disabled={disabled} onClick={() => setDeleting({ index, name: rule.name })} />
+                  </FormActions>} />)}
+              </div>
+            </div>
+          </ExpertDisclosure>;
+        })}
         {!rules.length && <EmptyState>Правил маршрутизации пока нет. Создайте первое правило в мастере.</EmptyState>}
         {!readOnly && <FormActions><Button disabled={disabled} onClick={() => { resetWizard(); setMode("wizard"); }}>+ Правило</Button></FormActions>}
         {editor.isEdit && <EditorFooter saving={editor.saving} valid={pageValid && !readOnly} cancel={editor.cancel} save={save} />}

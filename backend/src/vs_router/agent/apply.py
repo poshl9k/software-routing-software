@@ -454,9 +454,14 @@ class ApplyEngine:
             try:
                 bundle = deserialize_wireguard(self.fs.read(PENDING_DIR / files['wireguard']))
                 manifest = json.loads(bundle['manifest.json'])
-                if any(self.executor.run(['ip', 'link', 'show', 'dev', iface], 15).returncode or
-                       self.executor.run([entry['protocol'], 'show', iface], 15).returncode
-                       for iface, entry in manifest.items()):
+                if (any(entry.get('uplink') for entry in manifest.values())
+                        or any(self.executor.run(['ip', 'link', 'show', 'dev', iface], 15).returncode or
+                               self.executor.run([entry['protocol'], 'show', iface], 15).returncode
+                               for iface, entry in manifest.items())):
+                    # A transport uplink lives in the main routing table, not in
+                    # any applied artifact. Byte-equal generator output cannot
+                    # prove that its endpoint /32 survived an earlier version,
+                    # a rollback or a boot; only the reloader can re-assert it.
                     unchanged.remove('wireguard')
             except (OSError, ValueError, KeyError, TypeError):
                 unchanged.remove('wireguard')

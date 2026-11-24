@@ -54,8 +54,10 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
   const clientTunnels = (configuration.tunnels ?? [])
     .filter((tunnel) => tunnel.role === "client")
     .map((tunnel) => ({ value: tunnel.name, label: tunnel.name }));
-  const ruInterfaces = (configuration.interfaces ?? [])
-    .filter((item) => item.zone && item.zone !== "wan")
+  // An exit is a link with its own address: the operator may pick a WAN uplink
+  // (vip1/vip2 here), not only a LAN-side segment address.
+  const exitInterfaces = (configuration.interfaces ?? [])
+    .filter((item) => (item.addresses ?? []).length > 0)
     .map((item) => ({ value: item.name, label: item.name }));
   const sourceAddresses = [...new Map((configuration.interfaces ?? []).flatMap((item) =>
     (item.addresses ?? []).map((address) => {
@@ -83,17 +85,32 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
     domain_suffix: [], domain_exact: [], rule_sets: [], exit,
   });
 
+  const tunnelExit = (name: string): RoutingExit => {
+    const tunnel = (configuration.tunnels ?? []).find((item) => item.name === name);
+    const link = tunnel && (configuration.interfaces ?? []).find((item) => item.name === tunnel.interface);
+    const source = link?.addresses?.[0]?.split("/")[0];
+    return { kind: "tunnel", name, ...(source ? { source } : {}) };
+  };
+
+  const nextRestRule = (): RoutingRule => {
+    const tunnel = clientTunnels[0]?.value;
+    const ru = exitInterfaces[0]?.value;
+    const exit: RoutingExit = tunnel ? tunnelExit(tunnel)
+      : ru ? { kind: "interface", interface: ru } : { kind: "direct" };
+    return withSubject(`${segmentName}_rest`, exit, [CATCH_ALL]);
+  };
+
   const applyPreset = (preset: "ru-then-tunnel" | "blocked-only" | "all-tunnel" | "all-ru") => {
     const tunnel = clientTunnels[0]?.value;
-    const ru = ruInterfaces[0]?.value;
+    const ru = exitInterfaces[0]?.value;
     const ruExit: RoutingExit = ru
       ? { kind: "interface", interface: ru }
       : { kind: "direct" };
-    const tunnelExit: RoutingExit = tunnel
-      ? { kind: "tunnel", name: tunnel }
+    const tunnelExitRule: RoutingExit = tunnel
+      ? tunnelExit(tunnel)
       : { kind: "direct" };
     const rest = withSubject(`${segmentName}_rest`, preset === "all-ru" ? ruExit
-      : preset === "blocked-only" ? (tunnelExit) : tunnelExit, [CATCH_ALL]);
+      : preset === "blocked-only" ? (tunnelExitRule) : tunnelExitRule, [CATCH_ALL]);
     const ruSet = [...new Set([
       ...(configuration.rule_sets ?? []).map((source) => source.name),
       ...rules.flatMap((rule) => rule.rule_sets),
@@ -197,11 +214,11 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
                   options={[
                     { value: "direct", label: "Напрямую (по маршруту)" },
                     ...clientTunnels.map((item) => ({ value: `tunnel:${item.value}`, label: `Туннель ${item.value}` })),
-                    ...ruInterfaces.map((item) => ({ value: item.value, label: `Интерфейс ${item.label}` })),
+                    ...exitInterfaces.map((item) => ({ value: item.value, label: `Интерфейс ${item.label}` })),
                   ]}
                   onChange={(value) => {
                     const exit: RoutingExit = value.startsWith("tunnel:")
-                      ? { kind: "tunnel", name: value.slice(7) }
+                      ? tunnelExit(value.slice(7))
                       : value === "direct" ? { kind: "direct" } : { kind: "interface", interface: value };
                     setRules(rules.map((rule, index) => index === rules.length - 1 ? { ...rule, exit } : rule));
                   }} />
@@ -234,6 +251,9 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
               </> : <InfoNote severity="warning">
                 Нет правила «Всё остальное» — трафик без совпадения останется без политики сегмента.
                 Добавьте его, чтобы сегмент был описан полностью.
+                <Button disabled={disabled} onClick={() => setRules([...rules, nextRestRule()])}>
+                  Добавить «Всё остальное»
+                </Button>
               </InfoNote>}
             </PageSection>
             <PageSection title="Пресеты">
@@ -245,7 +265,7 @@ export function SegmentEditor({ configuration, group, disabled, onClose }: {
               </div>
               <InfoNote>
                 Пресет заменяет правила этого сегмента и использует первые объявленные выходы:
-                туннель — {clientTunnels[0]?.label ?? "не объявлен"}, РФ-интерфейс — {ruInterfaces[0]?.label ?? "напрямую"}.
+                туннель — {clientTunnels[0]?.label ?? "не объявлен"}, РФ-интерфейс — {exitInterfaces[0]?.label ?? "напрямую"}.
                 Проверьте результат перед сохранением.
               </InfoNote>
             </PageSection>
