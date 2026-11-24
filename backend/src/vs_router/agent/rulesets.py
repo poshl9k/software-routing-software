@@ -53,7 +53,8 @@ SRS_MAGIC = b"SRS"
 RULE_SET_VERSION = 1
 
 _DOMAIN_RE = re.compile(
-    r"^(?:\*\.)?(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z]{2,}$", re.IGNORECASE)
+    r"^(?:\*\.)?(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+(?:[a-z]{2,}|xn--[a-z0-9-]{2,})$",
+    re.IGNORECASE)
 _DOMAIN_PREFIXES = ("domain:", "full:", "keyword:", "regexp:")
 
 

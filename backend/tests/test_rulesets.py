@@ -143,6 +143,12 @@ def test_materialize_text_domain_honours_prefixes():
     assert {"domain_regex": ["^ads\\d+\\.example$"]} in doc["rules"]
 
 
+def test_materialize_accepts_idn_a_labels():
+    doc = json.loads(materialize_ruleset(
+        "xn--p8j9a0d9c9a.xn--q9jyb4c\n", profile("text-domain")))
+    assert doc["rules"] == [{"domain_suffix": ["xn--p8j9a0d9c9a.xn--q9jyb4c"]}]
+
+
 def test_materialize_v2fly_style_domain_list():
     doc = json.loads(materialize_ruleset(
         "youtube\nggpht.cn @cn\nfull:yt3.googleusercontent.com\nads.youtube.com @ads\n",
