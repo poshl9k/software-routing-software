@@ -24,7 +24,8 @@ import { EditorFooter } from "../components/EditorShell";
 import { ExpertDisclosure } from "../components/ExpertDisclosure";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { Field, LinesField } from "../components/Field";
+import { Field } from "../components/Field";
+import { ChipToggle } from "../components/ChipToggle";
 import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { InfoNote } from "../components/InfoNote";
 import { InlineStatus } from "../components/InlineStatus";
@@ -1439,13 +1440,27 @@ export function RuleGroups() {
             </FormGrid>
           </PageSection>
           <PageSection title="Источники">
-            <LinesField label="Источники (по одному тегу в строке)" values={current.sources}
-              valid={current.sources.length > 0 && current.sources.every(sourceDeclared)}
-              hint="Теги объявленных источников из раздела «Источники списков»"
-              onChange={(next) => update({ sources: next })} />
             <InfoNote>
-              Доступные теги: {sources.map((source) => source.name).join(", ") || "нет — сначала объявите источники"}.
+              Выберите подготовленные списки чипами — теги вводить не нужно. Повторный клик снимает выбор.
             </InfoNote>
+            <div className="chip-row" role="group" aria-label="Источники группы">
+              {sources.length
+                ? sources.map((source) => <ChipToggle
+                    key={source.name}
+                    label={source.name}
+                    title={`${source.format} · ${source.url}`}
+                    selected={current.sources.includes(source.name)}
+                    onClick={() => update({ sources:
+                      current.sources.includes(source.name)
+                        ? current.sources.filter((tag) => tag !== source.name)
+                        : [...current.sources, source.name],
+                    })}
+                  />)
+                : <InfoNote severity="warning">
+                    Нет объявленных источников — сначала добавьте их на вкладке «Источники списков».
+                  </InfoNote>}
+            </div>
+            <InfoNote>Выбрано: {current.sources.length}.</InfoNote>
           </PageSection>
           {!rowValid(current, selected) && <InfoNote severity="warning">
             Пока группа не заполнена корректно, черновик не сохранится.

@@ -648,8 +648,9 @@ it("creates a reusable rule group from declared sources", async () => {
   await user.click(screen.getByRole("button", { name: "Добавить группу" }));
   await user.type(screen.getByLabelText("Имя группы"), "blocked_bundle");
   await user.type(screen.getByLabelText("Описание"), "все блокировки");
-  await user.click(screen.getByLabelText("Источники (по одному тегу в строке)"));
-  await user.paste("blocked_domains");
+  expect(screen.queryByLabelText("Источники (по одному тегу в строке)")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "blocked_domains" }));
+  expect(screen.getByRole("button", { name: "blocked_domains" })).toHaveAttribute("aria-pressed", "true");
   await user.click(saveButton());
   await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
     path === "/api/draft" && (init as RequestInit)?.method === "PUT")).toBe(true));

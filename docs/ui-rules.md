@@ -29,6 +29,7 @@ action, no duplicated labels, no ad-hoc styling.
 | Standalone boolean | `Toggle` | a hand-built `FormControlLabel`+`Switch` |
 | Multi-select group, dense inline option | `Checkbox` + `FormControlLabel` | `Toggle` in a checkbox list (a switch is wrong there) |
 | Status chip | `Badge tone="blue|green|amber|red|purple"` | coloured `<span>` |
+| Toggleable named tag | `ChipToggle` | raw MUI `Chip` in a page |
 | Read-only table | `DataTable` | hand-rolled `<table>` |
 | Card with a header action | `Card` (+ `action={…}`) | a bare `<div class="card">` |
 | «нет данных» / hint / error | `EmptyState` / `InfoNote` / `ErrorNotice` | ad-hoc paragraphs |
