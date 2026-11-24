@@ -20,7 +20,7 @@ import { Button, Dialog, DialogTitle, DialogContent, Typography } from "@mui/mat
 import { WizardProgress } from "../components/WizardProgress";
 import { PageSection } from "../components/PageSection";
 import { FormGrid, FormWide, FormActions } from "../components/Form";
-import { Field } from "../components/Field";
+import { Field, LinesField } from "../components/Field";
 import { Select } from "../components/Select";
 import { DeleteButton } from "../components/DeleteButton";
 import { EditorFooter, EditorFieldset } from "../components/EditorShell";
@@ -473,18 +473,15 @@ function DestinationFields({ rule, change }: {
           Выбрано сервисов: {chosen.length}. Их назначения — альтернативы; свой список — ниже.
         </Typography>}
       </FormWide>}
-    <Field label="Свои домены (по одному в строке)" multiline value={manualDomains.join("\n")}
+    <LinesField label="Свои домены (по одному в строке)" values={manualDomains}
       valid={domainListValid(manualDomains)} hint="Совпадение по суффиксу: «rutube.ru» покроет и www.rutube.ru"
-      onChange={(text) => {
-        const typed = text.split("\n").map((item) => item.trim()).filter(Boolean);
-        change({ domain_suffix: [...new Set([...typed, ...rule.domain_suffix.filter((domain) => serviceDomains.has(domain))])] });
-      }} />
-    <Field label="Свои адреса и сети (CIDR)" multiline value={rule.ip_cidr.join("\n")}
+      onChange={(typed) => change({ domain_suffix: [...new Set([...typed, ...rule.domain_suffix.filter((domain) => serviceDomains.has(domain))])] })} />
+    <LinesField label="Свои адреса и сети (CIDR)" values={rule.ip_cidr}
       valid={cidrListValid(rule.ip_cidr)} hint="Только IPv4. Оставьте пустым, если адреса не нужны"
-      onChange={(text) => change({ ip_cidr: text.split("\n").map((item) => item.trim()).filter(Boolean) })} />
-    <Field label="Точные домены (по строкам)" multiline value={rule.domain_exact.join("\n")}
+      onChange={(parsed) => change({ ip_cidr: parsed })} />
+    <LinesField label="Точные домены (по строкам)" values={rule.domain_exact}
       valid={domainListValid(rule.domain_exact)} hint="Только этот домен, без поддоменов"
-      onChange={(text) => change({ domain_exact: text.split("\n").map((item) => item.trim()).filter(Boolean) })} />
+      onChange={(parsed) => change({ domain_exact: parsed })} />
     <FormWide><Typography variant="body2" color="text.secondary">
       Списки — альтернативы: достаточно совпадения с любым доменом или сетью из любого списка.
     </Typography></FormWide>

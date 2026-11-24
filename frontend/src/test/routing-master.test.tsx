@@ -677,6 +677,30 @@ it("criterion_S5_saving_requires_the_catch_all_rule_last", async () => {
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
 });
 
+it("criterion_S5_destination_lists_accept_several_lines", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await openMaster(user);
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  const domainsInput = screen.getByLabelText("Свои домены (по одному в строке)");
+  await user.click(domainsInput);
+  await user.paste("one.example\ntwo.example");
+  expect((domainsInput as HTMLTextAreaElement).value).toBe("one.example\ntwo.example");
+  await user.click(screen.getByLabelText("Свои адреса и сети (CIDR)"));
+  await user.paste("203.0.113.1/32\n198.51.100.0/24");
+  await user.click(screen.getByLabelText("Точные домены (по строкам)"));
+  await user.paste("exact.example\nother.example");
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const rule = savedDraft(fetch).routing_rules[0];
+  expect(rule.domain_suffix).toEqual(["one.example", "two.example"]);
+  expect(rule.ip_cidr).toEqual(["203.0.113.1/32", "198.51.100.0/24"]);
+  expect(rule.domain_exact).toEqual(["exact.example", "other.example"]);
+});
+
 it("criterion_S5_advanced_groups_collapse_and_keep_global_numbers", async () => {
   const configuration = baseConfiguration();
   const rule = (name: string, subject: RoutingRule["subject"], domain: string) => ({

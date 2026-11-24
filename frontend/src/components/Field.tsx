@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { TextField, type SxProps, type Theme } from "@mui/material";
 
 /** Everything a `Field` needs regardless of whether it is editable. */
@@ -87,4 +88,32 @@ export function Field({
       onChange={(e) => onChange?.(e.target.value)}
     />
   );
+}
+
+/**
+ * A multiline editor for one-value-per-line lists. The raw text is local state:
+ * deriving it back from the parsed list would drop the empty trailing line after
+ * Enter, so the next value would be concatenated to the previous one instead of
+ * becoming a new line.
+ */
+export function LinesField({ label, values, onChange, valid = true, hint }: {
+  label: string;
+  values: readonly string[];
+  onChange: (values: string[]) => void;
+  valid?: boolean;
+  hint?: string;
+}) {
+  const [text, setText] = useState(() => values.join("\n"));
+  const lastEmitted = useRef<string | null>(null);
+  useEffect(() => {
+    const external = values.join("\n");
+    if (lastEmitted.current !== external) setText(external);
+  }, [values]);
+  return <Field label={label} multiline value={text} valid={valid} hint={hint}
+    onChange={(next) => {
+      setText(next);
+      const parsed = next.split("\n").map((item) => item.trim()).filter(Boolean);
+      lastEmitted.current = parsed.join("\n");
+      onChange(parsed);
+    }} />;
 }
