@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { queryKeys } from "../query";
-import { displayPair, displayTitle } from "../labels";
+import { displayTitle, sourceDisplayPair, sourceDisplayTitle } from "../labels";
 import type {
   ProxyGroup,
   RoutingExit,
@@ -1251,6 +1251,8 @@ function RuleSetDeclarations() {
   const canEdit = user?.role === "admin";
   const editor = useDraftEditor<RuleSetSource[]>();
   const presets = useQuery({ queryKey: queryKeys.presetSources(), queryFn: api.presetSources });
+  const catalog = useQuery({ queryKey: queryKeys.presetCatalog(), queryFn: api.presetCatalog });
+  const catalogServices = catalog.data?.services ?? [];
   const [selected, setSelected] = useState<number | null>(null);
   const declared = editor.value ?? configuration.rule_sets ?? [];
   const current = selected === null ? null : declared[selected];
@@ -1276,7 +1278,7 @@ function RuleSetDeclarations() {
         <DataTable
           heads={["Понятное название", "Техническое имя", "Формат", "Адрес", "Действия"]}
           rows={declared.map((row, index) => [
-            displayTitle(row),
+            sourceDisplayTitle(row, catalogServices),
             row.name || "—",
             row.format,
             row.url || "—",
@@ -1286,10 +1288,10 @@ function RuleSetDeclarations() {
               </Button>
               <DeleteButton
                 label={`Удалить источник ${row.name || index + 1}`}
-                onClick={() => void editor.save((list) => ({
-                  ...configuration,
-                  rule_sets: (list as RuleSetSource[]).filter((_, i) => i !== index),
-                }))}
+                onClick={() => void editor.save(
+                  (list) => ({ ...configuration, rule_sets: list as RuleSetSource[] }),
+                  declared.filter((_, i) => i !== index),
+                )}
               />
             </div>,
           ])}
@@ -1381,6 +1383,8 @@ export function RuleGroups() {
   const { user, configuration } = useConfiguration();
   const canEdit = user?.role === "admin";
   const editor = useDraftEditor<RuleGroup[]>();
+  const catalog = useQuery({ queryKey: queryKeys.presetCatalog(), queryFn: api.presetCatalog });
+  const catalogServices = catalog.data?.services ?? [];
   const [selected, setSelected] = useState<number | null>(null);
   const groups = editor.value ?? configuration.rule_groups ?? [];
   const sources = configuration.rule_sets ?? [];
@@ -1408,16 +1412,17 @@ export function RuleGroups() {
           row.name || "—",
           row.sources.map((tag) => {
             const source = sources.find((item) => item.name === tag);
-            return source ? displayPair(source) : tag;
+            return source ? sourceDisplayPair(source, catalogServices) : tag;
           }).join(", ") || "—",
           <div className="row-actions" key={`${row.name}-${index}`}>
             <Button disabled={!canEdit} onClick={() => { editor.begin(groups); setSelected(index); }}>
               Изменить
             </Button>
             <DeleteButton label={`Удалить группу ${row.name || index + 1}`}
-              onClick={() => void editor.save((list) => ({
-                ...configuration, rule_groups: (list as RuleGroup[]).filter((_, i) => i !== index),
-              }))} />
+              onClick={() => void editor.save(
+                (list) => ({ ...configuration, rule_groups: list as RuleGroup[] }),
+                groups.filter((_, i) => i !== index),
+              )} />
           </div>,
         ])}
         empty={<EmptyState title="Групп пока нет">
@@ -1456,8 +1461,8 @@ export function RuleGroups() {
               {sources.length
                 ? sources.map((source) => <ChipToggle
                     key={source.name}
-                    label={displayPair(source)}
-                    title={`${displayPair(source)} · ${source.format} · ${source.url}`}
+                    label={sourceDisplayPair(source, catalogServices)}
+                    title={`${sourceDisplayPair(source, catalogServices)} · ${source.format} · ${source.url}`}
                     selected={current.sources.includes(source.name)}
                     onClick={() => update({ sources:
                       current.sources.includes(source.name)

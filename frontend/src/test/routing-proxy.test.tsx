@@ -6,7 +6,7 @@ import { expect, it, vi } from "vitest";
 import Routing from "../pages/Routing";
 import { RouterProvider, useRouterState } from "../state";
 import { emptyConfiguration } from "../fixtures";
-import type { Configuration, ProxyOutbound, ProxySettings, RuleSetStatus, TProxy } from "../types";
+import type { CatalogResponse, Configuration, ProxyOutbound, ProxySettings, RuleSetStatus, TProxy } from "../types";
 
 type Role = "admin" | "operator";
 
@@ -21,6 +21,7 @@ function setup(options?: {
   refresh?: unknown;
   sources?: Configuration["rule_sets"];
   groups?: Configuration["rule_groups"];
+  catalog?: CatalogResponse;
 }) {
   const configuration = {
     ...emptyConfiguration,
@@ -51,6 +52,9 @@ function setup(options?: {
         kind: "rule_set", license: "GPL-3.0 (не подтверждена)", license_verified: false,
         provenance: "SagerNet/sing-geoip, ветка rule-set", notes: null,
         warning: "preset.license_unverified" }] })));
+    if (path === "/api/presets/catalog")
+      return Promise.resolve(new Response(JSON.stringify(
+        options?.catalog ?? { categories: [], services: [] })));
     if (path === "/api/rulesets/update") {
       if (options?.updateFails)
         return Promise.resolve(
@@ -661,4 +665,40 @@ it("creates a reusable rule group from declared sources", async () => {
   expect(body.rule_groups).toEqual([{
     name: "blocked_bundle", label: "Набор блокировок", sources: ["blocked_domains"],
   }]);
+});
+
+it("deletes a declared source without opening the row editor", async () => {
+  const fetch = setup({ sources: [
+    { name: "ru-ips", label: "Российские IP", format: "json",
+      url: "https://example.org/ru.json", max_records: 200000, max_bytes: 5000000 },
+    { name: "my-list", format: "srs", url: "https://example.org/my.srs",
+      max_records: 200000, max_bytes: 5000000 },
+  ] });
+  const user = userEvent.setup();
+  await openTab(user, "Источники списков");
+  await user.click(screen.getByRole("button", { name: "Удалить источник ru-ips" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && (init as RequestInit)?.method === "PUT")).toBe(true));
+  const call = fetch.mock.calls.find(([path, init]) =>
+    path === "/api/draft" && (init as RequestInit)?.method === "PUT");
+  const body = JSON.parse(String((call![1] as RequestInit).body));
+  expect(body.rule_sets.map((source: { name: string }) => source.name)).toEqual(["my-list"]);
+});
+
+it("group chips use catalog preset titles for built-in sources", async () => {
+  setup({
+    sources: [{ name: "geosite-grok", format: "srs",
+      url: "https://example.org/grok.srs", max_records: 200000, max_bytes: 5000000 }],
+    catalog: {
+      categories: [{ key: "ai", title: "AI", count: 1 }],
+      services: [{ id: "grok", name: "Grok (xAI)", category: "ai", icon_slug: "", notice: null,
+        covers: [], dns_domains: [],
+        rule_sets: [{ tag: "geosite-grok", url: "https://example.org/grok.srs", format: "srs" }],
+        declared: false, action: "tunnel" }],
+    },
+  });
+  const user = userEvent.setup();
+  await openTab(user, "Группы списков");
+  await user.click(screen.getByRole("button", { name: "Добавить группу" }));
+  expect(screen.getByRole("button", { name: "Grok (xAI) · geosite-grok" })).toBeInTheDocument();
 });
