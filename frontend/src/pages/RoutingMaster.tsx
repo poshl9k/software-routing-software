@@ -11,6 +11,7 @@ import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
+import { displayTitle } from "../labels";
 import { ChoiceCards } from "../components/ChoiceCards";
 import { FlowChain } from "../components/FlowChain";
 import { LoadingSkeleton } from "../components/LoadingSkeleton";
@@ -453,6 +454,12 @@ function DestinationFields({ rule, change, configuration }: {
   const serviceDomains = new Set(chosen.flatMap((item) => item.dns_domains));
   // What the operator typed by hand: list entries no chosen service contributes.
   const manualDomains = rule.domain_suffix.filter((domain) => !serviceDomains.has(domain));
+  // The second block is for manually added lists only. A declared source whose
+  // tag belongs to any catalog preset is already shown by the first block.
+  const builtinTags = new Set((catalog.data?.services ?? [])
+    .flatMap((item) => item.rule_sets.map((set) => set.tag)));
+  const manualSources = (configuration.rule_sets ?? [])
+    .filter((source) => !builtinTags.has(source.name));
   const empty = rule.domain_suffix.length + rule.domain_exact.length +
     rule.ip_cidr.length + rule.rule_sets.length + (rule.rule_groups ?? []).length === 0;
   const applyChosen = (ids: string[]) => {
@@ -479,25 +486,30 @@ function DestinationFields({ rule, change, configuration }: {
           Выбрано сервисов: {chosen.length}. Их назначения — альтернативы; свой список — ниже.
         </Typography>}
       </FormWide>}
-    {(configuration.rule_sets ?? []).length > 0 && <FormWide>
-      <ChoiceCards label="Объявленные списки" layout="presets" multiple
-        value={(rule.rule_sets ?? []).filter((tag) =>
-          (configuration.rule_sets ?? []).some((source) => source.name === tag))}
-        options={(configuration.rule_sets ?? []).map((source) => ({
-          value: source.name, label: source.name,
-          description: `${source.format} · ${source.url}`,
+    {manualSources.length > 0 && <FormWide>
+      <ChoiceCards label="Ручные списки" layout="presets" multiple
+        value={(rule.rule_sets ?? []).filter((tag) => manualSources.some((source) => source.name === tag))}
+        options={manualSources.map((source) => ({
+          value: source.name,
+          label: displayTitle(source),
+          description: displayTitle(source) === source.name
+            ? source.format
+            : `${source.name} · ${source.format}`,
         }))}
         onChange={(_id, selected) => change({
           rule_sets: [...(rule.rule_sets ?? []).filter((tag) =>
-            !(configuration.rule_sets ?? []).some((source) => source.name === tag)), ...selected],
+            !manualSources.some((source) => source.name === tag)), ...selected],
         })} />
     </FormWide>}
     {(configuration.rule_groups ?? []).length > 0 && <FormWide>
       <ChoiceCards label="Группы списков" layout="presets" multiple
         value={rule.rule_groups ?? []}
         options={(configuration.rule_groups ?? []).map((group) => ({
-          value: group.name, label: group.name,
-          description: group.description ?? `${group.sources.length} источников`,
+          value: group.name,
+          label: displayTitle(group),
+          description: displayTitle(group) === group.name
+            ? `${group.sources.length} источников`
+            : `${group.name} · ${group.sources.length} источников`,
         }))}
         onChange={(_id, selected) => change({ rule_groups: selected })} />
       <InfoNote>Группа подставляет все свои списки как альтернативы — один выбор вместо повтора в каждом правиле.</InfoNote>

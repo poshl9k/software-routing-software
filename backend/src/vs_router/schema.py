@@ -851,6 +851,8 @@ class RuleSetSource(Model):
     url: str
     max_records: int = Field(default=200_000, ge=1, le=5_000_000)
     max_bytes: int = Field(default=5_000_000, ge=1024, le=50_000_000)
+    # Optional human-facing title; the technical `name` stays the rule tag.
+    label: str | None = None
 
     @model_validator(mode="after")
     def check_url(self):
@@ -867,7 +869,7 @@ class RuleGroup(Model):
     """
 
     name: EngineTag
-    description: str | None = None
+    label: str | None = None
     sources: tuple[EngineTag, ...] = ()
 
 

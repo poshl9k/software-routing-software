@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useConfiguration } from "../state";
 import { api } from "../api";
 import { queryKeys } from "../query";
+import { displayPair, displayTitle } from "../labels";
 import type {
   ProxyGroup,
   RoutingExit,
@@ -1273,8 +1274,9 @@ function RuleSetDeclarations() {
           не загружает: обновление запускается вручную в таблице статусов ниже.
         </InfoNote>
         <DataTable
-          heads={["Имя", "Формат", "Адрес", "Действия"]}
+          heads={["Понятное название", "Техническое имя", "Формат", "Адрес", "Действия"]}
           rows={declared.map((row, index) => [
+            displayTitle(row),
             row.name || "—",
             row.format,
             row.url || "—",
@@ -1299,7 +1301,7 @@ function RuleSetDeclarations() {
           <Button
             disabled={!canEdit}
             onClick={() => {
-              editor.begin([...declared, { name: "", format: "srs", url: "", max_records: 200000, max_bytes: 5000000 }]);
+              editor.begin([...declared, { name: "", label: null, format: "srs", url: "", max_records: 200000, max_bytes: 5000000 }]);
               setSelected(declared.length);
             }}
           >
@@ -1315,6 +1317,9 @@ function RuleSetDeclarations() {
             <>
               <PageSection title="Описание">
                 <FormGrid>
+                  <Field label="Понятное название" value={current.label ?? ""}
+                    hint="Необязательно: так список подписан в мастере, чипах и карточках групп"
+                    onChange={(label) => update({ label: label || null })} />
                   <Field label="Имя источника" value={current.name}
                     valid={engineTagValid(current.name) && !nameTaken(current.name, selected)}
                     hint="Латиница, цифры, подчёркивание и дефис: так на него ссылаются правила"
@@ -1397,10 +1402,14 @@ export function RuleGroups() {
         на имя группы в поле «Что»; все её источники считаются альтернативами.
       </InfoNote>
       <DataTable
-        heads={["Имя", "Источники", "Действия"]}
+        heads={["Понятное название", "Техническое имя", "Источники", "Действия"]}
         rows={groups.map((row, index) => [
+          displayTitle(row),
           row.name || "—",
-          row.sources.join(", ") || "—",
+          row.sources.map((tag) => {
+            const source = sources.find((item) => item.name === tag);
+            return source ? displayPair(source) : tag;
+          }).join(", ") || "—",
           <div className="row-actions" key={`${row.name}-${index}`}>
             <Button disabled={!canEdit} onClick={() => { editor.begin(groups); setSelected(index); }}>
               Изменить
@@ -1417,26 +1426,26 @@ export function RuleGroups() {
       />
       <FormActions>
         <Button disabled={!canEdit} onClick={() => {
-          editor.begin([...groups, { name: "", description: null, sources: [] }]);
+          editor.begin([...groups, { name: "", label: null, sources: [] }]);
           setSelected(groups.length);
         }}>Добавить группу</Button>
       </FormActions>
     </Card>
     <Dialog open={isPresent(current)} onClose={editor.saving ? undefined : () => { editor.cancel(); setSelected(null); }}
       fullWidth maxWidth="md">
-      <DialogTitle>Группа списков: {current?.name || "новая"}</DialogTitle>
+      <DialogTitle>Группа списков: {current ? displayTitle(current) || "новая" : "новая"}</DialogTitle>
       <DialogContent>
         <ErrorNotice error={editor.error} />
         {current && selected !== null && <>
           <PageSection title="Описание">
             <FormGrid>
+              <Field label="Понятное название" value={current.label ?? ""}
+                hint="Необязательно: так группа подписана в мастере и таблицах"
+                onChange={(label) => update({ label: label || null })} />
               <Field label="Имя группы" value={current.name}
                 valid={engineTagValid(current.name) && !nameTaken(current.name, selected)}
                 hint="Латиница, цифры, подчёркивание и дефис: так на неё ссылаются правила"
                 onChange={(name) => update({ name })} />
-              <Field label="Описание" value={current.description ?? ""}
-                hint="Необязательно: что именно объединяет группа"
-                onChange={(description) => update({ description: description || null })} />
             </FormGrid>
           </PageSection>
           <PageSection title="Источники">
@@ -1447,8 +1456,8 @@ export function RuleGroups() {
               {sources.length
                 ? sources.map((source) => <ChipToggle
                     key={source.name}
-                    label={source.name}
-                    title={`${source.format} · ${source.url}`}
+                    label={displayPair(source)}
+                    title={`${displayPair(source)} · ${source.format} · ${source.url}`}
                     selected={current.sources.includes(source.name)}
                     onClick={() => update({ sources:
                       current.sources.includes(source.name)

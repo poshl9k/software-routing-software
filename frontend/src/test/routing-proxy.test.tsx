@@ -632,7 +632,7 @@ it("declares a rule-set source in the draft and never fetches it from the panel"
   const call = fetch.mock.calls.find(([path, init]) =>
     path === "/api/draft" && (init as RequestInit)?.method === "PUT");
   const body = JSON.parse(String((call![1] as RequestInit).body));
-  expect(body.rule_sets).toEqual([{ name: "ru-ips", format: "json",
+  expect(body.rule_sets).toEqual([{ name: "ru-ips", label: null, format: "json",
     url: "https://example.com/geoip-ru.json", max_records: 200000, max_bytes: 5000000 }]);
   // The panel declares; it never downloads.
   expect(fetch.mock.calls.some(([path]) => String(path).includes("/api/rulesets/update"))).toBe(false);
@@ -640,17 +640,18 @@ it("declares a rule-set source in the draft and never fetches it from the panel"
 
 it("creates a reusable rule group from declared sources", async () => {
   const fetch = setup({ sources: [{
-    name: "blocked_domains", format: "srs", url: "https://example.org/blocked.srs",
-    max_records: 200000, max_bytes: 5000000,
+    name: "blocked_domains", label: "Блок доменов", format: "srs",
+    url: "https://example.org/blocked.srs", max_records: 200000, max_bytes: 5000000,
   }] });
   const user = userEvent.setup();
   await openTab(user, "Группы списков");
   await user.click(screen.getByRole("button", { name: "Добавить группу" }));
   await user.type(screen.getByLabelText("Имя группы"), "blocked_bundle");
-  await user.type(screen.getByLabelText("Описание"), "все блокировки");
+  await user.type(screen.getByLabelText("Понятное название"), "Набор блокировок");
   expect(screen.queryByLabelText("Источники (по одному тегу в строке)")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "blocked_domains" }));
-  expect(screen.getByRole("button", { name: "blocked_domains" })).toHaveAttribute("aria-pressed", "true");
+  const chip = screen.getByRole("button", { name: "Блок доменов · blocked_domains" });
+  await user.click(chip);
+  expect(chip).toHaveAttribute("aria-pressed", "true");
   await user.click(saveButton());
   await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
     path === "/api/draft" && (init as RequestInit)?.method === "PUT")).toBe(true));
@@ -658,6 +659,6 @@ it("creates a reusable rule group from declared sources", async () => {
     path === "/api/draft" && (init as RequestInit)?.method === "PUT");
   const body = JSON.parse(String((call![1] as RequestInit).body));
   expect(body.rule_groups).toEqual([{
-    name: "blocked_bundle", description: "все блокировки", sources: ["blocked_domains"],
+    name: "blocked_bundle", label: "Набор блокировок", sources: ["blocked_domains"],
   }]);
 });

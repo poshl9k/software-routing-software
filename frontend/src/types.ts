@@ -383,6 +383,8 @@ export interface ProxySettings {
 /** Declared rule-set source profile; read-only, secret-free (mirrors schema.py). */
 export interface RuleSetSource {
   name: string;
+  /** Optional human-facing title shown before the technical name. */
+  label?: string | null;
   format: "text-domain" | "text-cidr" | "json" | "geosite" | "geoip" | "srs";
   url: string;
   max_records: number;
@@ -391,7 +393,8 @@ export interface RuleSetSource {
 /** Reusable named bundle of declared rule-set tags (destination catalog). */
 export interface RuleGroup {
   name: string;
-  description: string | null;
+  /** Optional human-facing title shown before the technical name. */
+  label?: string | null;
   sources: string[];
 }
 /** Candidate rule-set source from the bundled catalog (never trusted blindly). */

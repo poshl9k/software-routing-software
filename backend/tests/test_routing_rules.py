@@ -230,6 +230,18 @@ def test_rule_group_members_are_deduplicated_with_direct_tags():
             'action': 'route', 'outbound': 'direct'} in rules
 
 
+def test_labels_are_optional_and_do_not_change_generation():
+    data = _grouped_document()
+    data['rule_sets'][0]['label'] = 'Grok (xAI)'
+    data['rule_groups'][0]['label'] = 'Блок AI'
+    parsed = parse_configuration(data)
+    assert parsed.rule_sets[0].label == 'Grok (xAI)'
+    assert parsed.rule_groups[0].label == 'Блок AI'
+    rules = generate_singbox(ConfigurationVersion(configuration=parsed))['route']['rules']
+    assert {'rule_set': ['blocked-a', 'blocked-b'],
+            'action': 'route', 'outbound': 'direct'} in rules
+
+
 def test_rule_group_must_be_declared_and_its_sources_known():
     data = _grouped_document()
     data['routing_rules'][0]['rule_groups'] = ['missing']

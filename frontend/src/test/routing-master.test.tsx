@@ -704,20 +704,24 @@ it("criterion_S5_destination_lists_accept_several_lines", async () => {
 it("criterion_S5_manual_sources_and_groups_are_wizard_cards", async () => {
   const configuration = baseConfiguration();
   configuration.rule_sets = [{
-    name: "blocked_domains", format: "srs", url: "https://example.org/blocked.srs",
-    max_records: 200000, max_bytes: 5000000,
+    name: "blocked_domains", label: "Блок доменов", format: "srs",
+    url: "https://example.org/blocked.srs", max_records: 200000, max_bytes: 5000000,
   }];
   configuration.rule_groups = [{
-    name: "blocked_bundle", description: "все ручные блокировки",
-    sources: ["blocked_domains"],
+    name: "blocked_bundle", label: "Набор блокировок", sources: ["blocked_domains"],
   }];
   const fetch = setup(configuration);
   const user = userEvent.setup();
   await openMaster(user);
   await user.click(screen.getByRole("button", { name: "Далее" }));
-  expect(screen.getByRole("group", { name: "Объявленные списки" })).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "blocked_domains" }));
-  await user.click(screen.getByRole("button", { name: "blocked_bundle" }));
+  const manual = screen.getByRole("group", { name: "Ручные списки" });
+  expect(within(manual).getByRole("button", { name: "Блок доменов" })).toBeInTheDocument();
+  expect(within(manual).getByText("blocked_domains · srs")).toBeInTheDocument();
+  const groups = screen.getByRole("group", { name: "Группы списков" });
+  expect(within(groups).getByRole("button", { name: "Набор блокировок" })).toBeInTheDocument();
+  expect(within(groups).getByText("blocked_bundle · 1 источников")).toBeInTheDocument();
+  await user.click(within(manual).getByRole("button", { name: "Блок доменов" }));
+  await user.click(within(groups).getByRole("button", { name: "Набор блокировок" }));
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.click(screen.getByRole("button", { name: "Далее" }));
   await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
@@ -726,6 +730,32 @@ it("criterion_S5_manual_sources_and_groups_are_wizard_cards", async () => {
   const rule = savedDraft(fetch).routing_rules[0];
   expect(rule.rule_sets).toContain("blocked_domains");
   expect(rule.rule_groups).toContain("blocked_bundle");
+});
+
+it("criterion_S5_builtin_preset_sources_are_not_duplicated_in_manual_block", async () => {
+  const configuration = baseConfiguration();
+  configuration.rule_sets = [
+    { name: "geosite-grok", format: "srs", url: "https://example.org/grok.srs",
+      max_records: 200000, max_bytes: 5000000 },
+    { name: "my-block", label: "Мой список", format: "srs", url: "https://example.org/my.srs",
+      max_records: 200000, max_bytes: 5000000 },
+  ];
+  const catalog: CatalogResponse = {
+    categories: [{ key: "ai", title: "AI", count: 1 }],
+    services: [{ id: "grok", name: "Grok (xAI)", category: "ai", icon_slug: "", notice: null,
+      covers: [], dns_domains: [],
+      rule_sets: [{ tag: "geosite-grok", url: "https://example.org/grok.srs", format: "srs" }],
+      declared: false, action: "tunnel" }],
+  };
+  setup(configuration, { catalog });
+  const user = userEvent.setup();
+  await openMaster(user);
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  const presets = screen.getByRole("group", { name: "Готовые сервисы" });
+  expect(within(presets).getByRole("button", { name: "Grok (xAI)" })).toBeInTheDocument();
+  const manual = screen.getByRole("group", { name: "Ручные списки" });
+  expect(within(manual).queryByRole("button", { name: "geosite-grok" })).not.toBeInTheDocument();
+  expect(within(manual).getByRole("button", { name: "Мой список" })).toBeInTheDocument();
 });
 
 it("criterion_S5_advanced_groups_collapse_and_keep_global_numbers", async () => {
