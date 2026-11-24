@@ -223,6 +223,12 @@ def test_backend_wheels_use_snapshot_build_backend():
     assert '--no-build-isolation --no-deps' in updater
 
 
+def test_update_regenerates_the_singbox_unit_even_on_a_noop_apply():
+    updater = (PACKAGING / 'update.sh').read_text()
+    assert 'SingboxService' in updater
+    assert 'install_unit()' in updater
+
+
 def test_runtime_dependency_lock_matches_uv_lock():
     uv_lock = tomllib.loads((ROOT / 'backend/uv.lock').read_text())
     locked = {package['name']: package for package in uv_lock['package']}

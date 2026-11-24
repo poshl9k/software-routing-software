@@ -440,6 +440,15 @@ main() {
     log "Product profile: ${VS_ROUTER_PROFILE:-decided by host capability}"
     run_installer "$SCRIPT_DIR/install.sh"
 
+    # The agent rewrites this unit only when the sing-box apply step runs. An
+    # update that leaves the configuration byte-identical would otherwise keep
+    # an old unit forever (e.g. a new Group= needed by materialized rule-sets).
+    python3 - <<'PY' || fail 'could not regenerate the sing-box systemd unit'
+from vs_router.agent.apply import LocalFileSystem, SubprocessExecutor
+from vs_router.agent.singbox_service import SingboxService
+SingboxService(SubprocessExecutor(), LocalFileSystem()).install_unit()
+PY
+
     log 'Restarting runtime services'
     systemctl daemon-reload
     # vs-router-web-internal holds the schema in memory: without a restart it
