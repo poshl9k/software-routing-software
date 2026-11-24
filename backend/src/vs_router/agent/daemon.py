@@ -478,13 +478,31 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
             return None
         return None
 
+    def source_bind_interface():
+        explicit = os.environ.get('VS_ROUTER_SOURCE_BIND_INTERFACE')
+        if explicit:
+            return explicit
+        try:
+            with Session(database) as db:
+                row = db.scalar(select(ConfigurationRow)
+                                .where(ConfigurationRow.status == 'confirmed')
+                                .order_by(ConfigurationRow.id.desc()))
+                if row is None:
+                    return None
+                configuration = row.snapshot().configuration
+                return next((t.interface for t in configuration.tunnels
+                             if t.role == 'client'), None)
+        except Exception:
+            return None
+
     def get_updater():
         if updater_holder[0] is None:
             from .downloader import SourceUpdater
             from .presets import selected_catalog_sources
             updater_holder[0] = SourceUpdater(builtin_sources=selected_catalog_sources(
                 os.environ.get('VS_ROUTER_PRESET_SOURCE_KEYS', '')),
-                bind_address=source_bind_address())
+                bind_address=source_bind_address(),
+                bind_interface=source_bind_interface())
         return updater_holder[0]
 
     def update_source(name, url, kind="rule_set", format="auto", authorized=False,

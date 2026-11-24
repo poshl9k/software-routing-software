@@ -382,9 +382,13 @@ class ApplyEngine:
                         break
                 if bind_address:
                     break
+        bind_interface = os.environ.get('VS_ROUTER_SOURCE_BIND_INTERFACE')
+        if not bind_interface:
+            bind_interface = next((t.interface for t in version.configuration.tunnels
+                                   if t.role == 'client'), None)
         updater = SourceUpdater(builtin_sources=selected_catalog_sources(
             os.environ.get('VS_ROUTER_PRESET_SOURCE_KEYS', '')),
-            bind_address=bind_address)
+            bind_address=bind_address, bind_interface=bind_interface)
         for source in sources:
             updater.update(name=source.name, url=source.url, kind='rule_set',
                            format=source.format, authorized=True,
