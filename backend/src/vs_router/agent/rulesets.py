@@ -134,16 +134,39 @@ def _domain_token(token: str) -> str | None:
     return token or None
 
 
+def _normalize_domain_value(token: str) -> tuple[str | None, str]:
+    """Split a domain-list line into (prefix, value).
+
+    v2fly/geosite-style attributes (``@cn``/``@ads``) are ignored, and a bare
+    label (``youtube``) is expanded to ``<label>.com`` — both are common in
+    domain-list-community data files. Other malformed lines fail closed.
+    """
+    prefix = next((p for p in _DOMAIN_PREFIXES if token.startswith(p)), None)
+    value = token[len(prefix):].strip() if prefix else token.strip()
+    value = value.split("@", 1)[0].strip()
+    if value.startswith("*."):
+        value = value[2:]
+    if not value:
+        raise RuleSetError("ruleset.invalid_record", f"empty domain: {token!r}")
+    if prefix in ("keyword:", "regexp:"):
+        return prefix, value
+    if not _DOMAIN_RE.match(value):
+        if re.fullmatch(r"[a-zA-Z0-9_-]{1,63}", value):
+            value = f"{value}.com"
+        else:
+            raise RuleSetError("ruleset.invalid_record", f"not a domain: {token!r}")
+    return prefix, value
+
+
 def _count_domains(content: str) -> int:
     records = 0
     for token in _iter_lines(content):
         if _is_cidr(token):
             raise RuleSetError("ruleset.format_mismatch",
                                f"CIDR line in a domain set: {token!r}")
-        candidate = _domain_token(token)
-        if candidate is None or (not token.startswith(("keyword:", "regexp:"))
-                                 and not _DOMAIN_RE.match(candidate)):
-            raise RuleSetError("ruleset.invalid_record", f"not a domain: {token!r}")
+        if token.startswith("include:"):
+            raise RuleSetError("ruleset.include_unsupported", token)
+        _normalize_domain_value(token)
         records += 1
     if records == 0:
         raise RuleSetError("ruleset.empty")
@@ -261,14 +284,9 @@ def materialize_ruleset(content: str | bytes, profile: SourceProfile) -> str:
     if profile.format in ("text-domain", "geosite"):
         for token in _iter_lines(text):
             if _is_cidr(token):
-                raise RuleSetError("ruleset.format_mismatch", f"CIDR line in a domain set: {token!r}")
-            prefix = next((p for p in _DOMAIN_PREFIXES if token.startswith(p)), None)
-            value = token[len(prefix):].strip() if prefix else token.strip()
-            if value.startswith("*."):
-                value = value[2:]
-            if not value or (prefix not in ("keyword:", "regexp:")
-                             and not _DOMAIN_RE.match(value)):
-                raise RuleSetError("ruleset.invalid_record", f"not a domain: {token!r}")
+                raise RuleSetError("ruleset.format_mismatch",
+                                   f"CIDR line in a domain set: {token!r}")
+            prefix, value = _normalize_domain_value(token)
             key = {"full:": "domain", "keyword:": "domain_keyword",
                    "regexp:": "domain_regex"}.get(prefix or "", "domain_suffix")
             bucket = rules.setdefault(key, [])

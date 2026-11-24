@@ -143,6 +143,14 @@ def test_materialize_text_domain_honours_prefixes():
     assert {"domain_regex": ["^ads\\d+\\.example$"]} in doc["rules"]
 
 
+def test_materialize_v2fly_style_domain_list():
+    doc = json.loads(materialize_ruleset(
+        "youtube\nggpht.cn @cn\nfull:yt3.googleusercontent.com\nads.youtube.com @ads\n",
+        profile("text-domain")))
+    assert {"domain_suffix": ["youtube.com", "ggpht.cn", "ads.youtube.com"]} in doc["rules"]
+    assert {"domain": ["yt3.googleusercontent.com"]} in doc["rules"]
+
+
 def test_materialize_rejects_wrong_content_and_srs():
     with pytest.raises(RuleSetError) as err:
         materialize_ruleset("10.0.0.0/8\n", profile("text-domain"))
