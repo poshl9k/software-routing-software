@@ -68,7 +68,8 @@ from urllib.parse import urljoin, urlsplit
 from .apply import ApplyError, LocalFileSystem
 from . import bootstrap_dns
 from .rulesets import (DEFAULT_MAX_RECORDS, RuleSetError, SourceProfile,
-                       materialize_ruleset, validate_ruleset)
+                       include_targets, materialize_ruleset, validate_ruleset,
+                       without_includes)
 from ..ruleset_paths import SOURCES_DIR, active_rule_set_path
 from .source_schedule import SourceSchedule, is_due, next_run, state_from_history
 
@@ -79,6 +80,7 @@ from .source_schedule import SourceSchedule, is_due, next_run, state_from_histor
 DEFAULT_MAX_BYTES = 5_000_000        # 5 MB
 DEFAULT_TIMEOUT = 20.0               # seconds, per request
 MAX_REDIRECTS = 5
+MAX_INCLUDE_DEPTH = 4                # v2fly include: chains
 MAX_RESOLVED_ADDRESSES = 16
 HISTORY_LIMIT = 200
 
@@ -773,6 +775,35 @@ class SourceUpdater:
                           etag=etag, last_modified=last_modified,
                           max_records=max_records)
 
+    # -- v2fly include expansion -------------------------------------------
+    def _expand_includes(self, content: str, url: str, spec: SourceSpec, *,
+                         depth: int = 0, seen: set[str] | None = None) -> str:
+        """Replace ``include:name`` lines with the body fetched from the same dir."""
+        names = include_targets(content)
+        if not names:
+            return content
+        if depth >= MAX_INCLUDE_DEPTH:
+            raise DownloadError('ruleset.include_depth')
+        seen = set() if seen is None else seen
+        parts = [without_includes(content)]
+        for name in names:
+            if name in seen:
+                continue
+            seen.add(name)
+            include_url = urljoin(url, name)
+            include_spec = self.build_spec(
+                name=name, url=include_url, kind=spec.kind, format=spec.format,
+                authorized=True, max_bytes=spec.max_bytes,
+                max_records=spec.max_records, timeout=spec.timeout)
+            result = fetch(include_spec, transport=self.transport, resolver=self.resolver,
+                           bootstrap_resolver=self.bootstrap_resolver,
+                           allow_plaintext=self.allow_plaintext)
+            if result.not_modified:
+                continue
+            parts.append(self._expand_includes(result.content, result.url, include_spec,
+                                               depth=depth + 1, seen=seen))
+        return "\n".join(parts)
+
     # -- manual update ------------------------------------------------------
     def update(self, *, name: str, url: str, kind: str = 'rule_set',
                format: str = 'auto', authorized: bool = False,
@@ -808,7 +839,10 @@ class SourceUpdater:
                 profile = SourceProfile(name=spec.name, format=spec.format,  # type: ignore[arg-type]
                                         url=spec.url, max_records=spec.max_records,
                                         max_bytes=spec.max_bytes)
-                materialized = materialize_ruleset(result.content, profile)
+                content = result.content
+                if spec.format in ("text-domain", "geosite"):
+                    content = self._expand_includes(content, result.url, spec)
+                materialized = materialize_ruleset(content, profile)
                 payload = materialized.encode("utf-8")
                 detected = "source"
                 content = materialized

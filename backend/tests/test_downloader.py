@@ -357,6 +357,20 @@ def test_text_cidr_update_materializes_a_local_rule_set(tmp_path):
         "version": 1, "rules": [{"ip_cidr": ["10.0.0.0/8", "192.0.2.7/32"]}]}
 
 
+def test_text_domain_expands_v2fly_includes(tmp_path):
+    updater, store, transport = make_updater(
+        tmp_path, responses=[response(200, b"include:child\nparent.com\n"),
+                             response(200, b"child.com\n")],
+        mapping={"public.example": [PUBLIC]})
+    record = updater.update(name="google", url="https://public.example/data/google",
+                            format="text-domain", authorized=True)
+    assert record["status"] == "ok"
+    assert len(transport.calls) == 2
+    assert transport.calls[1]["url"] == "https://public.example/data/child"
+    doc = json.loads(store.fs.read(store.active_path("google", "rule_set")))
+    assert {"domain_suffix": ["parent.com", "child.com"]} in doc["rules"]
+
+
 class _FailingMoveFS(FakeFS):
     def atomic_move(self, source, destination):
         raise OSError("disk full")

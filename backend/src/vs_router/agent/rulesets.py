@@ -134,6 +134,23 @@ def _domain_token(token: str) -> str | None:
     return token or None
 
 
+def include_targets(content: str) -> tuple[str, ...]:
+    """Names referenced by v2fly-style ``include:`` lines."""
+    names = []
+    for token in _iter_lines(content):
+        if token.startswith("include:"):
+            name = token[len("include:"):].split("@", 1)[0].strip()
+            if name:
+                names.append(name)
+    return tuple(dict.fromkeys(names))
+
+
+def without_includes(content: str) -> str:
+    """Drop ``include:`` directives; the caller replaces them with their bodies."""
+    return "\n".join(token for token in _iter_lines(content)
+                     if not token.startswith("include:"))
+
+
 def _normalize_domain_value(token: str) -> tuple[str | None, str]:
     """Split a domain-list line into (prefix, value).
 
