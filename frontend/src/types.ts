@@ -188,6 +188,8 @@ export interface RoutingRule {
   domain_exact: string[];
   /** Declared rule-set tags (ADR-0031); an alternative destination family. */
   rule_sets: string[];
+  /** Names of reusable RuleGroup bundles (see Configuration.rule_groups). */
+  rule_groups?: string[];
   exit: RoutingExit;
 }
 export interface TProxyUpdateSchedule {
@@ -386,6 +388,12 @@ export interface RuleSetSource {
   max_records: number;
   max_bytes: number;
 }
+/** Reusable named bundle of declared rule-set tags (destination catalog). */
+export interface RuleGroup {
+  name: string;
+  description: string | null;
+  sources: string[];
+}
 /** Candidate rule-set source from the bundled catalog (never trusted blindly). */
 export interface PresetSource {
   key: string;
@@ -468,6 +476,8 @@ export interface Configuration {
   tproxy: TProxy;
   proxies: ProxySettings;
   rule_sets: RuleSetSource[];
+  /** Optional in legacy snapshots; backend defaults to an empty tuple. */
+  rule_groups?: RuleGroup[];
   /** Optional in legacy snapshots; backend defaults to an empty tuple. */
   inbounds?: Inbound[];
   anti_lockout: boolean;

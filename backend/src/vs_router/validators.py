@@ -180,8 +180,25 @@ def validate_configuration(c):
     # is not implemented, so a reference to one is refused instead of silently
     # never matching.
     engine_formats = {s.name: s.format for s in c.rule_sets}
+    groups = {group.name: group for group in c.rule_groups}
+    if len(groups) != len(c.rule_groups):
+        fail('routing.rule_group_duplicate')
+    for group in c.rule_groups:
+        if not group.sources:
+            fail('routing.rule_group_empty')
+        for name in group.sources:
+            if name not in rule_set_names:
+                fail('routing.rule_group_source_unavailable')
+            if engine_formats[name] not in ('srs', 'json'):
+                fail('routing.rule_group_source_format')
     for rule in c.routing_rules:
-        for name in rule.rule_sets:
+        for name in rule.rule_groups:
+            if name not in groups:
+                fail('routing.rule_group_unavailable')
+        # A group is expanded into the same rule_set matcher, so its members
+        # must pass exactly the same declaration/format gate as direct tags.
+        for name in (*rule.rule_sets,
+                     *(source for group in rule.rule_groups for source in groups[group].sources)):
             if name not in rule_set_names:
                 fail('routing.ruleset_unavailable')
             if engine_formats[name] not in ('srs', 'json'):

@@ -859,6 +859,18 @@ class RuleSetSource(Model):
         return self
 
 
+class RuleGroup(Model):
+    """A reusable named bundle of declared rule-set tags.
+
+    A group is a destination catalog entry, not a routing rule: it never carries
+    an exit and is expanded into the rule's ``rule_set`` matcher at generation.
+    """
+
+    name: EngineTag
+    description: str | None = None
+    sources: tuple[EngineTag, ...] = ()
+
+
 class Exit(Model):
     """Product egress: direct internet, bound interface, outbound, group, tunnel or block.
 
@@ -946,12 +958,15 @@ class RoutingRule(Model):
     # Configuration.rule_sets (validators), so a missing declaration is a
     # contract error, not a silently dead matcher.
     rule_sets: tuple[EngineTag, ...] = ()
+    # Reusable destination bundles declared in Configuration.rule_groups.
+    rule_groups: tuple[EngineTag, ...] = ()
     exit: Exit = Field(default_factory=Exit)
 
     @model_validator(mode="after")
     def check_destination(self):
         from ipaddress import ip_network
-        if not (self.ip_cidr or self.domain_suffix or self.domain_exact or self.rule_sets):
+        if not (self.ip_cidr or self.domain_suffix or self.domain_exact
+                or self.rule_sets or self.rule_groups):
             raise ValueError('routing.destination_required')
         for cidr in self.ip_cidr:
             try:
@@ -982,6 +997,7 @@ class Configuration(Model):
     tproxy: TProxy = Field(default_factory=TProxy)
     proxies: ProxySettings = Field(default_factory=ProxySettings)
     rule_sets: tuple[RuleSetSource, ...] = ()
+    rule_groups: tuple[RuleGroup, ...] = ()
     anti_lockout: bool = True
     panel_port: Port = 443
     subscribers: tuple[Subscriber, ...] = ()

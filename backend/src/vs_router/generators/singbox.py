@@ -276,7 +276,17 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
                if peer.subscriber is not None}
     rules = []
     bound_outbounds = {}
+    groups = {group.name: group.sources for group in configuration.rule_groups}
     for rule in configuration.routing_rules:
+        # A reusable group is expanded into the rule's own rule_set list before
+        # rendering: the engine sees one flat matcher, and the group never
+        # becomes a separate policy level with its own priority.
+        expanded = tuple(dict.fromkeys(
+            (*rule.rule_sets,
+             *(source for name in rule.rule_groups for source in groups[name]))
+        )) if rule.rule_groups else rule.rule_sets
+        matcher_rule = (rule if expanded == rule.rule_sets
+                        else rule.model_copy(update={"rule_sets": expanded}))
         subject_match = {}
         if rule.subject.kind == "device":
             # Guaranteed by RoutingSubject validation, before generation.
@@ -294,7 +304,7 @@ def _render_product_routing(configuration: Configuration) -> tuple[list[dict], l
                 # traffic, so the rule must not be rendered at all.
                 continue
             subject_match["source_ip_cidr"] = list(sources)
-        destination = _render_destination_disjunction(rule)
+        destination = _render_destination_disjunction(matcher_rule)
         # Domain matching needs DNS visibility (ADR-0020). Do not pretend that
         # sniffing implements the subscriber resolver, or enable it implicitly.
         target = rule.exit
@@ -523,6 +533,9 @@ def generate_singbox(version: ConfigurationVersion,
     # (text lists, raw geosite/geoip) are a render-time failure, not a
     # silently dead matcher.
     referenced_sets = {name for rule in configuration.routing_rules for name in rule.rule_sets}
+    group_members = {group.name: group.sources for group in configuration.rule_groups}
+    referenced_sets |= {source for rule in configuration.routing_rules
+                        for name in rule.rule_groups for source in group_members[name]}
     referenced_sets |= {name for rule in configuration.tproxy.rules
                         for part in (rule, *rule.logical_rules) for name in part.rule_sets}
     referenced_sets |= {name for rule in configuration.tproxy.dns.rules for name in rule.rule_sets}

@@ -240,6 +240,8 @@ export function destinationLabel(rule: RoutingRule): string {
   if (rule.domain_suffix.length) parts.push(`домены ${brief(rule.domain_suffix)}`);
   if (rule.domain_exact.length) parts.push(`точный домен ${brief(rule.domain_exact)}`);
   if (rule.ip_cidr.length) parts.push(`сеть ${brief(rule.ip_cidr)}`);
+  if (rule.rule_sets.length) parts.push(`наборы ${brief(rule.rule_sets)}`);
+  if ((rule.rule_groups ?? []).length) parts.push(`группы ${brief(rule.rule_groups ?? [])}`);
   return parts.join("; ") || "назначение не задано";
 }
 
@@ -276,7 +278,7 @@ export function exitComplete(exit: RoutingExit): boolean {
 export function ruleComplete(rule: RoutingRule): boolean {
   return nameValid(rule.name) &&
     (rule.domain_suffix.length + rule.domain_exact.length + rule.ip_cidr.length +
-      rule.rule_sets.length > 0) &&
+      rule.rule_sets.length + (rule.rule_groups ?? []).length > 0) &&
     domainListValid(rule.domain_suffix) && domainListValid(rule.domain_exact) &&
     cidrListValid(rule.ip_cidr) && exitComplete(rule.exit);
 }
@@ -289,6 +291,7 @@ function emptyRule(): RoutingRule {
     domain_exact: [],
     ip_cidr: [],
     rule_sets: [],
+    rule_groups: [],
     exit: { kind: "direct" },
   };
 }
@@ -310,7 +313,9 @@ export function suggestRuleName(rule: RoutingRule, taken: readonly string[]): st
       ? `net_${network.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`
       : rule.rule_sets[0]
         ? rule.rule_sets[0].replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")
-        : "rule";
+        : (rule.rule_groups ?? [])[0]
+          ? (rule.rule_groups ?? [])[0].replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+          : "rule";
   base = base.slice(0, 24) || "rule";
   // The backend accepts a name that starts with a letter only.
   if (!/^[a-zA-Z]/.test(base)) base = `rule_${base}`;
@@ -421,9 +426,10 @@ const categoryIcons: Record<string, IconName> = {
   dev: "developer", cloud: "cloud", gaming: "gaming", games: "gaming", ai: "ai", block: "block",
 };
 
-function DestinationFields({ rule, change }: {
+function DestinationFields({ rule, change, configuration }: {
   rule: RoutingRule;
   change: (update: Partial<RoutingRule>) => void;
+  configuration: Configuration;
 }) {
   const catalog = useQuery({ queryKey: queryKeys.presetCatalog(), queryFn: api.presetCatalog });
   // Rule-set services (18+, RKN, реклама — ADR-0031) come with their own
@@ -448,7 +454,7 @@ function DestinationFields({ rule, change }: {
   // What the operator typed by hand: list entries no chosen service contributes.
   const manualDomains = rule.domain_suffix.filter((domain) => !serviceDomains.has(domain));
   const empty = rule.domain_suffix.length + rule.domain_exact.length +
-    rule.ip_cidr.length + rule.rule_sets.length === 0;
+    rule.ip_cidr.length + rule.rule_sets.length + (rule.rule_groups ?? []).length === 0;
   const applyChosen = (ids: string[]) => {
     const nextDomains = new Set(services.filter((item) => ids.includes(item.id)).flatMap((item) => item.dns_domains));
     const nextTags = services.filter((item) => ids.includes(item.id)).flatMap((item) => item.rule_sets.map((set) => set.tag));
@@ -473,6 +479,29 @@ function DestinationFields({ rule, change }: {
           Выбрано сервисов: {chosen.length}. Их назначения — альтернативы; свой список — ниже.
         </Typography>}
       </FormWide>}
+    {(configuration.rule_sets ?? []).length > 0 && <FormWide>
+      <ChoiceCards label="Объявленные списки" layout="presets" multiple
+        value={(rule.rule_sets ?? []).filter((tag) =>
+          (configuration.rule_sets ?? []).some((source) => source.name === tag))}
+        options={(configuration.rule_sets ?? []).map((source) => ({
+          value: source.name, label: source.name,
+          description: `${source.format} · ${source.url}`,
+        }))}
+        onChange={(_id, selected) => change({
+          rule_sets: [...(rule.rule_sets ?? []).filter((tag) =>
+            !(configuration.rule_sets ?? []).some((source) => source.name === tag)), ...selected],
+        })} />
+    </FormWide>}
+    {(configuration.rule_groups ?? []).length > 0 && <FormWide>
+      <ChoiceCards label="Группы списков" layout="presets" multiple
+        value={rule.rule_groups ?? []}
+        options={(configuration.rule_groups ?? []).map((group) => ({
+          value: group.name, label: group.name,
+          description: group.description ?? `${group.sources.length} источников`,
+        }))}
+        onChange={(_id, selected) => change({ rule_groups: selected })} />
+      <InfoNote>Группа подставляет все свои списки как альтернативы — один выбор вместо повтора в каждом правиле.</InfoNote>
+    </FormWide>}
     <LinesField label="Свои домены (по одному в строке)" values={manualDomains}
       valid={domainListValid(manualDomains)} hint="Совпадение по суффиксу: «rutube.ru» покроет и www.rutube.ru"
       onChange={(typed) => change({ domain_suffix: [...new Set([...typed, ...rule.domain_suffix.filter((domain) => serviceDomains.has(domain))])] })} />
@@ -921,6 +950,12 @@ export function orderWarnings(configuration: Configuration, rules: RoutingRule[]
       warnings.push({ tone: "red", text:
         `Правило «${rule.name}»: набор ${missingSets.join(", ")} не объявлен на вкладке «Источники списков».` });
     }
+    const declaredGroups = new Set((configuration.rule_groups ?? []).map((group) => group.name));
+    const missingGroups = (rule.rule_groups ?? []).filter((tag) => !declaredGroups.has(tag));
+    if (missingGroups.length) {
+      warnings.push({ tone: "red", text:
+        `Правило «${rule.name}»: группа ${missingGroups.join(", ")} не объявлена на вкладке «Группы списков».` });
+    }
     if (rule.ip_cidr.length && rule.ip_cidr.every((cidr) => cidr.includes(":"))) {
       warnings.push({ tone: "amber", text:
         `Правило «${rule.name}»: только IPv6-адреса — захват и выходы работают по IPv4, правило не сработает.` });
@@ -1030,7 +1065,7 @@ export default function RoutingMasterPage() {
     (subject.kind === "device" && peers.some((peer) => peer.subscriber === subject.subscriber && peer.peer === subject.peer)) ||
     (subject.kind === "interface" && interfaces.some((item) => item.name === subject.interface));
   const validDestination = rule.domain_suffix.length + rule.domain_exact.length +
-    rule.ip_cidr.length + rule.rule_sets.length > 0 &&
+    rule.ip_cidr.length + rule.rule_sets.length + (rule.rule_groups ?? []).length > 0 &&
     domainListValid(rule.domain_suffix) && domainListValid(rule.domain_exact) && cidrListValid(rule.ip_cidr);
   const stepValid = [validSubject, validDestination, exitComplete(rule.exit), nameValid(rule.name)][step];
   const unique = !rules.some((item) => item.name === rule.name);
@@ -1154,7 +1189,7 @@ export default function RoutingMasterPage() {
         <Typography variant="body2" color="text.secondary" className="routing-subtitle">{stepSubtitles[step]}</Typography>
         <EditorFieldset disabled={disabled}>
           {step === 0 && <SubjectFields rule={rule} change={change} peers={peers} interfaces={interfaces} />}
-          {step === 1 && <DestinationFields rule={rule} change={change} />}
+          {step === 1 && <DestinationFields rule={rule} change={change} configuration={configuration} />}
           {step === 2 && <ExitFields rule={rule} change={change} choices={choices} />}
           {step === 3 && <FormGrid>
             <FormWide><SummaryPanel>
@@ -1263,7 +1298,7 @@ export default function RoutingMasterPage() {
       <DialogTitle id="routing-rule-title">Правило: {editingIndex !== null ? rules[editingIndex]?.name ?? "" : ""}</DialogTitle>
       <DialogContent>{editingIndex !== null && rules[editingIndex] && <EditorFieldset disabled={disabled}>
         <PageSection title="Кому"><SubjectFields rule={rule} change={change} peers={peers} interfaces={interfaces} /></PageSection>
-        <PageSection title="Что"><DestinationFields rule={rule} change={change} /></PageSection>
+        <PageSection title="Что"><DestinationFields rule={rule} change={change} configuration={configuration} /></PageSection>
         <PageSection title="Куда"><ExitFields rule={rule} change={change} choices={choices} /></PageSection>
       </EditorFieldset>}</DialogContent>
       <EditorFooter saving={editor.saving} valid={!readOnly && ruleComplete(rule) && validSubject &&

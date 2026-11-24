@@ -3,10 +3,10 @@ import { PageHeader } from "../components/PageHeader";
 import { ErrorNotice } from "../components/ErrorNotice";
 import { ValueTabs } from "../components/Tabs";
 import { useConfiguration } from "../state";
-import { ProxiesEditor, RuleSets } from "./RoutingProxy";
+import { ProxiesEditor, RuleGroups, RuleSets } from "./RoutingProxy";
 import RoutingMasterPage from "./RoutingMaster";
 
-type RoutingTab = "master" | "proxies" | "rulesets";
+type RoutingTab = "master" | "proxies" | "rulesets" | "groups";
 
 /** The «Маршрутизация» section: master wizard + proxy exits + rule-set sources.
  *  The legacy TProxy rules editor was removed: the backend renders sing-box
@@ -25,11 +25,13 @@ export default function Routing() {
           { value: "master", label: "Мастер маршрутизации" },
           { value: "proxies", label: "Прокси-выходы" },
           { value: "rulesets", label: "Источники списков" },
+          { value: "groups", label: "Группы списков" },
         ]}
       />
       {tab === "master" && <RoutingMasterPage />}
       {tab === "proxies" && <ProxiesEditor />}
       {tab === "rulesets" && <RuleSets />}
+      {tab === "groups" && <RuleGroups />}
     </>
   );
 }

@@ -202,6 +202,43 @@ def test_rule_set_destination_valid_with_declared_srs_source():
     assert parsed.routing_rules[0].rule_sets == ('geosite-category-porn',)
 
 
+def _grouped_document():
+    data = document()
+    data['rule_sets'] = [
+        {'name': 'blocked-a', 'format': 'srs', 'url': 'https://example.org/a.srs'},
+        {'name': 'blocked-b', 'format': 'srs', 'url': 'https://example.org/b.srs'},
+    ]
+    data['rule_groups'] = [{'name': 'blocked', 'sources': ['blocked-a', 'blocked-b']}]
+    data['routing_rules'] = [rule('blocked', ip_cidr=[], rule_groups=['blocked'])]
+    return data
+
+
+def test_rule_group_expands_into_the_rule_set_matcher():
+    parsed = parse_configuration(_grouped_document())
+    version = ConfigurationVersion(configuration=parsed)
+    rules = generate_singbox(version)['route']['rules']
+    assert {'rule_set': ['blocked-a', 'blocked-b'],
+            'action': 'route', 'outbound': 'direct'} in rules
+
+
+def test_rule_group_members_are_deduplicated_with_direct_tags():
+    data = _grouped_document()
+    data['routing_rules'][0]['rule_sets'] = ['blocked-b']
+    version = ConfigurationVersion(configuration=parse_configuration(data))
+    rules = generate_singbox(version)['route']['rules']
+    assert {'rule_set': ['blocked-b', 'blocked-a'],
+            'action': 'route', 'outbound': 'direct'} in rules
+
+
+def test_rule_group_must_be_declared_and_its_sources_known():
+    data = _grouped_document()
+    data['routing_rules'][0]['rule_groups'] = ['missing']
+    invalid(data, 'routing.rule_group_unavailable')
+    data = _grouped_document()
+    data['rule_groups'][0]['sources'] = ['missing-source']
+    invalid(data, 'routing.rule_group_source_unavailable')
+
+
 def test_criterion_6_ip_only_panel_dns_and_server_rules_valid():
     data = document()
     data['tunnels'][0]['peers'][0]['dns_mode'] = 'own'

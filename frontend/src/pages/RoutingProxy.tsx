@@ -13,6 +13,7 @@ import type {
   SubscriptionMember, SubscriptionPreview, SubscriptionRefresh,
   RuleSetStatus,
   RuleSetSource,
+  RuleGroup,
 } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
@@ -23,7 +24,7 @@ import { EditorFooter } from "../components/EditorShell";
 import { ExpertDisclosure } from "../components/ExpertDisclosure";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorNotice } from "../components/ErrorNotice";
-import { Field } from "../components/Field";
+import { Field, LinesField } from "../components/Field";
 import { FormActions, FormGrid, FormWide } from "../components/Form";
 import { InfoNote } from "../components/InfoNote";
 import { InlineStatus } from "../components/InlineStatus";
@@ -1362,6 +1363,100 @@ function RuleSetDeclarations() {
       </Dialog>
     </>
   );
+}
+
+/**
+ * Reusable destination bundles. A group does not carry an exit: a routing rule
+ * references it by name and the generator expands its sources into that rule's
+ * rule_set matcher. This keeps one shared list assignment instead of repeating
+ * the same tags in every segment.
+ */
+export function RuleGroups() {
+  const { user, configuration } = useConfiguration();
+  const canEdit = user?.role === "admin";
+  const editor = useDraftEditor<RuleGroup[]>();
+  const [selected, setSelected] = useState<number | null>(null);
+  const groups = editor.value ?? configuration.rule_groups ?? [];
+  const sources = configuration.rule_sets ?? [];
+  const current = selected === null ? null : groups[selected] ?? null;
+  const update = (patch: Partial<RuleGroup>) =>
+    editor.setValue(groups.map((row, index) => index === selected ? { ...row, ...patch } : row));
+  const nameTaken = (name: string, index: number) =>
+    groups.some((row, i) => i !== index && row.name === name);
+  const sourceDeclared = (tag: string) => sources.some((source) => source.name === tag);
+  const rowValid = (row: RuleGroup, index: number) =>
+    engineTagValid(row.name) && !nameTaken(row.name, index) &&
+    row.sources.length > 0 && row.sources.every(sourceDeclared);
+
+  return <>
+    <Card title="Группы списков">
+      <ErrorNotice error={editor.error} />
+      <InfoNote>
+        Группа объединяет объявленные списки в один переиспользуемый набор. Правило ссылается
+        на имя группы в поле «Что»; все её источники считаются альтернативами.
+      </InfoNote>
+      <DataTable
+        heads={["Имя", "Источники", "Действия"]}
+        rows={groups.map((row, index) => [
+          row.name || "—",
+          row.sources.join(", ") || "—",
+          <div className="row-actions" key={`${row.name}-${index}`}>
+            <Button disabled={!canEdit} onClick={() => { editor.begin(groups); setSelected(index); }}>
+              Изменить
+            </Button>
+            <DeleteButton label={`Удалить группу ${row.name || index + 1}`}
+              onClick={() => void editor.save((list) => ({
+                ...configuration, rule_groups: (list as RuleGroup[]).filter((_, i) => i !== index),
+              }))} />
+          </div>,
+        ])}
+        empty={<EmptyState title="Групп пока нет">
+          Добавьте группу, чтобы не назначать одни и те же списки в каждом правиле.
+        </EmptyState>}
+      />
+      <FormActions>
+        <Button disabled={!canEdit} onClick={() => {
+          editor.begin([...groups, { name: "", description: null, sources: [] }]);
+          setSelected(groups.length);
+        }}>Добавить группу</Button>
+      </FormActions>
+    </Card>
+    <Dialog open={isPresent(current)} onClose={editor.saving ? undefined : () => { editor.cancel(); setSelected(null); }}
+      fullWidth maxWidth="md">
+      <DialogTitle>Группа списков: {current?.name || "новая"}</DialogTitle>
+      <DialogContent>
+        <ErrorNotice error={editor.error} />
+        {current && selected !== null && <>
+          <PageSection title="Описание">
+            <FormGrid>
+              <Field label="Имя группы" value={current.name}
+                valid={engineTagValid(current.name) && !nameTaken(current.name, selected)}
+                hint="Латиница, цифры, подчёркивание и дефис: так на неё ссылаются правила"
+                onChange={(name) => update({ name })} />
+              <Field label="Описание" value={current.description ?? ""}
+                hint="Необязательно: что именно объединяет группа"
+                onChange={(description) => update({ description: description || null })} />
+            </FormGrid>
+          </PageSection>
+          <PageSection title="Источники">
+            <LinesField label="Источники (по одному тегу в строке)" values={current.sources}
+              valid={current.sources.length > 0 && current.sources.every(sourceDeclared)}
+              hint="Теги объявленных источников из раздела «Источники списков»"
+              onChange={(next) => update({ sources: next })} />
+            <InfoNote>
+              Доступные теги: {sources.map((source) => source.name).join(", ") || "нет — сначала объявите источники"}.
+            </InfoNote>
+          </PageSection>
+          {!rowValid(current, selected) && <InfoNote severity="warning">
+            Пока группа не заполнена корректно, черновик не сохранится.
+          </InfoNote>}
+          <EditorFooter saving={editor.saving} valid={groups.every((row, index) => rowValid(row, index))}
+            cancel={() => { editor.cancel(); setSelected(null); }}
+            save={() => void editor.save((list) => ({ ...configuration, rule_groups: list as RuleGroup[] }))} />
+        </>}
+      </DialogContent>
+    </Dialog>
+  </>;
 }
 
 const isPresent = (value: unknown): boolean => value !== null && value !== undefined;

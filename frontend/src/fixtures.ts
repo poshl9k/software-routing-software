@@ -34,6 +34,7 @@ export const emptyConfiguration: Configuration = {
   },
   proxies: { enabled: false, outbounds: [], subscriptions: [], groups: [] },
   rule_sets: [],
+  rule_groups: [],
   anti_lockout: true,
   panel_port: 443,
 };

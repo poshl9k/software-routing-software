@@ -6,7 +6,7 @@ import { expect, it, vi } from "vitest";
 import Routing from "../pages/Routing";
 import { RouterProvider, useRouterState } from "../state";
 import { emptyConfiguration } from "../fixtures";
-import type { ProxyOutbound, ProxySettings, RuleSetStatus, TProxy } from "../types";
+import type { Configuration, ProxyOutbound, ProxySettings, RuleSetStatus, TProxy } from "../types";
 
 type Role = "admin" | "operator";
 
@@ -19,11 +19,15 @@ function setup(options?: {
   updateFails?: boolean;
   preview?: unknown;
   refresh?: unknown;
+  sources?: Configuration["rule_sets"];
+  groups?: Configuration["rule_groups"];
 }) {
   const configuration = {
     ...emptyConfiguration,
     proxies: options?.proxies ?? emptyConfiguration.proxies,
     tproxy: options?.tproxy ?? emptyConfiguration.tproxy,
+    rule_sets: options?.sources ?? [],
+    rule_groups: options?.groups ?? [],
   };
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
     if (path === "/api/versions")
@@ -632,4 +636,27 @@ it("declares a rule-set source in the draft and never fetches it from the panel"
     url: "https://example.com/geoip-ru.json", max_records: 200000, max_bytes: 5000000 }]);
   // The panel declares; it never downloads.
   expect(fetch.mock.calls.some(([path]) => String(path).includes("/api/rulesets/update"))).toBe(false);
+});
+
+it("creates a reusable rule group from declared sources", async () => {
+  const fetch = setup({ sources: [{
+    name: "blocked_domains", format: "srs", url: "https://example.org/blocked.srs",
+    max_records: 200000, max_bytes: 5000000,
+  }] });
+  const user = userEvent.setup();
+  await openTab(user, "Группы списков");
+  await user.click(screen.getByRole("button", { name: "Добавить группу" }));
+  await user.type(screen.getByLabelText("Имя группы"), "blocked_bundle");
+  await user.type(screen.getByLabelText("Описание"), "все блокировки");
+  await user.click(screen.getByLabelText("Источники (по одному тегу в строке)"));
+  await user.paste("blocked_domains");
+  await user.click(saveButton());
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && (init as RequestInit)?.method === "PUT")).toBe(true));
+  const call = fetch.mock.calls.find(([path, init]) =>
+    path === "/api/draft" && (init as RequestInit)?.method === "PUT");
+  const body = JSON.parse(String((call![1] as RequestInit).body));
+  expect(body.rule_groups).toEqual([{
+    name: "blocked_bundle", description: "все блокировки", sources: ["blocked_domains"],
+  }]);
 });

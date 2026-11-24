@@ -701,6 +701,33 @@ it("criterion_S5_destination_lists_accept_several_lines", async () => {
   expect(rule.domain_exact).toEqual(["exact.example", "other.example"]);
 });
 
+it("criterion_S5_manual_sources_and_groups_are_wizard_cards", async () => {
+  const configuration = baseConfiguration();
+  configuration.rule_sets = [{
+    name: "blocked_domains", format: "srs", url: "https://example.org/blocked.srs",
+    max_records: 200000, max_bytes: 5000000,
+  }];
+  configuration.rule_groups = [{
+    name: "blocked_bundle", description: "все ручные блокировки",
+    sources: ["blocked_domains"],
+  }];
+  const fetch = setup(configuration);
+  const user = userEvent.setup();
+  await openMaster(user);
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  expect(screen.getByRole("group", { name: "Объявленные списки" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "blocked_domains" }));
+  await user.click(screen.getByRole("button", { name: "blocked_bundle" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Далее" }));
+  await user.click(screen.getByRole("button", { name: "Сохранить черновик" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && init?.method === "PUT")).toBe(true));
+  const rule = savedDraft(fetch).routing_rules[0];
+  expect(rule.rule_sets).toContain("blocked_domains");
+  expect(rule.rule_groups).toContain("blocked_bundle");
+});
+
 it("criterion_S5_advanced_groups_collapse_and_keep_global_numbers", async () => {
   const configuration = baseConfiguration();
   const rule = (name: string, subject: RoutingRule["subject"], domain: string) => ({
