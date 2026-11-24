@@ -371,6 +371,15 @@ def test_text_domain_expands_v2fly_includes(tmp_path):
     assert {"domain_suffix": ["parent.com", "child.com"]} in doc["rules"]
 
 
+def test_validator_version_invalidates_stale_materializer_cache(tmp_path):
+    updater, store, _ = make_updater(tmp_path, responses=[], mapping={"public.example": [PUBLIC]})
+    spec = updater.build_spec(name="geo", url="https://public.example/data/geo",
+                              authorized=True, format="text-domain")
+    store.save_validators("geo", url=spec.url, etag='"old"', last_modified=None, version=1)
+    assert store.latest_validators("geo", spec.url, version=1) == ('"old"', None)
+    assert store.latest_validators("geo", spec.url, version=2) == (None, None)
+
+
 class _FailingMoveFS(FakeFS):
     def atomic_move(self, source, destination):
         raise OSError("disk full")

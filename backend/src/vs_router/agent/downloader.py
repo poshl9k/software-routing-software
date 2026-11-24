@@ -81,6 +81,7 @@ DEFAULT_MAX_BYTES = 5_000_000        # 5 MB
 DEFAULT_TIMEOUT = 20.0               # seconds, per request
 MAX_REDIRECTS = 5
 MAX_INCLUDE_DEPTH = 4                # v2fly include: chains
+MATERIALIZER_VERSION = 2             # bump when normalization semantics change
 MAX_RESOLVED_ADDRESSES = 16
 HISTORY_LIMIT = 200
 
@@ -660,23 +661,29 @@ class SourceStore:
             return {}
         return loaded if isinstance(loaded, dict) else {}
 
-    def latest_validators(self, name: str, url: str) -> tuple[str | None, str | None]:
-        """Return ``(etag, last_modified)`` for ``name`` **iff** the URL matches.
+    def latest_validators(self, name: str, url: str, *,
+                          version: int | None = None) -> tuple[str | None, str | None]:
+        """Return ``(etag, last_modified)`` for ``name`` iff URL and version match.
 
         A validator is only meaningful for the resource it came from, so a URL
-        change drops it (no cross-resource ``304``).
+        change drops it (no cross-resource ``304``). A materializer-version
+        change also drops it: otherwise a code upgrade would keep serving the
+        old, un-normalized active file on a ``304`` forever.
         """
         entry = self.read_validators().get(name)
         if not isinstance(entry, dict) or entry.get('url') != url:
             return (None, None)
+        if version is not None and entry.get('version') != version:
+            return (None, None)
         return (_header_value(entry.get('etag')), _header_value(entry.get('last_modified')))
 
     def save_validators(self, name: str, *, url: str, etag: str | None,
-                        last_modified: str | None) -> None:
+                        last_modified: str | None, version: int | None = None) -> None:
         data = self.read_validators()
         data[name] = {'url': url,
                       'etag': _header_value(etag),
-                      'last_modified': _header_value(last_modified)}
+                      'last_modified': _header_value(last_modified),
+                      'version': version}
         self.fs.write(self.validators_path(), json.dumps(data))
 
     # -- activation ---------------------------------------------------------
@@ -819,7 +826,10 @@ class SourceUpdater:
         spec = self.build_spec(name=name, url=url, kind=kind, format=format,
                                authorized=authorized, max_bytes=max_bytes,
                                max_records=max_records, timeout=timeout)
-        etag, last_modified = self.store.latest_validators(name, spec.url)
+        materialized_source = spec.format in ("text-domain", "text-cidr", "geosite", "geoip")
+        validator_version = MATERIALIZER_VERSION if materialized_source else None
+        etag, last_modified = self.store.latest_validators(
+            name, spec.url, version=validator_version)
         if etag or last_modified:
             spec = self.build_spec(name=name, url=url, kind=kind, format=format,
                                    authorized=authorized, max_bytes=max_bytes,
@@ -833,7 +843,8 @@ class SourceUpdater:
                 # Keep the active set and the previous content; refresh only the
                 # validators/attempt bookkeeping. Not a failure.
                 self.store.save_validators(name, url=spec.url, etag=result.etag,
-                                           last_modified=result.last_modified)
+                                           last_modified=result.last_modified,
+                                           version=validator_version)
                 return self.store.record(spec, status='not_modified', url=result.url)
             if spec.format in ("text-domain", "text-cidr", "geosite", "geoip"):
                 profile = SourceProfile(name=spec.name, format=spec.format,  # type: ignore[arg-type]
@@ -865,7 +876,8 @@ class SourceUpdater:
             self.store.activate(spec, content=content, sha256=sha256,
                                 size=size, url=result.url, detected=detected)
             self.store.save_validators(name, url=spec.url, etag=result.etag,
-                                       last_modified=result.last_modified)
+                                       last_modified=result.last_modified,
+                                       version=validator_version)
         except RuleSetError as exc:
             self.store.record(spec, status='failed', error=exc.code)
             raise
