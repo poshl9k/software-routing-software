@@ -129,6 +129,31 @@ SSID в Omada ничего не ломает.
 Пустое поле подставляет техническое имя, поэтому старые записи остаются
 читаемыми.
 
+**Обновление и просмотр списков.** В продукте две разные системы, и таблица
+ниже относится только к агентскому загрузчику:
+
+- агент обновляет текстовые/json наборы по расписанию `tproxy.update_schedule`
+  (по умолчанию интервал 6 ч, timer `vs-router-source-update.timer` запускает
+  проверку раз в час); кнопка «Обновить» доступна только для таких источников;
+- текущие `.srs` наборы из правил скачивает и обновляет **сам sing-box**: при
+  старте и затем раз в сутки (`update_interval` по умолчанию 24 ч). Принудительно
+  обновить их можно перезапуском `vs-router-singbox` — на время перезапуска
+  транзит прервётся.
+
+Рабочая конфигурация — `/etc/vs-router/confirmed/singbox.json`, там же видны URL
+удалённых `route.rule_set`. Просмотреть бинарный `.srs` можно так:
+
+```bash
+curl --interface tun0 -fsSL "$URL" -o /tmp/list.srs
+/usr/local/lib/vs-router/sing-box rule-set decompile /tmp/list.srs -o /tmp/list.json
+jq '.rules | length' /tmp/list.json
+/usr/local/lib/vs-router/sing-box rule-set match /tmp/list.srs example.com -f binary
+```
+
+`--interface tun0` повторяет `download_detour` через туннель; без него запрос
+идет через management-шлюз. Кэш `.srs` на диске по умолчанию не включён, поэтому
+"текущий список" нужно скачивать заново, а не искать файл на хосте.
+
 **Шлюз транспорта туннеля** (`uplink`, задаётся в конфиге туннеля через API:
 `tunnels[].uplink = {"interface": "wan0", "gateway": "192.168.116.254",
 "source": "192.168.180.10"}` — UI-селектор пока не сделан):

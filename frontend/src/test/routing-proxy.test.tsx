@@ -595,6 +595,15 @@ it("lists rule-set sources with status/stale and refreshes via the typed RPC", a
   });
 });
 
+it("hides the agent refresh button for binary srs sources", async () => {
+  setup({ rulesets: [{ ...GEO, name: "geosite-grok", format: "srs" }] });
+  const user = userEvent.setup();
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
+  await openTab(user, "Источники списков");
+  expect(await screen.findByText("geosite-grok")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Обновить geosite-grok" })).not.toBeInTheDocument();
+});
+
 it("shows a stale rule-set source with an honest status badge", async () => {
   setup({ rulesets: [{ ...GEO, status: "never", stale: true, sha256: null }] });
   const user = userEvent.setup();

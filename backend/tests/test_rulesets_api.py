@@ -78,7 +78,7 @@ def test_redaction_keeps_rule_sets_and_still_redacts_secrets():
     # The declared rule-set source is fully visible (no secret in it).
     assert view["rule_sets"][0] == {
         "name": "geo", "format": "geosite", "url": DECLARED["url"],
-        "max_records": 200_000, "max_bytes": 5_000_000,
+        "label": None, "max_records": 200_000, "max_bytes": 5_000_000,
     }
     # The outbound secret is still masked.
     assert view["proxies"]["outbounds"][0]["secret"] == {"redacted": True}
@@ -168,6 +168,27 @@ async def test_rulesets_list_returns_declared_with_status_and_stale(api, monkeyp
     assert extra["status"] == "failed" and extra["stale"] is True
     # No secret marker ever appears in a rule-set source response.
     assert "ciphertext" not in response.text and "redacted" not in response.text
+
+
+async def test_rulesets_list_falls_back_to_confirmed_snapshot(api, monkeypatch):
+    """After apply there is no draft; the table must still show live sources."""
+    from sqlalchemy import delete
+    from sqlalchemy.orm import Session
+    from vs_router.db import ConfigurationRow, save_version
+    from vs_router.schema import Configuration, ConfigurationVersion
+    client, engine, _ = api
+    await sign_in(client)
+    with Session(engine) as db:
+        db.execute(delete(ConfigurationRow).where(ConfigurationRow.status == "draft"))
+        save_version(db, ConfigurationVersion(id=2, status="confirmed",
+                                               configuration=Configuration.model_validate(
+                                                   {"rule_sets": [DECLARED]})))
+        db.commit()
+    _patch_agent(monkeypatch, history=[])
+    response = await client.get("/api/rulesets")
+    assert response.status_code == 200
+    assert [row["name"] for row in response.json()] == ["geo"]
+    assert response.json()[0]["status"] == "never"
 
 
 async def test_rulesets_list_reports_agent_unavailable(api, monkeypatch):

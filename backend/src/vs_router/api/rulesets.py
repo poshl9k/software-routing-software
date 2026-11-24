@@ -24,8 +24,17 @@ router = APIRouter(dependencies=[Depends(current_user)])
 
 
 def _declared(db: Session) -> list[dict]:
-    """Declared rule-set sources from the single draft, if one exists."""
+    """Declared sources from the draft, falling back to the confirmed snapshot.
+
+    After an apply there is no draft, but the operator still needs the status
+    table: those are the sources currently in force. Only when a draft exists
+    does it win, so the table follows what the panel is about to apply.
+    """
     row = db.scalar(select(ConfigurationRow).where(ConfigurationRow.status == "draft"))
+    if row is None:
+        row = db.scalar(select(ConfigurationRow)
+                        .where(ConfigurationRow.status == "confirmed")
+                        .order_by(ConfigurationRow.id.desc()))
     if row is None:
         return []
     return [source.model_dump(mode="json")
