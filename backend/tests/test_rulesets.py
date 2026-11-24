@@ -143,6 +143,23 @@ def test_materialize_text_domain_honours_prefixes():
     assert {"domain_regex": ["^ads\\d+\\.example$"]} in doc["rules"]
 
 
+def test_materialize_collapses_overlapping_and_adjacent_cidrs():
+    doc = json.loads(materialize_ruleset(
+        "10.0.0.0/8\n10.1.2.0/24\n192.168.0.0/24\n192.168.1.0/24\n2001:db8::/32\n",
+        profile("text-cidr")))
+    assert doc["rules"] == [{"ip_cidr": [
+        "10.0.0.0/8", "192.168.0.0/23", "2001:db8::/32"]}]
+
+
+def test_materialize_drops_domains_implied_by_a_broader_suffix():
+    doc = json.loads(materialize_ruleset(
+        "example.com\nsub.example.com\nfull:example.com\nkeyword:promo\n",
+        profile("text-domain")))
+    assert {"domain_suffix": ["example.com"]} in doc["rules"]
+    assert "domain" not in [next(iter(rule)) for rule in doc["rules"]]
+    assert {"domain_keyword": ["promo"]} in doc["rules"]
+
+
 def test_materialize_accepts_idn_a_labels():
     doc = json.loads(materialize_ruleset(
         "xn--p8j9a0d9c9a.xn--q9jyb4c\n", profile("text-domain")))
@@ -153,7 +170,7 @@ def test_materialize_v2fly_style_domain_list():
     doc = json.loads(materialize_ruleset(
         "youtube\nggpht.cn @cn\nfull:yt3.googleusercontent.com\nads.youtube.com @ads\n",
         profile("text-domain")))
-    assert {"domain_suffix": ["youtube.com", "ggpht.cn", "ads.youtube.com"]} in doc["rules"]
+    assert {"domain_suffix": ["youtube.com", "ggpht.cn"]} in doc["rules"]
     assert {"domain": ["yt3.googleusercontent.com"]} in doc["rules"]
 
 

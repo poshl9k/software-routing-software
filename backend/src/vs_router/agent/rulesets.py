@@ -286,6 +286,44 @@ def validate_ruleset(content: str | bytes, profile: SourceProfile) -> RuleSetInf
                        records=records, activatable=True, warnings=warnings)
 
 
+def _collapse_cidrs(values: list[str]) -> list[str]:
+    """Remove contained/adjacent networks; equivalent IP set, smaller ruleset."""
+    networks = [ipaddress.ip_network(value, strict=False) for value in values]
+    collapsed: list[str] = []
+    for version in (4, 6):
+        same = [net for net in networks if net.version == version]
+        collapsed.extend(str(net) for net in
+                         ipaddress.collapse_addresses(sorted(set(same))))  # type: ignore[arg-type]
+    return collapsed
+
+
+def _domain_covered(domain: str, suffix: str) -> bool:
+    domain, suffix = domain.lower().rstrip('.'), suffix.lower().rstrip('.')
+    return domain == suffix or domain.endswith('.' + suffix)
+
+
+def _dedupe_domains(rules: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Drop entries already implied by a broader domain matcher."""
+    suffixes = rules.get("domain_suffix", [])
+    kept_suffixes: list[str] = []
+    for value in suffixes:
+        if value in kept_suffixes:
+            continue
+        if any(value != other and value.endswith('.' + other)
+               for other in suffixes):
+            continue
+        kept_suffixes.append(value)
+    if kept_suffixes:
+        rules["domain_suffix"] = kept_suffixes
+    if "domain" in rules:
+        rules["domain"] = [value for value in rules["domain"]
+                           if not any(_domain_covered(value, suffix)
+                                      for suffix in kept_suffixes)]
+        if not rules["domain"]:
+            rules.pop("domain")
+    return rules
+
+
 def materialize_ruleset(content: str | bytes, profile: SourceProfile) -> str:
     """Turn a validated line-oriented source into a sing-box source rule-set.
 
@@ -321,6 +359,14 @@ def materialize_ruleset(content: str | bytes, profile: SourceProfile) -> str:
                 bucket.append(value)
     else:
         raise RuleSetError("ruleset.materialize_unavailable", profile.format)
+
+    # Fail-closed normalization: overlapping CIDRs and implied domains are
+    # resolved before the final rule-set is built, in the same background
+    # update path that later feeds apply.
+    if "ip_cidr" in rules:
+        rules["ip_cidr"] = _collapse_cidrs(rules["ip_cidr"])
+    if profile.format in ("text-domain", "geosite"):
+        rules = _dedupe_domains(rules)
 
     document = {"version": RULE_SET_VERSION,
                 "rules": [{key: bucket} for key, bucket in rules.items() if bucket]}
