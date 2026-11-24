@@ -14,7 +14,7 @@ import threading
 from urllib.parse import urlsplit
 
 from pydantic import ValidationError
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from .apply import ApplyEngine, ApplyError, ApplyResult, APPLIED_DIR
@@ -446,12 +446,45 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
     # its transport, resolver and limits are all injectable.
     updater_holder = [updater]
 
+    def source_bind_address():
+        """Source address for agent fetches: the first confirmed client tunnel.
+
+        On this product management may have no internet route while a client
+        tunnel does (sing-box uses it as ``download_detour``). Binding the
+        pinned HTTPS socket to that tunnel address reproduces the detour for
+        the agent downloader. An explicit env var wins.
+        """
+        explicit = os.environ.get('VS_ROUTER_SOURCE_BIND_ADDRESS')
+        if explicit:
+            return explicit
+        try:
+            with Session(database) as db:
+                row = db.scalar(select(ConfigurationRow)
+                                .where(ConfigurationRow.status == 'confirmed')
+                                .order_by(ConfigurationRow.id.desc()))
+                if row is None:
+                    return None
+                configuration = row.snapshot().configuration
+                tunnel_names = {t.interface for t in configuration.tunnels
+                                if t.role == 'client'}
+                for interface in configuration.interfaces:
+                    if interface.name not in tunnel_names:
+                        continue
+                    for address in interface.addresses:
+                        host = str(address).split('/', 1)[0]
+                        if ':' not in host:
+                            return host
+        except Exception:
+            return None
+        return None
+
     def get_updater():
         if updater_holder[0] is None:
             from .downloader import SourceUpdater
             from .presets import selected_catalog_sources
             updater_holder[0] = SourceUpdater(builtin_sources=selected_catalog_sources(
-                os.environ.get('VS_ROUTER_PRESET_SOURCE_KEYS', '')))
+                os.environ.get('VS_ROUTER_PRESET_SOURCE_KEYS', '')),
+                bind_address=source_bind_address())
         return updater_holder[0]
 
     def update_source(name, url, kind="rule_set", format="auto", authorized=False,

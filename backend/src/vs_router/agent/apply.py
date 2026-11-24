@@ -368,8 +368,23 @@ class ApplyEngine:
         import os
         from .downloader import SourceUpdater
         from .presets import selected_catalog_sources
+        bind_address = os.environ.get('VS_ROUTER_SOURCE_BIND_ADDRESS')
+        if not bind_address:
+            tunnel_ifaces = {t.interface for t in version.configuration.tunnels
+                             if t.role == 'client'}
+            for interface in version.configuration.interfaces:
+                if interface.name not in tunnel_ifaces:
+                    continue
+                for address in interface.addresses:
+                    host = str(address).split('/', 1)[0]
+                    if ':' not in host:
+                        bind_address = host
+                        break
+                if bind_address:
+                    break
         updater = SourceUpdater(builtin_sources=selected_catalog_sources(
-            os.environ.get('VS_ROUTER_PRESET_SOURCE_KEYS', '')))
+            os.environ.get('VS_ROUTER_PRESET_SOURCE_KEYS', '')),
+            bind_address=bind_address)
         for source in sources:
             updater.update(name=source.name, url=source.url, kind='rule_set',
                            format=source.format, authorized=True,

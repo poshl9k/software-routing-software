@@ -314,13 +314,17 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     the address that is dialled, independently of any later DNS answer.
     """
 
-    def __init__(self, host, connect_ip, *, context, port=443, timeout=10):
+    def __init__(self, host, connect_ip, *, context, port=443, timeout=10,
+                 bind_address=None):
         super().__init__(host, port, timeout=timeout, context=context)
         self._connect_ip = connect_ip
         self._tls_context = context
+        self._bind_address = bind_address
 
     def connect(self):  # noqa: D102 - see class docstring
-        sock = socket.create_connection((self._connect_ip, self.port), self.timeout)
+        source = (self._bind_address, 0) if self._bind_address else None
+        sock = socket.create_connection((self._connect_ip, self.port), self.timeout,
+                                        source_address=source)
         try:
             self.sock = self._tls_context.wrap_socket(sock, server_hostname=self.host)
         except BaseException:
@@ -330,6 +334,9 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
 class UrllibTransport:
     """HTTPS GET transport whose connection is pinned to a checked IP."""
+
+    def __init__(self, bind_address=None):
+        self.bind_address = bind_address
 
     def fetch(self, *, url, connect_ip, timeout, max_bytes,
               etag=None, last_modified=None):
@@ -341,7 +348,7 @@ class UrllibTransport:
         context = ssl.create_default_context()
         connection = _PinnedHTTPSConnection(
             host, connect_ip, context=context, port=port or (443 if scheme == 'https' else 80),
-            timeout=timeout)
+            timeout=timeout, bind_address=self.bind_address)
         headers = {
             'Host': parsed.netloc,
             'User-Agent': 'vs-router-downloader/1',
@@ -708,9 +715,10 @@ class SourceUpdater:
                  bootstrap_resolver: Callable[[str], list[str]] | None = None,
                  builtin_sources: dict[str, BuiltinSource] | None = None,
                  config_validator: Callable[[dict], object] | None = None,
-                 allow_plaintext: bool = False, clock: Callable[[], float] = time.time):
+                 allow_plaintext: bool = False, clock: Callable[[], float] = time.time,
+                 bind_address: str | None = None):
         self.store = store or SourceStore(clock=clock)
-        self.transport = transport or UrllibTransport()
+        self.transport = transport or UrllibTransport(bind_address=bind_address)
         self.resolver = resolver or default_resolver
         self.bootstrap_resolver = (bootstrap_resolver if bootstrap_resolver is not None
                                    else bootstrap_dns.resolve if resolver is None else None)
