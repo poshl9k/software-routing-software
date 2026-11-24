@@ -174,12 +174,11 @@ def validate_configuration(c):
     if any(name not in rule_set_names for rule in c.tproxy.rules
            for part in (rule, *rule.logical_rules) for name in part.rule_sets):
         fail("tproxy.ruleset_unavailable")
-    # Product routing rules reference the same declared sources (ADR-0031), and
-    # only formats the pinned engine accepts natively may be matched directly:
-    # text-domain/text-cidr/geosite/geoip need agent-side materialization that
-    # is not implemented, so a reference to one is refused instead of silently
-    # never matching.
+    # Product routing rules reference the same declared sources (ADR-0031).
+    # Line-oriented sources are materialized by the agent into a local sing-box
+    # rule-set before apply, so they are valid references too.
     engine_formats = {s.name: s.format for s in c.rule_sets}
+    usable_formats = ('srs', 'json', 'text-domain', 'text-cidr', 'geosite', 'geoip')
     groups = {group.name: group for group in c.rule_groups}
     if len(groups) != len(c.rule_groups):
         fail('routing.rule_group_duplicate')
@@ -189,7 +188,7 @@ def validate_configuration(c):
         for name in group.sources:
             if name not in rule_set_names:
                 fail('routing.rule_group_source_unavailable')
-            if engine_formats[name] not in ('srs', 'json'):
+            if engine_formats[name] not in usable_formats:
                 fail('routing.rule_group_source_format')
     for rule in c.routing_rules:
         for name in rule.rule_groups:
@@ -201,7 +200,7 @@ def validate_configuration(c):
                      *(source for group in rule.rule_groups for source in groups[group].sources)):
             if name not in rule_set_names:
                 fail('routing.ruleset_unavailable')
-            if engine_formats[name] not in ('srs', 'json'):
+            if engine_formats[name] not in usable_formats:
                 fail('routing.ruleset_format')
     # A segment whose capture is off keeps its rules as staged policy: the
     # engine never receives that ingress, so nothing routes, and the segments

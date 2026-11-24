@@ -15,6 +15,7 @@ from ipaddress import ip_address
 from typing import Any, Callable
 
 from vs_router.schema import Configuration, ConfigurationVersion, ProxyOutbound
+from vs_router.ruleset_paths import active_rule_set_path
 from vs_router.validators import (
     derive_dns_detours, routing_exit_tag, routing_referenced_tags,
     routing_subject_interface_cidrs, validate_routing,
@@ -558,13 +559,23 @@ def generate_singbox(version: ConfigurationVersion,
         source = declared.get(name)
         if source is None:
             raise ValueError("routing.ruleset_unavailable")
-        engine_format = {"srs": "binary", "json": "source"}.get(source.format)
-        if engine_format is None:
+        if source.format == "srs":
+            entry = {"type": "remote", "tag": name,
+                     "format": "binary", "url": source.url}
+            if download_detour is not None:
+                entry["download_detour"] = download_detour
+        elif source.format in ("text-domain", "text-cidr", "geosite", "geoip"):
+            # The agent materializes these into a sing-box source rule-set at
+            # a stable path before this configuration is installed.
+            entry = {"type": "local", "tag": name, "format": "source",
+                     "path": str(active_rule_set_path(name))}
+        elif source.format == "json":
+            entry = {"type": "remote", "tag": name,
+                     "format": "source", "url": source.url}
+            if download_detour is not None:
+                entry["download_detour"] = download_detour
+        else:
             raise ValueError(f"routing.ruleset_format: {source.format}")
-        entry = {"type": "remote", "tag": name,
-                 "format": engine_format, "url": source.url}
-        if download_detour is not None:
-            entry["download_detour"] = download_detour
         rule_set_entries.append(entry)
     if configuration.routing_rules:
         rule_set_entries.append({

@@ -67,6 +67,9 @@ from urllib.parse import urljoin, urlsplit
 
 from .apply import ApplyError, LocalFileSystem
 from . import bootstrap_dns
+from .rulesets import (DEFAULT_MAX_RECORDS, RuleSetError, SourceProfile,
+                       materialize_ruleset, validate_ruleset)
+from ..ruleset_paths import SOURCES_DIR, active_rule_set_path
 from .source_schedule import SourceSchedule, is_due, next_run, state_from_history
 
 # ---------------------------------------------------------------------------
@@ -80,7 +83,6 @@ MAX_RESOLVED_ADDRESSES = 16
 HISTORY_LIMIT = 200
 
 #: Default on-host store for staged/active sources and history.
-SOURCES_DIR = Path('/var/lib/vs-router/sources')
 
 _REDIRECTS = frozenset({301, 302, 303, 307, 308})
 
@@ -272,6 +274,7 @@ class SourceSpec:
     authorized: bool
     etag: str | None = None
     last_modified: str | None = None
+    max_records: int = DEFAULT_MAX_RECORDS
 
 
 @dataclass(frozen=True)
@@ -719,6 +722,7 @@ class SourceUpdater:
     def build_spec(self, *, name: str, url: str, kind: str = 'rule_set',
                    format: str = 'auto', authorized: bool = False,
                    max_bytes: int = DEFAULT_MAX_BYTES,
+                   max_records: int = DEFAULT_MAX_RECORDS,
                    timeout: float = DEFAULT_TIMEOUT,
                    etag: str | None = None,
                    last_modified: str | None = None) -> SourceSpec:
@@ -732,18 +736,21 @@ class SourceUpdater:
                               format=entry.format or format, max_bytes=max_bytes,
                               timeout=timeout, builtin=True,
                               allowed_hosts=entry.hosts, authorized=True,
-                              etag=etag, last_modified=last_modified)
+                              etag=etag, last_modified=last_modified,
+                              max_records=max_records)
         if not authorized:
             raise DownloadError('download.user_authorization_required')
         return SourceSpec(name=name, url=url, kind=kind, format=format,
                           max_bytes=max_bytes, timeout=timeout, builtin=False,
                           allowed_hosts=frozenset({host}), authorized=True,
-                          etag=etag, last_modified=last_modified)
+                          etag=etag, last_modified=last_modified,
+                          max_records=max_records)
 
     # -- manual update ------------------------------------------------------
     def update(self, *, name: str, url: str, kind: str = 'rule_set',
                format: str = 'auto', authorized: bool = False,
                max_bytes: int = DEFAULT_MAX_BYTES,
+               max_records: int = DEFAULT_MAX_RECORDS,
                timeout: float = DEFAULT_TIMEOUT) -> dict:
         """Run one manual update; returns the history record.
 
@@ -752,12 +759,14 @@ class SourceUpdater:
         left untouched (or restored).
         """
         spec = self.build_spec(name=name, url=url, kind=kind, format=format,
-                               authorized=authorized, max_bytes=max_bytes, timeout=timeout)
+                               authorized=authorized, max_bytes=max_bytes,
+                               max_records=max_records, timeout=timeout)
         etag, last_modified = self.store.latest_validators(name, spec.url)
         if etag or last_modified:
             spec = self.build_spec(name=name, url=url, kind=kind, format=format,
                                    authorized=authorized, max_bytes=max_bytes,
-                                   timeout=timeout, etag=etag, last_modified=last_modified)
+                                   max_records=max_records, timeout=timeout,
+                                   etag=etag, last_modified=last_modified)
         try:
             result = fetch(spec, transport=self.transport, resolver=self.resolver,
                            bootstrap_resolver=self.bootstrap_resolver,
@@ -768,7 +777,23 @@ class SourceUpdater:
                 self.store.save_validators(name, url=spec.url, etag=result.etag,
                                            last_modified=result.last_modified)
                 return self.store.record(spec, status='not_modified', url=result.url)
-            detected = validate_content(result.content, spec.format)
+            if spec.format in ("text-domain", "text-cidr", "geosite", "geoip"):
+                profile = SourceProfile(name=spec.name, format=spec.format,  # type: ignore[arg-type]
+                                        url=spec.url, max_records=spec.max_records,
+                                        max_bytes=spec.max_bytes)
+                materialized = materialize_ruleset(result.content, profile)
+                payload = materialized.encode("utf-8")
+                detected = "source"
+                content = materialized
+                sha256 = hashlib.sha256(payload).hexdigest()
+                size = len(payload)
+                recorded_format = spec.format
+            else:
+                detected = validate_content(result.content, spec.format)
+                content = result.content
+                sha256 = result.sha256
+                size = result.size
+                recorded_format = detected
             if self.config_validator is not None:
                 try:
                     self.config_validator(candidate_config(spec, detected, result))
@@ -776,10 +801,13 @@ class SourceUpdater:
                     raise
                 except Exception as exc:
                     raise DownloadError('download.config_invalid', str(exc)) from exc
-            self.store.activate(spec, content=result.content, sha256=result.sha256,
-                                size=result.size, url=result.url, detected=detected)
+            self.store.activate(spec, content=content, sha256=sha256,
+                                size=size, url=result.url, detected=detected)
             self.store.save_validators(name, url=spec.url, etag=result.etag,
                                        last_modified=result.last_modified)
+        except RuleSetError as exc:
+            self.store.record(spec, status='failed', error=exc.code)
+            raise
         except DownloadError as exc:
             self.store.record(spec, status='failed', error=exc.code)
             raise
@@ -787,8 +815,8 @@ class SourceUpdater:
             error = DownloadError('download.activation_failed', str(exc))
             self.store.record(spec, status='failed', error=error.code)
             raise error from exc
-        return self.store.record(spec, status='ok', sha256=result.sha256,
-                                 size=result.size, url=result.url, format=detected)
+        return self.store.record(spec, status='ok', sha256=sha256,
+                                 size=size, url=result.url, format=recorded_format)
 
     def status(self) -> list[dict]:
         """Return the append-only update history (oldest first)."""

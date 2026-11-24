@@ -353,6 +353,29 @@ class ApplyEngine:
         if any(tuple(table.split()) not in present for table in (expected or tproxy_apply.owned_tables())):
             raise ApplyError('agent.tproxy_tables_missing')
 
+    def _materialize_rule_sets(self, version) -> None:
+        """Fetch and compile line-oriented sources before sing-box is installed.
+
+        The generator emits local rule-set paths for these formats; the files
+        must exist before the configuration that references them is validated
+        or activated. Downloading stays inside the agent's typed updater with
+        the same SSRF/allowlist policy as manual refreshes.
+        """
+        sources = [source for source in version.configuration.rule_sets
+                   if source.format in ("text-domain", "text-cidr", "geosite", "geoip")]
+        if not sources:
+            return
+        import os
+        from .downloader import SourceUpdater
+        from .presets import selected_catalog_sources
+        updater = SourceUpdater(builtin_sources=selected_catalog_sources(
+            os.environ.get('VS_ROUTER_PRESET_SOURCE_KEYS', '')))
+        for source in sources:
+            updater.update(name=source.name, url=source.url, kind='rule_set',
+                           format=source.format, authorized=True,
+                           max_bytes=source.max_bytes,
+                           max_records=source.max_records)
+
     def _install(self, contents, marker, validators, files=None, steps=None,
                  steps_before=None, trusted_files=None, trusted_phases=None):
         files = self.files if files is None else files
@@ -839,6 +862,10 @@ class ApplyEngine:
                     trusted_phases[tproxy_apply.SINGBOX_PROCESS_STEP] = 'applied'
             else:
                 trusted_phases = None
+            # Local rule-set files must exist before the staged sing-box config
+            # is validated/installed. Failure here aborts the apply as a typed
+            # ruleset/download error; no half-written set is left behind.
+            self._materialize_rule_sets(version)
             self._install(contents, marker, apply_validators, files=apply_files,
                           steps=self._readiness_steps(version, doh_files),
                           steps_before=('tproxy_interception' if tproxy_files else

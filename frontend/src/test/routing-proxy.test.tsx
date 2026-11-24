@@ -591,6 +591,7 @@ it("lists rule-set sources with status/stale and refreshes via the typed RPC", a
     expect(JSON.parse(String((call![1] as RequestInit).body))).toMatchObject({
       name: "geo",
       authorized: true,
+      format: "geosite",
     });
   });
 });
@@ -649,6 +650,24 @@ it("declares a rule-set source in the draft and never fetches it from the panel"
     url: "https://example.com/geoip-ru.json", max_records: 200000, max_bytes: 5000000 }]);
   // The panel declares; it never downloads.
   expect(fetch.mock.calls.some(([path]) => String(path).includes("/api/rulesets/update"))).toBe(false);
+});
+
+it("declares a text-cidr source for agent materialization", async () => {
+  const fetch = setup();
+  const user = userEvent.setup();
+  await screen.findByRole("tab", { name: "Прокси-выходы" });
+  await openTab(user, "Источники списков");
+  await user.click(screen.getByRole("button", { name: "Добавить источник" }));
+  await user.type(screen.getByLabelText("Имя источника"), "ru-ips");
+  await user.type(screen.getByLabelText("Адрес (https)"), "https://example.org/ru.txt");
+  await user.selectOptions(screen.getByLabelText("Формат"), "text-cidr");
+  await user.click(saveButton());
+  await waitFor(() => expect(fetch.mock.calls.some(([path, init]) =>
+    path === "/api/draft" && (init as RequestInit)?.method === "PUT")).toBe(true));
+  const call = fetch.mock.calls.find(([path, init]) =>
+    path === "/api/draft" && (init as RequestInit)?.method === "PUT");
+  const body = JSON.parse(String((call![1] as RequestInit).body));
+  expect(body.rule_sets[0]).toMatchObject({ name: "ru-ips", format: "text-cidr" });
 });
 
 it("creates a reusable rule group from declared sources", async () => {

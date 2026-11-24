@@ -15,6 +15,7 @@ import type {
   RuleSetStatus,
   RuleSetSource,
   RuleGroup,
+  RuleSetUpdate,
 } from "../types";
 import { Badge } from "../components/Badge";
 import { Card } from "../components/Card";
@@ -1185,7 +1186,10 @@ export function RuleSets() {
     setError(null);
     setBusy(row.name);
     try {
-      await api.updateRuleset({ name: row.name, url: row.url, authorized: true });
+      await api.updateRuleset({ name: row.name, url: row.url, authorized: true,
+        format: (row.format ?? "auto") as RuleSetUpdate["format"],
+        max_bytes: row.max_bytes,
+        max_records: row.max_records });
       await queryClient.invalidateQueries({ queryKey: queryKeys.rulesets() });
     } catch (err) {
       setError(err);
@@ -1264,7 +1268,8 @@ function RuleSetDeclarations() {
     declared.some((row, i) => i !== index && row.name === name);
   const rowValid = (row: RuleSetSource, index: number) =>
     engineTagValid(row.name) && !nameTaken(row.name, index) &&
-    (row.format === "srs" || row.format === "json") &&
+    (row.format === "srs" || row.format === "json" ||
+     row.format === "text-domain" || row.format === "text-cidr") &&
     row.url.toLowerCase().startsWith("https://") && row.url.length > 8;
 
   return (
@@ -1328,7 +1333,7 @@ function RuleSetDeclarations() {
                     hint="Латиница, цифры, подчёркивание и дефис: так на него ссылаются правила"
                     onChange={(name) => update({ name })} />
                   <SelectField label="Формат" value={current.format}
-                    options={["srs", "json"] as const}
+                    options={["srs", "json", "text-domain", "text-cidr"] as const}
                     onChange={(format) => update({ format })} />
                   <FormWide>
                     <Field label="Адрес (https)" value={current.url}

@@ -424,15 +424,18 @@ export interface RuleSetStatus {
   last_attempt: number | null;
   last_success: number | null;
   sha256: string | null;
+  max_bytes?: number;
+  max_records?: number;
   declared: boolean;
 }
 export interface RuleSetUpdate {
   name: string;
   url: string;
   kind?: "rule_set" | "subscription";
-  format?: "auto" | "sing-box" | "clash" | "v2ray" | "base64" | "json" | "rule-set" | "text" | "srs";
+  format?: "auto" | "sing-box" | "clash" | "v2ray" | "base64" | "json" | "rule-set" | "text" | "text-domain" | "text-cidr" | "geosite" | "geoip" | "srs";
   authorized?: boolean;
   max_bytes?: number;
+  max_records?: number;
   timeout?: number;
 }
 /** Read-only service catalog returned by the panel; URLs are declarations, not browser downloads. */

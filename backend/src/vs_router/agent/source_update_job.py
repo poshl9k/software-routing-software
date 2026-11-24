@@ -40,8 +40,8 @@ def run(client, schedule, sources, *, now):
         try:
             client.call('update_source', {
                 'name': source.name, 'url': source.url, 'kind': 'rule_set',
-                'format': 'auto', 'authorized': True, 'scheduled': True,
-                'max_bytes': source.max_bytes,
+                'format': source.format, 'authorized': True, 'scheduled': True,
+                'max_bytes': source.max_bytes, 'max_records': source.max_records,
             })
         except AgentRPCError as exc:
             if exc.error.message == 'agent.apply_pending':

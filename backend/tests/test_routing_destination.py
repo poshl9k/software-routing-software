@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from vs_router.ruleset_paths import active_rule_set_path
 from vs_router.generators.singbox import (SUBSCRIBER_PEERS_RULE_SET_PATH,
                                           SUBSCRIBER_PEERS_RULE_SET_TAG, generate_singbox)
 from vs_router.schema import ConfigurationVersion
@@ -86,6 +87,19 @@ def test_criterion_B3_1_rule_set_destination_family_flat():
          'url': 'https://example.org/porn.srs'},
         {'type': 'local', 'tag': SUBSCRIBER_PEERS_RULE_SET_TAG, 'format': 'source',
          'path': SUBSCRIBER_PEERS_RULE_SET_PATH}]
+
+
+def test_text_cidr_rule_set_is_emitted_as_a_local_source():
+    data = document()
+    data['configuration']['rule_sets'] = [
+        {'name': 'ru-ips', 'format': 'text-cidr',
+         'url': 'https://example.org/ru.txt'}]
+    data['configuration']['routing_rules'] = [
+        {'name': 'ru', 'rule_sets': ['ru-ips']},
+    ]
+    output = render(data)
+    assert {'type': 'local', 'tag': 'ru-ips', 'format': 'source',
+            'path': str(active_rule_set_path('ru-ips'))} in output['route']['rule_set']
 
 
 def test_criterion_B3_2_rule_set_is_an_alternative_in_the_or():

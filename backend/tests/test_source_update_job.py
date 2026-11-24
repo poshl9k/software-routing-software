@@ -22,7 +22,8 @@ class FakeClient:
 
 
 def source(name):
-    return SimpleNamespace(name=name, url=f'https://example.org/{name}', max_bytes=4096)
+    return SimpleNamespace(name=name, url=f'https://example.org/{name}', max_bytes=4096,
+                           max_records=200_000, format='srs')
 
 
 def test_due_selection_and_idempotent_rerun():

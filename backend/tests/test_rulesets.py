@@ -3,12 +3,13 @@
 Offline only: ``validate_ruleset`` never touches the network.
 """
 import hashlib
+import json
 
 import pytest
 from pydantic import ValidationError
 
-from vs_router.agent.rulesets import (RuleSetError, SourceProfile, validate_ruleset,
-                                      staleness)
+from vs_router.agent.rulesets import (RuleSetError, SourceProfile, materialize_ruleset,
+                                      validate_ruleset, staleness)
 
 
 def profile(fmt="text-domain", **overrides):
@@ -121,3 +122,31 @@ def test_staleness():
     assert staleness(now=1000.0, last_success=None).stale is True
     assert staleness(now=1000.0, last_success=900.0).stale is False
     assert staleness(now=1000.0, last_success=1000.0 - 8 * 24 * 3600).stale is True
+
+
+def test_materialize_text_cidr_normalizes_and_deduplicates():
+    doc = json.loads(materialize_ruleset(
+        "10.0.0.0/8\n10.0.0.0/8\n192.0.2.7/32\n# comment\n",
+        profile("text-cidr")))
+    assert doc == {"version": 1, "rules": [
+        {"ip_cidr": ["10.0.0.0/8", "192.0.2.7/32"]}]}
+
+
+def test_materialize_text_domain_honours_prefixes():
+    doc = json.loads(materialize_ruleset(
+        "example.com\n*.wild.example\nfull:exact.example\nkeyword:promo\nregexp:^ads\\d+\\.example$\n",
+        profile("text-domain")))
+    assert doc["version"] == 1
+    assert {"domain_suffix": ["example.com", "wild.example"]} in doc["rules"]
+    assert {"domain": ["exact.example"]} in doc["rules"]
+    assert {"domain_keyword": ["promo"]} in doc["rules"]
+    assert {"domain_regex": ["^ads\\d+\\.example$"]} in doc["rules"]
+
+
+def test_materialize_rejects_wrong_content_and_srs():
+    with pytest.raises(RuleSetError) as err:
+        materialize_ruleset("10.0.0.0/8\n", profile("text-domain"))
+    assert err.value.code == "ruleset.format_mismatch"
+    with pytest.raises(RuleSetError) as err:
+        materialize_ruleset(b"SRS\x01binary", profile("srs"))
+    assert err.value.code == "ruleset.materialize_unavailable"

@@ -455,14 +455,15 @@ def make_handlers(engine, database, updater=None, runtime_engine=None, clash_cli
         return updater_holder[0]
 
     def update_source(name, url, kind="rule_set", format="auto", authorized=False,
-                      max_bytes=5_000_000, timeout=20, scheduled=False):
+                      max_bytes=5_000_000, max_records=200_000, timeout=20,
+                      scheduled=False):
         # Typed, whitelisted data only: the URL is never handed to a shell and
         # the agent re-applies its own allowlist/SSRF policy in build_spec.
         if scheduled and (marker := engine.status()) and marker.get('status') not in ('confirmed', 'rolled_back'):
             raise ApplyError('agent.apply_pending')
         return get_updater().update(name=name, url=url, kind=kind, format=format,
                                     authorized=authorized, max_bytes=max_bytes,
-                                    timeout=timeout)
+                                    max_records=max_records, timeout=timeout)
 
     def source_status():
         return get_updater().status()

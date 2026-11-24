@@ -304,6 +304,8 @@ def sources_view(declared: list[dict], history: list[dict], *, now: float,
             "name": name, "format": entry.get("format"), "url": entry.get("url"),
             "kind": entry.get("kind", "rule_set"), "status": "never", "stale": True,
             "last_attempt": None, "last_success": None, "sha256": None,
+            "max_bytes": entry.get("max_bytes", 5_000_000),
+            "max_records": entry.get("max_records", 200_000),
             "declared": True,
         }
     for entry in history:

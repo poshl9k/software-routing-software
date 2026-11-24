@@ -49,6 +49,8 @@ DEFAULT_STALE_AFTER_SECONDS = 7 * 24 * 3600
 
 #: sing-box binary rule-set magic.
 SRS_MAGIC = b"SRS"
+#: Rule-set document version understood by the pinned sing-box 1.14.2.
+RULE_SET_VERSION = 1
 
 _DOMAIN_RE = re.compile(
     r"^(?:\*\.)?(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z]{2,}$", re.IGNORECASE)
@@ -70,7 +72,7 @@ class SourceProfile(Model):
     ``max_bytes`` bound the payload before it can be considered for activation.
     """
 
-    name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_]{0,30}$")
+    name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]{0,30}$")
     format: RuleSetFormat
     url: str
     max_records: int = Field(default=DEFAULT_MAX_RECORDS, ge=1, le=5_000_000)
@@ -139,7 +141,8 @@ def _count_domains(content: str) -> int:
             raise RuleSetError("ruleset.format_mismatch",
                                f"CIDR line in a domain set: {token!r}")
         candidate = _domain_token(token)
-        if candidate is None or not _DOMAIN_RE.match(candidate):
+        if candidate is None or (not token.startswith(("keyword:", "regexp:"))
+                                 and not _DOMAIN_RE.match(candidate)):
             raise RuleSetError("ruleset.invalid_record", f"not a domain: {token!r}")
         records += 1
     if records == 0:
@@ -240,6 +243,58 @@ def validate_ruleset(content: str | bytes, profile: SourceProfile) -> RuleSetInf
     return RuleSetInfo(name=profile.name, format=fmt,
                        sha256=hashlib.sha256(payload).hexdigest(), size=len(payload),
                        records=records, activatable=True, warnings=warnings)
+
+
+def materialize_ruleset(content: str | bytes, profile: SourceProfile) -> str:
+    """Turn a validated line-oriented source into a sing-box source rule-set.
+
+    Only ``text-domain`` and ``text-cidr`` are materialized here. The result is
+    deterministic UTF-8 JSON with the rule-set version pinned to what the
+    bundled sing-box binary understands. The caller owns storage/activation.
+    """
+    info = validate_ruleset(content, profile)
+    if not info.activatable:
+        raise RuleSetError("ruleset.materialize_unavailable", info.format)
+    text = content if isinstance(content, str) else content.decode("utf-8")
+
+    rules: dict[str, list[str]] = {}
+    if profile.format in ("text-domain", "geosite"):
+        for token in _iter_lines(text):
+            if _is_cidr(token):
+                raise RuleSetError("ruleset.format_mismatch", f"CIDR line in a domain set: {token!r}")
+            prefix = next((p for p in _DOMAIN_PREFIXES if token.startswith(p)), None)
+            value = token[len(prefix):].strip() if prefix else token.strip()
+            if value.startswith("*."):
+                value = value[2:]
+            if not value or (prefix not in ("keyword:", "regexp:")
+                             and not _DOMAIN_RE.match(value)):
+                raise RuleSetError("ruleset.invalid_record", f"not a domain: {token!r}")
+            key = {"full:": "domain", "keyword:": "domain_keyword",
+                   "regexp:": "domain_regex"}.get(prefix or "", "domain_suffix")
+            bucket = rules.setdefault(key, [])
+            if value not in bucket:
+                bucket.append(value)
+    elif profile.format in ("text-cidr", "geoip"):
+        for token in _iter_lines(text):
+            candidate = _domain_token(token)
+            if candidate is None or not _is_cidr(candidate):
+                raise RuleSetError("ruleset.invalid_record", f"not a CIDR: {token!r}")
+            value = str(ipaddress.ip_network(candidate, strict=False))
+            bucket = rules.setdefault("ip_cidr", [])
+            if value not in bucket:
+                bucket.append(value)
+    else:
+        raise RuleSetError("ruleset.materialize_unavailable", profile.format)
+
+    document = {"version": RULE_SET_VERSION,
+                "rules": [{key: bucket} for key, bucket in rules.items() if bucket]}
+    if not document["rules"]:
+        raise RuleSetError("ruleset.empty")
+    # Re-check the cap after normalization: prefixes/wildcards may collapse.
+    total = sum(len(bucket) for bucket in rules.values())
+    if total > profile.max_records:
+        raise RuleSetError("ruleset.too_many_records", str(total))
+    return json.dumps(document, ensure_ascii=False)
 
 
 def staleness(*, now: float, last_success: float | None,

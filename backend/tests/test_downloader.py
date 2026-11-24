@@ -345,6 +345,18 @@ def test_successful_update_activates_and_records_history(tmp_path):
     assert [entry["status"] for entry in updater.status()] == ["ok"]
 
 
+def test_text_cidr_update_materializes_a_local_rule_set(tmp_path):
+    updater, store, _ = make_updater(
+        tmp_path, responses=[response(200, b"10.0.0.0/8\n192.0.2.7/32\n")],
+        mapping={"public.example": [PUBLIC]})
+    record = updater.update(name="ru-ips", url="https://public.example/cidr.txt",
+                            format="text-cidr", authorized=True)
+    assert record["status"] == "ok" and record["format"] == "text-cidr"
+    active = store.active_path("ru-ips", "rule_set")
+    assert json.loads(store.fs.read(active)) == {
+        "version": 1, "rules": [{"ip_cidr": ["10.0.0.0/8", "192.0.2.7/32"]}]}
+
+
 class _FailingMoveFS(FakeFS):
     def atomic_move(self, source, destination):
         raise OSError("disk full")

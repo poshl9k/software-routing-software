@@ -100,11 +100,13 @@ class UpdateSourceParams(Model):
     url: StrictStr
     kind: Literal["subscription", "rule_set"] = "rule_set"
     format: Literal["auto", "sing-box", "clash", "v2ray", "base64",
-                    "json", "rule-set", "text", "srs"] = "auto"
+                    "json", "rule-set", "text", "text-domain", "text-cidr",
+                    "geosite", "geoip", "srs"] = "auto"
     # Explicit, separate permission for a user-supplied (non-built-in) source.
     authorized: StrictBool = False
     scheduled: StrictBool = False
     max_bytes: StrictInt = Field(default=5_000_000, ge=1024, le=50_000_000)
+    max_records: StrictInt = Field(default=200_000, ge=1, le=5_000_000)
     timeout: StrictInt = Field(default=20, ge=1, le=120)
 
 
