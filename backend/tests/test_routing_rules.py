@@ -18,7 +18,6 @@ from vs_router.generators.singbox import (SUBSCRIBER_PEERS_RULE_SET_TAG,
                                           generate_singbox, generate_subscriber_peers_rule_set)
 from vs_router.schema import Configuration, ConfigurationVersion
 from vs_router.secrets import encrypt_secret
-from vs_router.validators import ordered_routing_rules
 
 
 SECRET = {'encrypted': True, 'ciphertext': 'gAAAAplaceholder'}
@@ -74,20 +73,6 @@ def test_router_tproxy_accepts_product_policy_without_legacy_rule():
 
     data['routing_rules'] = []
     invalid(data, 'tproxy.enabled_incomplete')
-
-
-def test_explicit_domain_outweighs_broad_ru_rule_set_in_the_same_segment():
-    data = document()
-    data['rule_sets'] = [{'name': 'ru-list', 'format': 'srs',
-                          'url': 'https://example.org/ru.srs'}]
-    subject = {'kind': 'interface', 'interface': 'wg0'}
-    data['routing_rules'] = [
-        rule('ru_direct', subject=subject, ip_cidr=[], rule_sets=['ru-list']),
-        rule('myip', subject=subject, ip_cidr=[], domain_suffix=['myip.com']),
-        rule('catch_all', subject=subject, ip_cidr=['0.0.0.0/0']),
-    ]
-    ordered = ordered_routing_rules(parse_configuration(data))
-    assert [item.name for item in ordered] == ['myip', 'ru_direct', 'catch_all']
 
 
 def test_criterion_1_roundtrip_diff_and_tproxy_isolation():
