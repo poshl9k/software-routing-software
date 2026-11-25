@@ -90,13 +90,37 @@ def routing_group_key(rule):
     return ("server",)
 
 
+def _rule_priority(rule):
+    """Explicit matchers outrank broad catalog lists; catch-all goes last.
+
+    A domain added by the operator (``myip.com``) must win over a geoip/rule-set
+    rule placed earlier in the same segment: a Cloudflare anycast IP can be
+    listed as "RU" while the operator explicitly wants that domain via tunnel.
+    Stability within a priority keeps the operator's order everywhere else.
+    """
+    cidrs = list(rule.ip_cidr or ())
+    try:
+        catch_all = bool(cidrs) and all(
+            ip_network(value, strict=False).prefixlen == 0 for value in cidrs)
+    except ValueError:
+        catch_all = False
+    if catch_all:
+        return 2
+    if rule.domain_suffix or rule.domain_exact or cidrs:
+        return 0
+    if rule.rule_sets or rule.rule_groups:
+        return 1
+    return 2
+
+
 def ordered_routing_rules(configuration):
-    """Keep each group's rules contiguous, in the order the operator sees.
+    """Keep each group contiguous; inside a group, sort by matcher specificity.
 
     Segments follow ``interfaces[]``; device groups keep their own order; the
     catch-all "server" group goes last because its rules carry no source
-    matcher and would shadow every group after them. Within a group the
-    operator's order is untouched — first match wins.
+    matcher and would shadow every group after them. Explicit domain/CIDR
+    rules come before rule-set rules in the same group, so an added domain is
+    never shadowed by a broad RU-IP list. First match still wins.
     """
     buckets, order = {}, []
     for rule in configuration.routing_rules:
@@ -113,7 +137,11 @@ def ordered_routing_rules(configuration):
             return (0, position, key[1])
         return (1 if key[0] == "device" else 2, 0, "")
 
-    return tuple(rule for key in sorted(order, key=rank) for rule in buckets[key])
+    return tuple(
+        rule
+        for key in sorted(order, key=rank)
+        for rule in sorted(buckets[key], key=_rule_priority)
+    )
 
 
 def validate_configuration(c):
