@@ -156,6 +156,7 @@ it("saves a device reservation in its selected subnet and DNS lists through the 
   const fetch = mockApi(configuration);
   const user = userEvent.setup();
   render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("tab", { name: "Устройства с постоянным IP" }));
   await user.click(await screen.findByRole("button", { name: "Добавить устройство" }));
   await user.type(screen.getByLabelText("Имя устройства"), "printer.home.lan");
   await user.type(screen.getByLabelText("MAC"), "aa:bb:cc:dd:ee:01");
@@ -237,7 +238,8 @@ it("shows device-first DHCP controls and rejects duplicate reservations", async 
   mockApi(configuration);
   const user = userEvent.setup();
   render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
-  expect(await screen.findByRole("tab", { name: "Устройства с постоянным IP" })).toHaveAttribute("aria-selected", "true");
+  expect(await screen.findByRole("tab", { name: "Аренды" })).toHaveAttribute("aria-selected", "true");
+  await user.click(screen.getByRole("tab", { name: "Устройства с постоянным IP" }));
   expect(screen.getByRole("columnheader", { name: "Постоянный IP" })).toBeVisible();
   expect(screen.getByText("Статус загружается…")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Добавить устройство" }));

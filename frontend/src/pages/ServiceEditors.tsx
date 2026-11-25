@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle } from "@mui/material";
-import type { DHCPSubnet, Reservation, DNS as DNSConfig, DNSUpstream } from "../types";
+import type { DHCPSubnet, DHCPClientNote, DHCPLease, Reservation, DNS as DNSConfig, DNSUpstream } from "../types";
 import { useConfiguration } from "../state";
 import { DataTable } from "../components/DataTable";
 import { ErrorNotice } from "../components/ErrorNotice";
@@ -20,6 +20,7 @@ import {
   lines,
   listValid,
   macValid,
+  privacyMac,
 } from "../components/validators";
 import { useDraftEditor } from "../hooks/useDraftEditor";
 
@@ -118,19 +119,41 @@ const upstreamsValid = (list: DNSUpstream[]) =>
     u.mode === "https" ? !!u.doh_server
       : ipValid(u.address) && (u.mode !== "tls" || !!u.tls_name));
 
-export function DHCPEditor({ children }: { children: (actions: {
-  addDevice: () => void; editDevice: (subnet: number, reservation: number) => void;
+type DHCPDraft = { subnets: DHCPSubnet[]; notes: DHCPClientNote[] };
+type LeaseDialog = {
+  mode: "note" | "bind";
+  mac: string;
+  hostname: string;
+  subnetIndex: number;
+  subnetLabel: string;
+  ip: string;
+  note: string;
+  reserved: boolean;
+  reservationIndex: number;
+};
+
+export type DHCPActions = {
+  addDevice: () => void;
+  editDevice: (subnet: number, reservation: number) => void;
   editSubnets: () => void;
-}) => ReactNode }) {
+  openLease: (lease: DHCPLease, mode: "note" | "bind") => void;
+};
+
+export function DHCPEditor({ children }: { children: (actions: DHCPActions) => ReactNode }) {
   const { configuration: c, version } = useConfiguration();
-  const editor = useDraftEditor<DHCPSubnet[]>();
-  const rows = editor.value ?? c.dhcp_subnets;
+  const editor = useDraftEditor<DHCPDraft>();
+  const draft = editor.value ?? { subnets: c.dhcp_subnets, notes: c.dhcp_client_notes ?? [] };
+  const rows = draft.subnets;
   const [device, setDevice] = useState<{ subnet: number; reservation: number } | null>(null);
+  const [leaseDialog, setLeaseDialog] = useState<LeaseDialog | null>(null);
   const [removeDevice, setRemoveDevice] = useState<{ subnet: number; reservation: number } | null>(null);
   const [subnetListOpen, setSubnetListOpen] = useState(false);
   const [selectedSubnet, setSelectedSubnet] = useState<number | null>(null);
+  const initialDraft = () => ({ subnets: c.dhcp_subnets, notes: c.dhcp_client_notes ?? [] });
+  const setSubnets = (subnets: DHCPSubnet[]) => editor.setValue({ ...draft, subnets });
+  const begin = () => editor.begin(initialDraft());
   const beginDevice = (subnet: number, reservation: number) => {
-    editor.begin(c.dhcp_subnets);
+    begin();
     setDevice({ subnet, reservation });
   };
   const updateDevice = (reservation: Reservation, subnet: number) => {
@@ -138,13 +161,13 @@ export function DHCPEditor({ children }: { children: (actions: {
     const next = rows.map((s) => ({ ...s, reservations: [...s.reservations] }));
     if (device.reservation >= 0) next[device.subnet].reservations.splice(device.reservation, 1);
     next[subnet].reservations.push(reservation);
-    editor.setValue(next);
+    setSubnets(next);
     setDevice({ subnet, reservation: next[subnet].reservations.length - 1 });
   };
   const isEditMode = editor.isEdit;
   const interfaces = c.interfaces.map((i) => i.name);
   const update = (index: number, value: Partial<DHCPSubnet>) =>
-    editor.setValue(rows.map((s, i) => (i === index ? { ...s, ...value } : s)));
+    setSubnets(rows.map((s, i) => (i === index ? { ...s, ...value } : s)));
   const valid = rows.every(
     (s) =>
       integer(s.id) &&
@@ -165,19 +188,65 @@ export function DHCPEditor({ children }: { children: (actions: {
       s.valid_lifetime > 0 && Number.isInteger(s.valid_lifetime),
   ) && new Set(rows.flatMap((s) => s.reservations.map((r) => r.hw_address.toLowerCase()))).size === rows.reduce((n, s) => n + s.reservations.length, 0) &&
   new Set(rows.flatMap((s) => s.reservations.map((r) => r.ip_address))).size === rows.reduce((n, s) => n + s.reservations.length, 0);
-  const save = () =>
-    editor.save((value) => ({
-      ...c,
-      dhcp_subnets: value.map((s) => ({
-        ...s,
-        routers: normalize(s.routers),
-        dns_servers: normalize(s.dns_servers),
-      })),
-    }));
-  const cancel = () => { editor.cancel(); setDevice(null); setSelectedSubnet(null); setSubnetListOpen(false); };
+  const commit = (value: DHCPDraft) => ({
+    ...c,
+    dhcp_subnets: value.subnets.map((s) => ({
+      ...s,
+      routers: normalize(s.routers),
+      dns_servers: normalize(s.dns_servers),
+    })),
+    dhcp_client_notes: value.notes
+      .map((item) => ({ ...item, mac: item.mac.toLowerCase(), note: item.note.trim() }))
+      .filter((item) => !!item.note),
+  });
+  const save = () => editor.save(commit);
+  const cancel = () => {
+    editor.cancel(); setDevice(null); setLeaseDialog(null);
+    setSelectedSubnet(null); setSubnetListOpen(false);
+  };
+  const openLease = (lease: DHCPLease, mode: "note" | "bind") => {
+    const mac = lease.mac.toLowerCase();
+    const subnetIndex = c.dhcp_subnets.findIndex((s) => String(s.id) === String(lease.subnet));
+    const reservationIndex = rows[subnetIndex]?.reservations.findIndex(
+      (r) => r.hw_address.toLowerCase() === mac) ?? -1;
+    const notes = editor.isEdit ? draft.notes : c.dhcp_client_notes ?? [];
+    const subnet = c.dhcp_subnets[subnetIndex];
+    const iface = c.interfaces.find((i) => i.name === subnet?.interface);
+    setLeaseDialog({
+      mode, mac, hostname: lease.hostname ?? "", subnetIndex,
+      subnetLabel: iface?.description
+        ? `${iface.description} (${iface.name}) · ${subnet?.subnet ?? "—"}`
+        : subnet ? `${subnet.subnet} (${subnet.interface})` : `Подсеть ${lease.subnet}`,
+      ip: reservationIndex >= 0
+        ? rows[subnetIndex].reservations[reservationIndex].ip_address : lease.ip,
+      note: notes.find((item) => item.mac.toLowerCase() === mac)?.note ?? "",
+      reserved: reservationIndex >= 0, reservationIndex,
+    });
+    if (!editor.isEdit) begin();
+  };
+  const commitLease = (ip: string, note: string) => {
+    if (!leaseDialog || !ipv4(ip) || privacyMac(leaseDialog.mac)) return;
+    const nextNotes = draft.notes.filter((item) => item.mac.toLowerCase() !== leaseDialog.mac);
+    if (note.trim()) nextNotes.push({ mac: leaseDialog.mac, note: note.trim() });
+    const nextSubnets = rows.map((s) => ({ ...s, reservations: [...s.reservations] }));
+    if (leaseDialog.mode === "bind" && leaseDialog.subnetIndex >= 0) {
+      const target = nextSubnets[leaseDialog.subnetIndex];
+      if (leaseDialog.reservationIndex >= 0) {
+        target.reservations[leaseDialog.reservationIndex] = {
+          ...target.reservations[leaseDialog.reservationIndex], ip_address: ip,
+        };
+      } else {
+        target.reservations.push({ hw_address: leaseDialog.mac, ip_address: ip,
+          hostname: leaseDialog.hostname || null });
+      }
+    }
+    const next = { subnets: nextSubnets, notes: nextNotes };
+    setLeaseDialog(null);
+    void editor.save(commit, next);
+  };
   const saveAndClose = async () => { await save(); };
   const addSubnet = () => {
-    editor.setValue([...rows, { id: Math.max(0, ...rows.map((s) => s.id)) + 1,
+    setSubnets([...rows, { id: Math.max(0, ...rows.map((s) => s.id)) + 1,
       interface: interfaces[0] ?? "", subnet: "", pools: [], reservations: [],
       routers: [], dns_servers: [], valid_lifetime: 3600 }]);
     setSelectedSubnet(rows.length);
@@ -188,7 +257,8 @@ export function DHCPEditor({ children }: { children: (actions: {
     {children({
       addDevice: () => beginDevice(0, -1),
       editDevice: beginDevice,
-      editSubnets: () => { setDevice(null); setSelectedSubnet(null); setSubnetListOpen(true); editor.begin(c.dhcp_subnets); },
+      editSubnets: () => { setDevice(null); setSelectedSubnet(null); setSubnetListOpen(true); begin(); },
+      openLease,
     })}
     <Dialog open={isEditMode && subnetListOpen && selectedSubnet === null && !device} onClose={editor.saving ? undefined : cancel} fullWidth maxWidth="md">
       <DialogTitle>Подсети DHCP</DialogTitle>
@@ -205,7 +275,7 @@ export function DHCPEditor({ children }: { children: (actions: {
     <Dialog open={isEditMode && !!selected} onClose={editor.saving ? undefined : cancel} fullWidth maxWidth="md">
       <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>Подсеть {selected?.subnet || selected?.id}</span>
-        {selected && <DeleteButton label={`Удалить подсеть ${selected.id}`} onClick={() => { editor.setValue(rows.filter((_, i) => i !== selectedSubnet)); setSelectedSubnet(null); }} />}
+        {selected && <DeleteButton label={`Удалить подсеть ${selected.id}`} onClick={() => { setSubnets(rows.filter((_, i) => i !== selectedSubnet)); setSelectedSubnet(null); }} />}
       </DialogTitle>
       <DialogContent>
         <ErrorNotice error={editor.error} />
@@ -262,7 +332,37 @@ export function DHCPEditor({ children }: { children: (actions: {
         <EditorFooter saving={editor.saving} valid={valid && !!version} cancel={cancel} save={() => void saveAndClose()} />
       </>}</DialogContent>
     </Dialog>
-    <ConfirmDialog open={!!removeDevice} title="Удалить устройство?" body="Резервация будет удалена из черновика после сохранения." confirmLabel="Удалить" cancelLabel="Отмена" danger onCancel={() => setRemoveDevice(null)} onConfirm={() => { if (removeDevice) editor.setValue(rows.map((s, i) => i === removeDevice.subnet ? { ...s, reservations: s.reservations.filter((_, j) => j !== removeDevice.reservation) } : s)); setRemoveDevice(null); setDevice(null); }} />
+    <Dialog open={isEditMode && !!leaseDialog} onClose={editor.saving ? undefined : cancel} fullWidth maxWidth="sm">
+      <DialogTitle>{leaseDialog?.mode === "note" ? "Заметка клиента"
+        : leaseDialog?.reserved ? "Изменить резервацию" : "Закрепить адрес"}</DialogTitle>
+      <DialogContent>
+        <ErrorNotice error={editor.error} />
+        {leaseDialog && <>
+          <FormGrid>
+            <Field label="MAC" value={leaseDialog.mac} readOnly />
+            <Field label="Hostname" value={leaseDialog.hostname || "—"} readOnly />
+            <Field label="Подсеть" value={leaseDialog.subnetLabel} readOnly />
+            {leaseDialog.mode === "bind" && <>
+              <Field label="Постоянный IP" value={leaseDialog.ip} valid={ipv4(leaseDialog.ip)}
+                hint="По умолчанию текущий адрес аренды; можно заменить"
+                onChange={(ip) => setLeaseDialog({ ...leaseDialog, ip })} />
+              <InfoNote>После применения адрес будет закреплён, а строка аренды останется в списке с чипом «Зарезервирован».</InfoNote>
+            </>}
+            <Field label="Заметка" value={leaseDialog.note} maxLength={120}
+              hint="Подпись клиента; видна в арендах и у закреплённых устройств"
+              onChange={(note) => setLeaseDialog({ ...leaseDialog, note })} />
+            {privacyMac(leaseDialog.mac) && <InfoNote>Этот MAC локально администрируемый (приватный адрес): он может измениться при следующем подключении, поэтому закрепление недоступно.</InfoNote>}
+          </FormGrid>
+        </>}
+      </DialogContent>
+      <DialogActions><EditorFooter saving={editor.saving}
+        valid={!!leaseDialog && !!version
+          && !privacyMac(leaseDialog.mac)
+          && (leaseDialog.mode === "bind" ? ipv4(leaseDialog.ip) : !!leaseDialog.note.trim())}
+        cancel={cancel}
+        save={() => leaseDialog && commitLease(leaseDialog.ip, leaseDialog.note)} /></DialogActions>
+    </Dialog>
+    <ConfirmDialog open={!!removeDevice} title="Удалить устройство?" body="Резервация будет удалена из черновика после сохранения." confirmLabel="Удалить" cancelLabel="Отмена" danger onCancel={() => setRemoveDevice(null)} onConfirm={() => { if (removeDevice) setSubnets(rows.map((s, i) => i === removeDevice.subnet ? { ...s, reservations: s.reservations.filter((_, j) => j !== removeDevice.reservation) } : s)); setRemoveDevice(null); setDevice(null); }} />
   </>;
 
 }

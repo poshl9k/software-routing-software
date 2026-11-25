@@ -373,6 +373,9 @@ def validate_configuration(c):
         for ip in (*s.routers, *s.dns_servers):
             if ip_address(ip).version != 4:
                 fail("dhcp.ipv4_required")
+    note_macs = [item.mac.lower() for item in c.dhcp_client_notes]
+    if len(set(note_macs)) != len(note_macs):
+        fail("dhcp.duplicate_client_note")
     for name in c.dns.interfaces:
         if name not in interfaces or not interfaces[name].addresses:
             fail("dns.interface_address_required")

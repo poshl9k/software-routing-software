@@ -7,6 +7,7 @@ import Network from "../pages/Network";
 import { DHCP } from "../pages/Services";
 import { fmtRemaining } from "../components/format";
 import { emptyConfiguration } from "../fixtures";
+import type { Configuration, DHCPLease } from "../types";
 
 it.each([
   [0, "истекла"],
@@ -251,4 +252,84 @@ it("saves PPPoE credentials through one draft and clears them on mode change", a
   const second = JSON.parse(String(fetch.mock.calls.filter(([, init]) => init?.method === "PUT")[1][1].body));
   expect(second.interfaces[0]).not.toHaveProperty("pppoe_username");
   expect(second.interfaces[0]).not.toHaveProperty("pppoe_password");
+});
+
+function leaseFixture(): { configuration: Configuration; leases: DHCPLease[] } {
+  const configuration: Configuration = {
+    ...emptyConfiguration,
+    interfaces: [{ name: "vlan1", type: "vlan", zone: "lan", description: "prostor-wifi-ssid",
+      addressing: "static", addresses: ["172.20.1.1/24"], parent: null, vlan_id: 1, members: [] }],
+    dhcp_subnets: [{ id: 1, interface: "vlan1", subnet: "172.20.1.0/24", pools: [],
+      reservations: [], routers: [], dns_servers: [], valid_lifetime: 3600 }],
+  };
+  const leases: DHCPLease[] = [
+    { ip: "172.20.1.21", mac: "3c:6a:a7:0d:5e:11", hostname: "poco-x8-pro",
+      subnet: "1", cltt: 0, valid_lft: 3600, expires_in: 3600 },
+    { ip: "172.20.1.34", mac: "da:4b:8e:1a:2c:3f", hostname: "",
+      subnet: "1", cltt: 0, valid_lft: 3600, expires_in: 600 },
+  ];
+  return { configuration, leases };
+}
+
+function mockLeasesPage(configuration: Configuration, leases: DHCPLease[]) {
+  const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/api/versions") return Promise.resolve(
+      new Response(JSON.stringify([{ id: 1, status: "draft", configuration }])));
+    if (path === "/api/dhcp/leases") return Promise.resolve(new Response(JSON.stringify(leases)));
+    if (path === "/api/draft") return Promise.resolve(new Response(JSON.stringify({
+      id: 2, status: "draft", configuration: JSON.parse(String(init?.body)),
+    })));
+    return Promise.resolve(new Response(JSON.stringify({ generated_at: "2026-11-25T10:00:00Z", services: [] })));
+  });
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+
+it("opens leases first, showing the friendly subnet and private-MAC warning", async () => {
+  const { configuration, leases } = leaseFixture();
+  mockLeasesPage(configuration, leases);
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  expect(await screen.findByRole("tab", { name: "Аренды" })).toHaveAttribute("aria-selected", "true");
+  expect(await screen.findAllByText("prostor-wifi-ssid (vlan1) · 172.20.1.0/24")).toHaveLength(2);
+  expect(screen.getByText("Приватный MAC")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Закрепить 172.20.1.34" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Закрепить 172.20.1.21" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "Заметка для 172.20.1.21" }));
+  const dialog = screen.getByRole("dialog", { name: "Заметка клиента" });
+  expect(within(dialog).getByLabelText("MAC")).toHaveValue("3c:6a:a7:0d:5e:11");
+  expect(within(dialog).getByLabelText("Подсеть")).toHaveValue("prostor-wifi-ssid (vlan1) · 172.20.1.0/24");
+  expect(within(dialog).queryByLabelText("Постоянный IP")).toBeNull();
+});
+
+it("saves a client note from the leases tab into the draft", async () => {
+  const { configuration, leases } = leaseFixture();
+  const fetch = mockLeasesPage(configuration, leases);
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("button", { name: "Заметка для 172.20.1.21" }));
+  const dialog = screen.getByRole("dialog", { name: "Заметка клиента" });
+  await user.type(within(dialog).getByLabelText("Заметка"), "Телефон Алины");
+  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(true));
+  const saved = JSON.parse(String(fetch.mock.calls.find(([path]) => path === "/api/draft")![1].body));
+  expect(saved.dhcp_client_notes).toEqual([{ mac: "3c:6a:a7:0d:5e:11", note: "Телефон Алины" }]);
+  expect(saved.dhcp_subnets[0].reservations).toEqual([]);
+});
+
+it("binds a lease with the current address and keeps the row in the list", async () => {
+  const { configuration, leases } = leaseFixture();
+  const fetch = mockLeasesPage(configuration, leases);
+  const user = userEvent.setup();
+  render(<MemoryRouter><RouterProvider><DHCP /></RouterProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("button", { name: "Закрепить 172.20.1.21" }));
+  const dialog = screen.getByRole("dialog", { name: "Закрепить адрес" });
+  expect(within(dialog).getByLabelText("Постоянный IP")).toHaveValue("172.20.1.21");
+  await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path]) => path === "/api/draft")).toBe(true));
+  const saved = JSON.parse(String(fetch.mock.calls.find(([path]) => path === "/api/draft")![1].body));
+  expect(saved.dhcp_subnets[0].reservations).toEqual([{
+    hw_address: "3c:6a:a7:0d:5e:11", ip_address: "172.20.1.21", hostname: "poco-x8-pro",
+  }]);
+  expect(await screen.findByText("172.20.1.21")).toBeVisible();
 });

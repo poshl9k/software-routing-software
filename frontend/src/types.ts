@@ -467,6 +467,7 @@ export interface Configuration {
   static_routes?: StaticRoute[];
   aliases: Alias[];
   dhcp_subnets: DHCPSubnet[];
+  dhcp_client_notes?: DHCPClientNote[];
   firewall_rules: FirewallRule[];
   port_forwards: PortForward[];
   outbound_nat_mode: "automatic" | "hybrid" | "manual" | "disabled";
@@ -531,6 +532,9 @@ export interface ErrorBody {
   code: string;
   message: string;
   details: unknown[];
+}
+export interface DHCPClientNote {
+  mac: string; note: string;
 }
 export interface DHCPLease {
   ip: string; mac: string; hostname: string | null; subnet: string;

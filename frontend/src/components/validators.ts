@@ -23,6 +23,10 @@ export const portValid = (v: number) =>
 export const macValid = (v: string) =>
   /^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/.test(v);
 
+/** Locally-administered MAC: private Wi-Fi address or virtual adapter. */
+export const privacyMac = (v: string) =>
+  macValid(v) && (parseInt(v.slice(0, 2), 16) & 0x02) !== 0;
+
 export const hostValid = (v: string, wildcard = false) =>
   (wildcard ? /^[a-zA-Z0-9*.-]+$/ : /^[a-zA-Z0-9.-]+$/).test(v);
 

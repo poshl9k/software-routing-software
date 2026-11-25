@@ -4,6 +4,7 @@ export const emptyConfiguration: Configuration = {
   interfaces: [],
   aliases: [],
   dhcp_subnets: [],
+  dhcp_client_notes: [],
   firewall_rules: [],
   port_forwards: [],
   outbound_nat_mode: "hybrid",

@@ -65,6 +65,16 @@ def test_invalid_dhcp(change):
         ConfigurationVersion.model_validate(data)
 
 
+def test_client_notes_are_case_insensitive_and_unique():
+    data = scenario("typical").model_dump()
+    data["configuration"]["dhcp_client_notes"] = [
+        {"mac": "AA:BB:CC:DD:EE:02", "note": "первый"},
+        {"mac": "aa:bb:cc:dd:ee:02", "note": "второй"},
+    ]
+    with pytest.raises(ValidationError, match="dhcp.duplicate_client_note"):
+        ConfigurationVersion.model_validate(data)
+
+
 def test_dhcp_requires_an_assigned_interface():
     with pytest.raises(ValidationError, match="dhcp.interface_unassigned"):
         Configuration.model_validate({

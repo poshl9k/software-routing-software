@@ -79,6 +79,17 @@ class Reservation(Model):
     hostname: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9.-]+$")
 
 
+class DHCPClientNote(Model):
+    """Operator label for a client, keyed by MAC; independent of binding."""
+    mac: str = Field(pattern=r"^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
+    note: str = Field(default="", max_length=120)
+
+    @field_validator('mac')
+    @classmethod
+    def normalize_mac(cls, value: str) -> str:
+        return value.lower()
+
+
 class DHCPSubnet(Model):
     id: int = Field(ge=1, le=4294967294)
     interface: InterfaceName
@@ -987,6 +998,9 @@ class Configuration(Model):
     static_routes: tuple[StaticRoute, ...] = ()
     aliases: tuple[Alias, ...] = ()
     dhcp_subnets: tuple[DHCPSubnet, ...] = ()
+    # UI-only client labels. Not emitted into Kea config; kept by MAC so a note
+    # survives binding and is shown in both leases and reservations.
+    dhcp_client_notes: tuple[DHCPClientNote, ...] = ()
     firewall_rules: tuple[FirewallRule, ...] = ()
     port_forwards: tuple[PortForward, ...] = ()
     outbound_nat_mode: Literal["automatic", "hybrid", "manual", "disabled"] = "hybrid"

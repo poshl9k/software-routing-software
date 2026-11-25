@@ -10,14 +10,16 @@ import { Field } from "../components/Field";
 import { InfoNote } from "../components/InfoNote";
 import { PageHeader } from "../components/PageHeader";
 import { PageTabs } from "../components/Tabs";
-import { DHCPEditor, DNSEditor } from "./ServiceEditors";
+import { Badge } from "../components/Badge";
+import { DHCPEditor, DNSEditor, type DHCPActions } from "./ServiceEditors";
 import { DnsPolicyDialog } from "./TProxyDnsPolicy";
 import { Sites, DDNS } from "./ConnectionEditors";
 import { api, ApiError } from "../api";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "../query";
 import { fmtRemaining } from "../components/format";
-import type { DNSUpstream } from "../types";
+import { privacyMac } from "../components/validators";
+import type { DNSUpstream, DHCPLease } from "../types";
 
 export function useServiceTelemetry() {
   return useQuery({
@@ -58,44 +60,80 @@ export function DHCP() {
     <DHCPEditor>{(actions) => <DHCPReadOnly actions={actions} />}</DHCPEditor>
   );
 }
-function DHCPReadOnly({ actions }: { actions: { addDevice: () => void; editDevice: (subnet: number, reservation: number) => void; editSubnets: () => void } }) {
+function DHCPReadOnly({ actions }: { actions: DHCPActions }) {
   const { configuration: c } = useConfiguration();
   const telemetry = useServiceTelemetry();
   const [tab, setTab] = useState(0);
   const [query, setQuery] = useState("");
   const [term, setTerm] = useState("");
-  // Server state: cached, deduped, and only fetched while the tab is open.
+  // Server state: cached, deduped, and only fetched while the leases tab is open.
   const leases = useQuery({
     queryKey: queryKeys.dhcpLeases(term),
     queryFn: () => (term ? api.searchLeases(term) : api.dhcpLeases()),
-    enabled: tab === 2,
+    enabled: tab === 0,
   });
   const leaseError = leases.error;
   const leaseEmpty = leases.isLoading ? "Загрузка аренд…"
     : leaseError instanceof ApiError && (leaseError.status === 502 || leaseError.status === 503)
       ? "Kea ctrl-agent недоступен — аренды не прочитаны"
       : leaseError ? "Не удалось получить аренды" : "Аренд пока нет";
+  const noteOf = (mac: string) =>
+    c.dhcp_client_notes?.find((item) => item.mac.toLowerCase() === mac.toLowerCase())?.note ?? "";
+  const subnetFor = (lease: DHCPLease) => {
+    const subnet = c.dhcp_subnets.find((s) => String(s.id) === String(lease.subnet));
+    if (!subnet) return `Подсеть ${lease.subnet}`;
+    const iface = c.interfaces.find((i) => i.name === subnet.interface);
+    return iface?.description
+      ? `${iface.description} (${iface.name}) · ${subnet.subnet}`
+      : `${subnet.subnet} (${subnet.interface})`;
+  };
+  const isReserved = (lease: DHCPLease) => c.dhcp_subnets.some((s) =>
+    s.reservations.some((r) => r.hw_address.toLowerCase() === lease.mac.toLowerCase()));
+  const leaseList: DHCPLease[] = Array.isArray(leases.data) ? leases.data : [];
+  const leaseRows = (leases.isError ? [] : leaseList).map((l) => {
+    const privateMac = privacyMac(l.mac);
+    const reserved = isReserved(l);
+    const note = noteOf(l.mac);
+    return [
+      <>{l.ip}{reserved && <div><Badge tone="green">Зарезервирован</Badge></div>}</>,
+      <span className="mac-value">{l.mac}</span>,
+      l.hostname || "—",
+      subnetFor(l),
+      <>{note || "—"}<div><Button aria-label={`Заметка для ${l.ip}`}
+        onClick={() => actions.openLease(l, "note")}>Заметка</Button></div></>,
+      fmtRemaining(l.expires_in),
+      <>{privateMac && <Badge tone="amber">Приватный MAC</Badge>}
+        <Button disabled={privateMac} aria-label={reserved ? `Изменить резервацию ${l.ip}` : `Закрепить ${l.ip}`}
+          onClick={() => actions.openLease(l, "bind")}>{reserved ? "Изменить" : "Закрепить"}</Button></>,
+    ];
+  });
   return (
     <>
       <PageHeader>DHCP (Kea)</PageHeader>
       <RuntimeServiceHeader name="DHCP" serviceName="kea" telemetry={telemetry} />
-      <PageTabs values={["Устройства с постоянным IP", "Подсети и диапазоны", "Аренды"]} value={tab} change={setTab} />
-      {tab === 0 && <Card title="Устройства с постоянным IP" action={<Button onClick={actions.addDevice} disabled={!c.dhcp_subnets.length}>Добавить устройство</Button>}>
+      <PageTabs values={["Аренды", "Устройства с постоянным IP", "Подсети и диапазоны"]} value={tab} change={setTab} />
+      {tab === 0 && <Card title="Текущие аренды" action={<Button onClick={() => void leases.refetch()} disabled={leases.isFetching}>Обновить</Button>}>
+        <div className="footer-actions"><Field label="Поиск: MAC, IP, hostname" value={query} onChange={setQuery} fullWidth={false}/><Button onClick={() => setTerm(query.trim())} disabled={leases.isFetching}>Найти</Button></div>
+        {term && <div className="footer-actions">Показаны результаты по запросу «{term}» <Button onClick={() => { setQuery(""); setTerm(""); }}>Сбросить</Button></div>}
+        <div className="table-wide">
+          <DataTable heads={["IP-адрес", "MAC", "Hostname", "Подсеть", "Заметка", "Истекает через", "Действия"]}
+            rows={leaseRows} empty={<EmptyState>{leaseEmpty}</EmptyState>}/>
+        </div>
+      </Card>}
+      {tab === 1 && <Card title="Устройства с постоянным IP" action={<Button onClick={actions.addDevice} disabled={!c.dhcp_subnets.length}>Добавить устройство</Button>}>
         {!c.dhcp_subnets.length && <InfoNote>Сначала добавьте подсеть, затем назначьте устройству постоянный IP.</InfoNote>}
         <DataTable heads={["Устройство", "MAC", "Постоянный IP", "Подсеть", "Действия"]}
-          rows={c.dhcp_subnets.flatMap((s, si) => s.reservations.map((r, ri) => [r.hostname || "—", r.hw_address, r.ip_address, s.subnet,
-            <Button onClick={() => actions.editDevice(si, ri)} aria-label={`Изменить устройство ${r.hostname || r.hw_address}`}>Изменить</Button>]))}
+          rows={c.dhcp_subnets.flatMap((s, si) => s.reservations.map((r, ri) => [
+            <>{r.hostname || "—"}{noteOf(r.hw_address) && <div><small>{noteOf(r.hw_address)}</small></div>}</>,
+            r.hw_address, r.ip_address, s.subnet,
+            <Button onClick={() => actions.editDevice(si, ri)} aria-label={`Изменить устройство ${r.hostname || r.hw_address}`}>Изменить</Button>,
+          ]))}
           empty={<EmptyState>Устройств с постоянным IP пока нет</EmptyState>} />
       </Card>}
-      {tab === 1 && <Card title="Подсети и диапазоны" action={<Button onClick={actions.editSubnets}>Настроить</Button>}>
+      {tab === 2 && <Card title="Подсети и диапазоны" action={<Button onClick={actions.editSubnets}>Настроить</Button>}>
         <DataTable heads={["Подсеть", "Интерфейс", "Диапазон адресов", "Адрес роутера", "DNS для клиентов", "Срок аренды"]}
           rows={c.dhcp_subnets.map((s) => [s.subnet, s.interface, s.pools.map((p) => `${p.start}–${p.end}`).join(", ") || "—", s.routers.join(", ") || "—", s.dns_servers.join(", ") || "—", `${s.valid_lifetime} с`])}
           empty={<EmptyState>Подсети DHCP не настроены.</EmptyState>} />
-      </Card>}
-      {tab===2&&<Card title="Текущие аренды" action={<Button onClick={()=>void leases.refetch()} disabled={leases.isFetching}>Обновить</Button>}>
-        <div className="footer-actions"><Field label="Поиск: MAC, IP, hostname" value={query} onChange={setQuery} fullWidth={false}/><Button onClick={()=>setTerm(query.trim())} disabled={leases.isFetching}>Найти</Button></div>
-        {term && <div className="footer-actions">Показаны результаты по запросу «{term}» <Button onClick={() => { setQuery(""); setTerm(""); }}>Сбросить</Button></div>}
-        <DataTable heads={["IP-адрес","MAC","Hostname","Подсеть","Истекает через"]} rows={(leases.isError ? [] : leases.data??[]).map(l=>[l.ip,l.mac,l.hostname??"—",l.subnet,fmtRemaining(l.expires_in)])} empty={<EmptyState>{leaseEmpty}</EmptyState>}/>
       </Card>}
     </>
   );
